@@ -124,11 +124,13 @@ async function main() {
     });
   }
 
-  // 5. version
+  // 5. version (compare against the version declared in package.json)
+  const pkgRaw = await fs.readFile(path.join(process.cwd(), "package.json"), "utf8");
+  const expected = JSON.parse(pkgRaw) as { version: string };
   results.push(
-    VERSION === "1.0.0"
+    VERSION === expected.version
       ? { status: "PASS", text: `server version ${VERSION}` }
-      : { status: "FAIL", text: `server version mismatch: ${VERSION} (expected 1.0.0)` },
+      : { status: "FAIL", text: `server version mismatch: ${VERSION} (expected ${expected.version})` },
   );
 
   const passes = results.filter((r) => (r as CheckResult).status === "PASS").length;
