@@ -37,6 +37,7 @@ COPY tsconfig.json ./
 COPY lib ./lib
 COPY tools ./tools
 COPY server.ts ./server.ts
+COPY bin ./bin
 RUN npm run build
 
 # 3. Produce the better-sqlite3 native binding for THIS platform/Node ABI
