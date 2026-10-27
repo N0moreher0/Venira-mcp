@@ -27,6 +27,24 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # better-sqlite3 is a native module. With npm v12 the install-time
+      # security defaults are on (allowScripts off by default); this project
+      # opts back in via the `allowScripts` allowlist in package.json, so the
+      # `install` script (prebuild-install || node-gyp rebuild) runs and the
+      # .node binding should exist. This step makes the expectation explicit
+      # and self-heals on the off chance the prebuild didn't land.
+      - name: Ensure better-sqlite3 native binding
+        run: |
+          B="node_modules/better-sqlite3/build/Release/better_sqlite3.node"
+          if [ -f "$B" ]; then
+            echo "prebuild present: $B"
+            node -e "require('better-sqlite3'); console.log('better-sqlite3 loads OK')"
+          else
+            echo "prebuild missing — running npm rebuild better-sqlite3..."
+            npm rebuild better-sqlite3
+            node -e "require('better-sqlite3'); console.log('better-sqlite3 loads OK after rebuild')"
+          fi
+
       - name: Build
         run: npm run build
 

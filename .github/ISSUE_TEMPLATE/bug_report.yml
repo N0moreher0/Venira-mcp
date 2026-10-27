@@ -1,0 +1,114 @@
+name: Bug report
+description: File a bug report for venira-mcp-coding
+title: "[bug] "
+labels: ["bug", "needs triage"]
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report! Please fill out as much of the template as you can.
+
+  - type: input
+    id: version
+    attributes:
+      label: venira-mcp-coding version
+      description: Run `node dist/server.js` and read the `[venira-coding] ready vX.Y.Z` line, or check `package.json`.
+      placeholder: "1.0.1"
+    validations:
+      required: true
+
+  - type: input
+    id: node
+    attributes:
+      label: Node.js version
+      description: `node -v`
+      placeholder: "v20.11.0"
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: OS / arch
+      description: `uname -a` (Linux/macOS) or `systeminfo` (Windows). Note x64 vs arm64.
+      placeholder: "Windows 11 x64 / macOS 15 arm64 / Ubuntu 24.04 x64"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: repro
+    attributes:
+      label: How are you running the server?
+      options:
+        - npx -y venira-mcp-coding
+        - npm install + node dist/server.js
+        - Docker (ghcr.io)
+        - MCP client config (OpenCode / Claude Desktop)
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: A short description of the actual behaviour.
+      placeholder: "project_read_batch returns a 500 / the audit DB is locked / …"
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+      placeholder: "The envelope should have ok:true and data.responses[0].ok === true"
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro-steps
+    attributes:
+      label: Steps to reproduce
+      description: Numbered steps a maintainer can follow to hit the same bug.
+      placeholder: |
+        1. `npx -y venira-mcp-coding`
+        2. Call `project_read_batch` with 8 items on a Windows drive
+        3. Observe …
+    validations:
+      required: true
+
+  - type: textarea
+    id: log
+    attributes:
+      label: Relevant log / error output
+      description: Paste the JSON envelope(s) or stderr. Redact anything sensitive.
+      render: json
+      placeholder: |
+        {
+          "ok": false,
+          "error": { "code": "io_error", "message": "…" },
+          "hint": "…"
+        }
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      options:
+        - blocking — cannot use the server at all
+        - major — a core tool is broken
+        - minor — degraded behaviour / wrong output
+        - cosmetic — docs / hints / labels
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-checks
+      options:
+        - label: I ran `npm run doctor` and `npm run verify` and they don't fix / don't relate
+          required: false
+        - label: I searched existing issues for duplicates
+          required: false

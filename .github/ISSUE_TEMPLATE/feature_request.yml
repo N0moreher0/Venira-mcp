@@ -1,0 +1,58 @@
+name: Feature request / improvement
+description: Propose a new tool, config, or improvement
+title: "[feat] "
+labels: ["enhancement", "needs triage"]
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please describe the idea and why it's needed. Check `TODO.md` / `TOOL-ROADMAP.md` for
+        already-scoped work before filing.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / motivation
+      placeholder: "What pain point does this solve? What workflow is it better for?"
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      placeholder: "What should the tool / config / behaviour look like? Env vars? Args? Envelope shape?"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority you'd assign
+      options:
+        - P1 — useful for the common workflow
+        - P2 — nice to have
+        - P3 — long-term / roadmap
+        - Unsure — maintainer decides
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you've considered
+      placeholder: "Could a combination of existing tools do it? What's wrong with that?"
+
+  - type: textarea
+    id: sketch
+    attributes:
+      label: API sketch (optional)
+      description: If you know what the tool signature / args / data would look like.
+      render: json
+      placeholder: |
+        {
+          "operation": "project_…",
+          "args": { },
+          "data": { }
+        }
