@@ -152,6 +152,21 @@ jobs:
             release/venira-mcp-coding-*.tgz
             release/venira-mcp-coding-*-standalone.zip
 
+      # ------------------------------------------------------------------
+      # Optional: publish to npm. Only runs when the repo owner has set
+      # the `NPM_TOKEN` secret (Settings → Secrets → Actions → NPM_TOKEN).
+      # The NPM_TOKEN must have "classic" token scope with publish rights.
+      # ------------------------------------------------------------------
+      - name: Publish to npm (if NPM_TOKEN is set)
+        if: ${{ env.NPM_TOKEN != '' }}
+        run: |
+          cd release
+          TARBALL=$(ls venira-mcp-coding-*.tgz | head -1)
+          npm publish "$TARBALL" --access public
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_REGISTRY: "https://registry.npmjs.org"
+
       - name: Attach checksums + Docker pull commands to release body
         run: |
           cd release
