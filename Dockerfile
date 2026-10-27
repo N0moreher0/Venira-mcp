@@ -24,7 +24,8 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev --ignore-scripts=false
+# npm ci with better-sqlite3's install script allowed (allowScripts in package.json)
+RUN npm ci --omit=dev
 
 COPY tsconfig.json ./
 COPY lib ./lib
