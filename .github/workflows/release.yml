@@ -199,7 +199,17 @@ jobs:
           cd release
           TARBALL=$(ls venira-mcp-*.tgz | head -1)
           echo "Publishing $TARBALL via OIDC trusted publishing..."
-          npm publish "$TARBALL" --access public
+          # Verbose + capture full error output so the log is actionable.
+          if ! npm publish "$TARBALL" --access public --loglevel verbose 2>&1; then
+            echo "::error::npm publish failed. Most common causes:"
+            echo "  1. Trusted publisher not configured on the npm side."
+            echo "     Run once on a logged-in machine:"
+            echo "       npm trust github venira-mcp --repo N0moreher0/Venira-mcp --file release.yml --allow-publish --allow-stage-publish -y"
+            echo "  2. The OIDC token was not accepted (workflow file changed since trust was registered)."
+            echo "     Re-run the npm trust command above (it re-fingerprints the current release.yml)."
+            echo "  3. Version already published — bump the version in package.json + lib/version.ts."
+            exit 1
+          fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_CONFIG_REGISTRY: "https://registry.npmjs.org"
