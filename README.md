@@ -53,18 +53,14 @@
 
 That's it. There is no external binary to build or download.
 
-### Build & run
+### Run in 30 seconds (npm, recommended)
 
 ```bash
-cd venira-mcp-coding
-npm install
-npm run build          # tsc → dist/
-npm start              # stdio MCP server (attach via your MCP client, or pipe JSON manually)
+npm install -g venira-mcp-coding        # or: npx -y venira-mcp-coding (no install)
 ```
 
-### Run without `npm install` (npx)
-
-If the package is published to npm, you can skip the local install entirely:
+Once the package is published, `npx` fetches it to a temp dir and runs it —
+no local clone or build needed:
 
 ```bash
 npx -y venira-mcp-coding                # start the MCP server (stdio)
@@ -73,8 +69,17 @@ npx -y venira-mcp-coding --verify       # run the behavioural regression suite
 ```
 
 The `bin` entry in `package.json` resolves `dist/server.js` relative to the
-installed location, so `npx` (which fetches the package to a temp dir) works
-without you having to clone anything.
+installed location, so `npx` works without you having to clone anything.
+
+### Run from source (developers)
+
+```bash
+git clone https://github.com/N0moreher0/Venira-mcp.git venira-mcp-coding
+cd venira-mcp-coding
+npm install
+npm run build          # tsc → dist/
+npm start              # stdio MCP server (attach via your MCP client, or pipe JSON manually)
+```
 
 ### Run in Docker (no Node on the host)
 
@@ -109,13 +114,33 @@ npm run bench:mcp# end-to-end MCP benchmark (first call, batch 8, search, health
 
 ### 3.1 OpenCode (`opencode.jsonc` or `.opencode/opencode.jsonc`)
 
+The simplest form (uses `npx`, no local install needed):
+
 ```jsonc
 {
   "$schema": "https://opencode.ai/config.json",
   "mcp": {
     "venira": {
       "type": "local",
-      // Point `command` at your build of the MCP server.
+      "command": ["npx", "-y", "venira-mcp-coding"],
+      "enabled": true,
+      "environment": {
+        "VENIRA_WORKSPACE": "C:\\path\\to\\your-project",
+        "VENIRA_UNRESTRICTED": "0"
+      }
+    }
+  }
+}
+```
+
+Or point at a local build (after `git clone` + `npm install` + `npm run build`):
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "venira": {
+      "type": "local",
       "command": ["node", "C:\\path\\to\\venira-mcp-coding\\dist\\server.js"],
       "enabled": true,
       "environment": {
