@@ -1,5 +1,5 @@
 # Exclude bulky/generated files from the npm package (dist is included on purpose:
-# `npm install venira-mcp-coding` gives you a ready-to-run dist/server.js without a build step).
+# `npm install venira-mcp` gives you a ready-to-run dist/server.js without a build step).
 node_modules/
 test/
 debug-search*

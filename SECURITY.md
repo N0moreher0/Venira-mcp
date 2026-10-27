@@ -1,4 +1,4 @@
-# Security Policy — venira-mcp-coding
+# Security Policy — venira-mcp
 
 ## Supported versions
 
@@ -63,7 +63,7 @@ directly affected:
   harness that let a crafted workspace file steer the tool-execution
   pipeline into running attacker-chosen commands. The mitigation pattern:
   validate *and* log every tool argument at the boundary, and never trust
-  content read from the workspace as a command. venira-mcp-coding keeps
+  content read from the workspace as a command. venira-mcp keeps
   tool arguments schema-checked (zod) and the audit table as the
   post-hoc record.
 - **Agent / sandbox escape (e.g. "harness"-style escapes)** — agents that

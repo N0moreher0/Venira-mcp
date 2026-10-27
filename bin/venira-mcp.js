@@ -2,9 +2,10 @@
 /**
  * npx entry point.
  *
- *   npx venira-mcp-coding            # run the MCP server in stdio mode
- *   npx venira-mcp-coding --doctor   # run the doctor preflight
- *   npx venira-mcp-coding --verify   # run the behavioural suite
+ *   npx venira-mcp                 # run the MCP server in stdio mode
+ *   npx venira-mcp --doctor        # run the doctor preflight
+ *   npx venira-mcp --verify        # run the behavioural suite
+ *   (also aliased as `venira` via the package.json `bin` entry)
  *
  * Resolves the compiled dist/ relative to this file so `npx` (which
  * installs the package to a temp dir) still works.
@@ -39,7 +40,7 @@ if (!existsSync(nativeBinding)) {
   const pkgJson = path.join(here, "..", "package.json");
   if (existsSync(pkgJson)) {
     process.stderr.write(
-      "[venira-mcp-coding] native binding missing or stale; running `npm rebuild better-sqlite3`...\n",
+      "[venira-mcp] native binding missing or stale; running `npm rebuild better-sqlite3`...\n",
     );
     try {
       const shell = process.platform === "win32" ? "cmd" : "sh";
@@ -50,7 +51,7 @@ if (!existsSync(nativeBinding)) {
       });
     } catch (error) {
       process.stderr.write(
-        `[venira-mcp-coding] rebuild failed (${error instanceof Error ? error.message : String(error)}). ` +
+        `[venira-mcp] rebuild failed (${error instanceof Error ? error.message : String(error)}). ` +
           "Continuing anyway; the server may fail to start if better-sqlite3 is unusable.\n",
       );
     }

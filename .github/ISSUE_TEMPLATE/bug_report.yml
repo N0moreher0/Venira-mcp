@@ -1,5 +1,5 @@
 name: Bug report
-description: File a bug report for venira-mcp-coding
+description: File a bug report for venira-mcp
 title: "[bug] "
 labels: ["bug", "needs triage"]
 assignees: []
@@ -12,7 +12,7 @@ body:
   - type: input
     id: version
     attributes:
-      label: venira-mcp-coding version
+      label: venira-mcp version
       description: Run `node dist/server.js` and read the `[venira-coding] ready vX.Y.Z` line, or check `package.json`.
       placeholder: "1.0.1"
     validations:
@@ -41,7 +41,7 @@ body:
     attributes:
       label: How are you running the server?
       options:
-        - npx -y venira-mcp-coding
+        - npx -y venira-mcp
         - npm install + node dist/server.js
         - Docker (ghcr.io)
         - MCP client config (OpenCode / Claude Desktop)
@@ -72,7 +72,7 @@ body:
       label: Steps to reproduce
       description: Numbered steps a maintainer can follow to hit the same bug.
       placeholder: |
-        1. `npx -y venira-mcp-coding`
+        1. `npx -y venira-mcp`
         2. Call `project_read_batch` with 8 items on a Windows drive
         3. Observe …
     validations:

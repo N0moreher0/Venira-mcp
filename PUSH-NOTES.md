@@ -1,10 +1,10 @@
-# Create an empty repository on GitHub (no README, no .gitignore) named "venira-mcp-coding"
+# Create an empty repository on GitHub (no README, no .gitignore) named "venira-mcp"
 # under the owner you have push access to, then run:
 
-cd G:\venira\venira-mcp-coding-standalone
+cd G:\venira\venira-mcp-standalone
 
 # 1. Point git at the new repo (replace with your actual URL):
-git remote add origin https://github.com/YOUR_USERNAME/venira-mcp-coding.git
+git remote add origin https://github.com/YOUR_USERNAME/venira-mcp.git
 
 # 2. Push (this is a fresh repo, so it's a clean push):
 git push -u origin main

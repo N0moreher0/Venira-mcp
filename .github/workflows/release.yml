@@ -45,10 +45,10 @@ jobs:
           # Convenience zip: everything a user needs without npm install
           mkdir -p release/zip-root
           cp -r dist release/zip-root/
-          cp bin/venira-mcp-coding.js release/zip-root/ 2>/dev/null || true
+          cp bin/venira-mcp.js release/zip-root/ 2>/dev/null || true
           cp package.json README.md LICENSE LICENSE-APACHE2.0.txt opencode.example.json release/zip-root/
           cp -r node_modules release/zip-root/
-          cd release/zip-root && zip -qr "../venira-mcp-coding-${TAG_NAME}-standalone.zip" .
+          cd release/zip-root && zip -qr "../venira-mcp-${TAG_NAME}-standalone.zip" .
           cd ../..
 
           ls -lh release/
@@ -152,8 +152,8 @@ jobs:
           generate_release_notes: true
           draft: false
           files: |
-            release/venira-mcp-coding-*.tgz
-            release/venira-mcp-coding-*-standalone.zip
+            release/venira-mcp-*.tgz
+            release/venira-mcp-*-standalone.zip
 
       # ------------------------------------------------------------------
       # Publish to npm via OIDC trusted publishing (no long-lived token).
@@ -185,18 +185,21 @@ jobs:
         id: npm
         run: |
           set -e
-          if npm view venira-mcp-coding version >/dev/null 2>&1; then
+          # 1. Does the package already exist on npm? (venira-mcp OR the
+          #    legacy venira-mcp-coding name — check both)
+          if npm view venira-mcp version >/dev/null 2>&1 || npm view venira-mcp-coding version >/dev/null 2>&1; then
             echo "package_exists=true" >> "$GITHUB_OUTPUT"
-            echo "venira-mcp-coding exists on npm (v$(npm view venira-mcp-coding version))"
+            V=$(npm view venira-mcp version 2>/dev/null || npm view venira-mcp-coding version 2>/dev/null)
+            echo "package exists on npm (v$V)"
           else
             echo "package_exists=false" >> "$GITHUB_OUTPUT"
             echo "::error::First publish must be done manually from a logged-in machine."
-            echo "Run once: npm login; npm publish --access public; npm trust github venira-mcp-coding --repo N0moreher0/Venira-mcp --file release.yml --allow-publish --allow-stage-publish -y"
+            echo "Run once: npm login; npm publish --access public; npm trust github venira-mcp --repo N0moreher0/Venira-mcp --file release.yml --allow-publish --allow-stage-publish -y"
             echo "Subsequent releases will publish automatically via OIDC."
             exit 1
           fi
           cd release
-          TARBALL=$(ls venira-mcp-coding-*.tgz | head -1)
+          TARBALL=$(ls venira-mcp-*.tgz | head -1)
           echo "Publishing $TARBALL via OIDC trusted publishing..."
           npm publish "$TARBALL" --access public
         env:
@@ -206,8 +209,9 @@ jobs:
       - name: Confirm publish
         if: steps.npm.outcome == 'success'
         run: |
-          echo "Published. Current version on npm: $(npm view venira-mcp-coding version)"
-          echo "Users can now run: npx -y venira-mcp-coding"
+          V=$(npm view venira-mcp version 2>/dev/null || npm view venira-mcp-coding version 2>/dev/null)
+          echo "Published. Current version on npm: $V"
+          echo "Users can now run: npx venira-mcp"
 
       - name: Attach checksums + Docker pull commands to release body
         run: |

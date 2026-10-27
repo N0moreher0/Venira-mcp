@@ -3,7 +3,7 @@
   "mcp": {
     "venira": {
       "type": "local",
-      "command": ["npx", "-y", "venira-mcp-coding"],
+      "command": ["npx", "venira-mcp"],
       "enabled": true,
       "environment": {
         "VENIRA_WORKSPACE": "C:\\path\\to\\your-project",

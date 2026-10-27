@@ -1,17 +1,17 @@
 # syntax: Dockerfile (multi-arch)
 
-# Build context: the venira-mcp-coding repo root.
+# Build context: the venira-mcp repo root.
 #
 # Usage:
 #   docker buildx build --platform linux/amd64,linux/arm64 \
-#     -t ghcr.io/<org>/venira-mcp-coding:latest --push .
+#     -t ghcr.io/<org>/venira-mcp:latest --push .
 #
 # Run:
 #   docker run --rm -it \
 #     -v /path/to/project:/workspace \
 #     -e VENIRA_WORKSPACE=/workspace \
 #     -e VENIRA_DATA_DIR=/workspace/data \
-#     ghcr.io/<org>/venira-mcp-coding
+#     ghcr.io/<org>/venira-mcp
 
 FROM node:22-slim AS build
 

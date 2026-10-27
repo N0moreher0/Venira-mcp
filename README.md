@@ -1,10 +1,10 @@
-# venira-mcp-coding
+# venira-mcp
 
 > Fast, workspace-scoped **MCP server for coding agents** (OpenCode, Claude Desktop, any MCP client). 16 tools, structured JSON envelopes, validated read caches, async shell, and full SQLite audit trail — **pure Node, no external binary, no GUI, no network.**
 
 ```
 ┌──────────────┐   stdio (MCP)   ┌────────────────────────────────────────────┐
-│ MCP client    │ ◄──────────────► │  venira-mcp-coding (Node, single process) │
+│ MCP client    │ ◄──────────────► │  venira-mcp (Node, single process)        │
 │ (OpenCode,    │                  │  16 tools · read caches · async shell    │
 │  Claude, ...) │                  │  SQLite audit (WAL) · p50/p95 metrics   │
 └──────────────┘                  └────────────────────────────────────────────┘
@@ -56,26 +56,26 @@ That's it. There is no external binary to build or download.
 ### Run in 30 seconds (npm, recommended)
 
 ```bash
-npm install -g venira-mcp-coding        # or: npx -y venira-mcp-coding (no install)
+npm install -g venira-mcp             # or: npx venira-mcp (no install)
 ```
 
 Once the package is published, `npx` fetches it to a temp dir and runs it —
 no local clone or build needed:
 
 ```bash
-npx -y venira-mcp-coding                # start the MCP server (stdio)
-npx -y venira-mcp-coding --doctor       # run the preflight suite
-npx -y venira-mcp-coding --verify       # run the behavioural regression suite
+npx venira-mcp                        # start the MCP server (stdio)
+npx venira-mcp --doctor               # run the preflight suite
+npx venira-mcp --verify                # run the behavioural regression suite
 ```
 
-The `bin` entry in `package.json` resolves `dist/server.js` relative to the
-installed location, so `npx` works without you having to clone anything.
+The `bin` entry in `package.json` exposes both `venira` and `venira-mcp`,
+so `npx venira` works too.
 
 ### Run from source (developers)
 
 ```bash
-git clone https://github.com/N0moreher0/Venira-mcp.git venira-mcp-coding
-cd venira-mcp-coding
+git clone https://github.com/N0moreher0/Venira-mcp.git venira-mcp
+cd venira-mcp
 npm install
 npm run build          # tsc → dist/
 npm start              # stdio MCP server (attach via your MCP client, or pipe JSON manually)
@@ -85,14 +85,14 @@ npm start              # stdio MCP server (attach via your MCP client, or pipe J
 
 ```bash
 # Build locally
-docker build -t venira-mcp-coding .
+docker build -t venira-mcp .
 
 # Run your project as the workspace
 docker run --rm -it \
   -v /path/to/your/project:/workspace \
   -e VENIRA_WORKSPACE=/workspace \
   -e VENIRA_DATA_DIR=/workspace/data \
-  venira-mcp-coding
+  venira-mcp
 ```
 
 See [`DOCKER.md`](./DOCKER.md) for multi-arch builds and MCP-client
@@ -122,7 +122,7 @@ The simplest form (uses `npx`, no local install needed):
   "mcp": {
     "venira": {
       "type": "local",
-      "command": ["npx", "-y", "venira-mcp-coding"],
+      "command": ["npx", "venira-mcp"],
       "enabled": true,
       "environment": {
         "VENIRA_WORKSPACE": "C:\\path\\to\\your-project",
@@ -141,7 +141,7 @@ Or point at a local build (after `git clone` + `npm install` + `npm run build`):
   "mcp": {
     "venira": {
       "type": "local",
-      "command": ["node", "C:\\path\\to\\venira-mcp-coding\\dist\\server.js"],
+      "command": ["node", "C:\\path\\to\\venira-mcp\\dist\\server.js"],
       "enabled": true,
       "environment": {
         // Root of the workspace. All relative paths resolve against this.
@@ -172,7 +172,7 @@ Or point at a local build (after `git clone` + `npm install` + `npm run build`):
   "mcpServers": {
     "venira": {
       "command": "npx",
-      "args": ["-y", "venira-mcp-coding"],
+      "args": ["venira-mcp"],
       "env": {
         "VENIRA_WORKSPACE": "C:\\path\\to\\your-project",
         "VENIRA_DATA_DIR": "C:\\path\\to\\your-project\\data",
@@ -185,7 +185,7 @@ Or point at a local build (after `git clone` + `npm install` + `npm run build`):
 ```
 
 > For a local build (not yet published to npm), use
-> `"command": "node", "args": ["C:\\path\\to\\venira-mcp-coding\\dist\\server.js"]`
+> `"command": "node", "args": ["C:\\path\\to\\venira-mcp\\dist\\server.js"]`
 > instead of `npx`.
 
 ### 3.3 Environment variables (full reference)
@@ -284,7 +284,7 @@ prompt-driven and tool-discovery-driven clients get the same signal.
 ## 5. Architecture
 
 ```
-venira-mcp-coding/
+venira-mcp/
 ├── server.ts                 # MCP entry point: McpServer + StdioTransport, warm-up, shutdown
 ├── tools/
 │   └── project.ts            # 16 tool registrations, serial queue, caches, shell tracking,
@@ -562,7 +562,7 @@ npm run bench:mcp    # end-to-end numbers
 | Read cache seems stale | It should not — reads are mtime+size validated. If you see it, check that the filesystem timestamp updates (some network drives delay `mtime`). |
 | Shell command not finishing | `project_shell_status` with `wait_seconds: 30`; check `project_health` → `shells.active` to see which `run_id` is still running. |
 | `better-sqlite3` build failure on install | You're on an unusual platform (musl, exotic arch). Run `npm rebuild better-sqlite3` with build tools (`python3`, `make`, `g++`), or use the Docker image / prebuilt standalone zip instead. |
-| `npx venira-mcp-coding` not found | The package is not published yet. Use a local build: `node <repo>/dist/server.js`. |
+| `npx venira-mcp` not found | The package is not published yet. Use a local build: `node <repo>/dist/server.js`. |
 | `venira.db` won't open in `project_health` | Another process has the WAL locked; make sure only one server instance writes to the same data dir. |
 | Everything slow | Run `project_health` — `queue.depth`, `pending_requests`, and per-op p95 will tell you if it's a bottleneck or a stuck command. |
 

@@ -1,4 +1,4 @@
-# Benchmarks — venira-mcp-coding (standalone)
+# Benchmarks — venira-mcp (standalone)
 
 Repeatable benchmarks. Regenerate with:
 
@@ -9,7 +9,7 @@ npm run bench:mcp    # end-to-end over MCP stdio
 ```
 
 Numbers below are from **2026-10-27** on Windows 11 / NVMe / Node 20, standalone build
-(`venira-mcp-coding@1.0.0`, no external binary).
+(`venira-mcp@1.0.0`, no external binary).
 
 ## 1. End-to-end MCP (`npm run bench:mcp`)
 

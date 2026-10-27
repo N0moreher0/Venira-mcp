@@ -1,4 +1,4 @@
-# PR — venira-mcp-coding
+# PR — venira-mcp
 
 ## What changes and why
 <!-- 1-3 sentences. Link the issue: fixes #123 -->

@@ -1,4 +1,4 @@
-# Contributing to venira-mcp-coding
+# Contributing to venira-mcp
 
 Thanks for contributing. This is a small, fast-moving codebase — keep changes surgical and
 add a `verify.ts` check for any new tool.
@@ -7,7 +7,7 @@ add a `verify.ts` check for any new tool.
 
 ```bash
 git clone <repo-url>
-cd venira-mcp-coding
+cd venira-mcp
 npm install
 npm run build
 npm run doctor          # preflight: workspace, corehost, data dir, audit DB, tools

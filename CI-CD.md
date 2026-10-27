@@ -21,7 +21,7 @@ variables, no external binary needed — the whole suite is self-contained.
 > install scripts are off by default) the `install` script still runs and
 > the prebuild downloads. If a combo lacks a prebuild, the `npm ci` step
 > compiles from source (needs `python3` + build tools, which all three
-> runners already have). The `bin/venira-mcp-coding.js` npx entry also
+> runners already have). The `bin/venira-mcp.js` npx entry also
 > self-heals: if the `.node` binding is missing, it runs `npm rebuild
 > better-sqlite3` before launching.
 
@@ -32,8 +32,8 @@ Three jobs:
 1. **`build`**
    - `npm ci` → `npm run build` → `npm run verify`
    - Produces two artifacts:
-     - `venira-mcp-coding-*.tgz` — the npm package (for `npm install`)
-     - `venira-mcp-coding-*-standalone.zip` — a drop-in bundle with `dist/`,
+     - `venira-mcp-*.tgz` — the npm package (for `npm install`)
+     - `venira-mcp-*-standalone.zip` — a drop-in bundle with `dist/`,
        `node_modules/`, docs, and `opencode.example.json` (no `npm install`
        needed)
 
@@ -83,7 +83,7 @@ repo.
 **One-time setup (on the npm side):**
 
 ```bash
-# As a maintainer of the venira-mcp-coding package:
+# As a maintainer of the venira-mcp package:
 npm login
 npm pkg trust add N0moreher0/Venira-mcp   # register the repo as a trusted publisher
 ```
@@ -103,7 +103,7 @@ secret, no 2FA-bypass GAT.
 > publish *existing* packages. So:
 >
 > ```bash
-> cd venira-mcp-coding-standalone
+> cd venira-mcp-standalone
 > npm login
 > npm publish --access public
 > ```
@@ -113,9 +113,9 @@ secret, no 2FA-bypass GAT.
 After publishing, users can run the MCP server without cloning or installing:
 
 ```bash
-npx -y venira-mcp-coding              # stdio server
-npx -y venira-mcp-coding --doctor     # preflight
-npx -y venira-mcp-coding --verify     # behavioural suite
+npx -y venira-mcp              # stdio server
+npx -y venira-mcp --doctor     # preflight
+npx -y venira-mcp --verify     # behavioural suite
 ```
 
 ## 4. npm v12 notes (install-time security)

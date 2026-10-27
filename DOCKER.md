@@ -1,4 +1,4 @@
-# venira-mcp-coding (standalone)
+# venira-mcp (standalone)
 
 Multi-arch, multi-OS MCP server image. No external backend binary needed —
 the backend is pure Node.
@@ -8,11 +8,11 @@ the backend is pure Node.
 ```bash
 # Linux x86_64 + arm64
 docker buildx build --platform linux/amd64,linux/arm64 \
-  -t ghcr.io/your-org/venira-mcp-coding:latest --push .
+  -t ghcr.io/your-org/venira-mcp:latest --push .
 
 # Local smoke test
-docker build -t venira-mcp-coding . \
-  && docker run --rm -it -v "$PWD:/workspace" venira-mcp-coding
+docker build -t venira-mcp . \
+  && docker run --rm -it -v "$PWD:/workspace" venira-mcp
 ```
 
 ## Run
@@ -23,7 +23,7 @@ docker run --rm -it \
   -v /path/to/your/project:/workspace \
   -e VENIRA_WORKSPACE=/workspace \
   -e VENIRA_DATA_DIR=/workspace/data \
-  venira-mcp-coding
+  venira-mcp
 ```
 
 ## MCP client config (Docker transport)
@@ -41,7 +41,7 @@ support; most use the "command" form that pipes stdio into the container):
         "-v", "C:\\path\\to\\your-project:/workspace",
         "-e", "VENIRA_WORKSPACE=/workspace",
         "-e", "VENIRA_DATA_DIR=/workspace/data",
-        "ghcr.io/your-org/venira-mcp-coding:latest"
+        "ghcr.io/your-org/venira-mcp:latest"
       ],
       "enabled": true
     }
