@@ -197,7 +197,15 @@ jobs:
             exit 1
           fi
           cd release
-          TARBALL=$(ls venira-mcp-*.tgz | head -1)
+          # download-artifact@v4 lays the `release-packages` artifact out flat
+          # in `release/`, so the .tgz / .zip land directly there.
+          echo "Artifacts in release/:"
+          ls -lh
+          TARBALL=$(ls venira-mcp-*.tgz 2>/dev/null | head -1)
+          if [ -z "$TARBALL" ]; then
+            echo "::error::No venira-mcp-*.tgz found in release/ — the build job's Package step did not produce it."
+            exit 1
+          fi
           echo "Publishing $TARBALL via OIDC trusted publishing..."
           # Verbose + capture full error output so the log is actionable.
           if ! npm publish "$TARBALL" --access public --loglevel verbose 2>&1; then
