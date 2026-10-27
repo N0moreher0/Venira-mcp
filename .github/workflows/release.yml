@@ -116,6 +116,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      # Required for npm OIDC trusted publishing (npm exchanges the short-lived
+      # GitHub Actions JWT for a scoped publish credential; no secret stored).
+      id-token: write
     steps:
       - uses: actions/checkout@v4
 
@@ -153,19 +156,35 @@ jobs:
             release/venira-mcp-coding-*-standalone.zip
 
       # ------------------------------------------------------------------
-      # Optional: publish to npm. Only runs when the repo owner has set
-      # the `NPM_TOKEN` secret (Settings → Secrets → Actions → NPM_TOKEN).
-      # The NPM_TOKEN must have "classic" token scope with publish rights.
+      # Publish to npm via OIDC trusted publishing (no long-lived token).
+      #
+      # Why: as of 2026-07, npm's 2FA-bypass granular access tokens (GATs)
+      # are being deprecated for publishing (effective ~2027-01). npm now
+      # recommends OIDC trusted publishing: the workflow requests a short-
+      # lived JWT from GitHub Actions, npm exchanges it for a scoped
+      # publish credential, and nothing long-lived is stored in the repo.
+      #
+      # Prerequisites (one-time, on the npm side):
+      #   1. On npmjs.com: register this repo as a trusted publisher
+      #        (npm pkg trust add, or the web UI: package → Trusted
+      #        Publishers → Add publisher → npm → GitHub).
+      #   2. On GitHub: enable Actions (Settings → Actions → General).
+      #
+      # After that, every successful tag push auto-publishes. No secrets.
       # ------------------------------------------------------------------
-      - name: Publish to npm (if NPM_TOKEN is set)
-        if: ${{ env.NPM_TOKEN != '' }}
+      - name: Set up Node for npm publish
+        run: npm i -g node@22 >/dev/null 2>&1 || true
+
+      - name: Publish to npm (OIDC trusted publishing)
         run: |
           cd release
           TARBALL=$(ls venira-mcp-coding-*.tgz | head -1)
+          # With trusted publishing configured on the npm side, GITHUB_ACTIONS=1
+          # plus the `id-token: write` permission below is enough — npm uses
+          # the Actions OIDC token automatically.
           npm publish "$TARBALL" --access public
         env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NPM_CONFIG_REGISTRY: "https://registry.npmjs.org"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Attach checksums + Docker pull commands to release body
         run: |
