@@ -24,14 +24,25 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 
 COPY package.json package-lock.json ./
-# npm ci with better-sqlite3's install script allowed (allowScripts in package.json)
-RUN npm ci --omit=dev
+# Install ALL dependencies in the build stage (including devDependencies for
+# `tsc`). The runtime stage only copies the compiled `dist/` + the runtime
+# `node_modules`, so dev tools never ship in the image.
+#
+# better-sqlite3's install script (prebuild-install || node-gyp rebuild) is
+# allowed via the `allowScripts` allowlist in package.json, so the native
+# .node binding is produced here.
+RUN npm ci
 
 COPY tsconfig.json ./
 COPY lib ./lib
 COPY tools ./tools
 COPY server.ts ./server.ts
 RUN npm run build
+
+# Rebuild better-sqlite3 against the runtime image's Node version if the
+# build and runtime images ever use different Node ABIs.
+# (Here both are node:22-slim, so this is a no-op kept for safety.)
+RUN npm rebuild better-sqlite3
 
 # ---------------------------------------------------------------------------
 # Runtime image
