@@ -172,19 +172,38 @@ jobs:
       #
       # After that, every successful tag push auto-publishes. No secrets.
       # ------------------------------------------------------------------
-      - name: Set up Node for npm publish
-        run: npm i -g node@22 >/dev/null 2>&1 || true
-
-      - name: Publish to npm (OIDC trusted publishing)
+      - name: Publish to npm
+        # Two modes:
+        #  - Package already on npm AND trusted publishing configured:
+        #    npm publish uses the Actions OIDC token automatically (no secret).
+        #  - Package not on npm yet (first publish): fail with a clear
+        #    message to do a one-time manual publish.
+        id: npm
         run: |
+          set -e
+          if npm view venira-mcp-coding version >/dev/null 2>&1; then
+            echo "package_exists=true" >> "$GITHUB_OUTPUT"
+            echo "venira-mcp-coding exists on npm (v$(npm view venira-mcp-coding version))"
+          else
+            echo "package_exists=false" >> "$GITHUB_OUTPUT"
+            echo "::error::First publish must be done manually from a logged-in machine."
+            echo "Run once: npm login; npm publish --access public; npm pkg trust add N0moreher0/Venira-mcp"
+            echo "Subsequent releases will publish automatically via OIDC."
+            exit 1
+          fi
           cd release
           TARBALL=$(ls venira-mcp-coding-*.tgz | head -1)
-          # With trusted publishing configured on the npm side, GITHUB_ACTIONS=1
-          # plus the `id-token: write` permission below is enough — npm uses
-          # the Actions OIDC token automatically.
+          echo "Publishing $TARBALL via OIDC trusted publishing..."
           npm publish "$TARBALL" --access public
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NPM_CONFIG_REGISTRY: "https://registry.npmjs.org"
+
+      - name: Confirm publish
+        if: steps.npm.outcome == 'success'
+        run: |
+          echo "Published. Current version on npm: $(npm view venira-mcp-coding version)"
+          echo "Users can now run: npx -y venira-mcp-coding"
 
       - name: Attach checksums + Docker pull commands to release body
         run: |
