@@ -1,0 +1,30 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "repositoryCaching": "enabled",
+  "schedule": ["after 10am and before 4pm on weekdays"],
+  "prCreation": "not-pending",
+  "gitSubmodules": false,
+  "packageRules": [
+    {
+      "matchManagers": ["npm"],
+      "groupName": "npm",
+      "schedule": ["after 10am and before 4pm on weekdays"]
+    },
+    {
+      "matchPackageNames": ["better-sqlite3"],
+      "enabled": true,
+      "description": "Native module — only bump on minor/major, never auto-merge major."
+    },
+    {
+      "matchPackageNames": ["@modelcontextprotocol/sdk"],
+      "enabled": true,
+      "description": "MCP SDK — major bumps may change the wire protocol; keep a human in the loop."
+    }
+  ],
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "createTime": false
+  },
+  "ignoredPaths": ["package-lock.json"]
+}

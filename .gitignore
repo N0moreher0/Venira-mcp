@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Test / debug fixtures
+.verify-tmp/
+.debug-search*/
+*.tmp
+*.bak
+.edit-test.txt
+
+# Runtime state & logs
+data/
+*.log
+.env
+.env.*
+
+# Editor / OS
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini

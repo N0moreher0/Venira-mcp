@@ -1,0 +1,44 @@
+{
+  "name": "venira-mcp-coding",
+  "version": "1.0.0",
+  "description": "Standalone MCP server for coding agents (OpenCode, Claude Desktop, any MCP client). 16 tools, structured JSON envelopes, validated read caches, async shell, SQLite audit. No external backend required — runs on Node + better-sqlite3 only.",
+  "license": "MIT OR Apache-2.0",
+  "type": "module",
+  "main": "dist/server.js",
+  "bin": {
+    "venira-mcp-coding": "bin/venira-mcp-coding.js"
+  },
+  "files": [
+    "dist/",
+    "bin/",
+    "README.md",
+    "LICENSE",
+    "LICENSE-APACHE2.0.txt",
+    "opencode.example.json",
+    "CONTRIBUTING.md"
+  ],
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "dev": "tsx watch server.ts",
+    "smoke": "tsx scripts/smoke.ts",
+    "bench": "tsx scripts/bench.ts",
+    "bench:mcp": "tsx scripts/bench-mcp.ts",
+    "verify": "tsx scripts/verify.ts",
+    "doctor": "tsx scripts/doctor.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "better-sqlite3": "^11.0.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.0",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}

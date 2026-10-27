@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  test:
+    # Run on every supported OS + Node version.
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node: ["20", "22"]
+        # macOS is darwin, where better-sqlite3 needs a prebuilt binary.
+        # Node 22 + x64/arm64 has prebuilds; Node 20 does too.
+        exclude: []
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Type-check (strict)
+        run: npx tsc --noEmit
+
+      - name: Smoke (in-process backend)
+        run: npm run smoke
+
+      - name: Doctor (preflight)
+        run: npm run doctor
+
+      - name: Verify (behavioural suite)
+        run: npm run verify
+
+      - name: Bench (MCP end-to-end, recorded only)
+        run: npm run bench:mcp
+
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Package dry-run (what would be published)
+        run: |
+          npm pack --dry-run
+          npm pack 2>&1 | tail -5

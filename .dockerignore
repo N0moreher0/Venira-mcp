@@ -1,0 +1,17 @@
+# Docker build cache / intermediate layers
+.docker/
+
+# Runtime data (audit DB, workspace)
+data/
+/workspace/
+
+# Test fixtures
+.verify-tmp/
+.debug-search*/
+*.tmp
+*.bak
+.edit-test.txt
+
+# The standalone zip we build for release (contains node_modules inside)
+release/
+*.tgz
