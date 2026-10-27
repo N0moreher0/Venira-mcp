@@ -1,7 +1,7 @@
 /**
- * Chuẩn hoá envelope cho mọi tool venira:
+ * Standardizes the envelope returned by every venira tool:
  *   { ok, status, request_id, kind, data, truncated, summary, hint, cached, elapsed_ms }
- * và lỗi:
+ * and on failure:
  *   { ok:false, status:"failed", request_id, kind, error:{code, message, retryable}, hint, elapsed_ms }
  */
 import { randomBytes } from "node:crypto";
@@ -319,10 +319,10 @@ const DEFAULT_HINTS: Record<string, string> = {
 };
 
 function classify(raw: string): string {
-  if (/ngoài workspace|outside (the )?workspace/i.test(raw)) return "path_escape";
-  if (/quá thời gian chờ|timed out|timeout/i.test(raw)) return "host_timeout";
-  if (/corehost_rs thoát|corehost exited|EPIPE/i.test(raw)) return "host_unavailable";
-  if (/ENOENT|không tồn tại|not found|does not exist/i.test(raw)) return "not_found";
+  if (/outside (the )?workspace/i.test(raw)) return "path_escape";
+  if (/timed out|timeout/i.test(raw)) return "host_timeout";
+  if (/corehost exited|EPIPE/i.test(raw)) return "host_unavailable";
+  if (/ENOENT|not found|does not exist/i.test(raw)) return "not_found";
   if (/EACCES|EPERM|access is denied|permission denied/i.test(raw)) return "io_error";
   return "internal";
 }

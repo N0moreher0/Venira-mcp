@@ -20,8 +20,8 @@ import { VERSION } from "../lib/version.js";
 import { toHostPath, UNRESTRICTED, WORKSPACE } from "../lib/workspace.js";
 
 const PERMISSION_MODE = process.env.VENIRA_PERMISSION_MODE ?? "allow_all";
-// Rust cấp scope "chat-terminal" cho allow_all khi không có Project (giống app Venira).
-// Đặt VENIRA_SESSION_ID để test/verify truy vết được audit rows của riêng phiên này.
+// allow_all grants the "chat-terminal" scope when there is no Project (same as the native app).
+// Set VENIRA_SESSION_ID so test/verify runs can trace their own audit rows.
 export const SESSION_ID =
   process.env.VENIRA_SESSION_ID ?? `opencode-${process.pid}-${randomBytes(3).toString("hex")}`;
 
@@ -37,17 +37,17 @@ const SEARCH_CACHE_MS = envInt("VENIRA_SEARCH_CACHE_MS", 3000);
 const RECENT_CACHE_MS = envInt("VENIRA_RECENT_CACHE_MS", 2000);
 const MAX_BATCH_RESPONSE_BYTES = 2 * 1024 * 1024;
 const MAX_BATCH_ITEM_BYTES = envInt("VENIRA_BATCH_ITEM_BYTES", 512 * 1024);
-const MAX_READ_BYTES = 1048576; // 1 MiB, an toàn hơn native
+const MAX_READ_BYTES = 1048576; // 1 MiB, safer than the native ceiling
 const STARTED_AT = Date.now();
 
 const host = new CoreHost();
 export const closeHost = () => host.close();
 
 // ---------------------------------------------------------------------------
-// Hàng đợi tuần tự: Rust spawn mỗi request lên một blocking thread, mỗi thread
-// lại mở connection SQLite riêng cho audit; gọi song song nhiều request làm
-// audit tranh khóa (chậm gấp 3-4 lần và có thể lỗi audit_unavailable).
-// Gọi tuần tự giữ thread pool ấm, nhanh hơn và ổn định hơn hẳn.
+// Sequential request queue: each request spawns a blocking thread that opens its
+// own SQLite audit connection; parallel requests make the audit WAL lock
+// contend (3-4x slower and can fail with audit_unavailable). Serial calls keep
+// the thread pool warm, faster and far more stable.
 // ---------------------------------------------------------------------------
 let queueTail: Promise<unknown> = Promise.resolve();
 let queueDepth = 0;
@@ -71,9 +71,9 @@ async function runQueued<T>(task: () => Promise<T>): Promise<T> {
 }
 
 // ---------------------------------------------------------------------------
-// Capability sống: mở scope 1 lần rồi dùng lại cho mọi request (TTL 2 giờ).
-// Trước đây mỗi call đều open_scope -> canonicalize + mở handle cho home và
-// từng ổ đĩa, rồi close_scope ngay sau đó.
+// Long-lived capability: open the scope once, reuse it for every request (TTL 2h).
+// Previously each call did open_scope -> canonicalize + open handles for home
+// and each drive, then close_scope right after.
 // ---------------------------------------------------------------------------
 type Capability = { id: string; projectId: string; openedAt: number };
 
@@ -114,7 +114,7 @@ function isCapabilityError(error: unknown): boolean {
   return (
     message.includes("capability is expired or revoked") ||
     message.includes("capability does not match") ||
-    message.includes("corehost_rs thoát")
+    message.includes("corehost exited")
   );
 }
 
@@ -123,7 +123,7 @@ export async function warmUp(): Promise<void> {
     await capabilityReady();
   } catch (error) {
     console.error(
-      "[venira-coding] warmup thất bại:",
+      "[venira-coding] warmup failed:",
       error instanceof Error ? error.message : String(error),
     );
   }
@@ -140,7 +140,7 @@ export async function closeScope(): Promise<void> {
       5_000,
     );
   } catch {
-    /* host đã chết hoặc scope đã hết hạn */
+    /* host already dead or scope already expired */
   }
 }
 
@@ -148,7 +148,7 @@ export async function cancelAllShellRuns(): Promise<void> {
   try {
     await host.call("project_tool.shell.cancel_session", { session_id: SESSION_ID }, 5_000);
   } catch {
-    /* host chưa chạy hoặc đã chết: không có gì để huỷ */
+    /* host not started or already dead: nothing to cancel */
   }
 }
 
@@ -157,7 +157,7 @@ export async function cancelAllShellRuns(): Promise<void> {
 // ---------------------------------------------------------------------------
 type Args = Record<string, unknown>;
 
-/** Đổi các trường đường dẫn sang tuyệt đối trong workspace; bỏ undefined. */
+/** Convert path fields to absolute workspace paths; drop undefined values. */
 function prepare(operation: string, args: Args): Args {
   const out: Args = {};
   for (const [key, value] of Object.entries(args)) {
@@ -179,7 +179,7 @@ function timeoutFor(operation: string, args: Args): number {
   return 30_000;
 }
 
-/** shell_status/cancel không xếp hàng: một lần poll dài không được chặn tool khác. */
+/** shell_status/cancel are not queued: a long poll must never block other tools. */
 const UNQUEUED = new Set(["shell_status", "cancel"]);
 
 async function executeOnce(operation: string, args: Args): Promise<unknown> {
@@ -208,15 +208,15 @@ async function execute(operation: string, args: Args): Promise<RustResponse> {
     return (await executeOnce(operation, args)) as RustResponse;
   } catch (error) {
     if (!isCapabilityError(error)) throw error;
-    // Scope có thể đã hết hạn / host vừa restart: mở lại đúng 1 lần rồi thử lại.
+    // The scope may have expired / the host just restarted: reopen once, then retry.
     capability = null;
     return (await executeOnce(operation, args)) as RustResponse;
   }
 }
 
 // ---------------------------------------------------------------------------
-// Cache đọc: xác thực bằng stat (mtime + size) nên file bị sửa/xoá là tự trượt.
-// list/search/recent dùng TTL ngắn và bị xoá toàn bộ khi có thao tác ghi.
+// Read cache: validated by stat (mtime + size) so edited/deleted files drop out.
+// list/search/recent use short TTLs and are wiped on any mutating op.
 // ---------------------------------------------------------------------------
 type CachedRead = {
   status: string;
@@ -312,7 +312,7 @@ async function readFileCached(args: Args): Promise<Execution> {
   try {
     response = (await execute("read_file", args)) as RustResponse;
   } catch (error) {
-    // Rust gộp "không tồn tại" và "bị khoá" vào io_error; stat lại để trả code đúng.
+    // The backend lumps "does not exist" and "locked" into io_error; stat again to return the right code.
     const signature = await statSignature(absolutePath);
     if (!signature) {
       throw new Error(
@@ -442,8 +442,8 @@ async function searchCached(args: Args): Promise<Execution> {
   const cached = ttlLookup(searchCache, key, SEARCH_CACHE_MS, cacheStats.search);
   if (cached) return { response: cached, cached: true };
   const response = (await execute("search", args)) as RustResponse;
-  // Chỉ cache kết quả COMPLETE và có hits. Kết quả 0-hit không cache để tránh
-  // trả "không có match" từ cache khi file mới vừa được ghi (stale).
+  // Only cache COMPLETE results that have hits. 0-hit results are not cached,
+  // to avoid returning a stale "no match" right after a file was written.
   const data = response.result?.data as { complete?: boolean; hits?: unknown[] } | undefined;
   if (data?.complete !== false && (data?.hits?.length ?? 0) > 0) {
     ttlStore(searchCache, key, response);
@@ -474,7 +474,7 @@ function invalidateListCaches(): void {
 
 const MUTATING = new Set(["write_file", "edit_file", "delete_path", "create_directory"]);
 
-// File đã ghi/sửa trong phiên (project_recent_files trả thêm session_edits).
+// Files written/edited in this session (project_recent_files returns session_edits).
 const recentEdits = new Set<string>();
 function rememberEdit(absolutePath: string): void {
   recentEdits.delete(absolutePath);
@@ -528,7 +528,7 @@ async function executeCached(operation: string, args: Args): Promise<Execution> 
       invalidatePath(absolutePath);
       rememberEdit(absolutePath);
     } catch {
-      /* path không hợp lệ thì Rust đã trả lỗi, không cần dọn cache */
+      /* an invalid path already returned an error; no cache to clean */
     }
     invalidateListCaches();
   }
@@ -739,7 +739,7 @@ async function runReadRanges(args: Args): Promise<ToolResult> {
 }
 
 // ---------------------------------------------------------------------------
-// project_recent_files: quét filesystem có giới hạn (không có backend Rust).
+// project_recent_files: bounded filesystem scan (no external backend).
 // ---------------------------------------------------------------------------
 const IGNORED_DIRS = new Set([
   ".git",
@@ -892,11 +892,11 @@ async function runRecentFiles(args: Args): Promise<ToolResult> {
   }
 }
 
-// Theo dõi file đã ghi/sửa trong phiên để project_recent_files trả thêm context.
+// Track files written/edited in this session so project_recent_files can add context.
 
 // ---------------------------------------------------------------------------
-// project_create (gộp file + directory, đồng bộ với tool `project_create` của app native).
-// Không đổi IPC Rust (backend có sẵn `write_file` + `create_directory`).
+// project_create (unified file + directory, kept in sync with the native app tool).
+// No backend change needed (`write_file` + `create_directory` already exist).
 // ---------------------------------------------------------------------------
 async function runCreate(args: Args): Promise<ToolResult> {
   const started = performance.now();
@@ -904,7 +904,7 @@ async function runCreate(args: Args): Promise<ToolResult> {
   const kind = args.kind;
   if (kind === "directory") {
     if (args.content) {
-      const fail = errorEnvelope("create", new Error("[invalid_request] kind=directory không nhận `content`. Bỏ content hoặc dùng kind=file. Hint: Dùng write_file cho file, create_directory cho thư mục."), { requestId, elapsedMs: performance.now() - started });
+      const fail = errorEnvelope("create", new Error("[invalid_request] kind=directory does not accept `content`. Drop content or use kind=file. Hint: use write_file for files, create_directory for directories."), { requestId, elapsedMs: performance.now() - started });
       recordMetric("create", performance.now() - started, false);
       return toolResult(fail, true);
     }
@@ -914,11 +914,11 @@ async function runCreate(args: Args): Promise<ToolResult> {
   }
   if (kind !== "file") {
     recordMetric("create", performance.now() - started, false);
-    return toolResult(errorEnvelope("create", new Error(`[invalid_request] \`kind\` phải là "file" hoặc "directory". Nhận: ${JSON.stringify(kind)}.`), { requestId, elapsedMs: performance.now() - started }), true);
+    return toolResult(errorEnvelope("create", new Error(`[invalid_request] \`kind\` must be "file" or "directory". Received: ${JSON.stringify(kind)}.`), { requestId, elapsedMs: performance.now() - started }), true);
   }
   if (typeof args.content !== "string") {
     recordMetric("create", performance.now() - started, false);
-    return toolResult(errorEnvelope("create", new Error("[invalid_request] kind=file cần `content` (chuỗi UTF-8; file rỗng dùng \"\")."), { requestId, elapsedMs: performance.now() - started }), true);
+    return toolResult(errorEnvelope("create", new Error("[invalid_request] kind=file requires `content` (a UTF-8 string; use an empty string \"\" for an empty file)."), { requestId, elapsedMs: performance.now() - started }), true);
   }
   const fileParams: Args = { relative_path: args.relative_path, content: args.content, create_dirs: args.create_dirs ?? true };
   if (args.mode !== undefined) fileParams.mode = args.mode;
@@ -1088,9 +1088,9 @@ async function runHealth(args: Args): Promise<ToolResult> {
 }
 
 // ---------------------------------------------------------------------------
-// Đăng ký tool
+// Tool registration
 // ---------------------------------------------------------------------------
-const path_ = z.string().describe("Đường dẫn trong workspace (tương đối hoặc tuyệt đối trong workspace)");
+const path_ = z.string().describe("Path inside the workspace (relative, or absolute inside the workspace)");
 const editOp = z.object({
   old_text: z.string(),
   new_text: z.string(),
@@ -1132,12 +1132,12 @@ export function registerProjectTools(server: McpServer): void {
     "project_list_files",
     {
       ...config(
-        "Liệt kê file/thư mục trong workspace. depth 1..3 để xem cây trong một lần gọi.",
+        "List files/directories in the workspace. depth 1..3 shows the tree in a single call.",
         "List files",
         {
-          use_when: "cần xem cây thư mục, kiểm tra path, hoặc lấy danh sách file trước khi đọc.",
-          avoid_when: "chỉ cần metadata 1 file (project_get_file_info) hoặc nội dung 1 file (project_read_file).",
-          speed_profile: "nhanh; cache TTL 1.5s, tự xoá khi ghi/sửa/xoá.",
+          use_when: "you need to see the directory tree, check a path, or list files before reading.",
+          avoid_when: "you only need one file's metadata (project_get_file_info) or one file's contents (project_read_file).",
+          speed_profile: "fast; TTL cache 1.5s, auto-wiped on write/edit/delete.",
           output_kind: "file_list: entries, truncated, hint.",
           batch_safe: true,
         },
@@ -1157,12 +1157,12 @@ export function registerProjectTools(server: McpServer): void {
     "project_read_file",
     {
       ...config(
-        "Đọc file text, tuỳ chọn theo khoảng dòng (1-based). Kết quả có next_start_line nếu bị cắt.",
+        "Read a text file, optionally by line range (1-based). The result carries next_start_line when truncated.",
         "Read file",
         {
-          use_when: "cần nội dung 1 file, hoặc 1 khoảng dòng của file lớn.",
-          avoid_when: "cần đọc từ 2 file trở lên (project_read_batch) hoặc chỉ cần metadata (project_get_file_info).",
-          speed_profile: "rất nhanh khi lặp lại; cache xác thực bằng mtime+size.",
+          use_when: "you need the contents of one file, or one line range of a large file.",
+          avoid_when: "you need to read 2+ files (project_read_batch) or only need metadata (project_get_file_info).",
+          speed_profile: "very fast on repeat; cache validated by mtime+size.",
           output_kind: "file_read: text, first_line, last_line, total_bytes, next_start_line.",
           batch_safe: true,
         },
@@ -1186,13 +1186,13 @@ export function registerProjectTools(server: McpServer): void {
     "project_read_ranges",
     {
       ...config(
-        "Đọc nhiều khoảng dòng của CÙNG một file trong 1 lần gọi (tối đa 16 range).",
+        "Read multiple disjoint line ranges of the SAME file in a single call (max 16 ranges).",
         "Read file ranges",
         {
-          use_when: "cần nhiều đoạn rời của một file (ví dụ quanh các search hit) mà không muốn nhiều round-trip.",
-          avoid_when: "cần cả file (project_read_file) hoặc nhiều file khác nhau (project_read_batch).",
-          speed_profile: "nhanh; tận dụng cache read_file theo từng range.",
-          output_kind: "file_read_ranges: ranges[] với text/truncated/next_start_line.",
+          use_when: "you need several disjoint segments of one file (e.g. around search hits) without multiple round-trips.",
+          avoid_when: "you need the whole file (project_read_file) or different files (project_read_batch).",
+          speed_profile: "fast; reuses the per-range read_file cache.",
+          output_kind: "file_read_ranges: ranges[] with text/truncated/next_start_line.",
           batch_safe: false,
         },
         { readOnlyHint: true, openWorldHint: false },
@@ -1218,12 +1218,12 @@ export function registerProjectTools(server: McpServer): void {
     "project_get_file_info",
     {
       ...config(
-        "Metadata của file/thư mục (kind, kích thước, thời gian sửa).",
+        "File/directory metadata (kind, size, modification time).",
         "Get file info",
         {
-          use_when: "chỉ cần size/mtime/kind, hoặc kiểm tra path tồn tại.",
-          avoid_when: "cần nội dung file (project_read_file).",
-          speed_profile: "rất nhanh; cache xác thực bằng mtime+size.",
+          use_when: "you only need size/mtime/kind, or want to check that a path exists.",
+          avoid_when: "you need the file's contents (project_read_file).",
+          speed_profile: "very fast; cache validated by mtime+size.",
           output_kind: "file_info: relative_path, kind, size_bytes, modified_unix_seconds.",
           batch_safe: true,
         },
@@ -1238,12 +1238,12 @@ export function registerProjectTools(server: McpServer): void {
     "project_search",
     {
       ...config(
-        "Tìm theo tên file, tên thư mục, nội dung (literal hoặc regex=true) hoặc dòng khai báo symbol (definition).",
+        "Search by file name, directory name, content (literal or regex=true), or symbol declaration lines (definition).",
         "Search workspace",
         {
-          use_when: "cần tìm code/chuỗi/symbol trước khi đọc; dùng kind=literal_content hoặc definition.",
-          avoid_when: "đã biết chính xác path cần đọc.",
-          speed_profile: "trung bình (quét file); cache TTL 3s cho cùng query.",
+          use_when: "you need to find code/strings/symbols before reading; use kind=literal_content or definition.",
+          avoid_when: "you already know the exact path to read.",
+          speed_profile: "medium (file scan); TTL cache 3s for the same query.",
           output_kind: "search: hits, complete, diagnostics, hint.",
           batch_safe: true,
         },
@@ -1271,12 +1271,12 @@ export function registerProjectTools(server: McpServer): void {
     "project_recent_files",
     {
       ...config(
-        "Liệt kê file sửa gần đây nhất trong workspace (quét filesystem có giới hạn, bỏ qua node_modules/target/.git).",
+        "List files modified most recently in the workspace (bounded filesystem scan, skips node_modules/target/.git).",
         "Recent files",
         {
-          use_when: "cần biết file nào vừa thay đổi, hoặc chọn file để đọc tiếp trong phiên làm việc.",
-          avoid_when: "cần danh sách đầy đủ/theo tên (project_list_files) hoặc tìm nội dung (project_search).",
-          speed_profile: "trung bình (đi filesystem); cache TTL 2s, giới hạn 4000 file/300 thư mục.",
+          use_when: "you need to know which files just changed, or to pick the next file to read in this session.",
+          avoid_when: "you need the full list / by name (project_list_files) or content search (project_search).",
+          speed_profile: "medium (filesystem walk); TTL cache 2s, bounded to 4000 files / 300 directories.",
           output_kind: "recent_files: entries[] sorted by mtime desc, scanned_files, truncated.",
           batch_safe: false,
         },
@@ -1296,13 +1296,13 @@ export function registerProjectTools(server: McpServer): void {
     "project_read_batch",
     {
       ...config(
-        "Chạy tối đa 8 thao tác CHỈ-ĐỌC (list_files, read_file, get_file_info, search) trong một lần gọi; read/info dùng cache nên lặp lại rất nhanh.",
+        "Run up to 8 READ-ONLY ops (list_files, read_file, get_file_info, search) in one call; read/info use the cache so repeats are very fast.",
         "Batch read",
         {
-          use_when: "cần đọc từ 2 file/thao tác trở lên trong cùng một bước (đọc context, quét nhiều file).",
-          avoid_when: "chỉ có 1 thao tác đơn lẻ; hoặc cần thao tác ghi (dùng tool tương ứng).",
-          speed_profile: "nhanh nhất cho read-heavy; chạy tuần tự + cache, có ngân sách response.",
-          output_kind: "read_batch: responses[] (mỗi item là envelope ok/error).",
+          use_when: "you need to read 2+ files/ops in the same step (reading context, scanning several files).",
+          avoid_when: "there is only a single op; or you need a mutating op (use the corresponding tool).",
+          speed_profile: "fastest for read-heavy work; sequential + cached, with a response budget.",
+          output_kind: "read_batch: responses[] (each item is an ok/error envelope).",
           batch_safe: true,
         },
         { readOnlyHint: true, openWorldHint: false },
@@ -1328,12 +1328,12 @@ export function registerProjectTools(server: McpServer): void {
     "project_write_file",
     {
       ...config(
-        "Ghi file. mode=create báo lỗi nếu đã tồn tại; overwrite thay thế; append nối vào cuối.",
+        "Write a file. mode=create errors if it exists; overwrite replaces; append concatenates to the end.",
         "Write file",
         {
-          use_when: "tạo file mới hoặc thay toàn bộ/nối nội dung file.",
-          avoid_when: "chỉ sửa một đoạn nhỏ (project_edit_file) để giữ nguyên phần còn lại.",
-          speed_profile: "nhanh; xoá cache read/list/search của path bị ảnh hưởng.",
+          use_when: "create a new file or replace/append a file's contents.",
+          avoid_when: "only a small section needs to change (project_edit_file) to leave the rest intact.",
+          speed_profile: "fast; clears the read/list/search cache for the affected path.",
           output_kind: "file_written: action, bytes_written, sha256_after.",
           batch_safe: false,
         },
@@ -1354,12 +1354,12 @@ export function registerProjectTools(server: McpServer): void {
     "project_edit_file",
     {
       ...config(
-        "Sửa file bằng thay thế văn bản chính xác: một cặp old_text/new_text, hoặc edits[] cho nhiều đoạn.",
+        "Edit a file by exact text replacement: one old_text/new_text pair, or edits[] for multiple sections.",
         "Edit file",
         {
-          use_when: "sửa một hoặc vài đoạn text đã biết chính xác; có thể kèm expected_sha256 để chống ghi đè.",
-          avoid_when: "cần đổi toàn bộ file (project_write_file) hoặc chưa đọc file để biết old_text.",
-          speed_profile: "nhanh; xoá cache read/list/search của path bị ảnh hưởng.",
+          use_when: "change one or a few text sections whose exact content you know; pair with expected_sha256 to guard against blind overwrites.",
+          avoid_when: "the whole file must change (project_write_file), or you have not read the file to know old_text.",
+          speed_profile: "fast; clears the read/list/search cache for the affected path.",
           output_kind: "file_written: replacements, sha256_before/after.",
           batch_safe: false,
         },
@@ -1380,9 +1380,9 @@ export function registerProjectTools(server: McpServer): void {
   server.registerTool(
     "project_create_directory",
     {
-      ...config("Tạo thư mục (create_parents mặc định true).", "Create directory", {
-        use_when: "cần tạo thư mục trước khi ghi file vào path mới.",
-        avoid_when: "thư mục đã tồn tại hoặc chỉ cần ghi file với create_dirs=true.",
+      ...config("Create a directory (create_parents defaults to true).", "Create directory", {
+        use_when: "a directory must exist before writing a file into a new path.",
+        avoid_when: "the directory already exists, or you only need to write a file with create_dirs=true.",
         speed_profile: "nhanh.",
         output_kind: "directory_created: relative_path.",
         batch_safe: false,
@@ -1398,10 +1398,10 @@ export function registerProjectTools(server: McpServer): void {
   server.registerTool(
     "project_delete_path",
     {
-      ...config("Xoá file hoặc thư mục (thư mục cần recursive=true).", "Delete path", {
-        use_when: "cần xoá hẳn file/thư mục; đã xác định đúng path.",
-        avoid_when: "chỉ cần thay nội dung (write/edit). Đây là thao tác không hoàn tác.",
-        speed_profile: "nhanh; xoá cache read/list/search.",
+      ...config("Delete a file or directory (directories require recursive=true).", "Delete path", {
+        use_when: "a file/directory must be deleted entirely; the path is confirmed.",
+        avoid_when: "you only need to change the content (write/edit). This op is not undoable.",
+        speed_profile: "fast; clears the read/list/search cache.",
         output_kind: "path_deleted: entries_deleted, bytes_deleted.",
         batch_safe: false,
       }, { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false }),
@@ -1417,12 +1417,12 @@ export function registerProjectTools(server: McpServer): void {
     "project_shell_run",
     {
       ...config(
-        `Chạy lệnh shell (cwd mặc định ${WORKSPACE}). Trả run_id ngay; dùng project_shell_status để lấy output.`,
+        `Run a shell command (cwd defaults to ${WORKSPACE}). Returns run_id immediately; use project_shell_status to get the output.`,
         "Shell run (async)",
         {
-          use_when: "build/test/lint/lệnh chạy lâu; trả run_id ngay nên không chặn tool khác.",
-          avoid_when: "lệnh cực ngắn mà bạn cần output ngay (vẫn có thể chạy rồi poll 0s).",
-          speed_profile: "trả về trong ~5ms; thời gian chạy do lệnh quyết định.",
+          use_when: "build/test/lint/long-running commands; returns run_id immediately so it never blocks other tools.",
+          avoid_when: "a very short command whose output you need right now (you can still run it and poll 0s).",
+          speed_profile: "returns in ~5 ms; run time is up to the command.",
           output_kind: "shell_run: run_id, running, exit_code, stdout_tail/stderr_tail.",
           batch_safe: false,
         },
@@ -1441,12 +1441,12 @@ export function registerProjectTools(server: McpServer): void {
     "project_shell_status",
     {
       ...config(
-        "Xem trạng thái + output của lệnh đang chạy. wait_seconds (0..30) chỉ là thời gian chờ quan sát, không phải timeout.",
+        "Check status + output of a running command. wait_seconds (0..30) is an observation window, not a timeout.",
         "Shell status",
         {
-          use_when: "sau project_shell_run; poll cho tới khi running=false.",
-          avoid_when: "chưa có run_id.",
-          speed_profile: "nhanh; không xếp hàng nên không chặn tool khác.",
+          use_when: "after project_shell_run; poll until running=false.",
+          avoid_when: "no run_id available yet.",
+          speed_profile: "fast; not queued so it never blocks other tools.",
           output_kind: "shell_run: running, exit_code, stdout_tail/stderr_tail.",
           batch_safe: false,
         },
@@ -1463,9 +1463,9 @@ export function registerProjectTools(server: McpServer): void {
   server.registerTool(
     "project_shell_cancel",
     {
-      ...config("Dừng một lệnh shell đang chạy theo run_id.", "Shell cancel", {
-        use_when: "lệnh chạy quá lâu hoặc không còn cần kết quả.",
-        avoid_when: "lệnh đã kết thúc (kiểm tra bằng project_shell_status).",
+      ...config("Cancel a running shell command by run_id.", "Shell cancel", {
+        use_when: "the command is running too long or its result is no longer needed.",
+        avoid_when: "the command already finished (check with project_shell_status).",
         speed_profile: "nhanh.",
         output_kind: "cancellation: accepted, cleanup_complete.",
         batch_safe: false,
@@ -1479,13 +1479,13 @@ export function registerProjectTools(server: McpServer): void {
     "project_create",
     {
       ...config(
-        "Tạo thư mục HOẶC file trong MỘT lần gọi (gộp project_create_directory + project_write_file cho trường hợp mới).",
+        "Create a directory OR a file in ONE call (merges project_create_directory + project_write_file for the new-file case).",
         "Create file or directory",
         {
-          use_when: "tạo thư mục (kind=directory) hoặc file mới (kind=file, content+mode); đồng bộ với tool native của app Venira.",
-          avoid_when: "sửa file có sẵn (project_edit_file); ghi đè file đã có mà cần giữ nguyên (project_write_file mode=overwrite vẫn được).",
-          speed_profile: "nhanh; tạo cache invalidation khi ghi/thư mục mới.",
-          output_kind: "directory_created hoặc file_written (kind data theo thao tác).",
+          use_when: "create a directory (kind=directory) or a new file (kind=file, content+mode); kept in sync with the Venira native app tool.",
+          avoid_when: "modifying an existing file (project_edit_file); overwriting a file whose contents must be preserved (project_write_file mode=overwrite still works).",
+          speed_profile: "fast; triggers cache invalidation on write / new directory.",
+          output_kind: "directory_created or file_written (data kind depends on the op).",
           batch_safe: false,
         },
         { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
@@ -1506,12 +1506,12 @@ export function registerProjectTools(server: McpServer): void {
     "project_health",
     {
       ...config(
-        "Chẩn đoán server: corehost/data dir/audit DB, capability, queue depth, cache hit-rate, shell đang chạy, metrics p50/p95.",
+        "Server diagnostics: corehost/data dir/audit DB, capability, queue depth, cache hit-rate, running shells, p50/p95 metrics.",
         "Health & metrics",
         {
-          use_when: "debug chậm/lỗi, kiểm tra corehost/DB/audit trước khi báo lỗi, hoặc xem cache/metrics của phiên.",
-          avoid_when: "đang cần đọc/ghi file bình thường.",
-          speed_profile: "nhanh (~vài ms + 1 query DB audit); include_audit=false để bỏ query DB.",
+          use_when: "debugging slowness/errors, checking the backend/DB/audit before reporting, or inspecting this session's cache/metrics.",
+          avoid_when: "you just need to read/write files normally.",
+          speed_profile: "fast (~a few ms + 1 audit DB query); set include_audit=false to skip the DB query.",
           output_kind: "health: server, corehost, capability, queue, caches, shells, metrics, audit.",
           batch_safe: false,
         },

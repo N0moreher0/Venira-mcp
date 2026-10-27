@@ -1,156 +1,156 @@
 # Venira MCP Coding — Tool Roadmap
 
-## 1) Mục tiêu tổng thể
-- Giữ venira là MCP layer tách khỏi OpenCode.
-- Cải thiện UX chọn tool, output, tốc độ workflow, và tính dễ test.
-- Không cần native hoá ngay; native hoá chỉ là option dài hạn nếu open-code-only.
+## 1) Overall goals
+- Keep venira as an MCP layer decoupled from OpenCode.
+- Improve tool-selection UX, output, workflow speed, and ease of testing.
+- Do not natively integrate just yet; native integration is only a long-term option if it's OpenCode-only.
 
-## 2) Nguyên tắc thiết kế tool
-- Native cho 1 op đơn giản, output không quan trọng.
-- Venira cho read-heavy, batch, async shell, structured envelope.
-- Opencode tool cho metadata/session/worktree/MCP resource.
-- Code Mode helper chỉ dùng để khám phá catalog, không thay thế tool thật.
+## 2) Tool design principles
+- Native for single, simple ops where output doesn't matter much.
+- Venira for read-heavy workloads, batches, async shell, and structured envelopes.
+- OpenCode tools for metadata/session/worktree/MCP resources.
+- Code Mode helpers are used only for exploring the catalog; they don't replace real tools.
 
-## 3) Roadmap chi tiết
+## 3) Detailed roadmap
 
-### Giai đoạn 1: Cải thiện discoverability và tool selection
-1. Đổi helper Code Mode từ `search` thành `findTools` hoặc `listTools`.
-2. Mỗi tool venira bổ sung metadata:
+### Phase 1: Improve discoverability and tool selection
+1. Rename the Code Mode helper from `search` to `findTools` or `listTools`.
+2. Add metadata to each venira tool:
    - `use_when`
    - `avoid_when`
    - `speed_profile`
    - `output_kind`
    - `batch_safe`
-3. Tạo policy file ngắn trong repo, ví dụ `.opencode/tool-policy.md`:
-   - native-first cho single small ops
-   - venira-first cho read-heavy workflow
-   - batch-first với read-only
-   - async shell cho build/test
-4. Viết guideline chọn tool dạng decision tree cho model:
-   - đọc nhiều file? → `project_read_batch`
-   - shell lâu? → `project_shell_run` + `project_shell_status`
-   - cần metadata OpenCode? → `opencode.*`
-   - khám phá tool không chắc? → `findTools`
+3. Create a short policy file in the repo, e.g. `.opencode/tool-policy.md`:
+   - Native-first for single small ops
+   - Venira-first for read-heavy workflows
+   - Batch-first for read-only
+   - Async shell for build/test
+4. Write tool-selection guidelines in decision-tree form for the model:
+   - Reading multiple files? → `project_read_batch`
+   - Long shell? → `project_shell_run` + `project_shell_status`
+   - Need OpenCode metadata? → `opencode.*`
+   - Unsure which tool? → `findTools`
 
-### Giai đoạn 2: Nâng cấp output và UX
-1. Chuẩn hóa response envelope ở mọi tool:
+### Phase 2: Upgrade output and UX
+1. Standardize the response envelope on every tool:
    - `status`
    - `request_id`
    - `kind`
    - `data`
    - `truncated`
    - `hint`
-2. Thêm `hint` cho các lỗi phổ biến:
-   - path ngoài workspace
-   - file không tồn tại
-   - batch chạm limit
-   - search limit quá nhỏ
-3. Cho phép compact output mode mạnh hơn:
-   - `VENIRA_PRETTY=0` mặc định
-   - thêm `VENIRA_OUTPUT_MODE=full|compact|summary`
-4. Bổ sung phần `summary` cho kết quả dài:
+2. Add `hint` for common errors:
+   - Path outside the workspace
+   - File not found
+   - Batch hitting the limit
+   - Search limit too small
+3. Enable a more aggressive compact output mode:
+   - Default is `VENIRA_PRETTY=0`
+   - Add `VENIRA_OUTPUT_MODE=full|compact|summary`
+4. Add a `summary` for long results:
    - `matches_preview`
    - `files_scanned`
    - `next_start_line`
    - `suggested_narrowing`
-5. Chuẩn hóa error format:
+5. Standardize the error format:
    - `code`
    - `message`
    - `retryable`
    - `suggestion`
 
-### Giai đoạn 3: Tối ưu tốc độ workflow
-1. Mở rộng cache đọc:
-   - hiện tại `read_file`, `get_file_info`
-   - bổ sung cache cho `list_files` ngắn hạn nếu cần
-2. Thêm cache index cho `project_search`:
-   - index theo file + line
-   - invalidation bằng mtime/size
-3. Tối ưu `project_read_batch`:
-   - giữ batch nhưng tránh parallel ở tầng Rust nếu audit lock là bottleneck
-   - thêm `max_response_bytes_per_item`
-4. Thêm prewarm mạnh hơn:
-   - mở capability sớm
-   - warm filesystem cache
-   - ping host khi start
-5. Bench tiêu chuẩn:
-   - `bench.ts` cho corehost
-   - `bench-mcp.ts` cho end-to-end
-   - thêm test scenario:
-     - batch 8 cold
-     - batch 8 cached
-     - shell async
-     - search rộng vs hẹp
+### Phase 3: Optimize workflow speed
+1. Extend the read cache:
+   - Currently `read_file`, `get_file_info`
+   - Add a short-lived `list_files` cache if needed
+2. Add a cache index for `project_search`:
+   - Per-file + per-line index
+   - Invalidation via mtime/size
+3. Optimize `project_read_batch`:
+   - Keep the batch but avoid parallelism at the Rust layer when the audit lock is the bottleneck
+   - Add `max_response_bytes_per_item`
+4. Add stronger prewarm:
+   - Open the capability early
+   - Prewarm the filesystem cache
+   - Ping the host on startup
+5. Standard benchmarks:
+   - `bench.ts` for the corehost
+   - `bench-mcp.ts` for end-to-end
+   - Add test scenarios:
+     - Batch 8 cold
+     - Batch 8 cached
+     - Shell async
+     - Search wide vs. narrow
 
-### Giai đoạn 4: Tăng reliability và observability
-1. Thêm request tracing:
-   - `request_id` truyền xuyên suốt
-   - log structured output
-   - theo dõi p50/p95 per operation
-2. Thêm health tool:
+### Phase 4: Improve reliability and observability
+1. Add request tracing:
+   - Propagate `request_id` end-to-end
+   - Structured log output
+   - Track p50/p95 per operation
+2. Add a health tool:
    - `project_health`
-   - trả capability status, cache stats, queue depth, shell active runs
-3. Thêm self-test mode:
-   - `npm run verify` giữ nguyên
-   - thêm `npm run doctor` để check:
+   - Report capability state, cache statistics, queue depth, active shell runs
+3. Add a self-test mode:
+   - `npm run verify` stays as-is
+   - Add `npm run doctor` to check:
      - corehost path
-     - data dir
+     - data directory
      - workspace lock
      - permission mode
-     - audit db reachable
-4. Thêm structured diagnostics trong error:
+     - audit DB reachability
+4. Add structured diagnostics in errors:
    - audit_unavailable
    - capability_expired
    - path_escape
    - batch_resource_limit
    - shell_timeout
 
-### Giai đoạn 5: Mở rộng capability tool
-1. Thêm tool nhóm read-heavy:
-   - `project_diff_files` (nếu có backend)
+### Phase 5: Expand capability tools
+1. Add tools in the read-heavy group:
+   - `project_diff_files` (if the backend supports it)
    - `project_outline_symbol`
    - `project_read_ranges`
-2. Thêm tool nhóm code context:
+2. Add tools in the code-context group:
    - `project_symbol_references`
    - `project_file_symbols`
    - `project_recent_files`
-3. Thêm tool nhóm workflow:
+3. Add tools in the workflow group:
    - `project_plan_read_batch`
    - `project_selective_search`
    - `project_explain_error`
-4. Bổ sung shell UX:
-   - tail output
-   - exit code sớm
-   - timeout policy rõ ràng
-   - cancel safety
+4. Add shell UX:
+   - Tail output
+   - Early exit codes
+   - Clear timeout policy
+   - Safe cancel
 
-### Giai đoạn 6: Cân nhắc native hoá
-1. Chỉ native hoá khi:
-   - OpenCode là runtime duy nhất
-   - overhead MCP đo được thành vấn đề thật
-   - team chấp nhận maintain tool trong OpenCode
-2. Nếu native hoá:
-   - giữ structured envelope
-   - giữ batch + async shell
-   - thêm benchmark native vs MCP
-   - giữ khả năng port lại MCP nếu cần
-3. Nếu không native hoá:
-   - tối ưu transport
-   - giảm serialize cost
-   - cache catalog
-   - tối ưu startup/warm-up
+### Phase 6: Consider native integration
+1. Only do native integration when:
+   - OpenCode is the sole runtime
+   - The measured MCP overhead is a real problem
+   - The team accepts maintaining the tools inside OpenCode
+2. When going native:
+   - Keep the structured envelope
+   - Keep batch + async shell
+   - Add a native vs. MCP benchmark
+   - Keep the option to port back to MCP if needed
+3. When not going native:
+   - Optimize the transport
+   - Reduce serialization cost
+   - Cache the catalog
+   - Optimize startup/warmup
 
-## 4) Ưu tiên nên làm ngay
-- P0: đổi tên helper `search` → `findTools`
-- P0: thêm `use_when`/`avoid_when` cho từng tool
-- P1: chuẩn hóa `hint` trong error
-- P1: tăng cache cho read-heavy workflow
-- P2: thêm `project_health`
-- P2: mở rộng bench/verify scenarios
+## 4) Priorities for immediate action
+- P0: Rename the helper from `search` → `findTools`
+- P0: Add `use_when`/`avoid_when` to every tool
+- P1: Standardize `hint` in errors
+- P1: Add caching for read-heavy workflows
+- P2: Add `project_health`
+- P2: Expand bench/verify scenarios
 
-## 5) Định nghĩa thành công
-- Model chọn đúng tool theo quy tắc rõ, không bị trộn native/venira/opencode.
-- Output đủ rõ để debug mà không cần dump JSON dài.
-- Workflow nhiều thao tác giảm round-trip rõ rệt.
-- Tốc độ chấp nhận được, chênh lệch với native không làm xấu UX.
-- Có test/bench chứng minh cải thiện, không chỉ cảm tính.
+## 5) Definition of done
+- The model picks the right tool per clear rules; no confusion between native/venira/opencode.
+- Output is clear enough to debug without dumping long JSON.
+- Multi-op workflows measurably reduce round-trips.
+- Speed is acceptable, and the delta vs. native doesn't degrade the UX.
+- There are tests/benchmarks that prove the improvements, not just vibes.

@@ -1,9 +1,9 @@
 /**
- * Verify hành vi MCP sau refactoring envelope (ok/kind/data/hint), cache invalidation,
- * batch, shell, lỗi chuẩn hoàn chỉnh, envelope cho health/recent_files/read_ranges,
- * summary mode (nếu spawn client nhị phân), metrics, tool annotations.
+ * Verify MCP behaviour after the envelope refactor (ok/kind/data/hint), cache invalidation,
+ * batch, shell, full error standards, envelopes for health/recent_files/read_ranges,
+ * summary mode (when spawning a binary client), metrics, tool annotations.
  *
- * Cố định session để audit rows thuộc riêng phiên này.
+ * Fix the session so audit rows belong to this run only.
  */
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -22,7 +22,7 @@ function verifyEnv(extraEnv: Record<string, string> = {}, outputMode = "full") {
   };
 }
 
-// Client thứ 2 để test VENIRA_OUTPUT_MODE=summary
+// Second client to test VENIRA_OUTPUT_MODE=summary
 const createClient = (extraEnv: Record<string, string> = {}) => {
   const transport = new StdioClientTransport({
     command: "node",
@@ -38,7 +38,7 @@ const transport = new StdioClientTransport({
   command: "node",
   args: ["dist/server.js"],
   cwd: process.cwd(),
-  env: verifyEnv({}, "full"), // full mode cho verify phần còn lại
+  env: verifyEnv({}, "full"), // full mode for the remaining checks
   stderr: "pipe",
 });
 const client = new Client({ name: "verify", version: "0.0.0" }, { capabilities: {} });
@@ -56,7 +56,7 @@ await fs.mkdir(dir, { recursive: true });
 const names = Array.from({ length: 8 }, (_, i) => `${dir}/f${i}.txt`);
 await Promise.all(names.map((name, i) => fs.writeFile(name, `noi dung ${i}\n`.repeat(50))));
 
-// 1. Instructions và annotations
+// 1. Instructions and annotations
 console.log("[verify] checking instructions...");
 const client2 = await new Client({ name: "verify-instr", version: "0.0.0" }, { capabilities: {} });
 const instrTransport = new StdioClientTransport({
@@ -87,7 +87,7 @@ tools.tools.forEach((t) => {
   check(`description_${t.name}_has_avoid_when`, hasAvoidWhen ?? !!meta?.venira?.avoid_when, undefined);
 });
 
-// 2. Batch lần đầu (cold)
+// 2. First batch (cold)
 console.log("[verify] checking cold batch...");
 let started = performance.now();
 const firstBatch = await call("project_read_batch", {
@@ -111,7 +111,7 @@ if (parsed.ok) {
   });
 }
 
-// 3. Batch lần 2 (cached)
+// 3. Second batch (cached)
 started = performance.now();
 await call("project_read_batch", {
   requests: names.map((relative_path) => ({ operation: "read_file", arguments: { relative_path } })),
@@ -133,7 +133,7 @@ check(
   secondRead.data?.text?.slice(0, 60),
 );
 
-// 5. Ghi qua tool rồi edit invalidation
+// 5. Write via tool then edit invalidation
 await call("project_write_file", { relative_path: `${dir}/written.txt`, content: "ban dau\n" });
 const beforeEdit = await runRead(`${dir}/written.txt`);
 await call("project_edit_file", { relative_path: `${dir}/written.txt`, old_text: "ban dau", new_text: "da sua" });
@@ -161,7 +161,7 @@ check(
   rangedData.data?.text,
 );
 
-// 8. Lỗi file không tồn tại / path_escape
+// 8. Missing file error / path_escape
 const missing = await call("project_read_file", { relative_path: `${dir}/khong-ton-tai.txt` });
 check("missing_file_isError", (missing as { isError?: boolean }).isError === true, missing);
 
@@ -190,7 +190,7 @@ const search1 = await call("project_search", {
 const search1Data = JSON.parse((search1 as { content?: { text?: string }[] })?.content?.[0]?.text ?? "{}");
 check("search_hits", Array.isArray(search1Data.data?.hits), Object.keys(search1Data.data ?? {}));
 await call("project_write_file", { relative_path: `${dir}/search-token.txt`, content: `${token}\n` });
-await new Promise((resolve) => setTimeout(resolve, 3200)); // chờ search cache hết TTL
+await new Promise((resolve) => setTimeout(resolve, 3200)); // wait for search cache TTL to expire
 const search2 = await call("project_search", {
   query: token,
   kind: "literal_content",
@@ -222,11 +222,11 @@ const list2Data = JSON.parse((list2 as { content?: { text?: string }[] })?.conte
 const list2Count = list2Data.data?.entries?.length ?? 0;
 check("list_cache_invalidate_after_write", list2Count === list1Count + 1, { list1Count, list2Count });
 
-// 12. Compact JSON: text phải là 1 dòng
+// 12. Compact JSON: text must be a single line
 results.compact_single_line = !textOf(await call("project_read_file", { relative_path: "package.json" })).includes("\n  ");
 
-// 13. search: cached HIT sau mutation phải phản ánh nội dung MỚI (proof rằng
-// invalidateListCaches thật sự xoá search cache, không phải chờ TTL hết hạn).
+// 13. search: a cached HIT after a mutation must reflect the NEW content (proof that
+// invalidateListCaches actually clears the search cache, not just waiting for TTL to expire).
 await call("project_search", { query: token, kind: "literal_content", relative_path: dir, glob: "*.txt" });
 await call("project_write_file", { relative_path: `${dir}/search-token.txt`, content: "NEW_TOKEN\n" });
 await call("project_write_file", { relative_path: `${dir}/cache-proof.txt`, content: "CACHE_PROOF_TOKEN_XYZ\n" });
@@ -256,7 +256,7 @@ const rS = rangesData.data?.ranges ?? [];
 check("read_ranges_count", rS.length === 2, rS);
 check("read_ranges_have_text", rS[0]?.text && rS[1]?.text, rS);
 
-// 14. Recent files: file ghi gần đây và included trong results
+// 14. Recent files: recently written file included in results
 await call("project_write_file", { relative_path: `${dir}/recent-test.txt`, content: "recent\n" });
 const recent = await call("project_recent_files", { relative_path: dir, limit: 10 });
 const recentData = JSON.parse((recent as { content: { text: string }[] })?.content[0].text ?? "{}");

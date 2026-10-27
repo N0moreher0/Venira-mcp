@@ -48,15 +48,15 @@ async function shutdown(code = 0): Promise<void> {
 }
 
 async function main() {
-  // Spawn corehost + mở capability ngay từ đầu, chạy song song với lúc opencode
-  // bắt tay MCP -> call đầu tiên không phải trả giá khởi động (~15ms).
+  // Open the capability scope up front, in parallel with the MCP handshake,
+  // so the first tool call doesn't pay the ~15 ms scope-open cost.
   void warmUp();
   await server.connect(new StdioServerTransport());
   console.error(
     `[venira-coding] ready v${VERSION} (session ${SESSION_ID}, output ${process.env.VENIRA_OUTPUT_MODE ?? "full"}, ` +
       `workspace ${WORKSPACE}, ${UNRESTRICTED ? "unrestricted" : "locked to workspace"})`,
   );
-  // opencode đóng stdin / kill process: dọn shell + host con.
+  // Client closed stdin / killed the process: cancel shells + close the scope.
   process.stdin.on("end", () => void shutdown());
   process.stdin.on("close", () => void shutdown());
   for (const signal of ["SIGINT", "SIGTERM"] as const) {

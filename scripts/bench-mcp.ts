@@ -1,7 +1,4 @@
-/**
- * Bench end-to-end qua MCP stdio: node dist/server.js.
- * Mở rộng với read_ranges, recent_files, health (dễ đo).
- */
+/** End-to-end MCP bench over stdio: node dist/server.js. Extended with read_ranges, recent_files, health (easy to measure). */
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
@@ -42,7 +39,7 @@ const out: Record<string, unknown> = {};
 const tools = await client.listTools();
 out.tool_count = tools.tools.length;
 
-// Warmup vài lần để cache gắn với một session
+// Warmup a few times to attach the cache to a session
 for (let i = 0; i < 3; i++) await client.callTool({ name: "project_read_file", arguments: { relative_path: "package.json" } });
 
 const first = await call("project_read_file", { relative_path: "server.ts" });

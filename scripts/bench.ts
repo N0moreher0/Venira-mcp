@@ -78,7 +78,7 @@ try {
 
   const files = ["server.ts", "package.json", "tsconfig.json", "lib/workspace.ts", "lib/corehost.ts", "lib/output.ts", "lib/metrics.ts", "lib/version.ts"].map(toHostPath);
 
-  step("direct 8 file tuần tự");
+  step("direct 8 files sequential");
   const dBatchStart = performance.now();
   for (const f of files) await direct("read_file", { relative_path: f });
   results.direct_batch8_seq_ms = +(performance.now() - dBatchStart).toFixed(1);
