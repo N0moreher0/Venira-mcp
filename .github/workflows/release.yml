@@ -166,11 +166,15 @@ jobs:
       #
       # Prerequisites (one-time, on the npm side):
       #   1. On npmjs.com: register this repo as a trusted publisher
-      #        (npm pkg trust add, or the web UI: package → Trusted
-      #        Publishers → Add publisher → npm → GitHub).
+      #        (npm trust github ... --file release.yml, or the web UI).
       #   2. On GitHub: enable Actions (Settings → Actions → General).
       #
-      # After that, every successful tag push auto-publishes. No secrets.
+      # The job-level `id-token: write` permission (declared above) is what
+      # lets npm exchange the OIDC token. After that, every successful tag
+      # push auto-publishes — no secrets.
+      #
+      # This step runs regardless of the Docker job's outcome so a container
+      # hiccup can never block the npm package.
       # ------------------------------------------------------------------
       - name: Publish to npm
         # Two modes:
@@ -187,7 +191,7 @@ jobs:
           else
             echo "package_exists=false" >> "$GITHUB_OUTPUT"
             echo "::error::First publish must be done manually from a logged-in machine."
-            echo "Run once: npm login; npm publish --access public; npm pkg trust add N0moreher0/Venira-mcp"
+            echo "Run once: npm login; npm publish --access public; npm trust github venira-mcp-coding --repo N0moreher0/Venira-mcp --file release.yml --allow-publish --allow-stage-publish -y"
             echo "Subsequent releases will publish automatically via OIDC."
             exit 1
           fi
