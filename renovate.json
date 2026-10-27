@@ -14,12 +14,24 @@
     {
       "matchPackageNames": ["better-sqlite3"],
       "enabled": true,
-      "description": "Native module — only bump on minor/major, never auto-merge major."
+      "description": "Native module — bump minor/patch automatically, but major versions (new Node ABI / glibc changes) always stay manual so the prebuild + allowScripts + CI rebuild path is re-verified by a human first.",
+      "major": {
+        "enabled": true,
+        "automerge": false,
+        "stabilityDays": 3
+      },
+      "minor": {
+        "automerge": true
+      }
     },
     {
       "matchPackageNames": ["@modelcontextprotocol/sdk"],
       "enabled": true,
-      "description": "MCP SDK — major bumps may change the wire protocol; keep a human in the loop."
+      "description": "MCP SDK — major bumps can change the wire protocol / server API; never auto-merge major.",
+      "major": {
+        "automerge": false,
+        "stabilityDays": 7
+      }
     }
   ],
   "vulnerabilityAlerts": {
