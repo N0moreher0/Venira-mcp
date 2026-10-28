@@ -85,6 +85,9 @@ function ensureAuditDb(): Database.Database | null {
       (auditDb.prepare("PRAGMA table_info(project_tool_audit)").all() as Array<{ name: string }>).map((c) => c.name),
     );
     for (const [name, type] of [
+      ["started_at", "INTEGER"],
+      ["completed_at", "INTEGER"],
+      ["elapsed_ms", "INTEGER"],
       ["decision", "TEXT"],
       ["policy_rule", "TEXT"],
       ["command", "TEXT"],
@@ -121,27 +124,31 @@ function auditInsert(row: AuditRow): void {
   const db = ensureAuditDb();
   if (!db) return;
   try {
+    const columns = new Set(
+      (db.prepare("PRAGMA table_info(project_tool_audit)").all() as Array<{ name: string }>).map((c) => c.name),
+    );
+    const entries: Array<[string, unknown]> = [
+      ["session_id", row.session_id],
+      ["project_id", row.project_id],
+      ["operation", row.operation],
+      ["outcome", row.outcome],
+      ["reason_code", row.reason_code ?? "running"],
+      ["request_id", row.request_id ?? null],
+      ["completed_at", row.completed_at ?? null],
+      ["decision", row.decision ?? null],
+      ["policy_rule", row.policy_rule ?? null],
+      ["command", row.command ?? null],
+      ["approver", row.approver ?? null],
+    ];
+    if (columns.has("started_at")) entries.push(["started_at", row.started_at]);
+    if (columns.has("created_at")) entries.push(["created_at", row.started_at]);
+    if (columns.has("elapsed_ms")) entries.push(["elapsed_ms", row.elapsed_ms ?? null]);
+    const colNames = entries.map(([c]) => c).join(", ");
+    const placeholders = entries.map(([c]) => `@${c}`).join(", ");
+    const params = Object.fromEntries(entries);
     db.prepare(
-      `INSERT INTO project_tool_audit
-       (session_id, project_id, operation, outcome, reason_code, request_id, started_at, completed_at, elapsed_ms,
-        decision, policy_rule, command, approver)
-       VALUES (@session_id, @project_id, @operation, @outcome, @reason_code, @request_id, @started_at, @completed_at, @elapsed_ms,
-        @decision, @policy_rule, @command, @approver)`
-    ).run({
-      session_id: row.session_id,
-      project_id: row.project_id,
-      operation: row.operation,
-      outcome: row.outcome,
-      reason_code: row.reason_code ?? null,
-      request_id: row.request_id ?? null,
-      started_at: row.started_at,
-      completed_at: row.completed_at ?? null,
-      elapsed_ms: row.elapsed_ms ?? null,
-      decision: row.decision ?? null,
-      policy_rule: row.policy_rule ?? null,
-      command: row.command ?? null,
-      approver: row.approver ?? null,
-    });
+      `INSERT INTO project_tool_audit (${colNames}) VALUES (${placeholders})`,
+    ).run(params);
   } catch (error) {
     console.error(
       `[corehost] audit write failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -203,7 +210,7 @@ function auditFinish(
        WHERE request_id = @request_id AND session_id = @session_id`
     ).run({
       outcome,
-      reason_code: reasonCode ?? null,
+      reason_code: reasonCode ?? "finished",
       completed_at: completedAt,
       elapsed: completedAt - startedAt,
       request_id: requestId,
