@@ -248,6 +248,8 @@ export type EnvelopeOptions = {
   elapsedMs?: number;
   cached?: boolean;
   hint?: string;
+  /** Extra machine-readable payload for error envelopes (e.g. approval tokens). */
+  data?: unknown;
 };
 
 export function buildEnvelope(
@@ -316,6 +318,12 @@ const DEFAULT_HINTS: Record<string, string> = {
   host_timeout: "The backend did not answer in time; check project_health, then retry once.",
   host_unavailable: "The backend is unavailable; it restarts on the next call. Retry once.",
   internal: "Unexpected error; check project_health and the server stderr log.",
+  approval_required:
+    "Ask the user to confirm. If they approve, retry project_shell_run with the approval_token from data (add approval_scope=\"session\" to approve this command group for a while). Never invent or reuse a token.",
+  approval_invalid:
+    "Tokens are single-use, bound to the exact command and expire after VENIRA_SHELL_APPROVAL_TTL_MS. Call project_shell_run without a token to get a fresh approval_required envelope.",
+  command_denied:
+    "The policy refuses this command in every mode. Do not retry or rephrase to bypass it; ask the user to run it manually if it is genuinely required.",
 };
 
 function classify(raw: string): string {
@@ -356,6 +364,7 @@ export function errorEnvelope(
   options: EnvelopeOptions = {},
 ): Envelope & { error: { code: string; message: string; retryable: boolean } } {
   const failure = parseToolError(error);
+  const hint = options.hint ?? failure.hint;
   return {
     ok: false,
     status: "failed",
@@ -366,7 +375,8 @@ export function errorEnvelope(
       message: failure.message,
       retryable: failure.retryable,
     },
-    ...(failure.hint ? { hint: failure.hint } : {}),
+    ...(hint ? { hint } : {}),
+    ...(options.data !== undefined ? { data: options.data } : {}),
     elapsed_ms: round(options.elapsedMs ?? 0),
   };
 }

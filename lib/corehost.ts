@@ -26,6 +26,22 @@ import path from "node:path";
 import crypto from "node:crypto";
 import Database from "better-sqlite3";
 import type { HostSnapshot } from "./types.js";
+import {
+  commandKey,
+  commandHash,
+  describeShellPolicy,
+  evaluateShellCommand,
+  grantSessionApproval,
+  hasSessionApproval,
+  issueApprovalToken,
+  parseShellCommand,
+  recordApproval,
+  recordDecision,
+  redactSecrets,
+  shellStats,
+  verifyApprovalToken,
+  type Decision,
+} from "./shell-policy.js";
 import { WORKSPACE, UNRESTRICTED, PLATFORM } from "./workspace.js";
 
 // ---------------------------------------------------------------------------
@@ -63,6 +79,19 @@ function ensureAuditDb(): Database.Database | null {
         elapsed_ms INTEGER
       );
     `);
+    // Additive migration for shell-policy auditing. SQLite has no
+    // `ADD COLUMN IF NOT EXISTS`, so probe the table first.
+    const columns = new Set(
+      (auditDb.prepare("PRAGMA table_info(project_tool_audit)").all() as Array<{ name: string }>).map((c) => c.name),
+    );
+    for (const [name, type] of [
+      ["decision", "TEXT"],
+      ["policy_rule", "TEXT"],
+      ["command", "TEXT"],
+      ["approver", "TEXT"],
+    ] as const) {
+      if (!columns.has(name)) auditDb.exec(`ALTER TABLE project_tool_audit ADD COLUMN ${name} ${type}`);
+    }
     return auditDb;
   } catch (error) {
     console.error(
@@ -82,6 +111,10 @@ type AuditRow = {
   started_at: number;
   completed_at?: number | null;
   elapsed_ms?: number | null;
+  decision?: string | null;
+  policy_rule?: string | null;
+  command?: string | null;
+  approver?: string | null;
 };
 
 function auditInsert(row: AuditRow): void {
@@ -90,8 +123,10 @@ function auditInsert(row: AuditRow): void {
   try {
     db.prepare(
       `INSERT INTO project_tool_audit
-       (session_id, project_id, operation, outcome, reason_code, request_id, started_at, completed_at, elapsed_ms)
-       VALUES (@session_id, @project_id, @operation, @outcome, @reason_code, @request_id, @started_at, @completed_at, @elapsed_ms)`
+       (session_id, project_id, operation, outcome, reason_code, request_id, started_at, completed_at, elapsed_ms,
+        decision, policy_rule, command, approver)
+       VALUES (@session_id, @project_id, @operation, @outcome, @reason_code, @request_id, @started_at, @completed_at, @elapsed_ms,
+        @decision, @policy_rule, @command, @approver)`
     ).run({
       session_id: row.session_id,
       project_id: row.project_id,
@@ -102,6 +137,10 @@ function auditInsert(row: AuditRow): void {
       started_at: row.started_at,
       completed_at: row.completed_at ?? null,
       elapsed_ms: row.elapsed_ms ?? null,
+      decision: row.decision ?? null,
+      policy_rule: row.policy_rule ?? null,
+      command: row.command ?? null,
+      approver: row.approver ?? null,
     });
   } catch (error) {
     console.error(
@@ -115,6 +154,7 @@ function auditStart(
   projectId: string,
   operation: string,
   requestId: string,
+  extra: { decision?: string; policy_rule?: string; command?: string; approver?: string } = {},
 ): number {
   const startedAt = Date.now();
   auditInsert({
@@ -124,6 +164,10 @@ function auditStart(
     outcome: "running",
     request_id: requestId,
     started_at: startedAt,
+    decision: extra.decision ?? null,
+    policy_rule: extra.policy_rule ?? null,
+    command: extra.command ?? null,
+    approver: extra.approver ?? null,
   });
   return startedAt;
 }
@@ -170,10 +214,35 @@ function auditFinish(
   }
 }
 
+/** Attach the shell-policy outcome to an audit row (shell operations only). */
+function auditDecision(
+  sessionId: string,
+  requestId: string,
+  extra: { decision?: string; policy_rule?: string; command?: string; approver?: string },
+): void {
+  const db = ensureAuditDb();
+  if (!db) return;
+  try {
+    db.prepare(
+      `UPDATE project_tool_audit
+       SET decision = @decision, policy_rule = @policy_rule, command = @command, approver = @approver
+       WHERE request_id = @request_id AND session_id = @session_id`
+    ).run({
+      decision: extra.decision ?? null,
+      policy_rule: extra.policy_rule ?? null,
+      command: extra.command ?? null,
+      approver: extra.approver ?? null,
+      request_id: requestId,
+      session_id: sessionId,
+    });
+  } catch {
+    /* audit DB may have been closed */
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Capability / scope
 // ---------------------------------------------------------------------------
-
 type Scope = {
   capability_id: string;
   project_id: string;
@@ -237,14 +306,117 @@ type ShellRun = {
   exit_code: number | null;
   cancelled: boolean;
   started_at: number;
+  /** Policy decision that authorised this run (audit + status output). */
+  decision: { tier: string; rule: string; reason: string; approver: string | null };
+  /** Requested timeout (0 = none). */
+  timeout_ms: number;
+  timed_out: boolean;
+  /** Bytes dropped because of the output cap. */
+  dropped_bytes: number;
+  /** setTimeout handle, cleared on exit. */
+  timer: NodeJS.Timeout | null;
 };
 
 const shellRuns = new Map<string, ShellRun>();
 const TAIL_LIMIT = 4000;
 
+/** Hard cap per stream; keeps a runaway build from exhausting server memory. */
+const MAX_OUTPUT_BYTES = (() => {
+  const value = Number(process.env.VENIRA_SHELL_MAX_OUTPUT_BYTES);
+  return Number.isFinite(value) && value > 0 ? value : 1024 * 1024;
+})();
+
+/** Upper bound for a caller-supplied timeout_ms (default: 30 minutes). */
+const MAX_TIMEOUT_MS = (() => {
+  const value = Number(process.env.VENIRA_SHELL_MAX_TIMEOUT_MS);
+  return Number.isFinite(value) && value > 0 ? value : 30 * 60 * 1000;
+})();
+
 function trimTail(buffer: string): string {
   if (buffer.length <= TAIL_LIMIT) return buffer;
   return buffer.slice(-TAIL_LIMIT);
+}
+
+/** Append with a byte cap; returns true when bytes were dropped. */
+function appendCapped(current: string, chunk: string, limit: number): { text: string; dropped: number } {
+  const remaining = limit - current.length;
+  if (remaining <= 0) return { text: current, dropped: chunk.length };
+  if (chunk.length <= remaining) return { text: current + chunk, dropped: 0 };
+  return { text: current + chunk.slice(0, remaining), dropped: chunk.length - remaining };
+}
+
+/**
+ * Environment allow list. The shell inherits only what toolchains actually
+ * need; agent secrets (API keys, registry tokens) are not passed through.
+ * Opt out with VENIRA_SHELL_ENV_PASS_ALL=1, extend with
+ * VENIRA_SHELL_ENV_ALLOW="VAR1,VAR2".
+ */
+const BASE_ENV_ALLOW = [
+  "PATH", "Path", "PATHEXT", "COMSPEC", "ComSpec", "SystemRoot", "SYSTEMROOT", "windir", "WINDIR",
+  "TEMP", "TMP", "TMPDIR", "HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH",
+  "APPDATA", "LOCALAPPDATA", "PROGRAMDATA", "PROGRAMFILES", "PROGRAMFILES(X86)", "COMMONPROGRAMFILES",
+  "USERNAME", "USER", "LOGNAME", "SHELL", "TERM", "LANG", "LC_ALL", "PWD",
+  "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE", "OS",
+  "JAVA_HOME", "DOTNET_ROOT", "GOPATH", "GOROOT", "CARGO_HOME", "RUSTUP_HOME",
+  "PYTHONPATH", "VIRTUAL_ENV", "CONDA_PREFIX", "NVM_HOME", "NVM_SYMLINK",
+  "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "CI",
+];
+
+function buildShellEnv(): NodeJS.ProcessEnv {
+  if (process.env.VENIRA_SHELL_ENV_PASS_ALL === "1") return { ...process.env };
+  const extra = (process.env.VENIRA_SHELL_ENV_ALLOW ?? "")
+    .split(",")
+    .map((name) => name.trim())
+    .filter(Boolean);
+  const allow = new Set([...BASE_ENV_ALLOW, ...extra]);
+  const env: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value !== undefined && allow.has(key)) env[key] = value;
+  }
+  // Keep PATH resolvable even if the host named it unusually.
+  if (!env.PATH && !env.Path && process.env.PATH) env.PATH = process.env.PATH;
+  return env;
+}
+
+/**
+ * Kill the whole process tree, not just the direct child: `npm test` spawns
+ * node which spawns the test runner, and `process.kill(pid)` leaves those
+ * grandchildren running (and holding ports/files).
+ */
+function killTree(child: ChildProcess | null): void {
+  if (!child || child.pid === undefined) return;
+  if (PLATFORM === "win32") {
+    try {
+      spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
+      return;
+    } catch {
+      /* fall through to child.kill */
+    }
+  } else {
+    try {
+      // The child was spawned detached, so it leads its own process group.
+      process.kill(-child.pid, "SIGKILL");
+      return;
+    } catch {
+      /* fall back */
+    }
+  }
+  try {
+    child.kill("SIGKILL");
+  } catch {
+    /* already gone */
+  }
+  recordApproval("killed_tree");
+}
+
+/** Snapshot of policy + runtime counters for project_health. */
+export function shellPolicySnapshot() {
+  return {
+    policy: describeShellPolicy(),
+    stats: shellStats(),
+    limits: { max_output_bytes: MAX_OUTPUT_BYTES, max_timeout_ms: MAX_TIMEOUT_MS, tail_chars: TAIL_LIMIT },
+    tracked_runs: shellRuns.size,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -880,24 +1052,103 @@ function shellCommandFor(shell: string, command: string): { file: string; args: 
   }
 }
 
+function clampTimeout(value: unknown): number {
+  const raw = Number(value ?? 0);
+  if (!Number.isFinite(raw) || raw <= 0) return 0;
+  return Math.min(Math.floor(raw), MAX_TIMEOUT_MS);
+}
+
 async function opShellRun(
   args: Record<string, unknown>,
   root: string,
   sessionId: string,
 ): Promise<RustResponse> {
-  const command = args.command as string;
+  const command = String(args.command ?? "");
+  if (!command.trim()) {
+    throw new Error("[invalid_request] `command` must be a non-empty string.");
+  }
   const shell = (args.shell as string | undefined) ?? process.env.VENIRA_DEFAULT_SHELL ?? defaultShellForPlatform();
   const cwd = resolveInWorkspace(args.relative_cwd as string | undefined, root);
   const runId = crypto.randomUUID().slice(0, 12);
 
+  // -------------------------------------------------------------------------
+  // 1. Policy gate: deny → throw, ask → approval flow, allow → continue.
+  // -------------------------------------------------------------------------
+  const decision = evaluateShellCommand(command, cwd);
+  recordDecision(decision);
+  const parsed = parseShellCommand(command);
+  const approvalKey = commandKey(parsed);
+  let approver: string | null = null;
+
+  if (decision.tier === "deny") {
+    throw new Error(
+      `[command_denied] Blocked by ${decision.rule}: ${decision.reason} ` +
+        `Hint: policy refuses this command; do not retry. Ask the user to run it manually if it is genuinely needed.`,
+    );
+  }
+
+  if (decision.tier === "ask") {
+    const token = typeof args.approval_token === "string" ? args.approval_token.trim() : "";
+    const wantSession = args.approval_scope === "session";
+    if (token) {
+      const verdict = verifyApprovalToken(token, sessionId, decision);
+      if (!verdict.ok) {
+        throw new Error(
+          `[approval_invalid] Approval token ${verdict.reason ?? "rejected"} (rule: ${decision.rule}). ` +
+            `Hint: tokens are single-use and expire; call project_shell_run again without a token to receive a fresh approval_required envelope.`,
+        );
+      }
+      approver = "user:token";
+      recordApproval("approved");
+      if (wantSession) grantSessionApproval(sessionId, decision, approvalKey);
+    } else if (hasSessionApproval(sessionId, decision, approvalKey)) {
+      approver = "user:session";
+      recordApproval("approved");
+    } else {
+      const issued = issueApprovalToken(sessionId, decision);
+      return {
+        status: "completed",
+        result: {
+          kind: "shell_approval",
+          data: {
+            approval_required: true,
+            command: redactSecrets(command),
+            shell,
+            cwd,
+            rule: decision.rule,
+            reason: decision.reason,
+            mode: decision.mode,
+            approval_token: issued.token,
+            expires_at: issued.expires_at,
+            retry_with: {
+              tool: "project_shell_run",
+              arguments: {
+                command,
+                shell,
+                ...(typeof args.relative_cwd === "string" ? { relative_cwd: args.relative_cwd } : {}),
+                approval_token: issued.token,
+              },
+            },
+          },
+        },
+      };
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // 2. Execution with hardening: env scrub, output cap, timeout, tree kill.
+  // -------------------------------------------------------------------------
+  const timeoutMs = clampTimeout(args.timeout_ms);
   const { file, args: spawnArgs } = shellCommandFor(shell, command);
   let child: ChildProcess;
   try {
     child = spawn(file, spawnArgs, {
       cwd,
-      env: { ...process.env },
-      stdio: ["pipe", "pipe", "pipe"],
+      env: buildShellEnv(),
+      stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
+      // POSIX: own process group so a timeout/cancel can kill grandchildren.
+      detached: PLATFORM !== "win32",
     });
   } catch (error) {
     throw new Error(`[io_error] Cannot start shell: ${error instanceof Error ? error.message : String(error)}`);
@@ -917,29 +1168,64 @@ async function opShellRun(
     exit_code: null,
     cancelled: false,
     started_at: Date.now(),
+    decision: { tier: decision.tier, rule: decision.rule, reason: decision.reason, approver },
+    timeout_ms: timeoutMs,
+    timed_out: false,
+    dropped_bytes: 0,
+    timer: null,
   };
   shellRuns.set(runId, run);
 
   child.stdout?.on("data", (chunk: Buffer) => {
-    run.stdout_full += chunk.toString("utf8");
+    const text = chunk.toString("utf8");
+    const out = appendCapped(run.stdout_full, text, MAX_OUTPUT_BYTES);
+    run.stdout_full = out.text;
+    if (out.dropped > 0) {
+      run.dropped_bytes += out.dropped;
+      recordApproval("output_capped");
+    }
     run.stdout_tail = trimTail(run.stdout_full);
   });
   child.stderr?.on("data", (chunk: Buffer) => {
-    run.stderr_full += chunk.toString("utf8");
+    const text = chunk.toString("utf8");
+    const out = appendCapped(run.stderr_full, text, MAX_OUTPUT_BYTES);
+    run.stderr_full = out.text;
+    if (out.dropped > 0) {
+      run.dropped_bytes += out.dropped;
+      recordApproval("output_capped");
+    }
     run.stderr_tail = trimTail(run.stderr_full);
   });
   child.on("exit", (code, signal) => {
     run.running = false;
     run.cancelled = signal === "SIGTERM" || signal === "SIGKILL";
-    run.exit_code = code ?? 0;
+    run.exit_code = code ?? (signal ? -1 : 0);
     run.process = null;
+    if (run.timer) {
+      clearTimeout(run.timer);
+      run.timer = null;
+    }
   });
   child.on("error", (error) => {
     run.running = false;
     run.exit_code = -1;
     run.process = null;
     run.stderr_tail = (run.stderr_tail + `\n[spawn error] ${error.message}`).slice(-TAIL_LIMIT);
+    if (run.timer) {
+      clearTimeout(run.timer);
+      run.timer = null;
+    }
   });
+
+  if (timeoutMs > 0) {
+    run.timer = setTimeout(() => {
+      if (!run.running) return;
+      run.timed_out = true;
+      recordApproval("timed_out");
+      killTree(run.process);
+    }, timeoutMs);
+    run.timer.unref?.();
+  }
 
   // Wait briefly for the process to actually start (or fail immediately).
   await new Promise<void>((resolve) => {
@@ -963,7 +1249,11 @@ async function opShellRun(
         exit_code: run.exit_code,
         stdout_tail: run.stdout_tail,
         stderr_tail: run.stderr_tail,
-        truncated: run.stdout_full.length > TAIL_LIMIT || run.stderr_full.length > TAIL_LIMIT,
+        truncated: run.stdout_full.length >= MAX_OUTPUT_BYTES || run.stderr_full.length >= MAX_OUTPUT_BYTES,
+        dropped_bytes: run.dropped_bytes,
+        timed_out: run.timed_out,
+        timeout_ms: run.timeout_ms,
+        policy: { decision: run.decision.tier, rule: run.decision.rule, mode: decision.mode, approver },
       },
     },
   };
@@ -998,7 +1288,16 @@ async function opShellStatus(
         cancelled: run.cancelled,
         stdout_tail: run.stdout_tail,
         stderr_tail: run.stderr_tail,
-        truncated: run.stdout_full.length > TAIL_LIMIT || run.stderr_full.length > TAIL_LIMIT,
+        truncated: run.stdout_full.length >= MAX_OUTPUT_BYTES || run.stderr_full.length >= MAX_OUTPUT_BYTES,
+        dropped_bytes: run.dropped_bytes,
+        timed_out: run.timed_out,
+        timeout_ms: run.timeout_ms,
+        elapsed_ms: Date.now() - run.started_at,
+        policy: {
+          decision: run.decision.tier,
+          rule: run.decision.rule,
+          approver: run.decision.approver,
+        },
       },
     },
   };
@@ -1010,10 +1309,14 @@ function opShellCancel(args: Record<string, unknown>): RustResponse {
   if (!run) {
     throw new Error(`[not_found] Unknown run_id: ${runId}.`);
   }
-  if (run.running && run.process) {
-    run.process.kill();
+  if (run.running) {
+    killTree(run.process);
     run.cancelled = true;
     run.running = false;
+    if (run.timer) {
+      clearTimeout(run.timer);
+      run.timer = null;
+    }
   }
   return {
     status: "completed",
@@ -1082,11 +1385,15 @@ export class CoreHost {
       }
 
       case "project_tool.shell.cancel_session": {
-        for (const [runId, run] of shellRuns) {
-          if (run.running && run.process) {
-            run.process.kill();
+        for (const [, run] of shellRuns) {
+          if (run.running) {
+            killTree(run.process);
             run.cancelled = true;
             run.running = false;
+            if (run.timer) {
+              clearTimeout(run.timer);
+              run.timer = null;
+            }
           }
         }
         return { cancelled: true } as T;
@@ -1113,9 +1420,46 @@ export class CoreHost {
           return response as T;
         }
         if (operation === "shell_run") {
-          const response = await opShellRun(args, WORKSPACE, sessionId);
-          auditFinish(sessionId, p.project_id ?? "chat-terminal", operation, requestId, startedAt, "succeeded");
-          return response as T;
+          const projectId = p.project_id ?? "chat-terminal";
+          const commandText =
+            typeof args.command === "string" ? redactSecrets(args.command).slice(0, 4000) : null;
+          try {
+            const response = await opShellRun(args, WORKSPACE, sessionId);
+            const data = response.result?.data as Record<string, any> | undefined;
+            const approval = response.result?.kind === "shell_approval";
+            const policy = (data?.policy ?? {}) as Record<string, any>;
+            auditDecision(sessionId, requestId, {
+              decision: approval ? "ask" : (policy.decision as string | undefined),
+              policy_rule: approval ? (data?.rule as string | undefined) : (policy.rule as string | undefined),
+              command: commandText ?? undefined,
+              approver: approval ? "pending" : (policy.approver as string | undefined),
+            });
+            // `ask` did not execute anything: record why the call stopped.
+            if (approval) {
+              auditFinish(sessionId, projectId, operation, requestId, startedAt, "failed", "approval_required");
+            } else {
+              auditFinish(sessionId, projectId, operation, requestId, startedAt, "succeeded");
+            }
+            return response as T;
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            const codeMatch = /^\[([a-z0-9_]+)\]/i.exec(message);
+            const reasonCode = codeMatch ? codeMatch[1] : "operation_failed";
+            const ruleMatch =
+              /Blocked by ([A-Za-z0-9_.]+)/.exec(message) ?? /\(rule: ([A-Za-z0-9_.]+)\)/.exec(message);
+            auditDecision(sessionId, requestId, {
+              decision:
+                reasonCode === "command_denied"
+                  ? "deny"
+                  : reasonCode === "approval_invalid" || reasonCode === "approval_required"
+                    ? "ask"
+                    : undefined,
+              policy_rule: ruleMatch ? ruleMatch[1] : undefined,
+              command: commandText ?? undefined,
+            });
+            auditFinish(sessionId, projectId, operation, requestId, startedAt, "failed", reasonCode);
+            throw error;
+          }
         }
         if (operation === "cancel") {
           const response = opShellCancel(args);
@@ -1149,10 +1493,14 @@ export class CoreHost {
 
   close(): void {
     for (const run of shellRuns.values()) {
-      if (run.running && run.process) {
-        run.process.kill();
+      if (run.running) {
+        killTree(run.process);
         run.cancelled = true;
         run.running = false;
+        if (run.timer) {
+          clearTimeout(run.timer);
+          run.timer = null;
+        }
       }
     }
     shellRuns.clear();

@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
-import { CoreHost } from "../lib/corehost.js";
+import { CoreHost, shellPolicySnapshot } from "../lib/corehost.js";
 import { recordMetric, metricsSnapshot } from "../lib/metrics.js";
 import {
   OUTPUT_MODE,
@@ -539,6 +539,128 @@ async function executeCached(operation: string, args: Args): Promise<Execution> 
 }
 
 // ---------------------------------------------------------------------------
+// Shell approval flow
+// ---------------------------------------------------------------------------
+
+const SHELL_ELICIT = ["1", "true", "on", "yes"].includes(
+  (process.env.VENIRA_SHELL_ELICIT ?? "").toLowerCase(),
+);
+const ELICIT_TIMEOUT_MS = 5 * 60 * 1000;
+
+type ShellApprovalData = {
+  approval_token?: unknown;
+  command?: unknown;
+  rule?: unknown;
+  reason?: unknown;
+  mode?: unknown;
+  expires_at?: unknown;
+};
+
+function approvalFailure(
+  operation: string,
+  data: ShellApprovalData,
+  requestId: string,
+  elapsedMs: number,
+): ToolResult {
+  const token = typeof data.approval_token === "string" ? data.approval_token : "";
+  const reason = typeof data.reason === "string" ? data.reason : "This command requires approval.";
+  const rule = typeof data.rule === "string" ? data.rule : "policy";
+  const hint = token
+    ? `Ask the user to confirm "${String(data.command ?? "").slice(0, 200)}". If they approve, retry project_shell_run with approval_token="${token}"; add approval_scope="session" to approve this command group until the token TTL ends.`
+    : undefined;
+  return toolResult(
+    errorEnvelope(operation, new Error(`[approval_required] ${reason} (rule: ${rule})`), {
+      requestId,
+      elapsedMs,
+      data,
+      hint,
+    }),
+    true,
+  );
+}
+
+/**
+ * Optional MCP elicitation (`VENIRA_SHELL_ELICIT=1`). Clients that do not
+ * advertise the `elicitation` capability are skipped, so the caller still gets
+ * the `approval_required` envelope and a usable token.
+ */
+async function elicitShellApproval(
+  server: McpServer,
+  data: ShellApprovalData,
+): Promise<{ approved: boolean; remember: boolean }> {
+  const capabilities = server.server.getClientCapabilities() as
+    | { elicitation?: unknown }
+    | undefined;
+  if (!capabilities?.elicitation) return { approved: false, remember: false };
+  try {
+    const result = await server.server.elicitInput(
+      {
+        message: `Run this shell command?\n\n${String(data.command ?? "").slice(0, 2000)}\n\nWhy approval is needed: ${String(data.reason ?? "policy")}`,
+        requestedSchema: {
+          type: "object" as const,
+          properties: {
+            approve: {
+              type: "boolean" as const,
+              title: "Run the command",
+              description: "Approve this exact command once.",
+              default: false,
+            },
+            remember: {
+              type: "boolean" as const,
+              title: "Remember for this session",
+              description: "Approve the same command group (e.g. `git push`) until the approval TTL ends.",
+              default: false,
+            },
+          },
+          required: ["approve"],
+        },
+      },
+      { timeout: ELICIT_TIMEOUT_MS },
+    );
+    if (result.action !== "accept") return { approved: false, remember: false };
+    const content = (result.content ?? {}) as { approve?: unknown; remember?: unknown };
+    return { approved: content.approve === true, remember: content.remember === true };
+  } catch (error) {
+    console.error(
+      `[venira-coding] elicitation failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return { approved: false, remember: false };
+  }
+}
+
+async function runShell(args: Args, server: McpServer): Promise<ToolResult> {
+  const started = performance.now();
+  const requestId = newRequestId();
+  try {
+    let { response, cached } = await executeCached("shell_run", args);
+    let data = response.result?.data as ShellApprovalData | undefined;
+
+    if (response.result?.kind === "shell_approval" && SHELL_ELICIT) {
+      const verdict = await elicitShellApproval(server, data ?? {});
+      if (verdict.approved) {
+        const retry: Args = { ...args, approval_token: data?.approval_token };
+        if (verdict.remember) retry.approval_scope = "session";
+        ({ response } = await executeCached("shell_run", retry));
+        data = response.result?.data as ShellApprovalData | undefined;
+        cached = false;
+      }
+    }
+
+    const elapsedMs = performance.now() - started;
+    if (response.result?.kind === "shell_approval") {
+      recordMetric("shell_run", elapsedMs, false);
+      return approvalFailure("shell_run", data ?? {}, requestId, elapsedMs);
+    }
+    recordMetric("shell_run", elapsedMs, true);
+    return toolResult(buildEnvelope("shell_run", response, { requestId, elapsedMs, cached }));
+  } catch (error) {
+    const elapsedMs = performance.now() - started;
+    recordMetric("shell_run", elapsedMs, false);
+    return toolResult(errorEnvelope("shell_run", error, { requestId, elapsedMs }), true);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Tool handlers
 // ---------------------------------------------------------------------------
 async function runOne(operation: string, args: Args, options?: { line_numbers?: boolean }): Promise<ToolResult> {
@@ -1070,6 +1192,7 @@ async function runHealth(args: Args): Promise<ToolResult> {
           .filter(([, state]) => state.running)
           .map(([runId, state]) => ({ run_id: runId, exit_code: state.exit_code })),
         tracked: shellRuns.size,
+        policy: shellPolicySnapshot(),
       },
       metrics: metricsSnapshot(),
       audit: includeAudit ? await auditHealth(dbPath) : { skipped: true },
@@ -1127,7 +1250,26 @@ function config(
   };
 }
 
+/**
+ * `VENIRA_DISABLE_TOOLS="project_shell_run,project_delete_path"` keeps tools
+ * out of `tools/list` entirely, so a client can never call them. This is a
+ * deployment-level switch (env only), not something an agent can change.
+ */
+function applyDisabledTools(server: McpServer): void {
+  const disabled = (process.env.VENIRA_DISABLE_TOOLS ?? "")
+    .split(",")
+    .map((name) => name.trim())
+    .filter(Boolean);
+  if (disabled.length === 0) return;
+  const blocked = new Set(disabled);
+  const original = server.registerTool.bind(server) as (name: string, ...rest: unknown[]) => unknown;
+  server.registerTool = ((name: string, ...rest: unknown[]) =>
+    blocked.has(name) ? undefined : original(name, ...rest)) as unknown as typeof server.registerTool;
+  console.error(`[venira-coding] disabled tools: ${[...blocked].join(", ")}`);
+}
+
 export function registerProjectTools(server: McpServer): void {
+  applyDisabledTools(server);
   server.registerTool(
     "project_list_files",
     {
@@ -1383,7 +1525,7 @@ export function registerProjectTools(server: McpServer): void {
       ...config("Create a directory (create_parents defaults to true).", "Create directory", {
         use_when: "a directory must exist before writing a file into a new path.",
         avoid_when: "the directory already exists, or you only need to write a file with create_dirs=true.",
-        speed_profile: "nhanh.",
+        speed_profile: "fast; create_parents avoids a second call.",
         output_kind: "directory_created: relative_path.",
         batch_safe: false,
       }, { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false }),
@@ -1417,24 +1559,44 @@ export function registerProjectTools(server: McpServer): void {
     "project_shell_run",
     {
       ...config(
-        `Run a shell command (cwd defaults to ${WORKSPACE}). Returns run_id immediately; use project_shell_status to get the output.`,
+        `Run a shell command (cwd defaults to ${WORKSPACE}). Returns run_id immediately; use project_shell_status to get the output. ` +
+          "Commands pass a policy gate: risky ones return an approval_required error with a single-use approval_token; " +
+          "catastrophic ones are denied outright.",
         "Shell run (async)",
         {
-          use_when: "build/test/lint/long-running commands; returns run_id immediately so it never blocks other tools.",
+          use_when:
+            "build/test/lint/long-running commands; returns run_id immediately so it never blocks other tools. " +
+            "After approval_required, ask the user and retry with the approval_token from data.",
           avoid_when: "a very short command whose output you need right now (you can still run it and poll 0s).",
-          speed_profile: "returns in ~5 ms; run time is up to the command.",
-          output_kind: "shell_run: run_id, running, exit_code, stdout_tail/stderr_tail.",
+          speed_profile: "returns in ~5 ms; run time is up to the command (bounded by timeout_ms).",
+          output_kind:
+            "shell_run: run_id, running, exit_code, stdout_tail/stderr_tail, timed_out, policy; " +
+            "approval_required: rule, reason, approval_token, retry_with.",
           batch_safe: false,
         },
         { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
       ),
       inputSchema: {
         shell: z.enum(["powershell", "cmd", "bash"]).optional(),
-        command: z.string(),
-        relative_cwd: z.string().optional(),
+        command: z.string().describe("Command line to execute."),
+        relative_cwd: z.string().optional().describe("Working directory inside the workspace (default: workspace root)."),
+        timeout_ms: z
+          .number()
+          .int()
+          .min(0)
+          .optional()
+          .describe("Kill the whole process tree after this many milliseconds (0 = no timeout; capped by VENIRA_SHELL_MAX_TIMEOUT_MS)."),
+        approval_token: z
+          .string()
+          .optional()
+          .describe("Single-use token from a previous approval_required envelope. Never invent or reuse one."),
+        approval_scope: z
+          .enum(["once", "session"])
+          .optional()
+          .describe("With approval_token: `once` (default) runs this command only; `session` also approves the same command group for the token TTL."),
       },
     },
-    (args) => runOne("shell_run", args),
+    (args) => runShell(args, server),
   );
 
   server.registerTool(
@@ -1466,7 +1628,7 @@ export function registerProjectTools(server: McpServer): void {
       ...config("Cancel a running shell command by run_id.", "Shell cancel", {
         use_when: "the command is running too long or its result is no longer needed.",
         avoid_when: "the command already finished (check with project_shell_status).",
-        speed_profile: "nhanh.",
+        speed_profile: "fast; kills the whole process tree so grandchildren do not keep running.",
         output_kind: "cancellation: accepted, cleanup_complete.",
         batch_safe: false,
       }, { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false }),

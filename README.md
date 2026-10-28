@@ -209,6 +209,15 @@ Or point at a local build (after `git clone` + `npm install` + `npm run build`):
 | `VENIRA_DATA_DIR` | `<workspace>/data` | Where the audit DB (`venira.db`) is created/updated. |
 | `VENIRA_UNRESTRICTED` | `"0"` | `"1"` disables workspace locking (absolute paths anywhere work). **Do not set in production.** |
 | `VENIRA_DEFAULT_SHELL` | platform default | `powershell` / `cmd` / `bash` used when `project_shell_run` receives no `shell` argument. |
+| `VENIRA_SHELL_MODE` | `balanced` | Shell policy mode: `balanced` (deny catastrophes, ask on high risk, allow the rest) · `strict` (allow list + approval for everything else) · `permissive` (only hard denials) · `off` (no policy at all). |
+| `VENIRA_SHELL_POLICY_FILE` | unset | **Explicit** path to a JSON policy (`{ mode, allow[], ask[], deny[] }`). Never read from the workspace, so a cloned repo cannot ship its own permissive policy. |
+| `VENIRA_SHELL_APPROVAL_TTL_MS` | `600000` (10 min) | Lifetime of approval tokens and session grants. |
+| `VENIRA_SHELL_ELICIT` | `"0"` | `"1"` = ask the user through MCP elicitation (when the client supports it) instead of only returning `approval_required`. |
+| `VENIRA_SHELL_MAX_OUTPUT_BYTES` | `1048576` (1 MiB) | Per-stream cap; the excess is dropped and reported as `dropped_bytes`. |
+| `VENIRA_SHELL_MAX_TIMEOUT_MS` | `1800000` (30 min) | Upper bound for `timeout_ms` (0 = no timeout unless the caller asks for one). |
+| `VENIRA_SHELL_ENV_PASS_ALL` | `"0"` | `"1"` passes the full parent environment to the child. Default: allow list only, so agent secrets never reach a command. |
+| `VENIRA_SHELL_ENV_ALLOW` | unset | Extra comma-separated env var names to pass through (e.g. `GITHUB_TOKEN`). |
+| `VENIRA_DISABLE_TOOLS` | unset | Comma-separated tool names to keep out of `tools/list` entirely (e.g. `project_shell_run,project_delete_path`). |
 | `VENIRA_OUTPUT_MODE` | `full` | `full` = complete payloads · `compact` = summary when >8 KB · `summary` = always trimmed previews. |
 | `VENIRA_PRETTY` | `"0"` | `"1"` = 2-space pretty JSON in tool results. |
 | `VENIRA_SESSION_ID` | auto (`opencode-<pid>-<rand>`) | Session tag; audit rows are grouped by it. Useful for verification / parallel test runs. |
@@ -262,13 +271,33 @@ Every tool returns the standard envelope ([§8](#8-envelopes-hints--error-codes)
 | `project_create` | Create a **file or directory in one call** | `kind: "file"` requires `content`; `kind: "directory"` ignores `content` |
 | `project_delete_path` | Delete a file or directory tree | `recursive: true` for directories. **Not undoable.** |
 
-### 4.3 Shell family (async, non-blocking)
+### 4.3 Shell family (async, non-blocking, policy-gated)
 
 | Tool | Purpose | Notes |
 |---|---|---|
-| `project_shell_run` | Run a shell command; returns `run_id` in ~5 ms | `shell`: `powershell` / `cmd` / `bash`; `relative_cwd` optional. stdout/stderr tail captured in-process. |
-| `project_shell_status` | Poll a running command | `wait_seconds` 0–30 is an *observation window*, not a timeout. Deliberately **not queued** behind other calls, not audit-logged (prevents orphan "running" rows). |
-| `project_shell_cancel` | Kill a running command by `run_id` | Also used at MCP shutdown to avoid orphan processes. |
+| `project_shell_run` | Run a shell command; returns `run_id` in ~5 ms | `shell`: `powershell` / `cmd` / `bash` · `relative_cwd` · `timeout_ms` (kills the **process tree**) · `approval_token` + `approval_scope` for the approval flow. stdout/stderr tails captured in-process with a 1 MiB per-stream cap. |
+| `project_shell_status` | Poll a running command | `wait_seconds` 0–30 is an *observation window*, not a timeout. Deliberately **not queued** behind other calls, not audit-logged (prevents orphan "running" rows). Reports `timed_out`, `dropped_bytes` and the policy decision. |
+| `project_shell_cancel` | Kill a running command by `run_id` | Kills the whole tree (`taskkill /T` on Windows, process group on POSIX). Also used at MCP shutdown to avoid orphan processes. |
+
+`project_shell_run` passes a policy gate before anything is spawned:
+
+```jsonc
+// 1) The command needs approval: nothing ran, a token comes back.
+{ "ok": false, "error": { "code": "approval_required", "retryable": false },
+  "data": { "rule": "ask.writes_outside_workspace", "reason": "This command writes or deletes outside the workspace.",
+            "approval_token": "v1.1793…​.9xQ…", "expires_at": 1793176040000,
+            "retry_with": { "tool": "project_shell_run", "arguments": { … } } },
+  "hint": "Ask the user to confirm … retry project_shell_run with approval_token=…" }
+
+// 2) The user approved: retry once with the token (optionally scope=session).
+project_shell_run({ command: "…", approval_token: "v1.…", approval_scope: "session" })
+```
+
+Tokens are HMAC-signed, single-use, bound to the session **and** the exact command
+hash, and expire after `VENIRA_SHELL_APPROVAL_TTL_MS`. `approval_scope: "session"`
+additionally grants the same *rule + command head* (e.g. `git push`) for that TTL, so
+an agent is not blocked on every invocation. Catastrophic commands are refused with
+`command_denied` in every mode — no token can unlock them.
 
 ### 4.4 How the model is told to pick the right tool
 
@@ -353,6 +382,7 @@ This project is intentionally **conservative by default**:
 | **Workspace lock** | ON | `lib/workspace.ts` resolves every path against `VENIRA_WORKSPACE` (or `process.cwd()`). A path that escapes (`../..`, absolute outside root) throws `path_escape`. |
 | **Unrestricted mode** | OFF | `VENIRA_UNRESTRICTED=1` disables the lock (use only when you fully understand the consequences — the agent can read/write anywhere on the machine). |
 | **Shell cwd** | workspace | `project_shell_run` with no `relative_cwd` runs in the workspace root; the command itself is still whatever the agent passes. |
+| **Shell policy** | `balanced` | Hard-coded catastrophes are always denied; risky operations (writes outside workspace, network fetches, package mutation, history rewrite…) require `ask` and receive a single-use, HMAC-signed approval_token. `VENIRA_SHELL_MODE` can be (`strict` / `permissive` / `off`) to adjust granularity. conversation can mark a command known-safe (allow-list) after guidance (the UI does not show raw commands). |
 | **Audit** | ON | Every operation (including failures and cancellations) is written to `project_tool_audit` in a SQLite WAL database. |
 | **`sensitive_result`** | — | The envelope carries `retryable: false` and a "do not retry" hint when content is withheld by policy. |
 | **`expected_sha256`** | opt-in | `project_write_file` / `project_edit_file` / `project_create` accept a content hash; a mismatch aborts with `conflict` — protects against blind overwrites when the agent re-applies an old edit. |
@@ -363,6 +393,64 @@ run destructive shell commands (`rm -rf`, `format`…). The audit log and `proje
 visible *after* the fact; the workspace lock only bounds filesystem access, not shell side-effects.
 If you need hard boundaries, run the MCP server in a container / VM, or drop `VENIRA_DEFAULT_SHELL`
 to a restricted shell profile.
+
+---
+
+### 6.1 Shell policy (hardening for `project_shell_run`)
+
+`venira-mcp` ships with a built‑in policy that guards against the most common destructive patterns while
+still enabling useful workflows:
+
+| Level | What it does | When to use |
+|---|---|---|
+| `balanced` (default) | Never runs a command whose rule is `deny`. Commands matching **ask rules** (writes outside workspace, network access, package mutations, `git push --force`, etc.) return `approval_required` with a signed token. All other commands run. | General interaction with the workspace. |
+| `strict` | Only commands on the **allow‑list** run without approval. Everything else requires approval. Allows a safe environment when you know exactly what tools an agent can invoke. | High‑value or public workspaces where you want to whitelist allowed tools. |
+| `permissive` | Only the hard-coded `deny` rules block execution. All other commands run immediately. *Caution:* this removes the ask protection. | Internal debugging or trusted agents with strict code review. |
+| `off` | No policy at all. Every shell command runs exactly as written. | Development workspaces where you control the sandbox manually. |
+
+The exact list of ask / deny rules is documented in `lib/shell-policy.ts` and can be overridden by a JSON file at **`VENIRA_SHELL_POLICY_FILE`**:
+```jsonc
+{
+  "mode": "balanced",
+  "allow": [{ "command": "npm", "subcommands": ["ci", "test"] }],
+  "ask": [{ "command": "git", "subcommands": ["push"], "reason": "Can rewrite history" }],
+  "deny": [{ "command": "sh", "args_regex": ".*\\|.*\\s+curl.*" }]
+}
+```
+The policy is **never read from the workspace** itself (a cloned repo cannot ship a permissive config).
+
+Approval flow (what the UI sees)
+
+1. An agent calls `project_shell_run`. The server evaluates the command.
+2. If the result is `deny` → an `approved: false` envelope with `code: "command_denied"` (non‑retryable).
+3. If the result is `ask` → an `approved: false` envelope with:
+   - `code: "approval_required"`
+   - `data.approval_token`: HMAC‑signed, bound to the session + command + issue time (expires after `VENIRA_SHELL_APPROVAL_TTL_MS`)
+   - `data.rule` and `data.reason` (human‑readable)
+   - `data.retry_with.tool` and `arguments.approval_token`
+   - optional `data.retry_with.arguments.approval_scope`: `session` upgrades to a TTL grant for the same rule + command head (`git push` ≈ grant for push actions).
+4. The UI can elicit input directly (`VENIRA_SHELL_ELICIT=1` uses `elicitInput` on a client that advertises `elicitation`) or can present a summarized one‑time rule (e.g., "Run `git push`?").
+5. The user confirms. The UI retries `project_shell_run` with `approval_token` and optionally `approval_scope: "session"`.
+
+Approvals are per‑session, per‑rule, per‑command hash. A token cannot be transferred between sessions.
+`V1.<timestamp>.<HMAC>` format makes the token easy to parse but impossible to forge.
+
+Runtime hardening (all modes)
+
+- Process tree kill: timeouts and cancellations invoke `killTree()`, which on Windows uses `taskkill /F /PID /T` and on POSIX sends `SIGKILL` to the whole group. This prevents children (e.g., `npm test` → test runner) from surviving after the parent timeout.
+- Output cap: by default 1 MiB per stream. Surplus is dropped and reported via `dropped_bytes`. Helps runaway builds from exhausting server memory.
+- Environment whitelist: by default the shell inherits only `PATH`, `HOME`, `TERM`, `CI`, and a few other safe variables. Set `VENIRA_SHELL_ENV_PASS_ALL=1` or `VENIRA_SHELL_ENV_ALLOW=VAR1,VAR2` to broaden this.
+- Timeout clamp: a caller can specify `timeout_ms`. The server caps it at `VENIRA_SHELL_MAX_TIMEOUT_MS` (default 30 min) and kills the process tree when exceeded.
+
+Audit coverage (all shell calls)
+
+Every shell command run is logged in `project_tool_audit` with columns:
+- `decision` ("deny" | "ask" | "allow")
+- `policy_rule` (e.g., `deny.pipe_download_to_shell`, `ask.cd_outside_workspace`)
+- `command` (redacted for secrets)
+- `approver` ("pending" | "user:token" | "user:session")
+
+A long‑running command that times out or is killed is recorded with `reason_code: "timed_out"` (or `output_capped`). The `project_health` output includes `shells.policy` (mode, builtin rule counts) and `shells.policy.stats` (evaluated/asked/denied/approved/timed_out).
 
 ---
 
