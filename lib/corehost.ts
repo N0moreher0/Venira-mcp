@@ -95,6 +95,27 @@ function ensureAuditDb(): Database.Database | null {
     ] as const) {
       if (!columns.has(name)) auditDb.exec(`ALTER TABLE project_tool_audit ADD COLUMN ${name} ${type}`);
     }
+    
+    // P2: Recent files index (SQLite cache, updated on write/edit/delete)
+    auditDb.exec(`
+      CREATE TABLE IF NOT EXISTS project_file_index (
+        path TEXT PRIMARY KEY,
+        kind TEXT NOT NULL DEFAULT 'file',
+        mtime_ms INTEGER NOT NULL,
+        size INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_file_index_mtime ON project_file_index(updated_at DESC);
+    `);
+    // Additive migration for the recent-files index (SQLite has no ADD COLUMN IF NOT EXISTS).
+    const indexColumns = new Set(
+      (auditDb.prepare("PRAGMA table_info(project_file_index)").all() as Array<{ name: string }>).map((c) => c.name),
+    );
+    for (const [name, type] of [
+      ["kind", "TEXT NOT NULL DEFAULT 'file'"],
+    ] as const) {
+      if (!indexColumns.has(name)) auditDb.exec(`ALTER TABLE project_file_index ADD COLUMN ${name} ${type}`);
+    }
     return auditDb;
   } catch (error) {
     console.error(
@@ -844,6 +865,13 @@ async function opWriteFile(
     } catch (error) {
       throw new Error(`[io_error] ${error instanceof Error ? error.message : String(error)}`);
     }
+
+    // P2: Update recent-files index
+    recordRecentFile(absPath, root);
+    try {
+      await fs.stat(absPath).then((s) => recordRecentFileMeta(absPath, s));
+    } catch { /* best-effort */ }
+
   }
 
   let sha256After = "";
@@ -879,6 +907,12 @@ async function opEditFile(
   const oldText = args.old_text as string | undefined;
   const newText = args.new_text as string | undefined;
   const replaceAll = args.replace_all === true;
+  
+  // P2: Fuzzy edit support
+  const fuzzyEnabled = (process.env.VENIRA_EDIT_FUZZY ?? "") === "1";
+  const fuzzyDistance = Number(args.fuzzy_distance ?? 3);
+  const ignoreIndentation = args.ignore_indentation === true;
+  const caseInsensitive = args.case_insensitive === true;
 
   const editList = edits ?? (oldText !== undefined ? [{ old_text: oldText, new_text: newText ?? "", replace_all: replaceAll }] : []);
   if (editList.length === 0) {
@@ -902,13 +936,25 @@ async function opEditFile(
   }
 
   let replacements = 0;
+  let usedFuzzy = false;
   for (const edit of editList) {
     const { old_text, new_text, replace_all } = edit;
     if (old_text === new_text) continue;
     let idx = content.indexOf(old_text);
+    
+    // P2: Fuzzy match fallback
+    if (idx === -1 && fuzzyEnabled) {
+      const fuzzyResult = findFuzzyMatch(content, old_text, fuzzyDistance, ignoreIndentation, caseInsensitive);
+      if (fuzzyResult !== -1) {
+        idx = fuzzyResult;
+        usedFuzzy = true;
+        console.error(`[corehost] fuzzy match found at offset ${idx} (distance ${fuzzyDistance})`);
+      }
+    }
+    
     if (idx === -1) {
       throw new Error(
-        `[conflict] old_text not found in ${args.relative_path}. Hint: re-read the file to confirm the exact text.`,
+        `[conflict] old_text not found in ${args.relative_path}. Hint: re-read the file to confirm the exact text.${fuzzyEnabled ? " (Fuzzy edit enabled with distance " + fuzzyDistance + ")" : ""}`,
       );
     }
     if (replace_all || replaceAll) {
@@ -927,6 +973,14 @@ async function opEditFile(
     throw new Error(`[io_error] ${error instanceof Error ? error.message : String(error)}`);
   }
 
+  // P2: Update recent-files index
+  recordRecentFile(absPath, root);
+  try {
+    await fs.stat(absPath).then((s) => {
+      recordRecentFileMeta(absPath, s);
+    });
+  } catch { /* best-effort */ }
+
   let sha256After = "";
   try {
     sha256After = crypto.createHash("sha256").update(Buffer.from(content, "utf8")).digest("hex");
@@ -944,9 +998,129 @@ async function opEditFile(
         replacements,
         sha256_before: sha256Before || undefined,
         sha256_after: sha256After || undefined,
+        fuzzy_used: usedFuzzy || undefined,
       },
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// P2: Recent files index (SQLite)
+// ---------------------------------------------------------------------------
+
+/** Record a file edit in the project_file_index (SQLite) so that
+ *  project_recent_files can use an indexed query instead of a bounded scan.
+ *  Best-effort: errors are logged, never thrown.
+ */
+function recordRecentFile(absPath: string, root: string): void {
+  const db = ensureAuditDb();
+  if (!db) return;
+  const rel = path.relative(root, absPath).replace(/\\/g, "/");
+  try {
+    db.prepare(
+      `INSERT OR REPLACE INTO project_file_index (path, mtime_ms, size, updated_at)
+       VALUES (?, 0, 0, ?)`,
+    ).run(rel, Date.now());
+  } catch (error) {
+    console.error(`[corehost] recent index write failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+/** Update mtime/size for a recently-touched file in the index. */
+function recordRecentFileMeta(absPath: string, stat: { mtimeMs: number; size: number }): void {
+  const db = ensureAuditDb();
+  if (!db) return;
+  const root = WORKSPACE;
+  const rel = path.relative(root, absPath).replace(/\\/g, "/");
+  try {
+    db.prepare(
+      `UPDATE project_file_index SET mtime_ms = ?, size = ?, updated_at = ? WHERE path = ?`,
+    ).run(stat.mtimeMs, stat.size, Date.now(), rel);
+  } catch (error) {
+    console.error(`[corehost] recent index update failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+/** P2: Query the recent-files index, optionally limiting the result. */
+export function queryRecentFiles(limit: number, includeDirs: boolean): Array<{ relative_path: string; mtime_ms: number; size: number; kind: string; updated_at: number }> {
+  const db = ensureAuditDb();
+  if (!db) return [];
+  try {
+    const where = includeDirs ? "" : `WHERE kind = 'file'`;
+    const rows = db.prepare(
+      `SELECT path, mtime_ms, size, kind, updated_at FROM project_file_index ${where} ORDER BY updated_at DESC LIMIT ?`,
+    ).all(limit) as Array<{ path: string; mtime_ms: number; size: number; kind: string; updated_at: number }>
+    return rows.map((r) => ({ relative_path: r.path, mtime_ms: r.mtime_ms, size: r.size, kind: r.kind, updated_at: r.updated_at }));
+  } catch (error) {
+    console.error(`[corehost] recent index query failed: ${error instanceof Error ? error.message : String(error)}`);
+    return [];
+  }
+}
+
+/**
+ * P2: Find the best fuzzy match of `needle` in `haystack` (Levenshtein distance <= maxDist).
+ * Returns the start offset of the best match, or -1 if none found.
+ */
+function findFuzzyMatch(
+  haystack: string,
+  needle: string,
+  maxDistance: number,
+  ignoreIndentation: boolean,
+  caseInsensitive: boolean,
+): number {
+  const hNorm = normalizeForFuzzy(haystack, ignoreIndentation, caseInsensitive);
+  const nNorm = normalizeForFuzzy(needle, ignoreIndentation, caseInsensitive);
+  if (!hNorm || !nNorm) return -1;
+  
+  let bestOffset = -1;
+  let bestDistance = Infinity;
+  
+  // Sliding window: try matching nNorm at every position in hNorm
+  const nLen = nNorm.length;
+  for (let i = 0; i < hNorm.length && i + nLen <= hNorm.length; i++) {
+    const window = hNorm.slice(i, i + nLen);
+    const dist = levenshtein(window, nNorm);
+    if (dist <= maxDistance && dist < bestDistance) {
+      bestDistance = dist;
+      bestOffset = i;
+    }
+  }
+  return bestOffset;
+}
+
+/** Normalize for fuzzy matching: collapse whitespace, optionally lowercase. */
+function normalizeForFuzzy(text: string, ignoreIndentation: boolean, caseInsensitive: boolean): string {
+  let s = text;
+  if (ignoreIndentation) {
+    // Collapse leading whitespace
+    s = s.replace(/^\s+/, "").replace(/\n/g, "\n").replace(/( +)(\t)/g, "$2");
+  } else {
+    // Collapse consecutive whitespace
+    s = s.replace(/\s+/g, " ").trim();
+  }
+  if (caseInsensitive) s = s.toLowerCase();
+  return s;
+}
+
+/** Simple O(n*m) Levenshtein distance for two strings. */
+function levenshtein(a: string, b: string): number {
+  const n = a.length;
+  const m = b.length;
+  if (n === 0) return m;
+  if (m === 0) return n;
+  const dp: number[][] = Array.from({ length: n + 1 }, () => new Array<number>(m + 1).fill(0));
+  for (let i = 0; i <= n; i++) dp[i][0] = i;
+  for (let j = 0; j <= m; j++) dp[0][j] = j;
+  for (let i = 1; i <= n; i++) {
+    for (let j = 1; j <= m; j++) {
+      dp[i][j] = Math.min(
+        dp[i - 1][j] + 1,          // deletion
+        dp[i][j - 1] + 1,          // insertion
+        dp[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1), // substitution
+      );
+    }
+  }
+  return dp[n][m];
 }
 
 async function opCreateDirectory(
@@ -1022,6 +1196,9 @@ async function opDeletePath(
   } catch (error) {
     throw new Error(`[io_error] ${error instanceof Error ? error.message : String(error)}`);
   }
+
+  // P2: Remove from recent-files index
+  removeFromRecentIndex(absPath, root);
 
   return {
     status: "completed",
@@ -1375,7 +1552,91 @@ const operations: Record<string, OperationHandler> = {
   edit_file: opEditFile,
   create_directory: opCreateDirectory,
   delete_path: opDeletePath,
+  recent_files: async (args: Record<string, unknown>) => opRecentFiles(args),
 };
+
+/** P2: opRecentFiles — index-backed recent files (falls back to Node-side bounded scan). */
+
+/** P2: Remove a file from the recent-files index on delete. */
+function removeFromRecentIndex(absPath: string, root: string): void {
+  const db = ensureAuditDb();
+  if (!db) return;
+  const rel = path.relative(root, absPath).replace(/\\/g, "/");
+  try {
+    db.prepare("DELETE FROM project_file_index WHERE path = ?").run(rel);
+  } catch (error) {
+    console.error("[corehost] recent index delete failed: " + (error instanceof Error ? error.message : String(error)));
+  }
+}
+async function opRecentFiles(args: Record<string, unknown>): Promise<RustResponse> {
+  const limit = Math.min(100, Math.max(1, Number(args.limit ?? 10)));
+  const includeDirs = args.include_ignored === true;
+
+  // P2: Query the SQLite index first; if empty or unavailable, fall back to a bounded scan.
+  const indexed = queryRecentFiles(limit, includeDirs);
+  if (indexed.length > 0) {
+    return {
+      status: "completed",
+      result: {
+        kind: "recent_files",
+        data: {
+          source: "index",
+          entries: indexed,
+        },
+      },
+    };
+  }
+
+  // Node-side fallback: bounded filesystem scan (skip node_modules/target/.git)
+  const SKIP_DIRS = new Set(["node_modules", "target", "build", "dist", ".git", ".venv", "venv", "__pycache__"]);
+  const entries: Array<{ relative_path: string; mtime_ms: number; size: number; kind: string }> = [];
+
+  async function walk(dir: string, rel: string): Promise<void> {
+    let items: string[];
+    try {
+      items = await fs.readdir(dir);
+    } catch {
+      return;
+    }
+    for (const name of items) {
+      if (SKIP_DIRS.has(name)) continue;
+      const abs = path.join(dir, name);
+      const relPath = rel ? path.posix.join(rel, name) : name;
+      try {
+        const s = await fs.stat(abs);
+        if (s.isDirectory()) {
+          await walk(abs, relPath);
+        } else if (s.isFile()) {
+          entries.push({
+            relative_path: relPath,
+            mtime_ms: s.mtimeMs,
+            size: s.size,
+            kind: "file",
+          });
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
+  await walk(WORKSPACE, "");
+  entries.sort((a, b) => b.mtime_ms - a.mtime_ms);
+  const result = entries.slice(0, limit);
+
+  return {
+    status: "completed",
+    result: {
+      kind: "recent_files",
+      data: {
+        source: "fallback_scan",
+        entries: result,
+      },
+    },
+  };
+}
+
+
 
 export class CoreHost {
   private started = false;

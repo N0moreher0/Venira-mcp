@@ -19,6 +19,7 @@ import {
 import type { RustResponse, ToolResult } from "../lib/output.js";
 import { VERSION } from "../lib/version.js";
 import { executeJs } from "../lib/js-executor.js";
+import { queryRecentFiles } from "../lib/corehost.js";
 import {
   toHostPath,
   UNRESTRICTED,
@@ -1045,10 +1046,36 @@ async function runRecentFiles(args: Args): Promise<ToolResult> {
       return toolResult(buildEnvelope("recent_files", cached, { requestId, elapsedMs, cached: true }));
     }
 
+    // P2: Try the SQLite index first (no bounded scan needed when the index is populated).
+    const maxFiles = Math.max(1, Math.min(100, Number(args.limit ?? 20)));
+    const indexHits = queryRecentFiles(maxFiles, args.include_ignored === true);
+    if (indexHits.length > 0) {
+      const data = {
+        relative_path: root,
+        source: "index" as const,
+        entries: indexHits.map((hit) => ({
+          relative_path: hit.relative_path,
+          size_bytes: hit.size,
+          modified_unix_seconds: Math.floor((hit.mtime_ms || hit.updated_at) / 1000),
+          modified_ago_seconds: Math.max(0, Math.floor((Date.now() - (hit.mtime_ms || hit.updated_at)) / 1000)),
+        })),
+        scanned_files: indexHits.length,
+        scanned_dirs: 0,
+        truncated: false,
+      };
+      const response: RustResponse = { status: "completed", result: { kind: "recent_files", data } };
+      ttlStore(recentCache, key, response);
+      const elapsedMs = performance.now() - started;
+      recordMetric("recent_files", elapsedMs, true);
+      return toolResult(buildEnvelope("recent_files", response, { requestId, elapsedMs, cached: false }));
+    }
+
+    // Node-side fallback: bounded filesystem scan (no external backend).
     const scan = await scanRecent(args);
     const editedRecently = [...new Set([...recentEdits].filter((abs) => abs.startsWith(root)))].slice(0, 20);
     const data = {
       relative_path: root,
+      source: "fallback_scan" as const,
       entries: scan.entries.map((entry) => ({
         relative_path: entry.rel,
         size_bytes: entry.size,
@@ -1951,6 +1978,11 @@ export function registerProjectTools(server: McpServer): void {
         replace_all: z.boolean().optional(),
         edits: z.array(editOp).max(64).optional(),
         expected_sha256: z.string().optional(),
+        // P2: Fuzzy edit args
+        old_text_fuzzy: z.string().optional().describe("P2: Fuzzy-match fallback for old_text (used when exact match fails and VENIRA_EDIT_FUZZY=1)."),
+        fuzzy_distance: z.number().int().min(0).max(10).optional().describe("P2: Max Levenshtein distance for fuzzy matching (default 3)."),
+        ignore_indentation: z.boolean().optional().describe("P2: Ignore leading whitespace differences in fuzzy matching."),
+        case_insensitive: z.boolean().optional().describe("P2: Case-insensitive fuzzy matching."),
       },
     },
     (args) => runOne("edit_file", args),
