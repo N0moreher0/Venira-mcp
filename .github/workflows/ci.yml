@@ -34,6 +34,9 @@ jobs:
       # .node binding should exist. This step makes the expectation explicit
       # and self-heals on the off chance the prebuild didn't land.
       - name: Ensure better-sqlite3 native binding
+        # `shell: bash` is required: the Windows runner defaults to
+        # PowerShell, which cannot parse the POSIX test below.
+        shell: bash
         run: |
           B="node_modules/better-sqlite3/build/Release/better_sqlite3.node"
           if [ -f "$B" ]; then
