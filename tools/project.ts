@@ -1312,7 +1312,7 @@ export function registerProjectTools(server: McpServer): void {
           .array(
             z.object({
               operation: z.enum(["list_files", "read_file", "get_file_info", "search"]),
-              arguments: z.record(z.unknown()),
+              arguments: z.record(z.string(), z.unknown()),
             }),
           )
           .min(1)

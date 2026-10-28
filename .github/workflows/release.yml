@@ -257,7 +257,11 @@ jobs:
           echo "Published. Current version on npm: $V"
           echo "Users can now run: npx venira-mcp"
 
-      - name: Attach checksums + Docker pull commands to release body
+      - name: Attach checksums + Docker pull commands to the release
+        # Appends to the GitHub Release body (not just the Actions summary) so
+        # downloaders can verify the artifacts without leaving the release page.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cd release
           TAG="${{ steps.tag.outputs.tag }}"
@@ -271,12 +275,18 @@ jobs:
             done
             echo ""
             echo "## Docker"
-            echo "```bash"
+            echo "\`\`\`bash"
             echo "docker pull ghcr.io/$REPO_LOWER:latest"
             echo "docker run --rm -it \\"
             echo "  -v /path/to/your/project:/workspace \\"
             echo "  -e VENIRA_WORKSPACE=/workspace \\"
             echo "  -e VENIRA_DATA_DIR=/workspace/data \\"
             echo "  ghcr.io/$REPO_LOWER:latest"
-            echo "```"
-          } >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`"
+          } > /tmp/release-extra.md
+          cat /tmp/release-extra.md >> "$GITHUB_STEP_SUMMARY"
+
+          gh release view "$TAG" --json body -q .body > /tmp/release-body.md
+          printf '\n\n' >> /tmp/release-body.md
+          cat /tmp/release-extra.md >> /tmp/release-body.md
+          gh release edit "$TAG" --notes-file /tmp/release-body.md

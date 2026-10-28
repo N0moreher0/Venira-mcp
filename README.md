@@ -70,8 +70,10 @@ npx venira-mcp --version              # print the version
 npx venira-mcp --help                 # list flags + environment variables
 ```
 
-The `bin` entry in `package.json` exposes both `venira` and `venira-mcp`,
-so `npx venira` works too.
+The `bin` entry in `package.json` exposes both `venira` and `venira-mcp`.
+`npx` resolves packages by name, so the short form must name the package
+explicitly — `npx -p venira-mcp venira` — or install it once globally with
+`npm i -g venira-mcp` and then call `venira`.
 
 ### Run from source (developers)
 
