@@ -462,9 +462,24 @@ const HARD_DENY: Array<{ id: string; test: (parsed: ParsedCommand, raw: string, 
     test: (_p, raw) => /\b(mkfs(\.[a-z0-9]+)?|mke2fs|fdisk|sfdisk|parted|diskpart|wipefs)\b/i.test(raw) || /\bdd\b[^\n]*\bof=\/dev\//i.test(raw) || /\bformat\s+[a-z]:/i.test(raw),
   },
   {
+    id: "filesystem_mount_overwrite",
+    reason: "Mounting a filesystem over a path may replace the entire directory tree.",
+    test: (_p, raw) => /\bmount\b/i.test(raw),
+  },
+  {
     id: "power_state",
     reason: "This command shuts down or reboots the machine.",
     test: (_p, raw) => /^\s*(shutdown|reboot|halt|poweroff)\b/im.test(raw) || /^\s*(shutdown|restart-computer|stop-computer)\b/im.test(raw),
+  },
+  {
+    id: "vm_state",
+    reason: "Powering off or destroying a virtual machine / container is unrecoverable.",
+    test: (_p, raw) => /\b(virtualbox|vmware|libvirt|virsh|lxc)\b[^\n]*\b(destroy|off|stop|delete|kill)\b/i.test(raw) || /\bdestroy-machine\b/i.test(raw),
+  },
+  {
+    id: "container_state",
+    reason: "Stopping or destroying containers or images on the host.",
+    test: (_p, raw) => /\b(docker|podman|nerdctl|kubernetes|kubectl)\b[^\n]*\b(destroy|rm|delete|stop|prune|system)\b/i.test(raw),
   },
   {
     id: "fork_bomb",
@@ -580,9 +595,6 @@ const ASK_RULES: AskRule[] = [
 const SAFE_COMMANDS = new Set([
   "node",
   "npx",
-  "npm",
-  "pnpm",
-  "yarn",
   "tsc",
   "esbuild",
   "tsx",

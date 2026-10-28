@@ -4,6 +4,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import { CoreHost, shellPolicySnapshot } from "../lib/corehost.js";
+import { evaluateToolPolicy } from "../lib/tool-policy.js";
 import { recordMetric, metricsSnapshot } from "../lib/metrics.js";
 import {
   OUTPUT_MODE,
@@ -42,6 +43,13 @@ const STARTED_AT = Date.now();
 
 const host = new CoreHost();
 export const closeHost = () => host.close();
+
+// ---------------------------------------------------------------------------
+// Tool-level policy (VENIRA_TOOL_POLICY_FILE).  Applied centrally so every
+// tool invocation — including MCP resource reads that share the path — can
+// be gated by command-level rules.  `null` means "no rule matched, allow".
+// ---------------------------------------------------------------------------
+let toolPolicyCache: { loaded: boolean } = { loaded: false };
 
 // ---------------------------------------------------------------------------
 // Sequential request queue: each request spawns a blocking thread that opens its
@@ -516,6 +524,20 @@ function trackShell(operation: string, data: unknown): void {
 }
 
 async function executeCached(operation: string, args: Args): Promise<Execution> {
+  // Tool-level policy: deny → throw (non-retryable), ask → throw an
+  // approval_required envelope.  When VENIRA_TOOL_POLICY_FILE is unset this
+  // is a no-op and the shell policy in lib/corehost.ts still applies.
+  const decision = evaluateToolPolicy(operation, args);
+  if (decision) {
+    if (decision.tier === "deny") {
+      throw new Error(`[command_denied] ${decision.reason} (rule: ${decision.tool})`);
+    }
+    if (decision.tier === "ask") {
+      // Registry of pending tool-level approvals stored in-process.  The
+      // same token machinery reuses shell's approval flow when possible.
+      throw new Error(`[approval_required] ${decision.reason}`);
+    }
+  }
   if (operation === "read_file") return readFileCached(args);
   if (operation === "get_file_info") return fileInfoCached(args);
   if (operation === "list_files") return listCached(args);
