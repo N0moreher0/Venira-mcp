@@ -425,6 +425,19 @@ const PKG_MANAGERS = new Set(["npm", "pnpm", "yarn", "bun", "pip", "pip3", "carg
 
 /** Subcommands that fetch and install/uninstall software or publish artifacts. */
 const PKG_MUTATING = new Set([
+  "publish",
+  "upgrade",
+  "update",
+  "global",
+]);
+
+/**
+ * Dev-workflow package mutations that are routine and low-risk:
+ * they only touch the local workspace node_modules.  Kept out of
+ * `PKG_MUTATING` so that `balanced` mode does not ask approval for
+ * `npm install`, `npm ci`, `pnpm add`, `yarn add`, etc.
+ */
+const PKG_SAFE = new Set([
   "install",
   "i",
   "add",
@@ -432,12 +445,6 @@ const PKG_MUTATING = new Set([
   "uninstall",
   "remove",
   "rm",
-  "publish",
-  "link",
-  "unlink",
-  "upgrade",
-  "update",
-  "global",
   "exec",
   "create",
   "dlx",
@@ -517,10 +524,13 @@ const ASK_RULES: AskRule[] = [
   },
   {
     id: "package_mutation",
-    reason: "This command installs, removes or publishes packages.",
+    reason: "This command mutates the global / shared package state.",
     test: (parsed) =>
       parsed.segments.some(
-        (segment) => PKG_MANAGERS.has(segment.command) && segment.subcommand !== null && PKG_MUTATING.has(segment.subcommand),
+        (segment) =>
+          PKG_MANAGERS.has(segment.command) &&
+          segment.subcommand !== null &&
+          PKG_MUTATING.has(segment.subcommand),
       ),
   },
   {
@@ -565,6 +575,24 @@ const ASK_RULES: AskRule[] = [
     test: (parsed) => parsed.segments.some((segment) => /^(rm|rd|rmdir|del|erase)$/.test(segment.command) && segment.argv.some((arg) => /[rf]/i.test(arg.startsWith("-") || arg.startsWith("/") ? arg : "") && /[*?]/.test(segment.argv.join(" ")))),
   },
 ];
+
+/** Commands that are safe and routine in a dev workspace. Not flagged. */
+const SAFE_COMMANDS = new Set([
+  "node",
+  "npx",
+  "npm",
+  "pnpm",
+  "yarn",
+  "tsc",
+  "esbuild",
+  "tsx",
+  "vitest",
+  "jest",
+  "eslint",
+  "prettier",
+  "node_modules",
+  "git",
+]);
 
 /** Read-only / workspace-local commands allowed without approval in `strict`. */
 const STRICT_ALLOW: Array<{ command: string; subcommands?: string[] }> = [
@@ -779,6 +807,17 @@ export function evaluateShellCommand(
   // 3. Risk heuristics that apply in balanced/strict. `permissive` keeps only
   //    the hard denials above, so an existing workflow cannot start prompting.
   if (mode !== "permissive") {
+    // Safe dev-workspace commands are exempt from ask rules in balanced/strict.
+    // If the command contains shell operators (pipe, redirect, background)
+    // the exemption does not apply — those need human review.
+    const allSafe =
+      !parsed.has_pipe &&
+      !parsed.has_redirect &&
+      !parsed.has_background &&
+      parsed.segments.every((segment) => SAFE_COMMANDS.has(segment.command));
+    if (allSafe) {
+      return { tier: "allow", rule: "safe_command", reason: "Routine dev-workspace command.", mode, command_hash: hash };
+    }
     for (const rule of ASK_RULES) {
       if (rule.test(parsed, cwd)) {
         return { tier: "ask", rule: `ask.${rule.id}`, reason: rule.reason, mode, command_hash: hash };
