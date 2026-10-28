@@ -274,7 +274,11 @@ Every tool returns the standard envelope ([§8](#8-envelopes-hints--error-codes)
 | `project_read_batch` | Run up to **8 read-only ops in one call** (`list_files`, `read_file`, `get_file_info`, `search`) | Sequential + cached; response budget enforced per item |
 | `project_health` | Server diagnostics: capability, queue, cache hit-rates, active shells, p50/p95 per op, audit DB stats | `include_audit=false` skips the DB query (~2 ms) |
 
-### 4.2 Mutate family (destructive, invalidates caches)
+### 4.2 JS Execution family (code execution, sandboxed by workspace)
+
+| Tool | Purpose | Notes |
+|---|---|---|
+| `project_execute_js` | Run synchronous JavaScript code; spawns `node` in the workspace with `require` support | `code`: the JS script string (required) · `timeout_ms`: 1–600_000 ms (default 30_000) · `argv`: additional arguments passed to `node` · stdout/stderr tails capped at 1 MiB. Inherits a whitelist env (PATH, HOME, TERM); NODE_PATH points to workspace's `node_modules` so built-in Node imports work without external deps. Use when you need a lightweight JS computation, file I/O via `fs`, or quick prototyping. Avoid when you need a shell pipeline or a long-running process (`project_shell_run` is the right tool). The tool has `destructiveHint: true` because code execution can have unexpected side effects; a workspace-locked `node` process operates under standard Node security posture. |
 
 | Tool | Purpose | Notes |
 |---|---|---|
