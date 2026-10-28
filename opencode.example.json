@@ -6,15 +6,28 @@
       "command": ["node", "G:\\path\\to\\venira-mcp\\dist\\server.js"],
       "enabled": true,
       "environment": {
+        // Root of the workspace. All relative paths resolve against this.
+        // Defaults to the server's process.cwd() when unset.
         "VENIRA_WORKSPACE": "C:\\path\\to\\your-project",
+        // Where the audit DB (venira.db) lives. Defaults to <workspace>/data.
         "VENIRA_DATA_DIR": "C:\\path\\to\\your-project\\data",
+        // Lock every path to the workspace. KEEP this unset (or "0") in normal use.
         "VENIRA_UNRESTRICTED": "0",
+        // Default shell for project_shell_run: "powershell" | "cmd" | "bash"
         "VENIRA_DEFAULT_SHELL": "powershell",
+        // Shell policy: balanced | strict | permissive | off
         "VENIRA_SHELL_MODE": "balanced",
+        // Tool permission mode: manual | best_effort | allow_all
         "VENIRA_PERMISSION_MODE": "allow_all",
+        // "full" | "compact" | "summary" (default "full")
         "VENIRA_OUTPUT_MODE": "full",
+        // Set to "1" for pretty-printed JSON in tool results (costs bytes; leave off for agents).
+        "VENIRA_PRETTY": "0",
+        // Enable optional JS execution tool (default 1). Set "0" to disable.
         "VENIRA_ALLOW_JS_EXEC": "1",
+        // Set to "1" for fast audit DB mode.
         "VENIRA_AUDIT_FAST": "1",
+        // Read cache budget in bytes (default 64 MiB).
         "VENIRA_READ_CACHE_BYTES": "67108864"
       }
     }
