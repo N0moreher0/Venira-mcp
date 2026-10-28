@@ -36,6 +36,7 @@ RUN npm ci --ignore-scripts
 COPY tsconfig.json ./
 COPY lib ./lib
 COPY tools ./tools
+COPY scripts ./scripts
 COPY server.ts ./server.ts
 COPY bin ./bin
 RUN npm run build
@@ -86,4 +87,8 @@ ENV VENIRA_WORKSPACE=/workspace \
 # Default workspace dir so the image can start even without a volume.
 RUN mkdir -p /workspace/data
 
-ENTRYPOINT ["node", "/app/dist/server.js"]
+# Entrypoint is the npx wrapper, so the CLI flags work inside the container:
+#   docker run --rm -i -v $PWD:/workspace ghcr.io/.../venira-mcp            # server
+#   docker run --rm    -v $PWD:/workspace ghcr.io/.../venira-mcp --doctor   # preflight
+#   docker run --rm ghcr.io/.../venira-mcp --version
+ENTRYPOINT ["node", "/app/bin/venira-mcp.js"]

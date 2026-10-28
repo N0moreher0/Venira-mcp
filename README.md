@@ -97,6 +97,15 @@ docker run --rm -it \
   -e VENIRA_WORKSPACE=/workspace \
   -e VENIRA_DATA_DIR=/workspace/data \
   venira-mcp
+
+# Preflight inside the container (same flags as the npx CLI)
+docker run --rm -v /path/to/your/project:/workspace venira-mcp --doctor
+```
+
+Published images are also available from GitHub Container Registry:
+
+```bash
+docker run --rm -it -v "$PWD:/workspace" ghcr.io/n0moreher0/venira-mcp:latest
 ```
 
 See [`DOCKER.md`](./DOCKER.md) for multi-arch builds and MCP-client
