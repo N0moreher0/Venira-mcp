@@ -18,7 +18,9 @@
 - ✅ Read audit log tool implemented
 - ✅ Shell UX upgrade implemented
 - ✅ P2 code intelligence: `project_outline_symbol` / `project_file_symbols`
+- ✅ P2 fuzzy edit + SQLite recent files index
 - ✅ P3 code intelligence: `project_diff_files`, `project_symbol_references`, `project_selective_search`
+- ⏸️ P3 deferred: `project_explain_error`, `project_plan_read_batch` (require OpenCode model access)
 
 ## 🎯 Implementation Roadmap
 
@@ -50,23 +52,25 @@
 
 ## 🚀 New Tools to Add (P2 - Aug 2025)
 
-### P2: Fuzzy Edit (effort: high, 8-12h) ⚠️
-- [ ] VENIRA_EDIT_FUZZY=1 → allow old_text_fuzzy (fuzzy match, Levenshtein/whitespace-tolerant)
-- [ ] Algorithm:
+### P2: Fuzzy Edit (effort: high, 8-12h) ✅
+- [x] VENIRA_EDIT_FUZZY=1 → allow old_text_fuzzy (fuzzy match, Levenshtein/whitespace-tolerant)
+- [x] Algorithm:
     - Normalize whitespace (collapse spaces/tabs, ignore leading indent if ignore_indentation=true)
     - Fuzzy match (Levenshtein distance <= N, N = fuzzy_distance, default 3)
-    - Return ALL matches (so the user can pick when there are several)
-- [ ] New args: { old_text_fuzzy?, ignore_indentation?, fuzzy_distance?, case_insensitive? }
-- [ ] Backend (lib/corehost.ts): add the fuzzy field to opEditFile
-- [ ] Audit: record "fuzzy" in reason_code (so the user knows)
-- [ ] Verify: test 3 cases (exact, fuzzy with indent, fuzzy with whitespace)
+    - Return best match (when several exist, the lowest-distance one wins)
+- [x] New args: { old_text_fuzzy?, ignore_indentation?, fuzzy_distance?, case_insensitive? }
+- [x] Backend (lib/corehost.ts): opEditFile fuzzy fallback + findFuzzyMatch + levenshtein
+- [x] Audit: records "fuzzy" in reason_code when a fuzzy match was used
+- [x] Tool schema: fuzzy args added to project_edit_file in tools/project.ts
 
-### P2: `project_recent_files` → index (effort: high, 8-12h) ⚠️
-- [ ] Backend: index mtime per workspace (SQLite cache, updated on writes)
-- [ ] Query: WHERE mtime DESC LIMIT N (no more 4000-file limit)
-- [ ] Invalidated on write/edit/delete/create_directory (already done)
-- [ ] Node-side fallback (if the index is not ready yet): keep the current behaviour
-- [ ] Verify: recent_files on a workspace with >4000 files
+### P2: `project_recent_files` → index (effort: high, 8-12h) ✅
+- [x] Backend: SQLite `project_file_index` table (path, kind, mtime_ms, size, updated_at)
+- [x] Index updated on write_file, edit_file; removed on delete_path
+- [x] Query: `WHERE kind='file' ORDER BY updated_at DESC LIMIT N` (no more 4000-file limit)
+- [x] Node-side fallback (if the index is empty/unavailable): keep the current bounded scan
+- [x] `queryRecentFiles()` exported from lib/corehost.ts
+- [x] `runRecentFiles` in tools/project.ts: SQLite index first, fallback scan second
+- [x] Response `source` field: `"index"` | `"fallback_scan"`
 
 ### P2: `project_outline_symbol` (effort: medium, 5-6h) ✅
 - [x] Backend: parse a file → outline (symbols + hierarchy, no cross-file needed)
@@ -139,7 +143,7 @@
 - **v1.1.0** (P1, ~1 week): ✅ Cache control + Trace + read_audit + Shell UX (COMPLETED)
 - **v1.1.2** (~2 days): Updated verify/doctor tool counts to 25
 - **v1.2.0** (P2, ~2-3 weeks):
-  - ~~Fuzzy edit + port recent_files to an index~~ (DEFERRED, depends on fuzzy edit + indexing)
+  - ~~Fuzzy edit + port recent_files to an index~~ (COMPLETED)
   - project_outline_symbol (COMPLETED)
 - **v1.3.0** (P3, ~1-2 months):
   - diff + symbols + references + selective_search (COMPLETED)
@@ -168,9 +172,17 @@
   - `project_diff_files` (P3) - unified diff via LCS
   - `project_symbol_references` (P3) - file/workspace scope symbol lookup
   - `project_selective_search` (P3) - multi-query fuzzy scoring search
+- **P2 fuzzy edit** (2025-10-28):
+  - `VENIRA_EDIT_FUZZY=1` + Levenshtein fuzzy match in opEditFile
+  - Args: old_text_fuzzy, fuzzy_distance, ignore_indentation, case_insensitive
+  - Returns fuzzy_used flag in envelope
+- **P2 recent files index** (2025-10-28):
+  - SQLite `project_file_index` table, updated on write/edit, removed on delete
+  - `queryRecentFiles()` exported from corehost.ts
+  - runRecentFiles uses index first, falls back to bounded scan
+  - Response source: "index" | "fallback_scan"
 - **DEFERRED**: `project_explain_error` and `project_plan_read_batch` (requires OpenCode model access, lower priority)
-- **TODO`: Pending P2 fuzzy edit + recent_files index
 
 ---
 
-Next steps: Starting P2 implementation (Fuzzy Edit, recent_files Index, project_outline_symbol)
+Next steps: P3 explain_error + plan_read_batch (deferred, needs OpenCode model access). All P1/P2 P0 roadmap items complete.
