@@ -35,6 +35,12 @@ import {
   extractSymbols,
   selectiveSearch,
 } from "../lib/symbol-diff.js";
+import {
+  detectAllHarnesses,
+  installSelf,
+  type HarnessName,
+  type InstallResult,
+} from "../lib/self-install.js";
 
 const PERMISSION_MODE = process.env.VENIRA_PERMISSION_MODE ?? "allow_all";
 // allow_all grants the "chat-terminal" scope when there is no Project (same as the native app).
@@ -1732,6 +1738,74 @@ async function runSelectiveSearch(args: Args): Promise<ToolResult> {
   return toolResult(buildEnvelope("selective_search", response, { requestId, elapsedMs, cached: false }));
 }
 
+// ---------------------------------------------------------------------------
+// P2.5: self-install — detect harnesses + install venira MCP config
+// ---------------------------------------------------------------------------
+
+async function runDetectHarnesses(args: Args): Promise<ToolResult> {
+  const started = performance.now();
+  const requestId = newRequestId();
+  const detections = detectAllHarnesses();
+  const response: RustResponse = {
+    status: "completed",
+    result: {
+      kind: "harness_detect",
+      data: {
+        detected: detections.filter((d) => d.detected).map((d) => d.harness),
+        harnesses: detections,
+      },
+    },
+    truncated: false,
+  };
+  const elapsedMs = performance.now() - started;
+  recordMetric("detect_harnesses", elapsedMs, true);
+  return toolResult(buildEnvelope("detect_harnesses", response, { requestId, elapsedMs, cached: false }));
+}
+
+async function runInstallSelf(args: Args): Promise<ToolResult> {
+  const started = performance.now();
+  const requestId = newRequestId();
+  const harness = String(args.harness ?? "") as HarnessName;
+  const valid: HarnessName[] = [
+    "opencode",
+    "claude_desktop",
+    "cursor",
+    "codex",
+    "kimi",
+    "deepseek",
+    "antigravity",
+  ];
+  if (!valid.includes(harness)) {
+    return toolResult(
+      errorEnvelope(
+        "install_self",
+        new Error(
+          `[invalid_request] harness must be one of: ${valid.join(", ")}. Got: ${harness || "(empty)"}`,
+        ),
+        { requestId, elapsedMs: 0 },
+      ),
+      true,
+    );
+  }
+  const result: InstallResult = await installSelf({
+    harness,
+    workspace: typeof args.workspace === "string" ? args.workspace : undefined,
+    dataDir: typeof args.data_dir === "string" ? args.data_dir : undefined,
+    dryRun: args.dry_run === true,
+  });
+  const response: RustResponse = {
+    status: "completed",
+    result: {
+      kind: "install_self",
+      data: result,
+    },
+    truncated: false,
+  };
+  const elapsedMs = performance.now() - started;
+  recordMetric("install_self", elapsedMs, result.status !== "error");
+  return toolResult(buildEnvelope("install_self", response, { requestId, elapsedMs, cached: false }));
+}
+
 export function registerProjectTools(server: McpServer): void {
   applyDisabledTools(server);
   server.registerTool(
@@ -2402,6 +2476,63 @@ export function registerProjectTools(server: McpServer): void {
       },
     },
     (args) => runSelectiveSearch(args as Args),
+  );
+
+  // -------------------------------------------------------------------------
+  // P2.5: Self-install (detect harnesses + install venira MCP config)
+  // -------------------------------------------------------------------------
+
+  server.registerTool(
+    "project_detect_harnesses",
+    {
+      ...config(
+        "Detect which MCP-client harnesses (OpenCode/Claude/Cursor/Codex/Kimi/DeepSeek/Antigravity) have a config on this machine.",
+        "Detect MCP harnesses",
+        {
+          use_when: "before installing venira, to know which client configs exist and can be updated.",
+          avoid_when: "you already know the config path (skip straight to project_install_self).",
+          speed_profile: "fast; filesystem checks, no writes.",
+          output_kind: "harness_detect: detected[] (found harnesses), harnesses[] {harness, detected, config_path, format, note}.",
+          batch_safe: true,
+        },
+        { readOnlyHint: true, openWorldHint: false },
+      ),
+      inputSchema: {},
+    },
+    (args) => runDetectHarnesses(args as Args),
+  );
+
+  server.registerTool(
+    "project_install_self",
+    {
+      ...config(
+        "Add the venira MCP entry to a target client's config (OpenCode/Claude/Cursor/Codex/Kimi/DeepSeek/Antigravity). Atomic + backup.",
+        "Self-install venira MCP",
+        {
+          use_when: "a user asks to 'install venira into <client>' — add the MCP server block to that client's config file.",
+          avoid_when: "the config path is unknown (run project_detect_harnesses first), or the user wants a dry-run (set dry_run=true).",
+          speed_profile: "fast; one atomic write per config. Always backs up the original to <file>.venira-bak.",
+          output_kind: "install_self: {harness, config_path, status (installed|already_present|config_missing|error), needs_restart, error?}.",
+          batch_safe: false,
+        },
+        { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      ),
+      inputSchema: {
+        harness: z.enum([
+          "opencode",
+          "claude_desktop",
+          "cursor",
+          "codex",
+          "kimi",
+          "deepseek",
+          "antigravity",
+        ]),
+        workspace: z.string().optional().describe("VENIRA_WORKSPACE value to write (default: process.cwd())."),
+        data_dir: z.string().optional().describe("VENIRA_DATA_DIR value to write (default: <workspace>/data)."),
+        dry_run: z.boolean().optional().describe("When true, report what would happen without writing."),
+      },
+    },
+    (args) => runInstallSelf(args as Args),
   );
 }
 
