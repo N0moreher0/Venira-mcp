@@ -28,7 +28,17 @@
         // Set to "1" for fast audit DB mode.
         "VENIRA_AUDIT_FAST": "1",
         // Read cache budget in bytes (default 64 MiB).
-        "VENIRA_READ_CACHE_BYTES": "67108864"
+        "VENIRA_READ_CACHE_BYTES": "67108864",
+        // P1: cache control. "0" disables the listed caches (strict "always fresh").
+        "VENIRA_CACHE_ALL": "1",
+        // P1: request tracing to stderr.
+        "VENIRA_TRACE": "0",
+        // P1: shell UX — tail cap, early-exit poll, soft|hard timeout policy.
+        "VENIRA_SHELL_TAIL_MAX": "4000",
+        "VENIRA_SHELL_EXIT_EARLY": "0",
+        "VENIRA_SHELL_TIMEOUT_POLICY": "soft",
+        // P2: fuzzy edit fallback for project_edit_file.
+        "VENIRA_EDIT_FUZZY": "0"
       }
     }
   }

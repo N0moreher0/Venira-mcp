@@ -1,11 +1,11 @@
 # venira-mcp
 
-> Fast, workspace-scoped **MCP server for coding agents** (OpenCode, Claude Desktop, any MCP client). 16 tools, structured JSON envelopes, validated read caches, async shell, and full SQLite audit trail — **pure Node, no external binary, no GUI, no network.**
+> Fast, workspace-scoped **MCP server for coding agents** (OpenCode, Claude Desktop, any MCP client). 25 tools, structured JSON envelopes, validated read caches, async shell, code-intelligence (outline/symbols/diff/references/selective search), fuzzy edit, SQLite recent-files index, and full SQLite audit trail — **pure Node, no external binary, no GUI, no network.**
 
 ```
 ┌──────────────┐   stdio (MCP)   ┌────────────────────────────────────────────┐
 │ MCP client    │ ◄──────────────► │  venira-mcp (Node, single process)        │
-│ (OpenCode,    │                  │  16 tools · read caches · async shell    │
+│ (OpenCode,    │                  │  25 tools · read caches · async shell     │
 │  Claude, ...) │                  │  SQLite audit (WAL) · p50/p95 metrics   │
 └──────────────┘                  └────────────────────────────────────────────┘
 ```
@@ -165,7 +165,6 @@ Or point at a local build (after `git clone` + `npm install` + `npm run build`):
         // Lock every path to the workspace. KEEP this unset (or "0") in normal use.
         "VENIRA_UNRESTRICTED": "0",
         // Default shell for project_shell_run: "powershell" | "cmd" | "bash"
-        "/**/ // Default shell for project_shell_run: "powershell" | "cmd" | "bash"
         "VENIRA_DEFAULT_SHELL": "powershell",
         // Shell policy: balanced | strict | permissive | off
         "VENIRA_SHELL_MODE": "balanced",
@@ -180,7 +179,17 @@ Or point at a local build (after `git clone` + `npm install` + `npm run build`):
         // Set to "1" for fast audit DB mode.
         "VENIRA_AUDIT_FAST": "1",
         // Read cache budget in bytes (default 64 MiB).
-        "VENIRA_READ_CACHE_BYTES": "67108864"
+        "VENIRA_READ_CACHE_BYTES": "67108864",
+        // P1: cache control. "0" disables the listed caches (strict "always fresh").
+        "VENIRA_CACHE_ALL": "1",
+        // P1: request tracing to stderr.
+        "VENIRA_TRACE": "0",
+        // P1: shell UX — tail cap, early-exit poll, soft|hard timeout policy.
+        "VENIRA_SHELL_TAIL_MAX": "4000",
+        "VENIRA_SHELL_EXIT_EARLY": "0",
+        "VENIRA_SHELL_TIMEOUT_POLICY": "soft",
+        // P2: fuzzy edit fallback for project_edit_file.
+        "VENIRA_EDIT_FUZZY": "0"
       }
     }
   }
@@ -240,10 +249,19 @@ Or point at a local build (after `git clone` + `npm install` + `npm run build`):
 | `VENIRA_RECENT_CACHE_MS` | `2000` | TTL for recent-files cache. |
 | `VENIRA_BATCH_ITEM_BYTES` | `524288` (512 KB) | Per-item cap inside `project_read_batch`. |
 | `VENIRA_DEBUG_STARTUP` | `"0"` | `"1"` = startup errors go to stderr instead of the protocol-safe stdout event. |
+| `VENIRA_CACHE_ALL` | `"1"` (on) | P1: `"0"` disables **every** read-side cache (strict "always fresh" mode). |
+| `VENIRA_CACHE_LIST_ONLY` | `"1"` (on) | P1: `"0"` disables only the `list_files` TTL cache. |
+| `VENIRA_CACHE_SEARCH_ONLY` | `"1"` (on) | P1: `"0"` disables only the `search` TTL cache. |
+| `VENIRA_TRACE` | `"0"` | P1: `"1"` logs every tool call (op, args, ms, cached, ok/fail) to stderr. |
+| `VENIRA_TRACE_FILE` | unset | P1: write trace logs to a file instead of stderr. |
+| `VENIRA_SHELL_TAIL_MAX` | `4000` | P1: tail buffer cap in bytes for `project_shell_run`/`status` output. |
+| `VENIRA_SHELL_EXIT_EARLY` | `"0"` | P1: `"1"` — `project_shell_status` returns as soon as the exit code is known, without waiting out the full `wait_seconds` window. |
+| `VENIRA_SHELL_TIMEOUT_POLICY` | `soft` | P1: `soft` (default) = an expired command only warns and is left to finish; `hard` = kill the whole process tree at the timeout. |
+| `VENIRA_EDIT_FUZZY` | `"0"` | P2: `"1"` enables fuzzy matching in `project_edit_file` (Levenshtein fallback when the exact `old_text` is not found). |
 
 ---
 
-## 4. Tools (16)
+## 4. Tools (25)
 
 Every tool returns the standard envelope ([§8](#8-envelopes-hints--error-codes)):
 
@@ -270,31 +288,46 @@ Every tool returns the standard envelope ([§8](#8-envelopes-hints--error-codes)
 | `project_read_ranges` | Read **multiple disjoint line ranges of one file** in a single call (max 16) | Reuses the read cache per range |
 | `project_get_file_info` | File/dir metadata: kind, size, mtime | Very fast; cached |
 | `project_search` | Search by file name, dir name, literal content, regex, or symbol definition | TTL cache 3 s; respects `glob`, `exclude_glob`, `context_lines`, `count_only` |
-| `project_recent_files` | Files modified recently (bounded filesystem scan, skips `node_modules`/`target`/`.git`) | TTL cache 2 s; includes `session_edits` — files you wrote in this session |
+| `project_recent_files` | Files modified recently (SQLite index first, bounded scan fallback) | `source: "index" | "fallback_scan"`; includes `session_edits` — files you wrote in this session |
 | `project_read_batch` | Run up to **8 read-only ops in one call** (`list_files`, `read_file`, `get_file_info`, `search`) | Sequential + cached; response budget enforced per item |
-| `project_health` | Server diagnostics: capability, queue, cache hit-rates, active shells, p50/p95 per op, audit DB stats | `include_audit=false` skips the DB query (~2 ms) |
+| `project_health` | Server diagnostics: capability, queue, cache/trace/shell config, active shells, p50/p95 per op, audit DB stats | `include_audit=false` skips the DB query (~2 ms) |
+| `project_read_audit` | Read recent rows from the SQLite audit log (filter by session/operation/outcome) | Bounded; `audit_unavailable` fallback if the DB is locked |
+| `project_trace_status` | Show the most recent traced tool calls + trace config | In-memory ring buffer, no file read |
 
 ### 4.2 JS Execution family (code execution, sandboxed by workspace)
 
 | Tool | Purpose | Notes |
 |---|---|---|
-| `project_execute_js` | Run synchronous JavaScript code; spawns `node` in the workspace with `require` support | `code`: the JS script string (required) · `timeout_ms`: 1–600_000 ms (default 30_000) · `argv`: additional arguments passed to `node` · stdout/stderr tails capped at 1 MiB. Inherits a whitelist env (PATH, HOME, TERM); NODE_PATH points to workspace's `node_modules` so built-in Node imports work without external deps. Use when you need a lightweight JS computation, file I/O via `fs`, or quick prototyping. Avoid when you need a shell pipeline or a long-running process (`project_shell_run` is the right tool). The tool has `destructiveHint: true` because code execution can have unexpected side effects; a workspace-locked `node` process operates under standard Node security posture. |
+| `project_execute_js` | Run synchronous JavaScript code; spawns `node` in the workspace with `require` support | `code`: the JS script string (required) · `timeout_ms`: 1–600_000 ms (default 30_000) · `argv`: additional arguments passed to `node` · stdout/stderr tails capped at 1 MiB. Inherits a whitelist env (PATH, HOME, TERM); NODE_PATH points to workspace's `node_modules`. Use for lightweight JS computation, file I/O via `fs`, or quick prototyping. Avoid when you need a shell pipeline or a long-running process (`project_shell_run` is the right tool). The tool has `destructiveHint: true` because code execution can have unexpected side effects. |
+
+### 4.3 Code intelligence family (P2/P3, regex/LCS-based, no external indexer)
+
+| Tool | Purpose | Notes |
+|---|---|---|
+| `project_outline_symbol` | Parse a source file and return its symbol outline (functions, classes, types, interfaces) with line numbers | Fast single-file regex scan; `max_symbols` cap |
+| `project_file_symbols` | Extract **all** symbols (fn/def/class/struct/interface) from one source file | Optional `language` hint; `include_functions`/`include_classes` filters |
+| `project_diff_files` | Unified (git-style) diff between two workspace files | LCS-based; `lines_added`/`lines_removed`; `context_lines` + `max_lines` caps; `truncated` flag |
+| `project_symbol_references` | Find every occurrence of a named symbol | `scope: "file"` (fast, single file) or `scope: "workspace"` (bounded content search); `limit`/`max_references` caps |
+| `project_selective_search` | Smart multi-query search: combine patterns with AND/NOT + fuzzy scoring | Bounded to a file set (`files_hint` or shallow listing); scored hits sorted by relevance; `limit` cap |
+
+### 4.4 Write family (mutating)
 
 | Tool | Purpose | Notes |
 |---|---|---|
 | `project_write_file` | Create / overwrite / append a file | `mode: "create"` errors if file exists; `expected_sha256` guards against blind overwrites |
-| `project_edit_file` | Replace exact text: one `old_text`/`new_text` pair **or** up to 64 `edits[]` | `replace_all` supported; `expected_sha256` available |
+| `project_edit_file` | Replace exact text: one `old_text`/`new_text` pair **or** up to 64 `edits[]` | `replace_all` supported; `expected_sha256` available; **P2 fuzzy edit** (`VENIRA_EDIT_FUZZY=1`): `old_text_fuzzy`, `fuzzy_distance`, `ignore_indentation`, `case_insensitive` args |
 | `project_create_directory` | Create a directory tree | `create_parents` defaults to `true` |
 | `project_create` | Create a **file or directory in one call** | `kind: "file"` requires `content`; `kind: "directory"` ignores `content` |
 | `project_delete_path` | Delete a file or directory tree | `recursive: true` for directories. **Not undoable.** |
 
-### 4.3 Shell family (async, non-blocking, policy-gated)
+### 4.5 Shell family (async, non-blocking, policy-gated)
 
 | Tool | Purpose | Notes |
 |---|---|---|
-| `project_shell_run` | Run a shell command; returns `run_id` in ~5 ms | `shell`: `powershell` / `cmd` / `bash` · `relative_cwd` · `timeout_ms` (kills the **process tree**) · `approval_token` + `approval_scope` for the approval flow. stdout/stderr tails captured in-process with a 1 MiB per-stream cap. |
+| `project_shell_run` | Run a shell command; returns `run_id` in ~5 ms | `shell`: `powershell` / `cmd` / `bash` · `relative_cwd` · `timeout_ms` (kills the **process tree**) · `approval_token` + `approval_scope` for the approval flow. stdout/stderr tails captured in-process with a 1 MiB per-stream cap. P1 UX: `VENIRA_SHELL_TAIL_MAX`, `VENIRA_SHELL_EXIT_EARLY`, `VENIRA_SHELL_TIMEOUT_POLICY` (soft/hard). |
 | `project_shell_status` | Poll a running command | `wait_seconds` 0–30 is an *observation window*, not a timeout. Deliberately **not queued** behind other calls, not audit-logged (prevents orphan "running" rows). Reports `timed_out`, `dropped_bytes` and the policy decision. |
 | `project_shell_cancel` | Kill a running command by `run_id` | Kills the whole tree (`taskkill /T` on Windows, process group on POSIX). Also used at MCP shutdown to avoid orphan processes. |
+| `project_shell_cancel_session` | Cancel **all** shell runs tracked in this session | P1; kills every process tree in the session at once. |
 
 `project_shell_run` passes a policy gate before anything is spawned:
 
@@ -327,11 +360,14 @@ At connect time the server advertises an `instructions` block (MCP SDK ≥ 1.32)
    follow next_start_line when truncated
 3. Find code → project_search (kind=literal_content or definition), then project_read_ranges around hits
 4. Directory tree → project_list_files (depth 1..3, limit ≤200). "What changed lately?" → project_recent_files
-5. Write whole file → project_write_file; small precise change → project_edit_file;
-   delete → project_delete_path (destructive, not undoable)
-6. Build/test/long command → project_shell_run (returns run_id immediately),
+5. Understand a file's structure → project_outline_symbol / project_file_symbols;
+   find every usage → project_symbol_references; compare two files → project_diff_files;
+   rank many files by several keywords → project_selective_search
+6. Write whole file → project_write_file; small precise change → project_edit_file
+   (fuzzy match via VENIRA_EDIT_FUZZY=1); delete → project_delete_path (destructive, not undoable)
+7. Build/test/long command → project_shell_run (returns run_id immediately),
    then poll project_shell_status (wait_seconds 5..30); project_shell_cancel to stop
-7. Debug latency/errors → project_health
+8. Debug latency/errors → project_health; inspect the audit trail → project_read_audit
 ```
 
 Every tool also carries machine-readable metadata in its description (`Use when:` / `Avoid when:` /
@@ -346,12 +382,16 @@ prompt-driven and tool-discovery-driven clients get the same signal.
 venira-mcp/
 ├── server.ts                 # MCP entry point: McpServer + StdioTransport, warm-up, shutdown
 ├── tools/
-│   └── project.ts            # 16 tool registrations, serial queue, caches, shell tracking,
-│                             #   audit-DB inspection, project_health, project_create
+│   └── project.ts            # 25 tool registrations, serial queue, caches, shell tracking,
+│                             #   audit-DB inspection, project_health, code-intelligence handlers
 ├── lib/
 │   ├── corehost.ts           # In-process backend: file I/O, search, async shell,
-│   │                         #   scope capability, SQLite WAL audit (better-sqlite3)
-│   ├── workspace.ts          # Workspace path resolution + escape validation
+│   │                         #   scope capability, SQLite WAL audit (better-sqlite3),
+│   │                         #   fuzzy edit, recent-files index
+│   ├── symbol-diff.ts        # P2/P3 code intelligence: symbol extraction, outline,
+│   │                         #   unified diff (LCS), selective multi-query search
+│   ├── tracer.ts             # P1 request tracing (VENIRA_TRACE / VENIRA_TRACE_FILE)
+│   ├── workspace.ts          # Workspace path resolution + escape validation + cache toggles
 │   ├── output.ts             # Envelope builder, output modes, hint inference, error parser
 │   ├── metrics.ts            # Ring-buffer p50/p95/max per operation (256 samples each)
 │   ├── types.ts              # Shared host snapshot types
@@ -361,7 +401,7 @@ venira-mcp/
 │   ├── bench.ts              # In-process backend benchmark
 │   ├── bench-mcp.ts          # End-to-end MCP benchmark
 │   ├── verify.ts             # ~30 end-to-end checks (cache, batch, shell, audit, modes)
-│   └── doctor.ts             # 7 preflight checks (workspace, data dir, tools, health, shell)
+│   └── doctor.ts             # 12 preflight checks (workspace, data dir, tools, health, shell, P1 config)
 ├── opencode.example.json     # Ready-to-edit OpenCode MCP config
 ├── package.json / tsconfig.json
 └── dist/                     # Build output (committed to the npm package, gitignored in repo)
@@ -586,13 +626,16 @@ etc. The model is expected to read `hint` first.
 - **macOS CI-only, not dev-tested.** CI runs on `macos-latest` (x64 + arm64) for both Node
   20 and 22, but no developer has day-to-day macOS. Path handling is POSIX-correct
   (verified on Linux), but Spotlight / Gatekeeper / SIP quirks are untested.
-- **No git/diff tooling yet.** `project_diff_files`, `project_file_symbols`, and
-  `project_symbol_references` are on the roadmap (see [`TODO.md`](./TODO.md)) but not implemented.
+- **No git/diff tooling yet.** ~~`project_diff_files`, `project_file_symbols`, and
+  `project_symbol_references` are on the roadmap~~ → **now implemented** in v1.3.0 (P2/P3)
+  — see [`TODO.md`](./TODO.md).
 - **Search is a line scanner, not an index.** `project_search` reads every file in scope
   (bounded at 1 MiB/file) and matches line-by-line. It's fine for typical project sizes;
   for a monorepo with thousands of files, p95 will climb.
-- **`project_recent_files` is a bounded scan**, not an index: it caps at 4 000 files / 300
-  directories and skips `node_modules`, `target`, `dist`, `.git`, etc.
+- **`project_recent_files` is index-first, scan-fallback.** It prefers the SQLite
+  `project_file_index` (maintained on write/edit/delete); when the index is empty it
+  falls back to a bounded scan capped at 4 000 files / 300 directories, skipping
+  `node_modules`, `target`, `dist`, `.git`, etc.
 - **Shell is tail-only.** `project_shell_run` returns a bounded tail of stdout/stderr, not a
   live stream. Long outputs are truncated by design.
 - **One workspace per server instance.** The workspace, data dir, and permission mode are
@@ -617,10 +660,23 @@ etc. The model is expected to read `hint` first.
   A search that *found none* is not — because the absence of a hit is exactly what can
   become stale the instant a file is written. (`verify.ts` guards this with
   `search_cache_invalidated`.)
-- **`project_recent_files` is pure Node.** No backend needed: bounded BFS with `readdir` +
-  `stat` in chunks of 64, symlinks skipped, ignored dirs pruned, results sorted by mtime
-  descending. The `session_edits` field additionally lists files *this* session wrote
-  (up to 20), so the model knows what it already touched.
+- **`project_recent_files` is index-first, scan-fallback.** P2 added a SQLite
+  `project_file_index` (maintained on write/edit/delete). The tool queries it first
+  (`source: "index"`); when empty it falls back to bounded BFS with `readdir` + `stat`
+  in chunks of 64 (`source: "fallback_scan"`), symlinks skipped, ignored dirs pruned,
+  results sorted by mtime descending. The `session_edits` field additionally lists files
+  *this* session wrote (up to 20), so the model knows what it already touched.
+- **Code intelligence is regex/LCS, not an indexer.** `project_outline_symbol`,
+  `project_file_symbols`, `project_diff_files`, `project_symbol_references`, and
+  `project_selective_search` all run over plain UTF-8 text in `lib/symbol-diff.ts` —
+  no external indexer, safe on any workspace file.
+- **Fuzzy edit is opt-in and audited.** `VENIRA_EDIT_FUZZY=1` makes `opEditFile` fall
+  back to a Levenshtein match when the exact `old_text` is not found; the envelope
+  sets `fuzzy_used: true` so the audit trail records it.
+- **P1 observability surfaces.** `project_health` now reports `cache` / `trace` / `shell`
+  config sections; `project_trace_status` returns the in-memory trace ring;
+  `project_read_audit` reads the SQLite audit log directly (bounded, WAL-safe,
+  `audit_unavailable` fallback).
 - **Audit DB is inspected read-only.** `project_health` opens `venira.db` with
   `readonly: true` via `better-sqlite3` and counts rows for the session, including
   `orphan_running` (rows stuck at `running` — a sign of an unclean shutdown).
@@ -640,8 +696,8 @@ etc. The model is expected to read `hint` first.
 ```bash
 npm run build        # type-check + emit dist/
 npm run smoke        # in-process sanity (backend reachable, path lock works)
-npm run doctor       # preflight: 7 checks incl. audit DB and shell smoke
-npm run verify       # behavioural regression suite (~30 checks, ~60 s)
+npm run doctor       # preflight: 12 checks incl. audit DB, shell smoke, P1 config surface
+npm run verify       # behavioural regression suite (26 checks, ~60 s)
 npm run bench        # in-process numbers
 npm run bench:mcp    # end-to-end numbers
 ```
@@ -689,8 +745,9 @@ npm run bench:mcp    # end-to-end numbers
 ## 13. Contributing
 
 1. Fork and clone; `npm install && npm run build && npm run doctor`.
-2. Read [`TODO.md`](./TODO.md) — the next milestones are already scoped (cache toggles,
-   request tracing, `project_read_audit`, shell UX, fuzzy edit, symbol tools).
+2. Read [`TODO.md`](./TODO.md) — P1 (cache control, tracing, audit, shell UX) and
+   P2/P3 (code intelligence, fuzzy edit, recent-files index) are complete; the next
+   milestone is `project_explain_error` / `project_plan_read_batch` (deferred, need LLM).
 3. Keep the invariants from [§10](#10-interesting-details--things-you-should-know):
    serial queue for `execute`, long-lived capability, asymmetric search cache, bounded scans.
 4. Add a `verify.ts` check for every new tool; keep the suite green before opening a PR.
