@@ -209,6 +209,8 @@ Or point at a local build (after `git clone` + `npm install` + `npm run build`):
 | `VENIRA_DATA_DIR` | `<workspace>/data` | Where the audit DB (`venira.db`) is created/updated. |
 | `VENIRA_UNRESTRICTED` | `"0"` | `"1"` disables workspace locking (absolute paths anywhere work). **Do not set in production.** |
 | `VENIRA_DEFAULT_SHELL` | platform default | `powershell` / `cmd` / `bash` used when `project_shell_run` receives no `shell` argument. |
+| `VENIRA_PERMISSION_MODE` | `"allow_all"` (MCP standalone) | `"manual"` / `"best_effort"` / `"allow_all"` permission mode for coding tool calls. |
+| `VENIRA_ALLOW_JS_EXEC` | `"1"` | `"0"` disables optional `project_execute_js` (code execution capability). |
 | `VENIRA_SHELL_MODE` | `balanced` | Shell policy mode: `balanced` (deny catastrophes, ask on high risk, allow the rest) · `strict` (allow list + approval for everything else) · `permissive` (only hard denials) · `off` (no policy at all). |
 | `VENIRA_SHELL_POLICY_FILE` | unset | **Explicit** path to a JSON policy (`{ mode, allow[], ask[], deny[] }`). Never read from the workspace, so a cloned repo cannot ship its own permissive policy. |
 | `VENIRA_SHELL_APPROVAL_TTL_MS` | `600000` (10 min) | Lifetime of approval tokens and session grants. |
