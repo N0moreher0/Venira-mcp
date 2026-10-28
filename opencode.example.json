@@ -11,7 +11,13 @@
         "VENIRA_UNRESTRICTED": "0",
         "VENIRA_DEFAULT_SHELL": "powershell",
         "VENIRA_OUTPUT_MODE": "full",
-        "VENIRA_READ_CACHE_BYTES": "67108864"
+        "VENIRA_READ_CACHE_BYTES": "67108864",
+        "VENIRA_SHELL_MODE": "balanced",
+        "VENIRA_SHELL_APPROVAL_TTL_MS": "600000",
+        "VENIRA_SHELL_ELICIT": "0",
+        "VENIRA_SHELL_MAX_OUTPUT_BYTES": "1048576",
+        "VENIRA_DISABLE_TOOLS": "",
+        "VENIRA_TOOL_POLICY_JSON": "{\"rules\":[{\"tool\":\"project_delete_path\",\"tier\":\"ask\",\"args\":{\"recursive\":\"true\"}},{\"tool\":\"project_shell_run\",\"tier\":\"ask\",\"args\":{\"command\":\"/^(rm|del|rd|rmdir|taskkill|sudo|su|shutdown|reboot|mkfs|fdisk|dd)\\\\b/i\"}}]}"
       }
     }
   }
