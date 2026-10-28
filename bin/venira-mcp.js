@@ -20,11 +20,39 @@
 import { spawn, execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const dist = path.join(here, "..", "dist", "server.js");
 const args = process.argv.slice(2);
+
+const USAGE = `venira-mcp — MCP server for coding agents
+
+Usage:
+  npx venira-mcp                 Start the MCP server (stdio transport)
+  npx venira-mcp --doctor        Run the preflight diagnostics
+  npx venira-mcp --verify        Run the behavioural test suite
+  npx venira-mcp --version, -v   Print the version
+  npx venira-mcp --help, -h      Show this help
+
+Environment:
+  VENIRA_WORKSPACE    Project root the tools are locked to (default: cwd)
+  VENIRA_DATA_DIR     Audit DB + runtime data (default: <workspace>/data)
+  VENIRA_UNRESTRICTED 1 to allow paths outside the workspace (default: 0)
+
+Docs: https://github.com/N0moreher0/Venira-mcp`;
+
+// `--version` / `--help` are CLI-level flags: handle them here instead of
+// handing them to the server (which would just start and wait on stdio).
+if (args[0] === "--version" || args[0] === "-v") {
+  const pkg = JSON.parse(readFileSync(path.join(here, "..", "package.json"), "utf8"));
+  process.stdout.write(`venira-mcp ${pkg.version}\n`);
+  process.exit(0);
+}
+if (args[0] === "--help" || args[0] === "-h") {
+  process.stdout.write(`${USAGE}\n`);
+  process.exit(0);
+}
 
 const target = (() => {
   if (args[0] === "--doctor") return { file: path.join(here, "..", "dist", "scripts", "doctor.js"), rest: args.slice(1) };

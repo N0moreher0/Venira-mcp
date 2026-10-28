@@ -65,7 +65,9 @@ no local clone or build needed:
 ```bash
 npx venira-mcp                        # start the MCP server (stdio)
 npx venira-mcp --doctor               # run the preflight suite
-npx venira-mcp --verify                # run the behavioural regression suite
+npx venira-mcp --verify               # run the behavioural regression suite
+npx venira-mcp --version              # print the version
+npx venira-mcp --help                 # list flags + environment variables
 ```
 
 The `bin` entry in `package.json` exposes both `venira` and `venira-mcp`,

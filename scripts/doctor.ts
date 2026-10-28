@@ -12,11 +12,33 @@
  */
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { promises as fs } from "node:fs";
+import { existsSync, promises as fs } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { VERSION } from "../lib/version.js";
 
 const SESSION_ID = `doctor-${Date.now()}`;
+
+/**
+ * Nearest ancestor directory that contains a package.json. Walking up (rather
+ * than hard-coding `../..`) makes this work both when the doctor runs from
+ * source (`scripts/doctor.ts`) and from the published build
+ * (`dist/scripts/doctor.js`), and keeps `npx venira-mcp --doctor` usable in
+ * any project directory.
+ */
+function findPackageRoot(start: string): string {
+  let dir = start;
+  for (let i = 0; i < 8; i += 1) {
+    if (existsSync(path.join(dir, "package.json"))) return dir;
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return start;
+}
+
+const PKG_ROOT = findPackageRoot(path.dirname(fileURLToPath(import.meta.url)));
+const SERVER_ENTRY = path.join(PKG_ROOT, "dist", "server.js");
 const WORKSPACE = process.env.VENIRA_WORKSPACE ?? process.cwd();
 const DATA_DIR = process.env.VENIRA_DATA_DIR ?? path.join(WORKSPACE, "data");
 
@@ -60,7 +82,7 @@ async function main() {
     const client = new Client({ name: "doctor", version: "0.0.0" }, { capabilities: {} });
     const transport = new StdioClientTransport({
       command: "node",
-      args: ["dist/server.js"],
+      args: [SERVER_ENTRY],
       cwd: WORKSPACE,
       env: mcpEnv(),
       stderr: "pipe",
@@ -100,7 +122,7 @@ async function main() {
     const client2 = new Client({ name: "doctor-shell", version: "0.0.0" }, { capabilities: {} });
     const transport2 = new StdioClientTransport({
       command: "node",
-      args: ["dist/server.js"],
+      args: [SERVER_ENTRY],
       cwd: WORKSPACE,
       env: mcpEnv({ VENIRA_SESSION_ID: `doctor-shell-${Date.now()}` }),
       stderr: "pipe",
@@ -124,14 +146,18 @@ async function main() {
     });
   }
 
-  // 5. version (compare against the version declared in package.json)
-  const pkgRaw = await fs.readFile(path.join(process.cwd(), "package.json"), "utf8");
-  const expected = JSON.parse(pkgRaw) as { version: string };
-  results.push(
-    VERSION === expected.version
-      ? { status: "PASS", text: `server version ${VERSION}` }
-      : { status: "FAIL", text: `server version mismatch: ${VERSION} (expected ${expected.version})` },
-  );
+  // 5. version (compare the running server against the installed package.json)
+  const pkgRaw = await fs.readFile(path.join(PKG_ROOT, "package.json"), "utf8").catch(() => null);
+  if (pkgRaw === null) {
+    results.push({ status: "FAIL", text: `cannot read ${path.join(PKG_ROOT, "package.json")} to verify the version` });
+  } else {
+    const expected = JSON.parse(pkgRaw) as { version: string };
+    results.push(
+      VERSION === expected.version
+        ? { status: "PASS", text: `server version ${VERSION}` }
+        : { status: "FAIL", text: `server version mismatch: ${VERSION} (expected ${expected.version})` },
+    );
+  }
 
   const passes = results.filter((r) => (r as CheckResult).status === "PASS").length;
   const failed = results.filter((r) => (r as CheckResult).status === "FAIL");
