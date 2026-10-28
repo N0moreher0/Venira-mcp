@@ -18,6 +18,7 @@ import {
 } from "../lib/output.js";
 import type { RustResponse, ToolResult } from "../lib/output.js";
 import { VERSION } from "../lib/version.js";
+import { executeJs } from "../lib/js-executor.js";
 import { toHostPath, UNRESTRICTED, WORKSPACE } from "../lib/workspace.js";
 
 const PERMISSION_MODE = process.env.VENIRA_PERMISSION_MODE ?? "allow_all";
@@ -524,6 +525,9 @@ function trackShell(operation: string, data: unknown): void {
 }
 
 async function executeCached(operation: string, args: Args): Promise<Execution> {
+  const _decision = evaluateToolPolicy(operation, args);
+  if (_decision?.tier === "deny") throw new Error(`[command_denied] ${_decision.reason} (rule: ${_decision.tool})`);
+  if (_decision?.tier === "ask") throw new Error(`[approval_required] ${_decision.reason}`);
   // Tool-level policy: deny → throw (non-retryable), ask → throw an
   // approval_required envelope.  When VENIRA_TOOL_POLICY_FILE is unset this
   // is a no-op and the shell policy in lib/corehost.ts still applies.
@@ -1290,6 +1294,41 @@ function applyDisabledTools(server: McpServer): void {
   console.error(`[venira-coding] disabled tools: ${[...blocked].join(", ")}`);
 }
 
+async function runExecuteJs(args: Args): Promise<ToolResult> {
+  const started = performance.now();
+  const requestId = newRequestId();
+  const code = typeof args.code === "string" ? args.code : "";
+  const timeoutMs = typeof args.timeout_ms === "number" && Number.isFinite(args.timeout_ms) && args.timeout_ms > 0
+    ? Math.min(Math.floor(args.timeout_ms), 600_000)
+    : 30_000;
+  try {
+    const cliArgs = Array.isArray(args.argv) ? (args.argv as string[]).map(String) : undefined;
+    const r = executeJs(code, { timeout: timeoutMs, args: cliArgs });
+    const response: RustResponse = {
+      status: "completed",
+      result: {
+        kind: "js_execute",
+        data: {
+          ok: r.ok,
+          stdout_tail: r.stdout_tail,
+          stderr_tail: r.stderr_tail,
+          exit_code: r.exit_code,
+          timed_out: r.timed_out,
+          ...(r.error ? { error: r.error } : {}),
+        },
+      },
+      truncated: false,
+    };
+    const elapsedMs = performance.now() - started;
+    recordMetric("execute_js", elapsedMs, r.ok);
+    return toolResult(buildEnvelope("execute_js", response, { requestId, elapsedMs, cached: false }));
+  } catch (error) {
+    const elapsedMs = performance.now() - started;
+    recordMetric("execute_js", elapsedMs, false);
+    return toolResult(errorEnvelope("execute_js", error, { requestId, elapsedMs }), true);
+  }
+}
+
 export function registerProjectTools(server: McpServer): void {
   applyDisabledTools(server);
   server.registerTool(
@@ -1704,5 +1743,31 @@ export function registerProjectTools(server: McpServer): void {
       inputSchema: { include_audit: z.boolean().optional() },
     },
     (args) => runHealth(args as Args),
+
+  );
+
+  server.registerTool(
+    "project_execute_js",
+    {
+      ...config(
+        "Evaluate JavaScript code. Runs `node` in the workspace, capturing stdout/stderr; supports top-level await and `require`.",
+        "Execute JS",
+        {
+          use_when: "you need to run a small JS snippet for computation, file I/O via fs, or prototyping.",
+          avoid_when: "you need a full shell pipeline (project_shell_run) or a persistent process.",
+          speed_profile: "synchronous node exec with timeout (default 30s, cap 10min); output capped at 1 MiB.",
+          output_kind: "execute_js: stdout_tail, stderr_tail, exit_code, timed_out, ok.",
+          batch_safe: false,
+        },
+        { destructiveHint: true, openWorldHint: false },
+      ),
+      inputSchema: {
+        code: z.string().min(1),
+        timeout_ms: z.number().int().min(1).max(600_000).optional(),
+        argv: z.array(z.string()).optional(),
+      },
+    },
+    (args) => runExecuteJs(args as Args),
   );
 }
+
