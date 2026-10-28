@@ -1658,10 +1658,10 @@ async function runSymbolReferences(args: Args): Promise<ToolResult> {
       relative_path: args.relative_path,
     })) as RustResponse;
     const hits = (searchRes.result?.data as { hits?: unknown[] } | undefined)?.hits ?? [];
-    references = (hits as Array<{ relative_path?: unknown; line_number?: unknown; text?: unknown }>).map((h) => ({
+    references = (hits as Array<{ relative_path?: unknown; line_number?: unknown; snippet?: unknown; text?: unknown; line?: unknown; context?: unknown }>).map((h) => ({
       relative_path: String(h.relative_path ?? ""),
       line_number: Number(h.line_number ?? 0),
-      context: String(h.text ?? "").slice(0, 160),
+      context: String(h.snippet ?? h.text ?? h.line ?? h.context ?? "").slice(0, 160),
     }));
   }
   const max = Number(args.max_references ?? 100);
