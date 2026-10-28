@@ -11,6 +11,7 @@
         "VENIRA_UNRESTRICTED": "0",
         "VENIRA_DEFAULT_SHELL": "powershell",
         "VENIRA_OUTPUT_MODE": "full",
+        "VENIRA_PERMISSION_MODE": "allow_all",
         "VENIRA_READ_CACHE_BYTES": "67108864",
         "VENIRA_SHELL_MODE": "balanced",
         "VENIRA_SHELL_APPROVAL_TTL_MS": "600000",
