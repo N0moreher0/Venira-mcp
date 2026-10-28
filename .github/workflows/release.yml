@@ -120,6 +120,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # OIDC trusted publishing is only implemented in npm >= 11.5.1.
+      # Node 22 ships npm 10.x, which has no OIDC support at all: `npm publish`
+      # then falls back to anonymous auth and dies with ENEEDAUTH even though
+      # the trusted publisher is configured correctly. Upgrade explicitly.
+      #
+      # NOTE: deliberately NOT passing `registry-url` to setup-node — that
+      # writes an `.npmrc` with `_authToken=${NODE_AUTH_TOKEN}`, and an empty
+      # value makes npm attempt token auth instead of the OIDC exchange.
+      - name: Upgrade npm (OIDC trusted publishing needs >= 11.5.1)
+        run: |
+          npm install -g npm@latest
+          echo "node: $(node -v)"
+          echo "npm:  $(npm -v)"
+
       - name: Resolve tag
         id: tag
         run: |
@@ -183,6 +201,14 @@ jobs:
         id: npm
         run: |
           set -e
+          echo "node $(node -v) / npm $(npm -v)"
+          # Show which auth config npm sees (values masked) — a stray
+          # _authToken entry is the #1 reason OIDC publish is skipped.
+          echo "npm config (auth-related):"
+          npm config list 2>/dev/null | grep -Ei '_auth|registry|provenance' || true
+          if [ -n "$NODE_AUTH_TOKEN" ]; then
+            echo "WARNING: NODE_AUTH_TOKEN is set — npm will use token auth instead of OIDC."
+          fi
           # 1. Does the package already exist on npm? (venira-mcp OR the
           #    legacy venira-mcp-coding name — check both)
           if npm view venira-mcp version >/dev/null 2>&1 || npm view venira-mcp-coding version >/dev/null 2>&1; then
