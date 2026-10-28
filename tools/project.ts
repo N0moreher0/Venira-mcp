@@ -19,7 +19,21 @@ import {
 import type { RustResponse, ToolResult } from "../lib/output.js";
 import { VERSION } from "../lib/version.js";
 import { executeJs } from "../lib/js-executor.js";
-import { toHostPath, UNRESTRICTED, WORKSPACE } from "../lib/workspace.js";
+import {
+  toHostPath,
+  UNRESTRICTED,
+  WORKSPACE,
+  CACHE_ALL_ENABLED,
+  CACHE_LIST_ONLY_ENABLED,
+  CACHE_SEARCH_ONLY_ENABLED,
+} from "../lib/workspace.js";
+import { addTrace, recentTraces, traceSnapshot } from "../lib/tracer.js";
+import {
+  buildOutline,
+  diffUnified,
+  extractSymbols,
+  selectiveSearch,
+} from "../lib/symbol-diff.js";
 
 const PERMISSION_MODE = process.env.VENIRA_PERMISSION_MODE ?? "allow_all";
 // allow_all grants the "chat-terminal" scope when there is no Project (same as the native app).
@@ -525,43 +539,74 @@ function trackShell(operation: string, data: unknown): void {
 }
 
 async function executeCached(operation: string, args: Args): Promise<Execution> {
-  const _decision = evaluateToolPolicy(operation, args);
-  if (_decision?.tier === "deny") throw new Error(`[command_denied] ${_decision.reason} (rule: ${_decision.tool})`);
-  if (_decision?.tier === "ask") throw new Error(`[approval_required] ${_decision.reason}`);
-  // Tool-level policy: deny → throw (non-retryable), ask → throw an
-  // approval_required envelope.  When VENIRA_TOOL_POLICY_FILE is unset this
-  // is a no-op and the shell policy in lib/corehost.ts still applies.
-  const decision = evaluateToolPolicy(operation, args);
-  if (decision) {
-    if (decision.tier === "deny") {
-      throw new Error(`[command_denied] ${decision.reason} (rule: ${decision.tool})`);
-    }
-    if (decision.tier === "ask") {
-      // Registry of pending tool-level approvals stored in-process.  The
-      // same token machinery reuses shell's approval flow when possible.
-      throw new Error(`[approval_required] ${decision.reason}`);
-    }
-  }
-  if (operation === "read_file") return readFileCached(args);
-  if (operation === "get_file_info") return fileInfoCached(args);
-  if (operation === "list_files") return listCached(args);
-  if (operation === "search") return searchCached(args);
+  const started = Date.now();
+  let cached = false;
+  let ok = true;
 
-  const response = (await execute(operation, args)) as RustResponse;
-  if (MUTATING.has(operation)) {
-    try {
-      const absolutePath = toHostPath(args.relative_path as string | undefined);
-      invalidatePath(absolutePath);
-      rememberEdit(absolutePath);
-    } catch {
-      /* an invalid path already returned an error; no cache to clean */
+  try {
+    const _decision = evaluateToolPolicy(operation, args);
+    if (_decision?.tier === "deny") throw new Error(`[command_denied] ${_decision.reason} (rule: ${_decision.tool})`);
+    if (_decision?.tier === "ask") throw new Error(`[approval_required] ${_decision.reason}`);
+    // Tool-level policy: deny → throw (non-retryable), ask → throw an
+    // approval_required envelope.  When VENIRA_TOOL_POLICY_FILE is unset this
+    // is a no-op and the shell policy in lib/corehost.ts still applies.
+    const decision = evaluateToolPolicy(operation, args);
+    if (decision) {
+      if (decision.tier === "deny") {
+        throw new Error(`[command_denied] ${decision.reason} (rule: ${decision.tool})`);
+      }
+      if (decision.tier === "ask") {
+        throw new Error(`[approval_required] ${decision.reason}`);
+      }
     }
-    invalidateListCaches();
+
+    // VENIRA_CACHE_ALL=0: bypass every read-side cache (strict fresh mode).
+    const bypassAll =
+      !CACHE_ALL_ENABLED && ["read_file", "get_file_info", "list_files", "search"].includes(operation);
+
+    let execution: Execution;
+    if (operation === "read_file") {
+      execution = bypassAll
+        ? { response: (await execute(operation, args)) as RustResponse, cached: false }
+        : await readFileCached(args);
+    } else if (operation === "get_file_info") {
+      execution = bypassAll
+        ? { response: (await execute(operation, args)) as RustResponse, cached: false }
+        : await fileInfoCached(args);
+    } else if (operation === "list_files") {
+      execution = bypassAll || !CACHE_LIST_ONLY_ENABLED
+        ? { response: (await execute(operation, args)) as RustResponse, cached: false }
+        : await listCached(args);
+    } else if (operation === "search") {
+      execution = bypassAll || !CACHE_SEARCH_ONLY_ENABLED
+        ? { response: (await execute(operation, args)) as RustResponse, cached: false }
+        : await searchCached(args);
+    } else {
+      const response = (await execute(operation, args)) as RustResponse;
+      if (MUTATING.has(operation)) {
+        try {
+          const absolutePath = toHostPath(args.relative_path as string | undefined);
+          invalidatePath(absolutePath);
+          rememberEdit(absolutePath);
+        } catch {
+          /* an invalid path already returned an error; no cache to clean */
+        }
+        invalidateListCaches();
+      }
+      if (operation.startsWith("shell_") || operation === "cancel") {
+        trackShell(operation, response.result?.data);
+      }
+      execution = { response, cached: false };
+    }
+
+    cached = execution.cached;
+    return execution;
+  } catch (error) {
+    ok = false;
+    throw error;
+  } finally {
+    addTrace({ operation, duration_ms: Date.now() - started, ok, cached });
   }
-  if (operation.startsWith("shell_") || operation === "cancel") {
-    trackShell(operation, response.result?.data);
-  }
-  return { response, cached: false };
 }
 
 // ---------------------------------------------------------------------------
@@ -1221,6 +1266,18 @@ async function runHealth(args: Args): Promise<ToolResult> {
         policy: shellPolicySnapshot(),
       },
       metrics: metricsSnapshot(),
+      // P1: config + observability surfaces
+      cache: {
+        all_enabled: CACHE_ALL_ENABLED,
+        list_enabled: CACHE_LIST_ONLY_ENABLED,
+        search_enabled: CACHE_SEARCH_ONLY_ENABLED,
+      },
+      trace: traceSnapshot(),
+      shell: {
+        tail_max: Number(process.env.VENIRA_SHELL_TAIL_MAX ?? 4096),
+        exit_early: process.env.VENIRA_SHELL_EXIT_EARLY === "1",
+        timeout_policy: process.env.VENIRA_SHELL_TIMEOUT_POLICY === "hard" ? "hard" : "soft",
+      },
       audit: includeAudit ? await auditHealth(dbPath) : { skipped: true },
     };
     const elapsedMs = performance.now() - started;
@@ -1327,6 +1384,325 @@ async function runExecuteJs(args: Args): Promise<ToolResult> {
     recordMetric("execute_js", elapsedMs, false);
     return toolResult(errorEnvelope("execute_js", error, { requestId, elapsedMs }), true);
   }
+}
+
+async function runReadAudit(args: Args): Promise<ToolResult> {
+  const started = performance.now();
+  const requestId = newRequestId();
+  const limit = Math.max(1, Math.min(200, Number(args.limit ?? 50)));
+  const dbPath = path.join(dataDirFor(host.snapshot().exe), "venira.db");
+  try {
+    const Database = (await import("better-sqlite3")).default;
+    const db = new Database(dbPath, { readonly: true, fileMustExist: true });
+    const where: string[] = [];
+    const values: unknown[] = [];
+    if (typeof args.session_id === "string") { where.push("session_id = ?"); values.push(args.session_id); }
+    if (typeof args.operation === "string") { where.push("operation = ?"); values.push(args.operation); }
+    if (typeof args.outcome === "string") { where.push("outcome = ?"); values.push(args.outcome); }
+    if (typeof args.since_unix === "number") { where.push("started_at >= ?"); values.push(Math.floor(args.since_unix * 1000)); }
+    const sql =
+      `SELECT session_id, operation, outcome, reason_code, request_id, started_at, completed_at, elapsed_ms ` +
+      `FROM project_tool_audit ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ` +
+      `ORDER BY started_at DESC LIMIT ?`;
+    const rows = db.prepare(sql).all(...values, limit + 1) as unknown[];
+    db.close();
+    const truncated = rows.length > limit;
+    const data = {
+      db_path: dbPath,
+      count: truncated ? limit : rows.length,
+      truncated,
+      rows: rows.slice(0, limit).map((r) => {
+        const row = r as Record<string, unknown>;
+        return {
+          session_id: row.session_id,
+          operation: row.operation,
+          outcome: row.outcome,
+          ...(row.reason_code ? { reason_code: row.reason_code } : {}),
+          request_id: row.request_id,
+          started_at: typeof row.started_at === "number" ? Math.floor(row.started_at / 1000) : row.started_at,
+          ...(row.completed_at != null ? { completed_at: Math.floor((row.completed_at as number) / 1000) } : {}),
+          ...(row.elapsed_ms != null ? { elapsed_ms: row.elapsed_ms } : {}),
+        };
+      }),
+    };
+    const response: RustResponse = {
+      status: "completed",
+      result: { kind: "audit_read", data },
+      truncated,
+    };
+    const elapsedMs = performance.now() - started;
+    recordMetric("read_audit", elapsedMs, true);
+    return toolResult(buildEnvelope("read_audit", response, { requestId, elapsedMs, cached: false }));
+  } catch (error) {
+    // WAL locked or DB missing: report audit_unavailable (non-retryable), do not crash.
+    const msg = error instanceof Error ? error.message : String(error);
+    const elapsedMs = performance.now() - started;
+    recordMetric("read_audit", elapsedMs, false);
+    return toolResult(
+      errorEnvelope("read_audit", new Error(`[audit_unavailable] ${msg}`), { requestId, elapsedMs }),
+      true,
+    );
+  }
+}
+
+async function runCancelShellSession(): Promise<ToolResult> {
+  const started = performance.now();
+  const requestId = newRequestId();
+  try {
+    // Reuse the session-level cancel exposed by the corehost.
+    const result = (await host.call(
+      "project_tool.shell.cancel_session",
+      { session_id: SESSION_ID },
+      5_000,
+    )) as { cancelled?: unknown } | undefined;
+    const response: RustResponse = {
+      status: "completed",
+      result: {
+        kind: "shell_cancel_session",
+        data: {
+          cancelled: result?.cancelled === true,
+          session_id: SESSION_ID,
+        },
+      },
+      truncated: false,
+    };
+    const elapsedMs = performance.now() - started;
+    recordMetric("shell_cancel_session", elapsedMs, true);
+    return toolResult(buildEnvelope("shell_cancel_session", response, { requestId, elapsedMs, cached: false }));
+  } catch (error) {
+    const elapsedMs = performance.now() - started;
+    recordMetric("shell_cancel_session", elapsedMs, false);
+    return toolResult(errorEnvelope("shell_cancel_session", error, { requestId, elapsedMs }), true);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// P2/P3: code intelligence + workflow tools
+// ---------------------------------------------------------------------------
+
+/** Read a workspace file's text, respecting max bytes; null when missing. */
+async function readTextFile(relPath: string): Promise<string | null> {
+  try {
+    const abs = toHostPath(relPath);
+    const text = await fs.readFile(abs, "utf8");
+    return text;
+  } catch {
+    return null;
+  }
+}
+
+async function runOutlineSymbol(args: Args): Promise<ToolResult> {
+  const started = performance.now();
+  const requestId = newRequestId();
+  const rel = String(args.relative_path ?? "");
+  const text = await readTextFile(rel);
+  if (text === null) {
+    const elapsedMs = performance.now() - started;
+    return toolResult(
+      errorEnvelope("outline_symbol", new Error(`[not_found] No such file: ${rel}. Hint: use project_list_files to locate it.`), { requestId, elapsedMs }),
+      true,
+    );
+  }
+  const includeFunctions = args.include_functions !== false;
+  const includeClasses = args.include_classes !== false;
+  const symbols = extractSymbols(text, typeof args.language === "string" ? args.language : undefined, includeFunctions, includeClasses);
+  const outline = buildOutline(text);
+  const response: RustResponse = {
+    status: "completed",
+    result: {
+      kind: "outline_symbol",
+      data: {
+        relative_path: toHostPath(rel),
+        total_symbols: outline.total_symbols,
+        symbols: symbols.slice(0, Number(args.max_symbols ?? 200)),
+      },
+    },
+    truncated: false,
+  };
+  const elapsedMs = performance.now() - started;
+  recordMetric("outline_symbol", elapsedMs, true);
+  return toolResult(buildEnvelope("outline_symbol", response, { requestId, elapsedMs, cached: false }));
+}
+
+async function runFileSymbols(args: Args): Promise<ToolResult> {
+  const started = performance.now();
+  const requestId = newRequestId();
+  const rel = String(args.relative_path ?? "");
+  const text = await readTextFile(rel);
+  if (text === null) {
+    const elapsedMs = performance.now() - started;
+    return toolResult(
+      errorEnvelope("file_symbols", new Error(`[not_found] No such file: ${rel}. Hint: use project_list_files to locate it.`), { requestId, elapsedMs }),
+      true,
+    );
+  }
+  const includeFunctions = args.include_functions !== false;
+  const includeClasses = args.include_classes !== false;
+  const symbols = extractSymbols(text, typeof args.language === "string" ? args.language : undefined, includeFunctions, includeClasses);
+  const response: RustResponse = {
+    status: "completed",
+    result: {
+      kind: "file_symbols",
+      data: {
+        relative_path: toHostPath(rel),
+        language: typeof args.language === "string" ? args.language : null,
+        count: symbols.length,
+        symbols,
+      },
+    },
+    truncated: false,
+  };
+  const elapsedMs = performance.now() - started;
+  recordMetric("file_symbols", elapsedMs, true);
+  return toolResult(buildEnvelope("file_symbols", response, { requestId, elapsedMs, cached: false }));
+}
+
+async function runDiffFiles(args: Args): Promise<ToolResult> {
+  const started = performance.now();
+  const requestId = newRequestId();
+  const relA = String(args.relative_path_a ?? "");
+  const relB = String(args.relative_path_b ?? "");
+  const [a, b] = await Promise.all([readTextFile(relA), readTextFile(relB)]);
+  if (a === null || b === null) {
+    const missing = a === null ? relA : relB;
+    const elapsedMs = performance.now() - started;
+    return toolResult(
+      errorEnvelope("diff_files", new Error(`[not_found] Cannot diff: missing ${missing}.`), { requestId, elapsedMs }),
+      true,
+    );
+  }
+  const contextLines = Number(args.context_lines ?? 3);
+  const maxLines = Number(args.max_lines ?? 500);
+  const diff = diffUnified(a, b, contextLines, maxLines);
+  const response: RustResponse = {
+    status: "completed",
+    result: {
+      kind: "diff_files",
+      data: {
+        relative_path_a: toHostPath(relA),
+        relative_path_b: toHostPath(relB),
+        lines_added: diff.lines_added,
+        lines_removed: diff.lines_removed,
+        unified_diff: diff.unified_diff,
+        truncated: diff.truncated,
+      },
+    },
+    truncated: diff.truncated,
+  };
+  const elapsedMs = performance.now() - started;
+  recordMetric("diff_files", elapsedMs, true);
+  return toolResult(buildEnvelope("diff_files", response, { requestId, elapsedMs, cached: false }));
+}
+
+async function runSymbolReferences(args: Args): Promise<ToolResult> {
+  const started = performance.now();
+  const requestId = newRequestId();
+  const symbolName = String(args.symbol_name ?? "");
+  if (!symbolName) {
+    return toolResult(errorEnvelope("symbol_references", new Error("[invalid_request] symbol_name is required."), { requestId, elapsedMs: 0 }), true);
+  }
+  const scope = args.scope === "file" ? "file" : "workspace";
+  // For "file" scope, search only the file that the symbol lives in (approximation:
+  // the caller should pair this with project_file_symbols first). For "workspace",
+  // do a bounded content search for the identifier.
+  let references: Array<{ relative_path: string; line_number: number; context: string }> = [];
+  if (scope === "file") {
+    const rel = String(args.relative_path ?? "");
+    const text = await readTextFile(rel);
+    if (text === null) {
+      return toolResult(errorEnvelope("symbol_references", new Error(`[not_found] No such file: ${rel}.`), { requestId, elapsedMs: performance.now() - started }), true);
+    }
+    const lines = text.split("\n");
+    const escaped = symbolName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const re = new RegExp(`\\b${escaped}\\b`);
+    for (let i = 0; i < lines.length; i++) {
+      if (re.test(lines[i])) {
+        references.push({ relative_path: toHostPath(rel), line_number: i + 1, context: lines[i].trim().slice(0, 160) });
+      }
+    }
+  } else {
+    // workspace scope: bounded search via the existing search op, kind=literal_content
+    const limit = Number(args.limit ?? 50);
+    const searchRes = (await execute("search", {
+      query: symbolName,
+      kind: "literal_content",
+      whole_word: true,
+      limit,
+      relative_path: args.relative_path,
+    })) as RustResponse;
+    const hits = (searchRes.result?.data as { hits?: unknown[] } | undefined)?.hits ?? [];
+    references = (hits as Array<{ relative_path?: unknown; line_number?: unknown; text?: unknown }>).map((h) => ({
+      relative_path: String(h.relative_path ?? ""),
+      line_number: Number(h.line_number ?? 0),
+      context: String(h.text ?? "").slice(0, 160),
+    }));
+  }
+  const max = Number(args.max_references ?? 100);
+  const response: RustResponse = {
+    status: "completed",
+    result: {
+      kind: "symbol_references",
+      data: {
+        symbol_name: symbolName,
+        scope,
+        count: references.length,
+        references: references.slice(0, max),
+      },
+    },
+    truncated: references.length > max,
+  };
+  const elapsedMs = performance.now() - started;
+  recordMetric("symbol_references", elapsedMs, true);
+  return toolResult(buildEnvelope("symbol_references", response, { requestId, elapsedMs, cached: false }));
+}
+
+async function runSelectiveSearch(args: Args): Promise<ToolResult> {
+  const started = performance.now();
+  const requestId = newRequestId();
+  const queries = args.queries as Array<{ pattern: string; must?: boolean; weight?: number }> | undefined;
+  if (!Array.isArray(queries) || queries.length === 0) {
+    return toolResult(errorEnvelope("selective_search", new Error("[invalid_request] queries[] is required."), { requestId, elapsedMs: 0 }), true);
+  }
+  // Bounded file set: prefer the caller's files_hint, otherwise scan a subset of
+  // the workspace via list_files + read.
+  const files = new Map<string, string>();
+  const hint = Array.isArray(args.files_hint) ? (args.files_hint as string[]) : [];
+  if (hint.length > 0) {
+    for (const rel of hint.slice(0, 20)) {
+      const text = await readTextFile(rel);
+      if (text !== null) files.set(toHostPath(rel), text);
+    }
+  } else {
+    // Fallback: a shallow directory listing + read of the first N text files.
+    const relPath = args.relative_path ? String(args.relative_path) : undefined;
+    const listRes = (await execute("list_files", { relative_path: relPath, depth: 2, limit: 40 })) as RustResponse;
+    const entries = (listRes.result?.data as { entries?: unknown[] } | undefined)?.entries ?? [];
+    const list = entries.filter((e) => typeof e === "object" && (e as { kind?: unknown }).kind === "file").slice(0, 40) as Array<{ relative_path?: unknown }>;
+    for (const e of list) {
+      const rel = String(e.relative_path ?? "");
+      if (/\.(ts|tsx|js|jsx|py|rs|go|java|c|cpp|h|cs|rb|php|sql|json|md|sh|yml|yaml|toml)$/.test(rel)) {
+        const text = await readTextFile(rel);
+        if (text !== null) files.set(toHostPath(rel), text);
+      }
+    }
+  }
+  const result = selectiveSearch(files, queries, Number(args.limit ?? 100));
+  const response: RustResponse = {
+    status: "completed",
+    result: {
+      kind: "selective_search",
+      data: {
+        hits: result.hits,
+        total_files: result.total_files,
+        total_hits: result.total_hits,
+        truncated: result.truncated,
+      },
+    },
+    truncated: result.truncated,
+  };
+  const elapsedMs = performance.now() - started;
+  recordMetric("selective_search", elapsedMs, true);
+  return toolResult(buildEnvelope("selective_search", response, { requestId, elapsedMs, cached: false }));
 }
 
 export function registerProjectTools(server: McpServer): void {
@@ -1768,6 +2144,232 @@ export function registerProjectTools(server: McpServer): void {
       },
     },
     (args) => runExecuteJs(args as Args),
+  );
+
+  // -------------------------------------------------------------------------
+  // P1: observability + audit + shell session tools
+  // -------------------------------------------------------------------------
+
+  server.registerTool(
+    "project_trace_status",
+    {
+      ...config(
+        "Show the most recent traced tool calls from the in-memory buffer (last N) plus the trace configuration.",
+        "Trace status",
+        {
+          use_when: "VENIRA_TRACE=1 and you want to see what ran recently without reading the log file.",
+          avoid_when: "tracing is disabled (returns an empty buffer) or you need the full on-disk log (read VENIRA_TRACE_FILE instead).",
+          speed_profile: "instant; in-memory buffer only, no I/O.",
+          output_kind: "trace_status: enabled, file, buffered, recent[] (newest last).",
+          batch_safe: true,
+        },
+        { readOnlyHint: true, openWorldHint: false },
+      ),
+      inputSchema: {
+        limit: z.number().int().min(1).max(100).optional().describe("How many recent traces to return (default 20, max 100)."),
+      },
+    },
+    (args) => {
+      const started = performance.now();
+      const requestId = newRequestId();
+      const limit = typeof args.limit === "number" ? args.limit : 20;
+      const recent = recentTraces(limit);
+      const response: RustResponse = {
+        status: "completed",
+        result: {
+          kind: "trace_status",
+          data: {
+            ...traceSnapshot(),
+            recent,
+          },
+        },
+        truncated: false,
+      };
+      const elapsedMs = performance.now() - started;
+      recordMetric("trace_status", elapsedMs, true);
+      return toolResult(buildEnvelope("trace_status", response, { requestId, elapsedMs, cached: false }));
+    },
+  );
+
+  server.registerTool(
+    "project_read_audit",
+    {
+      ...config(
+        "Read recent rows from the SQLite audit log (WAL). Filter by session/operation/outcome; bounded by limit.",
+        "Read audit log",
+        {
+          use_when: "you need to inspect what operations were recorded (audit trail) — e.g. compliance or debugging a prior action.",
+          avoid_when: "you only need the live cache/metric report (project_health include_audit=true) — that one is faster.",
+          speed_profile: "fast; one bounded SQLite read (readonly, WAL-safe).",
+          output_kind: "audit_read: rows[] (newest first), count, truncated, db_path.",
+          batch_safe: true,
+        },
+        { readOnlyHint: true, openWorldHint: false },
+      ),
+      inputSchema: {
+        session_id: z.string().optional(),
+        operation: z.string().optional(),
+        outcome: z.enum(["success", "failure", "running"]).optional(),
+        limit: z.number().int().min(1).max(200).optional(),
+        since_unix: z.number().int().min(0).optional(),
+      },
+    },
+    (args) => runReadAudit(args as Args),
+  );
+
+  server.registerTool(
+    "project_shell_cancel_session",
+    {
+      ...config(
+        "Cancel ALL shell runs tracked in this session (kills every process tree). Use to cleanly tear down a session.",
+        "Shell cancel session",
+        {
+          use_when: "a session is ending or a stuck session has many running commands and they must all be stopped.",
+          avoid_when: "only one run needs cancelling (project_shell_cancel by run_id). Destructive: running commands are killed.",
+          speed_profile: "fast; iterates the in-process shell run table and kills each tree.",
+          output_kind: "shell_cancel_session: cancelled_run_ids[], count.",
+          batch_safe: false,
+        },
+        { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+      ),
+      inputSchema: {},
+    },
+    () => runCancelShellSession(),
+  );
+
+  // -------------------------------------------------------------------------
+  // P2/P3: code intelligence + workflow
+  // -------------------------------------------------------------------------
+
+  server.registerTool(
+    "project_outline_symbol",
+    {
+      ...config(
+        "Parse a source file and return its symbol outline (functions, classes, types, interfaces) with line numbers.",
+        "Outline symbols",
+        {
+          use_when: "you need to see the structure / top-level symbols of a file before reading or refactoring it.",
+          avoid_when: "you need every usage of a symbol (project_symbol_references) or a text-only diff (project_diff_files).",
+          speed_profile: "fast; single-file regex scan, no external indexer.",
+          output_kind: "outline_symbol: total_symbols, symbols[] {name, kind, line, signature}.",
+          batch_safe: true,
+        },
+        { readOnlyHint: true, openWorldHint: false },
+      ),
+      inputSchema: {
+        relative_path: path_,
+        language: z.string().optional(),
+        include_functions: z.boolean().optional(),
+        include_classes: z.boolean().optional(),
+        max_symbols: z.number().int().min(1).max(500).optional(),
+      },
+    },
+    (args) => runOutlineSymbol(args as Args),
+  );
+
+  server.registerTool(
+    "project_file_symbols",
+    {
+      ...config(
+        "Extract all symbols (fn/def/class/struct/interface) from one source file, with an optional language hint.",
+        "File symbols",
+        {
+          use_when: "you need the complete symbol list of a single file (not just the top-level outline).",
+          avoid_when: "you need cross-file references (project_symbol_references) or a directory tree (project_list_files).",
+          speed_profile: "fast; single-file regex scan, no external indexer.",
+          output_kind: "file_symbols: count, language, symbols[] {name, kind, line, signature}.",
+          batch_safe: true,
+        },
+        { readOnlyHint: true, openWorldHint: false },
+      ),
+      inputSchema: {
+        relative_path: path_,
+        language: z.string().optional(),
+        include_functions: z.boolean().optional(),
+        include_classes: z.boolean().optional(),
+      },
+    },
+    (args) => runFileSymbols(args as Args),
+  );
+
+  server.registerTool(
+    "project_diff_files",
+    {
+      ...config(
+        "Unified (git-style) diff between two workspace files. Reports lines_added/lines_removed and the full hunk text.",
+        "Diff files",
+        {
+          use_when: "comparing two versions of a file, or reviewing changes before/after an edit.",
+          avoid_when: "the two files are in different languages or one is binary; large binaries are not supported.",
+          speed_profile: "medium; LCS-based diff over the two full texts, bounded by max_lines.",
+          output_kind: "diff_files: lines_added, lines_removed, unified_diff, truncated.",
+          batch_safe: true,
+        },
+        { readOnlyHint: true, openWorldHint: false },
+      ),
+      inputSchema: {
+        relative_path_a: path_,
+        relative_path_b: path_,
+        context_lines: z.number().int().min(0).max(50).optional(),
+        max_lines: z.number().int().min(10).max(10000).optional(),
+      },
+    },
+    (args) => runDiffFiles(args as Args),
+  );
+
+  server.registerTool(
+    "project_symbol_references",
+    {
+      ...config(
+        "Find every occurrence of a named symbol. scope=file (fast, single file) or scope=workspace (uses content search).",
+        "Symbol references",
+        {
+          use_when: "you need to know where a symbol is used before renaming/refactoring it.",
+          avoid_when: "you only need its declaration (project_file_symbols) or an arbitrary string (project_search).",
+          speed_profile: "fast for scope=file; medium for scope=workspace (single search call).",
+          output_kind: "symbol_references: count, references[] {relative_path, line_number, context}.",
+          batch_safe: true,
+        },
+        { readOnlyHint: true, openWorldHint: false },
+      ),
+      inputSchema: {
+        symbol_name: z.string(),
+        scope: z.enum(["file", "workspace"]).optional(),
+        relative_path: path_.optional(),
+        limit: z.number().int().min(1).max(200).optional(),
+        max_references: z.number().int().min(1).max(500).optional(),
+      },
+    },
+    (args) => runSymbolReferences(args as Args),
+  );
+
+  server.registerTool(
+    "project_selective_search",
+    {
+      ...config(
+        "Smart multi-query search: combine several patterns with AND/OR/NOT + fuzzy scoring. Bounded to a file set you pass in.",
+        "Selective search",
+        {
+          use_when: "you need to rank many files by how well they match several keywords at once (e.g. locating the right module among candidates).",
+          avoid_when: "you need a single exact literal (project_search) or to inspect one file's content (project_read_file).",
+          speed_profile: "medium; reads a bounded set of files (files_hint or a shallow listing) and scores each line.",
+          output_kind: "selective_search: hits[] {relative_path, line_number, text, score, matched}, total_files, total_hits, truncated.",
+          batch_safe: true,
+        },
+        { readOnlyHint: true, openWorldHint: false },
+      ),
+      inputSchema: {
+        queries: z.array(z.object({
+          pattern: z.string(),
+          must: z.boolean().optional(),
+          weight: z.number().int().optional(),
+        })).min(1),
+        files_hint: z.array(z.string()).optional(),
+        relative_path: path_.optional(),
+        limit: z.number().int().min(1).max(500).optional(),
+      },
+    },
+    (args) => runSelectiveSearch(args as Args),
   );
 }
 

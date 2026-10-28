@@ -92,7 +92,7 @@ async function main() {
       await new Promise((r) => setTimeout(r, 500)); // let warm-up finish
 
       const tools = await client.listTools();
-      const expectedTools = 16;
+      const expectedTools = 25;
       results.push(await check("tools_count", tools.tools.length === expectedTools, { actual: tools.tools.length, expected: expectedTools }));
 
       const healthRes = await client.callTool({ name: "project_health", arguments: { include_audit: false } });
@@ -143,6 +143,45 @@ async function main() {
     results.push({
       status: "FAIL",
       text: `Shell smoke failed: ${err instanceof Error ? err.message : String(err)}`,
+    });
+  }
+
+  // 4b. P1 config surfacing: cache control, tracing, shell UX, audit reachability
+  try {
+    const client3 = new Client({ name: "doctor-config", version: "0.0.0" }, { capabilities: {} });
+    const transport3 = new StdioClientTransport({
+      command: "node",
+      args: [SERVER_ENTRY],
+      cwd: WORKSPACE,
+      env: mcpEnv({ VENIRA_SESSION_ID: `doctor-config-${Date.now()}` }),
+      stderr: "pipe",
+    });
+    await client3.connect(transport3);
+    await new Promise((r) => setTimeout(r, 300));
+
+    const healthRes3 = await client3.callTool({ name: "project_health", arguments: { include_audit: false } });
+    const hData = JSON.parse(((healthRes3 as { content?: { text?: string }[] })?.content?.[0]?.text ?? "{}"));
+    results.push(await check("config_cache_reported", hData.data?.cache !== undefined, hData.data?.cache));
+    results.push(await check("config_trace_reported", hData.data?.trace !== undefined, hData.data?.trace));
+    results.push(await check("config_shell_reported", hData.data?.shell !== undefined, hData.data?.shell));
+
+    // P1: read_audit tool reachable and returns an envelope (audit_unavailable is acceptable)
+    const auditRes = await client3.callTool({ name: "project_read_audit", arguments: { limit: 1 } });
+    const auditData = JSON.parse(((auditRes as { content?: { text?: string }[] })?.content?.[0]?.text ?? "{}"));
+    const auditOk =
+      auditData.ok === true ||
+      auditData.error?.code === "audit_unavailable";
+    results.push(await check("read_audit_reachable", auditOk, auditData));
+
+    const traceRes = await client3.callTool({ name: "project_trace_status", arguments: {} });
+    const traceData = JSON.parse(((traceRes as { content?: { text?: string }[] })?.content?.[0]?.text ?? "{}"));
+    results.push(await check("trace_status_reachable", traceData.ok === true, traceData));
+
+    await client3.close();
+  } catch (err) {
+    results.push({
+      status: "FAIL",
+      text: `P1 config/audit/trace checks failed: ${err instanceof Error ? err.message : String(err)}`,
     });
   }
 

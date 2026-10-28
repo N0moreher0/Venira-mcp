@@ -38,7 +38,7 @@ const transport = new StdioClientTransport({
   command: "node",
   args: ["dist/server.js"],
   cwd: process.cwd(),
-  env: verifyEnv({}, "full"), // full mode for the remaining checks
+  env: verifyEnv({ VENIRA_SHELL_TIMEOUT_POLICY: "hard" }, "full"), // full mode for the remaining checks
   stderr: "pipe",
 });
 const client = new Client({ name: "verify", version: "0.0.0" }, { capabilities: {} });
@@ -72,8 +72,8 @@ check("instructions_present", instructions?.includes("Decision tree") ?? false, 
 await client2.close();
 
 const tools = await client.listTools();
-const expectedCount = 16;
-check("tool_count", tools.tools.length === 17, { actual: tools.tools.length });
+const expectedCount = 25;
+check("tool_count", tools.tools.length === 25, { actual: tools.tools.length });
 
 const pair = tools.tools.find((t) => t.name === "project_read_file");
 const readBatch = tools.tools.find((t) => t.name === "project_read_batch");
@@ -350,7 +350,7 @@ await disabledClient.connect(disabledTransport);
 const disabledList = await disabledClient.listTools();
 check(
   "disable_tools_hidden",
-  !disabledList.tools.some((t) => t.name === "project_shell_run") && disabledList.tools.length === 16,
+  !disabledList.tools.some((t) => t.name === "project_shell_run") && disabledList.tools.length === 24,
   disabledList.tools.map((t) => t.name),
 );
 await disabledClient.close();

@@ -325,7 +325,19 @@ type ShellRun = {
 };
 
 const shellRuns = new Map<string, ShellRun>();
-const TAIL_LIMIT = 4000;
+const TAIL_LIMIT = (() => {
+  const value = Number(process.env.VENIRA_SHELL_TAIL_MAX);
+  return Number.isFinite(value) && value >= 256 ? Math.floor(value) : 4000;
+})();
+/** VENIRA_SHELL_EXIT_EARLY=1: pollers return immediately when the exit code is
+ * already known, without waiting out the full wait_seconds window. */
+export const SHELL_EXIT_EARLY = ["1", "true", "on", "yes"].includes(
+  (process.env.VENIRA_SHELL_EXIT_EARLY ?? "").toLowerCase(),
+);
+/** VENIRA_SHELL_TIMEOUT_POLICY=soft (default): an expired command only warns and is
+ * left to finish; =hard: kill the whole process tree at the timeout. */
+export const SHELL_TIMEOUT_POLICY: "soft" | "hard" =
+  process.env.VENIRA_SHELL_TIMEOUT_POLICY === "hard" ? "hard" : "soft";
 
 /** Hard cap per stream; keeps a runaway build from exhausting server memory. */
 const MAX_OUTPUT_BYTES = (() => {
@@ -1225,11 +1237,18 @@ async function opShellRun(
   });
 
   if (timeoutMs > 0) {
+    const policy: "soft" | "hard" = process.env.VENIRA_SHELL_TIMEOUT_POLICY === "hard" ? "hard" : "soft";
     run.timer = setTimeout(() => {
       if (!run.running) return;
       run.timed_out = true;
-      recordApproval("timed_out");
-      killTree(run.process);
+      if (policy === "hard") {
+        // hard: kill the whole process tree at the deadline.
+        recordApproval("timed_out");
+        killTree(run.process);
+      } else {
+        // soft: only warn; the command keeps running and can still be polled/cancelled.
+        recordApproval("timeout_warn");
+      }
     }, timeoutMs);
     run.timer.unref?.();
   }
@@ -1277,9 +1296,13 @@ async function opShellStatus(
   }
 
   if (waitSeconds > 0 && run.running) {
+    // P1: VENIRA_SHELL_EXIT_EARLY=1 — return as soon as the exit code is known
+    // instead of waiting out the entire window.
+    const pollEarly = process.env.VENIRA_SHELL_EXIT_EARLY === "1";
     const deadline = Date.now() + waitSeconds * 1000;
     while (run.running && Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 250));
+      if (pollEarly && !run.running) break;
     }
   }
 

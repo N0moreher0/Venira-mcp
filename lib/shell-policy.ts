@@ -977,6 +977,7 @@ const stats = {
   denied: 0,
   approved: 0,
   timed_out: 0,
+  timeout_warn: 0,
   killed_tree: 0,
   output_capped: 0,
 };
@@ -988,7 +989,7 @@ export function recordDecision(decision: Decision): void {
   else stats.denied += 1;
 }
 
-export function recordApproval(kind: "approved" | "timed_out" | "killed_tree" | "output_capped"): void {
+export function recordApproval(kind: "approved" | "timed_out" | "timeout_warn" | "killed_tree" | "output_capped"): void {
   stats[kind] += 1;
 }
 
