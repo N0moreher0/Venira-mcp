@@ -46,7 +46,7 @@ jobs:
           mkdir -p release/zip-root
           cp -r dist release/zip-root/
           cp bin/venira-mcp.js release/zip-root/ 2>/dev/null || true
-          cp package.json README.md LICENSE LICENSE-APACHE2.0.txt opencode.example.json release/zip-root/
+          cp package.json README.md LICENSE-MIT LICENSE-APACHE opencode.example.json release/zip-root/
           cp -r node_modules release/zip-root/
           cd release/zip-root && zip -qr "../venira-mcp-${TAG_NAME}-standalone.zip" .
           cd ../..

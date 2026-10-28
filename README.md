@@ -587,7 +587,11 @@ npm run bench:mcp    # end-to-end numbers
 
 ## License
 
-Dual-licensed: **MIT OR Apache-2.0** — see [`LICENSE`](./LICENSE).
+Dual-licensed under **MIT OR Apache-2.0** — pick whichever fits your project.
 
-- MIT license text: top of [`LICENSE`](./LICENSE)
-- Apache-2.0 full text: [`LICENSE-APACHE2.0.txt`](./LICENSE-APACHE2.0.txt)
+- MIT license text: [`LICENSE-MIT`](./LICENSE-MIT)
+- Apache-2.0 full text: [`LICENSE-APACHE`](./LICENSE-APACHE)
+
+Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in this project shall be dual-licensed as above, without any
+additional terms or conditions.
