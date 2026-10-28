@@ -24,7 +24,39 @@ import { existsSync, readFileSync } from "node:fs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const dist = path.join(here, "..", "dist", "server.js");
-const args = process.argv.slice(2);
+const rawArgs = process.argv.slice(2);
+const env = { ...process.env };
+const restArgs = [];
+
+for (let i = 0; i < rawArgs.length; i++) {
+  const arg = rawArgs[i];
+  if (arg === "--workspace" || arg === "-w") {
+    env.VENIRA_WORKSPACE = rawArgs[++i] || env.VENIRA_WORKSPACE;
+  } else if (arg.startsWith("--workspace=")) {
+    env.VENIRA_WORKSPACE = arg.slice("--workspace=".length);
+  } else if (arg === "--data-dir") {
+    env.VENIRA_DATA_DIR = rawArgs[++i] || env.VENIRA_DATA_DIR;
+  } else if (arg.startsWith("--data-dir=")) {
+    env.VENIRA_DATA_DIR = arg.slice("--data-dir=".length);
+  } else if (arg === "--env") {
+    // e.g. --env VENIRA_TOOL_POLICY_JSON='{...}' ; simple variant
+    const [k, v] = (rawArgs[++i] || "").split("=");
+    if (k) env[k] = v;
+  } else {
+    restArgs.push(arg);
+  }
+}
+
+// Positional shorthand: `npx venira-mcp <project-path>`
+if (!env.VENIRA_WORKSPACE && restArgs.length && !restArgs[0].startsWith("--")) {
+  // Only treat as workspace if it isn't a CLI flag and a real directory exists
+  const candidate = restArgs[0];
+  if (candidate && existsSync(candidate)) {
+    env.VENIRA_WORKSPACE = candidate;
+    restArgs.shift();
+  }
+}
+const args = restArgs;
 
 const USAGE = `venira-mcp — MCP server for coding agents
 
@@ -39,6 +71,9 @@ Environment:
   VENIRA_WORKSPACE    Project root the tools are locked to (default: cwd)
   VENIRA_DATA_DIR     Audit DB + runtime data (default: <workspace>/data)
   VENIRA_UNRESTRICTED 1 to allow paths outside the workspace (default: 0)
+
+  --workspace, -w <path>  Project root instead of editing env
+  --data-dir <path>       Audit DB + data dir
 
 Docs: https://github.com/N0moreher0/Venira-mcp`;
 
@@ -88,7 +123,7 @@ if (!existsSync(nativeBinding)) {
 
 const child = spawn(process.execPath, [target.file, ...target.rest], {
   stdio: "inherit",
-  env: { ...process.env },
+  env,
 });
 
 child.on("close", (code) => process.exit(code ?? 0));
