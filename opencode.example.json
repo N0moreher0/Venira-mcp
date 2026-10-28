@@ -3,22 +3,19 @@
   "mcp": {
     "venira": {
       "type": "local",
-      "command": ["npx", "venira-mcp"],
+      "command": ["node", "G:\\path\\to\\venira-mcp\\dist\\server.js"],
       "enabled": true,
       "environment": {
         "VENIRA_WORKSPACE": "C:\\path\\to\\your-project",
         "VENIRA_DATA_DIR": "C:\\path\\to\\your-project\\data",
         "VENIRA_UNRESTRICTED": "0",
         "VENIRA_DEFAULT_SHELL": "powershell",
-        "VENIRA_OUTPUT_MODE": "full",
-        "VENIRA_PERMISSION_MODE": "allow_all",
-        "VENIRA_READ_CACHE_BYTES": "67108864",
         "VENIRA_SHELL_MODE": "balanced",
-        "VENIRA_SHELL_APPROVAL_TTL_MS": "600000",
-        "VENIRA_SHELL_ELICIT": "0",
-        "VENIRA_SHELL_MAX_OUTPUT_BYTES": "1048576",
-        "VENIRA_DISABLE_TOOLS": "",
-        "VENIRA_TOOL_POLICY_JSON": "{\"rules\":[{\"tool\":\"project_delete_path\",\"tier\":\"ask\",\"args\":{\"recursive\":\"true\"}},{\"tool\":\"project_shell_run\",\"tier\":\"ask\",\"args\":{\"command\":\"/^(rm|del|rd|rmdir|taskkill|sudo|su|shutdown|reboot|mkfs|fdisk|dd)\\\\b/i\"}}]}"
+        "VENIRA_PERMISSION_MODE": "allow_all",
+        "VENIRA_OUTPUT_MODE": "full",
+        "VENIRA_ALLOW_JS_EXEC": "1",
+        "VENIRA_AUDIT_FAST": "1",
+        "VENIRA_READ_CACHE_BYTES": "67108864"
       }
     }
   }
