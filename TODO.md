@@ -246,6 +246,7 @@ The whole history in order — what shipped, when, and why.
 - **v1.3.0+** (P2.5): ✅ self-install (`project_detect_harnesses` / `project_install_self`)
 - **v1.4.0**: ✅ checkpoints + audit reasons + Git/PR + CI + secrets (35 tools, verify 186/186)
 - **v1.5.0**: ✅ inline PR review comments + check-runs + secret rotation + deterministic `explain_error` / `plan_read_batch` (37 tools, verify 211/211)
+- **v1.5.1 → v1.5.4**: ✅ hardening found by live E2E + bench — inline `commit_id`, planner artifact/lockfile/credential filters, name/path ranking + calibrated estimate (verify 218/218)
 - **v1.6.0** (candidate): GitLab/Bitbucket provider dialect, multi-repo workspaces
 - **Backlog**: chroma/supabase integration, metrics UI
 

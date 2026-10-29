@@ -73,14 +73,14 @@ That's it. There is no external binary to build or download.
 npm install -g venira-mcp             # or: npx venira-mcp (no install)
 ```
 
-Once the package is published, `npx` fetches it to a temp dir and runs it —
-no local clone or build needed:
+`npx` fetches the published tarball to a temp dir and runs it — no local clone or
+build needed:
 
 ```bash
 npx venira-mcp                        # start the MCP server (stdio)
+npx venira-mcp --version              # print the version (current release: 1.5.4)
 npx venira-mcp --doctor               # run the preflight suite
 npx venira-mcp --verify               # run the behavioural regression suite
-npx venira-mcp --version              # print the version
 npx venira-mcp --help                 # list flags + environment variables
 ```
 
@@ -1117,7 +1117,9 @@ existing artifact/lockfile rules.
 | Item | Status | Notes |
 |---|---|---|
 | `project_explain_error` | ✅ shipped (v1.5.0) | Deterministic rule table + ready `next_actions`; no model call. |
-| `project_plan_read_batch` | ✅ shipped (v1.5.0) | Keywords → bounded search → ranked candidates → ready batch call. |
+| `project_plan_read_batch` | ✅ shipped (v1.5.0) | Keywords → bounded content + file-name search → ranked candidates → ready batch call. |
+| Planner candidate safety | ✅ shipped (v1.5.2 → v1.5.4) | Build/vendor dirs, DB/log/binary artifacts, lockfiles and credentials (`.env*`, `secrets.*`, `*.key/.pem`, `id_rsa`) never rank; source that *handles* secrets (`lib/secrets.ts`) still does. |
+| Planner ranking + calibrated estimate | ✅ shipped (v1.5.3) | Name/path match weight, prose weight `0.3` unless docs are requested, `estimated_ms` from the bench (6-file batch ≈ 62 ms). |
 | Inline PR review comments (file/line) | ✅ shipped (v1.5.0) | `project_pr_comment` with `path`, `line`, `start_line`, `side`, `commit_id`. |
 | PR checks API (`check-runs`) in `project_ci_status` | ✅ shipped (v1.5.0) | `ref` / `pr` → `GET /commits/{ref}/check-runs`. |
 | Secret rotation metadata (expiry, last used) | ✅ shipped (v1.5.0) | `expires_at`, `days_left`, `last_used_at`, `use_count`, `rotated_at`; expired secrets refused. |
