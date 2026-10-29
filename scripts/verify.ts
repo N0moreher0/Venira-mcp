@@ -90,7 +90,7 @@ check("instructions_present", instructions?.includes("Decision tree") ?? false, 
 await client2.close();
 
 const tools = await client.listTools();
-const expectedCount = 35;
+const expectedCount = 37;
 check("tool_count", tools.tools.length === expectedCount, { actual: tools.tools.length, expected: expectedCount });
 const snapshotTool = tools.tools.find((t) => t.name === "project_snapshot");
 check("tool_snapshot_present", !!snapshotTool, tools.tools.map((t) => t.name));
@@ -102,6 +102,8 @@ const expectedNewTools = [
   "project_ci_trigger",
   "project_ci_logs",
   "project_secret",
+  "project_explain_error",
+  "project_plan_read_batch",
 ];
 check(
   "tool_new_surface_present",
@@ -389,7 +391,7 @@ await disabledClient.connect(disabledTransport);
 const disabledList = await disabledClient.listTools();
 check(
   "disable_tools_hidden",
-  !disabledList.tools.some((t) => t.name === "project_shell_run") && disabledList.tools.length === 34,
+  !disabledList.tools.some((t) => t.name === "project_shell_run") && disabledList.tools.length === 36,
   disabledList.tools.map((t) => t.name),
 );
 await disabledClient.close();
@@ -651,6 +653,59 @@ const missingSecret = asEnvelope(
 );
 check("secret_env_missing", missingSecret.error?.code === "secret_missing", missingSecret);
 
+// 11c-bis. Rotation metadata: expiry, last use, use count, expired refusal.
+const usedMeta = asEnvelope(await call("project_secret", { action: "get", name: SECRET_NAME }));
+check(
+  "secret_use_tracking",
+  usedMeta.ok === true && usedMeta.data?.use_count >= 1 && typeof usedMeta.data?.last_used_at === "number",
+  { use_count: usedMeta.data?.use_count, last_used_at: usedMeta.data?.last_used_at },
+);
+
+const rotated = asEnvelope(
+  await call("project_secret", { action: "set", name: SECRET_NAME, value: SECRET_VALUE, expires_in_days: 30 }),
+);
+check(
+  "secret_rotation_metadata",
+  rotated.ok === true &&
+    rotated.data?.rotated === true &&
+    typeof rotated.data?.expires_at === "number" &&
+    rotated.data?.days_left >= 29 &&
+    rotated.data?.use_count === 0 &&
+    rotated.data?.last_used_at === null,
+  rotated.data,
+);
+check(
+  "secret_rotation_resets_use",
+  rotated.data?.use_count === 0 && rotated.data?.last_used_at === null,
+  rotated.data,
+);
+
+const EXPIRED_NAME = "VERIFY_EXPIRED";
+const expiredSet = asEnvelope(
+  await call("project_secret", {
+    action: "set",
+    name: EXPIRED_NAME,
+    value: "expired-secret-value-77aa",
+    expires_at: Date.now() - 60_000,
+  }),
+);
+check(
+  "secret_expiry_stored",
+  expiredSet.ok === true && expiredSet.data?.expired === true && expiredSet.data?.days_left < 0,
+  expiredSet.data,
+);
+const expiredInjection = asEnvelope(
+  await call("project_shell_run", { command: "echo hi", shell: shellFor, secret_env: [EXPIRED_NAME] }),
+);
+check("secret_expired_refused", expiredInjection.error?.code === "secret_expired", expiredInjection);
+const expiredGet = asEnvelope(await call("project_secret", { action: "get", name: EXPIRED_NAME }));
+check("secret_expired_get_hint", expiredGet.ok === true && expiredGet.data?.expired === true, expiredGet.data);
+const expiryConflict = asEnvelope(
+  await call("project_secret", { action: "set", name: EXPIRED_NAME, value: "x", expires_in_days: 1, expires_at: 1000 }),
+);
+check("secret_expiry_conflict", expiryConflict.error?.code === "invalid_request", expiryConflict);
+await call("project_secret", { action: "delete", name: EXPIRED_NAME });
+
 // 11d. GitHub provider + CI against the local mock (no network, fixed token).
 console.log("[verify] checking git/ci provider...");
 const prCreate = asEnvelope(
@@ -685,6 +740,43 @@ const prCommentUrl = asEnvelope(
 );
 check("pr_comment_accepts_url", prCommentUrl.ok === true && prCommentUrl.data?.comment_id === 1002, prCommentUrl);
 
+// Inline review comment: path+line switches to the pull review-comment API.
+const prInline = asEnvelope(
+  await call("project_pr_comment", {
+    pr: 7,
+    body: "This branch can be simplified",
+    path: "src/app.ts",
+    line: 42,
+    start_line: 40,
+    side: "RIGHT",
+  }),
+);
+check(
+  "pr_comment_inline",
+  prInline.ok === true &&
+    prInline.data?.inline === true &&
+    prInline.data?.path === "src/app.ts" &&
+    prInline.data?.line === 42 &&
+    prInline.data?.start_line === 40 &&
+    prInline.data?.side === "RIGHT",
+  prInline,
+);
+check(
+  "pr_comment_inline_payload",
+  githubMock.state.inlineComments === 1 &&
+    githubMock.state.lastInline?.path === "src/app.ts" &&
+    githubMock.state.lastInline?.line === 42 &&
+    githubMock.state.lastInline?.start_line === 40 &&
+    githubMock.state.lastInline?.start_side === "RIGHT",
+  githubMock.state.lastInline,
+);
+const prInlineNoLine = asEnvelope(
+  await call("project_pr_comment", { pr: 7, body: "no anchor", path: "src/app.ts" }),
+);
+check("pr_comment_inline_requires_line", prInlineNoLine.error?.code === "invalid_request", prInlineNoLine);
+const prLineNoPath = asEnvelope(await call("project_pr_comment", { pr: 7, body: "no file", line: 42 }));
+check("pr_comment_line_requires_path", prLineNoPath.error?.code === "invalid_request", prLineNoPath);
+
 const prMerge = asEnvelope(
   await call("project_pr_merge", { pr: 7, method: "squash", delete_branch: true, reason: "VERIFY_PROVIDER_REASON" }),
 );
@@ -715,6 +807,29 @@ check(
   ciRun.ok === true && ciRun.data?.run?.id === 99 && ciRun.data?.jobs?.length === 2 && ciRun.data?.overall === "failure",
   ciRun.data,
 );
+
+// Branch-protection check-runs (ref → check-runs API; pr → head sha first).
+const ciChecks = asEnvelope(await call("project_ci_status", { ref: "verify-branch", limit: 2 }));
+check(
+  "ci_status_check_runs",
+  ciChecks.ok === true &&
+    ciChecks.data?.source === "check-runs" &&
+    ciChecks.data?.check_runs?.length === 2 &&
+    ciChecks.data?.check_runs?.[1]?.conclusion === "failure" &&
+    ciChecks.data?.overall === "failure",
+  ciChecks.data,
+);
+const ciChecksPr = asEnvelope(await call("project_ci_status", { pr: 7 }));
+check(
+  "ci_status_check_runs_for_pr",
+  ciChecksPr.ok === true &&
+    ciChecksPr.data?.pr === 7 &&
+    String(ciChecksPr.data?.ref ?? "").startsWith("0123456789ab") &&
+    ciChecksPr.data?.check_runs_total === 2,
+  ciChecksPr.data,
+);
+const ciChecksBadRef = asEnvelope(await call("project_ci_status", { ref: "../etc/passwd" }));
+check("ci_status_ref_validated", ciChecksBadRef.error?.code === "invalid_request", ciChecksBadRef);
 const ciTrigger = asEnvelope(
   await call("project_ci_trigger", { workflow: "ci.yml", ref: "main", inputs: { suite: "full", retries: 1 } }),
 );
@@ -754,6 +869,70 @@ check(
   githubMock.blobAuth.length === 3 && githubMock.blobAuth.every((auth) => auth === null),
   githubMock.blobAuth,
 );
+
+// 11d-bis. Diagnostics + read planning (deterministic, no model call).
+console.log("[verify] checking diagnostics + read planning...");
+const explainEconn = asEnvelope(
+  await call("project_explain_error", {
+    error_text: "Error: connect ECONNREFUSED 127.0.0.1:5432\n    at TCPConnectWrap.afterConnect",
+  }),
+);
+check(
+  "explain_error_econnrefused",
+  explainEconn.ok === true &&
+    explainEconn.data?.matched === true &&
+    explainEconn.data?.diagnoses?.[0]?.rule_id === "net.econnrefused",
+  explainEconn.data,
+);
+
+const explainTs = asEnvelope(
+  await call("project_explain_error", {
+    error_text: "src/git-provider.ts:120 - error TS2322: Type 'string' is not assignable to type 'number'.",
+  }),
+);
+check(
+  "explain_error_typescript",
+  explainTs.ok === true &&
+    explainTs.data?.matched === true &&
+    explainTs.data?.diagnoses?.[0]?.rule_id === "ts.type_error" &&
+    (explainTs.data?.next_actions ?? []).some((action: { tool?: string }) => action.tool === "project_read_ranges"),
+  explainTs.data,
+);
+const explainUnknown = asEnvelope(await call("project_explain_error", { error_text: "everything is fine" }));
+check("explain_error_unknown_is_ok", explainUnknown.ok === true && explainUnknown.data?.matched === false, explainUnknown.data);
+const explainEmpty = asEnvelope(await call("project_explain_error", {}));
+check("explain_error_requires_input", explainEmpty.error?.code === "invalid_request", explainEmpty);
+
+const planTask = asEnvelope(
+  await call("project_plan_read_batch", { task_description: "add retry handling to the GitHub client" }),
+);
+check(
+  "plan_read_batch_search",
+  planTask.ok === true &&
+    (planTask.data?.keywords ?? []).some((keyword: string) => /retry|github/i.test(keyword)) &&
+    (planTask.data?.candidates ?? []).some((candidate: { relative_path?: string }) =>
+      String(candidate.relative_path).includes("git-provider"),
+    ) &&
+    planTask.data?.steps?.[0]?.tool === "project_read_batch",
+  planTask.data,
+);
+const planHint = asEnvelope(
+  await call("project_plan_read_batch", {
+    task_description: "refactor the checkpoint store",
+    files_hint: ["lib/snapshots.ts"],
+    include_search: false,
+  }),
+);
+check(
+  "plan_read_batch_hints",
+  planHint.ok === true &&
+    planHint.data?.searched === false &&
+    planHint.data?.candidates?.[0]?.relative_path === "lib/snapshots.ts" &&
+    planHint.data?.steps?.[0]?.tool === "project_read_batch",
+  planHint.data,
+);
+const planEmpty = asEnvelope(await call("project_plan_read_batch", { task_description: "   " }));
+check("plan_read_batch_requires_task", planEmpty.error?.code === "invalid_request", planEmpty);
 
 // 11e. Network kill switch + missing token (separate clients, real env variants).
 const offlineTransport = new StdioClientTransport({

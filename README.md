@@ -1,11 +1,11 @@
 # venira-mcp
 
-> Fast, workspace-scoped **MCP server for coding agents** (OpenCode, Claude Desktop, any MCP client). 35 tools, structured JSON envelopes, validated read caches, async shell, code-intelligence (outline/symbols/diff/references/selective search), fuzzy edit, SQLite recent-files index, **git-free checkpoints/rollback**, **audit reasons ("why")**, **pull requests + GitHub Actions**, **encrypted secrets injected as env vars**, and full SQLite audit trail — **pure Node, no external binary, no GUI.**
+> Fast, workspace-scoped **MCP server for coding agents** (OpenCode, Claude Desktop, any MCP client). 37 tools, structured JSON envelopes, validated read caches, async shell, code-intelligence (outline/symbols/diff/references/selective search), fuzzy edit, SQLite recent-files index, **git-free checkpoints/rollback**, **audit reasons ("why")**, **pull requests + GitHub Actions**, **encrypted secrets with rotation metadata**, **deterministic error diagnosis + read planning**, and full SQLite audit trail — **pure Node, no external binary, no GUI.**
 
 ```
 ┌──────────────┐   stdio (MCP)   ┌────────────────────────────────────────────┐
 │ MCP client    │ ◄──────────────► │  venira-mcp (Node, single process)        │
-│ (OpenCode,    │                  │  35 tools · read caches · async shell     │
+│ (OpenCode,    │                  │  37 tools · read caches · async shell     │
 │  Claude, ...) │                  │  SQLite audit (WAL) · p50/p95 metrics     │
 └──────────────┘                  └────────────────────────────────────────────┘
 ```
@@ -40,7 +40,7 @@
 
 - [Quick start](#2-quick-start)
 - [MCP client configuration (JSON)](#3-mcp-client-configuration-json)
-- [Tools](#4-tools-35)
+- [Tools](#4-tools-37)
 - [Architecture](#5-architecture)
 - [Security model](#6-security-model)
 - [Benchmark](#7-benchmark)
@@ -285,7 +285,7 @@ Or point at a local build (after `git clone` + `npm install` + `npm run build`):
 
 ---
 
-## 4. Tools (35)
+## 4. Tools (37)
 
 Every tool returns the standard envelope ([§8](#8-envelopes-hints--error-codes)):
 
@@ -375,7 +375,7 @@ project_snapshot({ action: "restore", id: "snap-…" })                  // roll
 | Tool | Purpose | Notes |
 |---|---|---|
 | `project_pr_create` | Open a pull request for the current (or explicit) branch | `title` required · `head` defaults to the current branch · `base` defaults to the repo default branch (cached 5 min) · `body`, `draft`, `repo`, `reason`. Returns `number`, `url`, `state`, `head`, `base`. |
-| `project_pr_comment` | Post a comment on a PR/issue | `pr` accepts a number **or** a full PR URL · `body` (markdown) · `repo`, `reason`. |
+| `project_pr_comment` | Post a comment on a PR: general thread comment **or inline review note** | `pr` accepts a number **or** a full PR URL · `body` (markdown) · for an inline note add `path` + `line` (plus optional `start_line`, `side: RIGHT\|LEFT`, `commit_id`) and it switches to the pull review-comment API · `repo`, `reason`. Returns `inline`, `comment_id`, `url`. |
 | `project_pr_merge` | Merge a PR and optionally delete the head branch | `method: merge \| squash \| rebase` · `commit_title`, `commit_message`, `delete_branch` · `repo`, `reason`. A closed/already-merged PR returns `already_merged` instead of an error; a conflicting PR returns `conflict`. |
 
 The token comes from `project_secret` (`GITHUB_TOKEN`), then `VENIRA_GITHUB_TOKEN`, then
@@ -394,7 +394,7 @@ project_pr_merge({ pr: 7, method: "squash", delete_branch: true })
 
 | Tool | Purpose | Notes |
 |---|---|---|
-| `project_ci_status` | Read the latest runs for a branch/workflow, or one run **with its jobs** | `branch`, `workflow` (file name or id), `limit` ≤ 50, or `run_id`. Returns `overall` (`success \| failure \| in_progress \| no_runs`) plus `runs[]` / `jobs[]`. |
+| `project_ci_status` | Read the latest runs for a branch/workflow, one run **with its jobs**, or branch-protection **check-runs** | `branch`, `workflow` (file name or id), `limit` ≤ 50 → workflow runs; `run_id` → run + `jobs[]`; `ref` (sha/branch) or `pr` (resolved to the head sha) → `check_runs[]`. Returns `overall` (`success \| failure \| in_progress \| no_runs \| no_checks`). |
 | `project_ci_trigger` | Dispatch a `workflow_dispatch` | `workflow` required · `ref` defaults to the current branch → default branch · `inputs` (≤ 10 string/number/boolean values), `reason`. |
 | `project_ci_logs` | Read the tail of a run's or job's logs | `run_id` (ZIP parsed **in memory**) or `job_id` (narrower, cheaper) · `tail_lines` (default 500) · `max_bytes` (default 512 KB, cap 4 MB). Archive cap 32 MB, per-entry cap 4 MB, unsupported/encrypted entries are reported in `entries[].skipped`. |
 
@@ -412,7 +412,13 @@ project_ci_logs({ run_id: 99, tail_lines: 50 })   // or { job_id: 2 } to isolate
 
 | Tool | Purpose | Notes |
 |---|---|---|
-| `project_secret` | Store / inspect / remove credentials by env-var name | `action: "set"` (`value` or **`value_env`** to read it from the host env) · `"get"` (metadata only: `length`, `sha256_12`, `updated_at`) · `"list"` (names only) · `"delete"`. `reveal: true` returns plaintext **only** when the host sets `VENIRA_SECRET_ALLOW_REVEAL=1`. |
+| `project_secret` | Store / inspect / remove credentials by env-var name, with rotation metadata | `action: "set"` (`value` or **`value_env`** to read it from the host env; optional `expires_in_days` or `expires_at`) · `"get"` (metadata only: `length`, `sha256_12`, `updated_at`, `expires_at`, `expired`, `days_left`, `last_used_at`, `use_count`, `rotated_at`) · `"list"` (same metadata per name) · `"delete"`. `reveal: true` returns plaintext **only** when the host sets `VENIRA_SECRET_ALLOW_REVEAL=1`. |
+
+Rotation is tracked automatically: every successful injection (or provider token read) bumps
+`last_used_at` / `use_count`; a re-`set` is a rotation that overwrites the value, resets the
+counter and keeps the previous expiry unless a new one is given. Expired secrets are **refused**
+before a child process starts (`secret_expired`, with a rotate hint), so a dead token can never
+silently fail as a `401`.
 
 Values are encrypted with **AES-256-GCM** in `<VENIRA_DATA_DIR>/secrets.json`, with the key in
 `secrets.key` (mode `0600`, written via temp file + rename). The preferred way to *use* a secret
@@ -434,7 +440,28 @@ project_shell_run({ command: "npm publish --dry-run", shell: "bash", secret_env:
   `command`/`reason` columns. The secret store itself is excluded from checkpoints and
   `delete_extra`, so a rollback can never copy ciphertext (or the key) elsewhere.
 
-### 4.9 Shell family (async, non-blocking, policy-gated)
+### 4.9 Diagnostics & read planning (deterministic, no model call)
+
+| Tool | Purpose | Notes |
+|---|---|---|
+| `project_explain_error` | Turn a failure into a cause + next tool calls | Feed `error_text` or `log_tail` (e.g. the tail from `project_ci_logs` / `project_shell_status`). Matches a rule table (POSIX errno, TypeScript/Python/pytest, git, npm, GitHub, venira codes) and returns `matched`, `summary`, `error_line`, `language`, `diagnoses[]` (`rule_id`, `likely_cause`, `suggested_fix[]`, `retry_hint`, `next_actions[]`) and a deduped `next_actions[]`. Unknown signatures return `matched: false` with a triage note — never an error. |
+| `project_plan_read_batch` | Plan which files to read for a task, in one call | `task_description` (one line) → keywords (quoted terms, identifiers, words) → up to 3 bounded content searches → candidates ranked by hit count (+ `files_hint`, + recent edits when the search is thin) → `steps[]` with a **ready-to-send** `project_read_batch` call, `estimated_ms`. `max_files` ≤ 8, `include_search: false` to plan from hints only. |
+
+Both are pure local logic: no network, no model, no file contents in the response (the plan points
+at files; you decide which step to run). They exist to cut the "guess → read → repeat" loop that
+costs the most round-trips in an unfamiliar codebase.
+
+```jsonc
+project_explain_error({ log_tail: "Error: connect ECONNREFUSED 127.0.0.1:5432" })
+// → { matched: true, diagnoses: [{ rule_id: "net.econnrefused", likely_cause: "Nothing is listening …",
+//      suggested_fix: ["Start the dependency …", "Confirm the port …"] }] }
+
+project_plan_read_batch({ task_description: "add retry handling to the GitHub client" })
+// → { keywords: ["retry", "github", …], candidates: [{ relative_path: "lib/git-provider.ts", hits: 3 }],
+//      steps: [{ tool: "project_read_batch", arguments: { requests: [ … ] }, why: "read the ranked candidates" }] }
+```
+
+### 4.10 Shell family (async, non-blocking, policy-gated)
 
 | Tool | Purpose | Notes |
 |---|---|---|
@@ -463,7 +490,7 @@ additionally grants the same *rule + command head* (e.g. `git push`) for that TT
 an agent is not blocked on every invocation. Catastrophic commands are refused with
 `command_denied` in every mode — no token can unlock them.
 
-### 4.10 How the model is told to pick the right tool
+### 4.11 How the model is told to pick the right tool
 
 At connect time the server advertises an `instructions` block (MCP SDK ≥ 1.32) containing a
 **decision tree** the model can read. A condensed version:
@@ -484,12 +511,18 @@ At connect time the server advertises an `instructions` block (MCP SDK ≥ 1.32)
    → action=restore id=… (dry_run first when unsure)
 8. Build/test/long command → project_shell_run (returns run_id immediately),
    then poll project_shell_status (wait_seconds 5..30); project_shell_cancel to stop
-9. A token/credential → project_secret action=set (prefer value_env) or action=get/list for metadata;
-   inject into a command with project_shell_run secret_env=["NAME"] — never paste the value
-10. Open a PR → project_pr_create; discuss it → project_pr_comment; land it → project_pr_merge
-11. Pipeline state → project_ci_status; re-run → project_ci_trigger; failure detail → project_ci_logs
-    (pass job_id to isolate the failing job)
-12. Debug latency/errors → project_health; inspect the audit trail → project_read_audit
+9. A token/credential → project_secret action=set (prefer value_env; expires_in_days for
+   rotation) or action=get/list for metadata; inject with project_shell_run secret_env=["NAME"]
+   — never paste the value. Expired secrets are refused (secret_expired)
+10. Open a PR → project_pr_create; discuss it → project_pr_comment (path+line for an inline note);
+    land it → project_pr_merge
+11. Pipeline state → project_ci_status (pr/ref for check-runs); re-run → project_ci_trigger;
+    failure detail → project_ci_logs (pass job_id to isolate the failing job)
+12. Something failed and the cause is unclear → project_explain_error (error_text / log_tail),
+    then follow its first diagnosis + next_actions
+13. Starting an unfamiliar task → project_plan_read_batch(task_description, files_hint?),
+    then run steps[0] (a ready read_batch) instead of guessing files
+14. Debug latency/errors → project_health; inspect the audit trail → project_read_audit
 ```
 
 Every tool also carries machine-readable metadata in its description (`Use when:` / `Avoid when:` /
@@ -504,8 +537,9 @@ prompt-driven and tool-discovery-driven clients get the same signal.
 venira-mcp/
 ├── server.ts                 # MCP entry point: McpServer + StdioTransport, warm-up, shutdown
 ├── tools/
-│   └── project.ts            # 35 tool registrations, serial queue, caches, shell tracking,
-│                             #   audit-DB inspection, project_health, code-intelligence handlers
+│   └── project.ts            # 37 tool registrations, serial queue, caches, shell tracking,
+│                             #   audit-DB inspection, project_health, code-intelligence,
+│                             #   diagnostics and read-planning handlers
 ├── lib/
 │   ├── corehost.ts           # In-process backend: file I/O, search, async shell,
 │   │                         #   scope capability, SQLite WAL audit (better-sqlite3),
@@ -514,7 +548,12 @@ venira-mcp/
 │   │                         #   CI status/dispatch/logs (in-memory ZIP), repo detection,
 │   │                         #   https-only client with redirect token hygiene
 │   ├── secrets.ts            # Encrypted secret store (AES-256-GCM, atomic writes),
-│   │                         #   metadata listing, redaction of values in output/audit
+│   │                         #   rotation metadata (expiry / last use / use count),
+│   │                         #   expired-secret guard, redaction of values in output/audit
+│   ├── diagnostics.ts        # Deterministic error rules (errno, TS/Python, git, npm,
+│   │                         #   GitHub, venira codes) -> cause + ready next_actions
+│   ├── read-plan.ts          # Deterministic read planner: keywords -> ranked candidates
+│   │                         #   -> a ready project_read_batch call + estimate
 │   ├── symbol-diff.ts        # P2/P3 code intelligence: symbol extraction, outline,
 │   │                         #   unified diff (LCS), selective multi-query search
 │   ├── snapshots.ts          # Checkpoints: content-addressed blobs + gzip manifests,
@@ -529,8 +568,9 @@ venira-mcp/
 │   ├── smoke.ts              # In-process backend sanity check
 │   ├── bench.ts              # In-process backend benchmark
 │   ├── bench-mcp.ts          # End-to-end MCP benchmark
-│   ├── verify.ts             # 186 end-to-end checks (cache, batch, shell, audit, modes,
-│   │                         #   snapshots, secrets, GitHub PR/CI against a local mock)
+│   ├── verify.ts             # 211 end-to-end checks (cache, batch, shell, audit, modes,
+│   │                         #   snapshots, secrets/rotation, GitHub PR/CI/check-runs against
+│   │                         #   a local mock, diagnostics + read planning)
 │   ├── github-mock.ts        # In-process GitHub API + pre-signed-blob mock (no network, no token)
 │   └── doctor.ts             # 12 preflight checks (workspace, data dir, tools, health, shell, P1 config)
 ├── opencode.example.json     # Ready-to-edit OpenCode MCP config
@@ -882,7 +922,7 @@ etc. The model is expected to read `hint` first.
 npm run build        # type-check + emit dist/
 npm run smoke        # in-process sanity (backend reachable, path lock works)
 npm run doctor       # preflight: 12 checks incl. audit DB, shell smoke, P1 config surface
-npm run verify       # behavioural regression suite (186 checks, ~90 s)
+npm run verify       # behavioural regression suite (211 checks, ~90 s)
 npm run bench        # in-process numbers
 npm run bench:mcp    # end-to-end numbers
 ```
@@ -943,7 +983,7 @@ npm run bench:mcp    # end-to-end numbers
 
 ## 14. Changelog & roadmap
 
-The full history, in order — from the standalone rewrite to the provider + secrets release.
+The full history, in order — from the standalone rewrite to the provider, secrets, diagnostics and planning releases.
 
 ### 14.1 Timeline
 
@@ -959,8 +999,48 @@ The full history, in order — from the standalone rewrite to the provider + sec
 | 2026-10-28 | **v1.3.0** | P2/P3 code intelligence: `project_outline_symbol`, `project_file_symbols`, `project_diff_files`, `project_symbol_references`, `project_selective_search`; fuzzy edit (`VENIRA_EDIT_FUZZY`); SQLite recent-files index (`project_file_index`, index-first + bounded fallback). |
 | 2026-10-29 | (post-1.3.0) | P2.5 self-install: `project_detect_harnesses` + `project_install_self` (OpenCode / Claude / Cursor / Codex / Kimi / DeepSeek / Antigravity), atomic config merge + backup. |
 | 2026-10-29 | **v1.4.0** | **Checkpoints + audit reasons + Git/PR + CI + encrypted secrets.** `project_snapshot` (content-addressed, deduplicated, sha256-verified rollback), `reason` on mutations stored in the audit trail, GitHub pull-request and Actions tools, an AES-256-GCM secret store with `secret_env` injection, and a network safety layer. **35 tools**, verify **186/186**. |
+| 2026-10-29 | **v1.5.0** | **Inline review comments + check-runs + secret rotation + deterministic diagnostics.** `project_pr_comment` pins notes to a file/line (`path`, `line`, `start_line`, `side`, `commit_id`); `project_ci_status` reads branch-protection **check-runs** (`ref` / `pr`); the secret store tracks `expires_at` / `last_used_at` / `use_count` / `rotated_at` and refuses expired credentials; new `project_explain_error` (rule table → next actions) and `project_plan_read_batch` (task → ready read batch). **37 tools**, verify **211/211**. |
 
-### 14.2 What v1.4.0 added
+### 14.2 What v1.5.0 added
+
+- **Inline PR review comments** — `project_pr_comment` keeps its general thread behaviour and
+  switches to the pull review-comment API when `path` + `line` are given. Optional
+  `start_line` (multi-line range), `side: RIGHT | LEFT`, `commit_id` (defaults to the PR head).
+  `line` without `path` (or `path` without `line`) is rejected with an actionable error instead
+  of silently posting to the wrong endpoint.
+- **Branch-protection check-runs** — `project_ci_status` keeps the Actions surface (`branch`,
+  `workflow`, `run_id`) and adds `ref` (sha/branch) or `pr` (resolved to the head sha), which hit
+  `GET /commits/{ref}/check-runs` instead. The result is `source: "check-runs"` with
+  `check_runs[]` (`name`, `status`, `conclusion`, `app`, `url`, `summary`) and
+  `overall: success | failure | in_progress | no_checks`. The ref is validated (no `..`,
+  restricted charset) before it reaches the URL.
+- **Secret rotation metadata** — every stored secret now carries `expires_at`, `expired`,
+  `days_left`, `last_used_at`, `use_count` and `rotated_at`. `action=set` accepts
+  `expires_in_days` (1–3650) or `expires_at` (epoch ms / ISO-8601); a re-`set` is a rotation
+  (value overwritten, counter reset, previous expiry kept unless a new one is supplied).
+  Expiry is enforced at every injection point (`secret_env` and the provider token) *before*
+  decryption, so a dead credential fails as `secret_expired` with a rotate hint instead of
+  surfacing later as a `401`. Use tracking is fire-and-forget (1 s debounce) and never fails
+  the call that used the secret.
+- **`project_explain_error`** — a deterministic rule table (~28 signatures: POSIX/Node errno,
+  TypeScript, JavaScript, Python/pytest, git, npm, GitHub 401/403/429, SQLite locks and venira's
+  own codes) maps an error block or log tail to `likely_cause`, `suggested_fix[]`,
+  `retry_hint` and **ready-to-send** `next_actions` (e.g. a `project_read_ranges` call built from
+  the failing `file:line`). `matched: false` is a normal result with a triage note, never an
+  error. No model call, no network, < 1 ms.
+- **`project_plan_read_batch`** — extracts keywords from a one-line task (quoted phrases,
+  identifiers, then words), runs up to three bounded content searches, folds in `files_hint`
+  and the recent-files index when the search is thin, ranks candidates by hit count and returns
+  `steps[]` whose first entry is a complete `project_read_batch` request (plus an outline step
+  for files > 256 KB and a tree/search fallback). Also no model call: it plans, you execute.
+- **Test infrastructure** — the GitHub mock gained the check-runs endpoint, inline-comment route
+  and a PR head `sha`; `npm run verify` grew to **211 checks** (rotation metadata, expired
+  refusal, inline payload shape, check-run summarisation + ref validation, diagnostics and
+  planning), and the tool-count expectations moved to 37 (36 when one is disabled).
+- **Docs** — README (tools 37, new §4.9, roadmap), TODO.md, `package.json` metadata and the
+  server's MCP instructions/decision tree (now 14 steps) updated in the same change.
+
+### 14.3 What v1.4.0 added
 
 - **Checkpoints (`project_snapshot`)** — `action: create | list | restore | delete`. Blobs are
   content-addressed (`snapshots/blobs/<ab>/<sha256>`) and deduplicated: a second checkpoint after
@@ -999,17 +1079,17 @@ The full history, in order — from the standalone rewrite to the provider + sec
 - **Docs** — README/repo docs updated to 35 tools, new env vars, security §6.2; `project_health`
   reports `secrets` and `network.github` sections (never the token).
 
-### 14.3 Roadmap
+### 14.4 Roadmap
 
 | Item | Status | Notes |
 |---|---|---|
-| `project_explain_error` | ⏸️ deferred | Needs model access; the MCP server stays deterministic. |
-| `project_plan_read_batch` | ⏸️ deferred | Same: a planner belongs in the agent, not the server. |
-| Inline PR review comments (file/line) | 💡 candidate | General comments ship today; inline needs the review-comment API. |
-| PR checks API (`check-runs`) in `project_ci_status` | 💡 candidate | Actions runs are covered; branch-protection checks are a separate endpoint. |
-| GitLab / Bitbucket providers | 💡 candidate | The provider layer is isolated in `lib/git-provider.ts`; a second dialect would mirror it. |
-| Secret rotation metadata (expiry, last used) | 💡 candidate | The store already tracks `updated_at` + fingerprint; expiry needs user input. |
-| Multi-repo workspaces | 💡 candidate | Today: one repo inferred from the workspace `.git`, override per call via `repo`. |
+| `project_explain_error` | ✅ shipped (v1.5.0) | Deterministic rule table + ready `next_actions`; no model call. |
+| `project_plan_read_batch` | ✅ shipped (v1.5.0) | Keywords → bounded search → ranked candidates → ready batch call. |
+| Inline PR review comments (file/line) | ✅ shipped (v1.5.0) | `project_pr_comment` with `path`, `line`, `start_line`, `side`, `commit_id`. |
+| PR checks API (`check-runs`) in `project_ci_status` | ✅ shipped (v1.5.0) | `ref` / `pr` → `GET /commits/{ref}/check-runs`. |
+| Secret rotation metadata (expiry, last used) | ✅ shipped (v1.5.0) | `expires_at`, `days_left`, `last_used_at`, `use_count`, `rotated_at`; expired secrets refused. |
+| GitLab / Bitbucket providers | 💡 v1.6 candidate | The provider layer is isolated in `lib/git-provider.ts`; a second dialect would mirror it. |
+| Multi-repo workspaces | 💡 v1.6 candidate | Today: one repo inferred from the workspace `.git`, override per call via `repo`. |
 
 ---
 
