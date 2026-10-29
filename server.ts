@@ -20,14 +20,22 @@ Decision tree
 3. Find code -> project_search (kind=literal_content or definition), then project_read_ranges around hits.
 4. Directory tree -> project_list_files (depth 1..3, limit <=200). "What changed lately?" -> project_recent_files.
 5. Write whole file -> project_write_file; small precise change -> project_edit_file; delete -> project_delete_path (destructive, not undoable).
-6. Build/test/long command -> project_shell_run (returns run_id immediately), then poll project_shell_status with wait_seconds 5..30 until running=false; project_shell_cancel to stop.
-7. Debug latency/errors or check host/audit DB -> project_health.
-8. Unsure which tool exists -> use the Code Mode tool-discovery helper (findTools; named search in older builds), not a Venira tool.
+6. Before a large/multi-file change chain -> project_snapshot action=create (paths default ["."]); if it goes wrong -> action=restore id=<id> (dry_run first if unsure). No git needed.
+7. Build/test/long command -> project_shell_run (returns run_id immediately), then poll project_shell_status with wait_seconds 5..30 until running=false; project_shell_cancel to stop.
+8. Tokens/credentials -> project_secret (action=set|get|list|delete). Never paste a key into a command: store it once, then inject it with project_shell_run secret_env=["NAME"].
+9. Pull requests -> project_pr_create (open), project_pr_comment (reply/report), project_pr_merge (land, optionally delete the branch).
+10. CI -> project_ci_status (runs + jobs), project_ci_trigger (workflow_dispatch), project_ci_logs (tail of a run or one job).
+11. Debug latency/errors or check host/audit DB -> project_health.
+12. Unsure which tool exists -> use the Code Mode tool-discovery helper (findTools; named search in older builds), not a Venira tool.
 
 Rules
 - Prefer Venira for read-heavy/batch work; single tiny native operations are fine either way.
 - Paths are workspace-relative (absolute inside the workspace also works). Never invent @grant paths unless list_files returned them.
 - project_read_batch and project_list_files/search results are cached briefly; mutations invalidate caches automatically.
+- Always pass \`reason\` ("why", e.g. "fix null pointer at line 45") on write/edit/delete/create/snapshot/pr/ci: it is stored in the audit trail (redacted, single line, <=400 chars), so future sessions know the intent. Read it back with project_read_audit.
+- Checkpoints are content-addressed and deduplicated: repeating action=create after a small edit costs only the changed bytes; restore is sha256-verified per file and only rewrites captured paths (delete_extra is opt-in and capped at 500).
+- Secrets are encrypted at rest and never logged: project_secret get returns metadata (length + sha256 prefix), values reach processes only via secret_env, and shell output/audit text is scrubbed of stored values.
+- GitHub tools resolve the repo from \`repo\` -> VENIRA_GITHUB_REPO -> .git/config origin; the token comes from secret GITHUB_TOKEN or VENIRA_GITHUB_TOKEN. VENIRA_NETWORK=0 disables all outbound calls.
 - Never loop on a non-retryable error (not_found, scope_denied, invalid_request, sensitive_result, audit_unavailable). Read the hint and change the request or tell the user.
 - Output modes: VENIRA_OUTPUT_MODE=full|compact|summary (default full). summary trims payloads; request full data when editing.`;
 
@@ -38,9 +46,10 @@ const server = new McpServer(
 registerProjectTools(server);
 
 let shuttingDown = false;
-async function shutdown(code = 0): Promise<void> {
+async function shutdown(code = 0, reason = "unknown"): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
+  console.error(`[venira-coding] shutdown (code ${code}, reason ${reason})`);
   await cancelAllShellRuns();
   await closeScope();
   closeHost();
@@ -57,14 +66,22 @@ async function main() {
       `workspace ${WORKSPACE}, ${UNRESTRICTED ? "unrestricted" : "locked to workspace"})`,
   );
   // Client closed stdin / killed the process: cancel shells + close the scope.
-  process.stdin.on("end", () => void shutdown());
-  process.stdin.on("close", () => void shutdown());
+  process.stdin.on("end", () => void shutdown(0, "stdin_end"));
+  process.stdin.on("close", () => void shutdown(0, "stdin_close"));
   for (const signal of ["SIGINT", "SIGTERM"] as const) {
-    process.on(signal, () => void shutdown());
+    process.on(signal, () => void shutdown(0, signal));
   }
+  process.on("unhandledRejection", (reason) => {
+    console.error("[venira-coding] unhandled rejection:", reason);
+    void shutdown(1, "unhandled_rejection");
+  });
+  process.on("uncaughtException", (error) => {
+    console.error("[venira-coding] uncaught exception:", error);
+    void shutdown(1, "uncaught_exception");
+  });
 }
 
 main().catch((err) => {
   console.error("[venira-coding] fatal:", err);
-  void shutdown(1);
+  void shutdown(1, "fatal");
 });

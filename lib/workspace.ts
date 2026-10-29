@@ -26,6 +26,25 @@ export function toHostPath(input: string | undefined): string {
   return abs;
 }
 
+/**
+ * Resolve `input` under an explicit `root` (used by the corehost operations,
+ * which receive the workspace root per call). Same guarantee as
+ * `toHostPath`: relative stays inside, absolute must stay inside unless
+ * VENIRA_UNRESTRICTED=1.
+ */
+export function resolveWithin(root: string, input: string | undefined): string {
+  const raw = (input ?? "").trim();
+  const abs = path.resolve(root, raw === "" ? "." : raw);
+  if (UNRESTRICTED) return abs;
+  const rel = path.relative(root, abs);
+  if (rel === ".." || rel.startsWith(".." + path.sep) || path.isAbsolute(rel)) {
+    throw new Error(
+      `[scope_denied] Path escapes workspace (${root}): ${raw}. Hint: use a workspace-relative path or set VENIRA_UNRESTRICTED=1.`,
+    );
+  }
+  return abs;
+}
+
 // ---------------------------------------------------------------------------
 // P1: cache control (VENIRA_CACHE_ALL / VENIRA_CACHE_LIST_ONLY / VENIRA_CACHE_SEARCH_ONLY)
 // ---------------------------------------------------------------------------

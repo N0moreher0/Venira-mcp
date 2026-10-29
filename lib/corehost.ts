@@ -42,7 +42,30 @@ import {
   verifyApprovalToken,
   type Decision,
 } from "./shell-policy.js";
-import { WORKSPACE, UNRESTRICTED, PLATFORM } from "./workspace.js";
+import { WORKSPACE, PLATFORM, resolveWithin } from "./workspace.js";
+import {
+  opSnapshotCreate,
+  opSnapshotDelete,
+  opSnapshotList,
+  opSnapshotRestore,
+  sanitizeReason,
+} from "./snapshots.js";
+import {
+  opCiLogs,
+  opCiStatus,
+  opCiTrigger,
+  opPrComment,
+  opPrCreate,
+  opPrMerge,
+} from "./git-provider.js";
+import {
+  assertSecretName,
+  deleteSecret,
+  getSecretValueSync,
+  listSecrets,
+  redactSecretValues,
+  setSecret,
+} from "./secrets.js";
 
 // ---------------------------------------------------------------------------
 // Audit (SQLite WAL)
@@ -92,6 +115,7 @@ function ensureAuditDb(): Database.Database | null {
       ["policy_rule", "TEXT"],
       ["command", "TEXT"],
       ["approver", "TEXT"],
+      ["reason", "TEXT"],
     ] as const) {
       if (!columns.has(name)) auditDb.exec(`ALTER TABLE project_tool_audit ADD COLUMN ${name} ${type}`);
     }
@@ -139,6 +163,8 @@ type AuditRow = {
   policy_rule?: string | null;
   command?: string | null;
   approver?: string | null;
+  /** Free-text "why" supplied by the caller (edit/write/delete/snapshot). */
+  reason?: string | null;
 };
 
 function auditInsert(row: AuditRow): void {
@@ -160,6 +186,7 @@ function auditInsert(row: AuditRow): void {
       ["policy_rule", row.policy_rule ?? null],
       ["command", row.command ?? null],
       ["approver", row.approver ?? null],
+      ["reason", row.reason ?? null],
     ];
     if (columns.has("started_at")) entries.push(["started_at", row.started_at]);
     if (columns.has("created_at")) entries.push(["created_at", row.started_at]);
@@ -182,7 +209,13 @@ function auditStart(
   projectId: string,
   operation: string,
   requestId: string,
-  extra: { decision?: string; policy_rule?: string; command?: string; approver?: string } = {},
+  extra: {
+    decision?: string;
+    policy_rule?: string;
+    command?: string;
+    approver?: string;
+    reason?: string;
+  } = {},
 ): number {
   const startedAt = Date.now();
   auditInsert({
@@ -196,6 +229,7 @@ function auditStart(
     policy_rule: extra.policy_rule ?? null,
     command: extra.command ?? null,
     approver: extra.approver ?? null,
+    reason: extra.reason ?? null,
   });
   return startedAt;
 }
@@ -402,8 +436,10 @@ const BASE_ENV_ALLOW = [
   "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "CI",
 ];
 
-function buildShellEnv(): NodeJS.ProcessEnv {
-  if (process.env.VENIRA_SHELL_ENV_PASS_ALL === "1") return { ...process.env };
+function buildShellEnv(overrides: Record<string, string> = {}): NodeJS.ProcessEnv {
+  if (process.env.VENIRA_SHELL_ENV_PASS_ALL === "1") {
+    return { ...process.env, ...overrides };
+  }
   const extra = (process.env.VENIRA_SHELL_ENV_ALLOW ?? "")
     .split(",")
     .map((name) => name.trim())
@@ -415,7 +451,29 @@ function buildShellEnv(): NodeJS.ProcessEnv {
   }
   // Keep PATH resolvable even if the host named it unusually.
   if (!env.PATH && !env.Path && process.env.PATH) env.PATH = process.env.PATH;
-  return env;
+  // Explicit `secret_env` injections are added last so they win over inherited
+  // values of the same name; they never come from the audit-visible args.
+  return { ...env, ...overrides };
+}
+
+/**
+ * `secret_env` names are validated up front (cheap) but their values are only
+ * decrypted at spawn time — after the policy gate approved the command.
+ */
+function normalizeSecretEnv(value: unknown): string[] {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) {
+    throw new Error("[invalid_request] `secret_env` must be an array of secret names.");
+  }
+  if (value.length > 16) {
+    throw new Error("[invalid_request] At most 16 `secret_env` names per shell run.");
+  }
+  const names: string[] = [];
+  for (const entry of value) {
+    const name = assertSecretName(entry);
+    if (!names.includes(name)) names.push(name);
+  }
+  return names;
 }
 
 /**
@@ -471,16 +529,7 @@ type RustResponse = {
 };
 
 function resolveInWorkspace(input: string | undefined, root: string): string {
-  const raw = (input ?? "").trim();
-  const abs = path.resolve(root, raw === "" ? "." : raw);
-  if (UNRESTRICTED) return abs;
-  const rel = path.relative(root, abs);
-  if (rel === ".." || rel.startsWith(".." + path.sep) || path.isAbsolute(rel)) {
-    throw new Error(
-      `[scope_denied] Path escapes workspace (${root}): ${raw}. Hint: use a workspace-relative path or set VENIRA_UNRESTRICTED=1.`,
-    );
-  }
-  return abs;
+  return resolveWithin(root, input);
 }
 
 async function opReadFile(
@@ -891,6 +940,7 @@ async function opWriteFile(
         action,
         bytes_written: bytesWritten,
         sha256_after: sha256After || undefined,
+        reason: sanitizeReason(args.reason),
       },
     },
   };
@@ -999,6 +1049,7 @@ async function opEditFile(
         sha256_before: sha256Before || undefined,
         sha256_after: sha256After || undefined,
         fuzzy_used: usedFuzzy || undefined,
+        reason: sanitizeReason(args.reason),
       },
     },
   };
@@ -1140,6 +1191,7 @@ async function opCreateDirectory(
       kind: "directory_created",
       data: {
         relative_path: path.relative(root, absPath).replace(/\\/g, "/"),
+        reason: sanitizeReason(args.reason),
       },
     },
   };
@@ -1209,6 +1261,7 @@ async function opDeletePath(
         kind: stat.isDirectory() ? "directory" : "file",
         entries_deleted: entriesDeleted,
         bytes_deleted: bytesDeleted,
+        reason: sanitizeReason(args.reason),
       },
     },
   };
@@ -1266,6 +1319,7 @@ async function opShellRun(
   const shell = (args.shell as string | undefined) ?? process.env.VENIRA_DEFAULT_SHELL ?? defaultShellForPlatform();
   const cwd = resolveInWorkspace(args.relative_cwd as string | undefined, root);
   const runId = crypto.randomUUID().slice(0, 12);
+  const secretNames = normalizeSecretEnv(args.secret_env);
 
   // -------------------------------------------------------------------------
   // 1. Policy gate: deny → throw, ask → approval flow, allow → continue.
@@ -1322,6 +1376,7 @@ async function opShellRun(
                 command,
                 shell,
                 ...(typeof args.relative_cwd === "string" ? { relative_cwd: args.relative_cwd } : {}),
+                ...(secretNames.length > 0 ? { secret_env: secretNames } : {}),
                 approval_token: issued.token,
               },
             },
@@ -1336,11 +1391,26 @@ async function opShellRun(
   // -------------------------------------------------------------------------
   const timeoutMs = clampTimeout(args.timeout_ms);
   const { file, args: spawnArgs } = shellCommandFor(shell, command);
+
+  // Secrets are decrypted only now (post-approval) and handed to the child
+  // through the environment: the command string stays free of values.
+  const secretEnvValues: Record<string, string> = {};
+  for (const name of secretNames) {
+    const value = getSecretValueSync(name);
+    if (value === undefined) {
+      throw new Error(
+        `[secret_missing] secret_env refers to "${name}" but it is not in the secret store. ` +
+          `Hint: run project_secret action=list, or action=set name=${name}.`,
+      );
+    }
+    secretEnvValues[name] = value;
+  }
+
   let child: ChildProcess;
   try {
     child = spawn(file, spawnArgs, {
       cwd,
-      env: buildShellEnv(),
+      env: buildShellEnv(secretEnvValues),
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
       // POSIX: own process group so a timeout/cancel can kill grandchildren.
@@ -1450,12 +1520,13 @@ async function opShellRun(
         shell,
         running: run.running,
         exit_code: run.exit_code,
-        stdout_tail: run.stdout_tail,
-        stderr_tail: run.stderr_tail,
+        stdout_tail: redactSecretValues(run.stdout_tail),
+        stderr_tail: redactSecretValues(run.stderr_tail),
         truncated: run.stdout_full.length >= MAX_OUTPUT_BYTES || run.stderr_full.length >= MAX_OUTPUT_BYTES,
         dropped_bytes: run.dropped_bytes,
         timed_out: run.timed_out,
         timeout_ms: run.timeout_ms,
+        ...(secretNames.length > 0 ? { secret_env: secretNames } : {}),
         policy: { decision: run.decision.tier, rule: run.decision.rule, mode: decision.mode, approver },
       },
     },
@@ -1493,8 +1564,8 @@ async function opShellStatus(
         running: run.running,
         exit_code: run.exit_code,
         cancelled: run.cancelled,
-        stdout_tail: run.stdout_tail,
-        stderr_tail: run.stderr_tail,
+        stdout_tail: redactSecretValues(run.stdout_tail),
+        stderr_tail: redactSecretValues(run.stderr_tail),
         truncated: run.stdout_full.length >= MAX_OUTPUT_BYTES || run.stderr_full.length >= MAX_OUTPUT_BYTES,
         dropped_bytes: run.dropped_bytes,
         timed_out: run.timed_out,
@@ -1541,6 +1612,151 @@ function opShellCancel(args: Record<string, unknown>): RustResponse {
 // CoreHost class (drop-in replacement for the Rust CoreHost)
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Secrets (`project_secret`)
+//
+// Values are never returned by default: `get`/`list` expose only metadata
+// (length + sha256 prefix + update time) so an agent can confirm a key exists
+// without ever putting it in a transcript. `reveal:true` is an explicit opt-in
+// *and* needs VENIRA_SECRET_ALLOW_REVEAL=1 on the host, so a compromised agent
+// cannot exfiltrate keys from a normal install.
+// ---------------------------------------------------------------------------
+
+const MAX_REVEAL_VALUE_CHARS = 16 * 1024;
+
+async function opSecret(args: Record<string, unknown>): Promise<RustResponse> {
+  const action = String(args.action ?? "").trim().toLowerCase();
+  const rawName = typeof args.name === "string" ? args.name.trim() : "";
+
+  if (action === "list") {
+    const secrets = listSecrets();
+    return {
+      status: "completed",
+      result: {
+        kind: "secret",
+        data: {
+          action: "list",
+          count: secrets.length,
+          secrets,
+          store: process.env.VENIRA_DATA_DIR ? "VENIRA_DATA_DIR" : "workspace/data",
+        },
+      },
+      ...(secrets.length === 0
+        ? { hint: "No secrets stored. Hint: project_secret action=set name=GITHUB_TOKEN value=<token>." }
+        : {}),
+    };
+  }
+
+  if (!rawName) {
+    throw new Error(
+      "[invalid_request] `name` is required for this action. Hint: use an env-var style name, e.g. GITHUB_TOKEN.",
+    );
+  }
+  const name = assertSecretName(rawName);
+
+  switch (action) {
+    case "get": {
+      const meta = listSecrets().find((entry) => entry.name === name);
+      if (!meta) {
+        throw new Error(
+          `[not_found] Secret "${name}" is not stored. Hint: run project_secret action=list to see available names.`,
+        );
+      }
+      const reveal = args.reveal === true;
+      const base = {
+        action: "get",
+        name: meta.name,
+        length: meta.length,
+        sha256_12: meta.sha256_12,
+        updated_at: meta.updated_at,
+        revealed: false,
+      };
+      if (!reveal) {
+        return {
+          status: "completed",
+          result: { kind: "secret", data: base },
+          hint:
+            "Metadata only (the value stays out of the transcript). Hint: inject it with project_shell_run secret_env=[\"" +
+            name +
+            '"], or set VENIRA_SECRET_ALLOW_REVEAL=1 and pass reveal=true.',
+        };
+      }
+      if (process.env.VENIRA_SECRET_ALLOW_REVEAL !== "1") {
+        throw new Error(
+          "[reveal_denied] Plaintext reveal is disabled on this host. " +
+            "Hint: inject the value via project_shell_run secret_env instead; set VENIRA_SECRET_ALLOW_REVEAL=1 only if the user explicitly wants the value printed.",
+        );
+      }
+      const value = getSecretValueSync(name);
+      if (value === undefined) {
+        throw new Error(
+          `[secret_store_locked] Secret "${name}" could not be decrypted. Hint: the key file may be missing; restore data/secrets.key or re-set the secret.`,
+        );
+      }
+      return {
+        status: "completed",
+        result: {
+          kind: "secret",
+          data: {
+            ...base,
+            revealed: true,
+            value: value.slice(0, MAX_REVEAL_VALUE_CHARS),
+          },
+        },
+        hint: "Revealed because reveal=true and VENIRA_SECRET_ALLOW_REVEAL=1. The value is now in this transcript.",
+      };
+    }
+
+    case "set": {
+      let value: string | undefined;
+      if (typeof args.value === "string") {
+        value = args.value;
+      } else if (typeof args.value_env === "string" && args.value_env.trim()) {
+        // Preferred path: take the value from the host env so it never appears
+        // in the tool arguments (and therefore never in a transcript/log).
+        const envName = args.value_env.trim();
+        value = process.env[envName];
+        if (value === undefined) {
+          throw new Error(
+            `[invalid_request] value_env "${envName}" is not set in the host environment. ` +
+              `Hint: pass value=<secret> directly, or export ${envName} before starting the server.`,
+          );
+        }
+      }
+      if (value === undefined) {
+        throw new Error(
+          "[invalid_request] `value` is required. Hint: pass value=<secret>, or value_env=<HOST_ENV_VAR> to avoid writing it in the tool call.",
+        );
+      }
+      const result = await setSecret(name, value);
+      return {
+        status: "completed",
+        result: {
+          kind: "secret",
+          data: { action: "set", ...result },
+        },
+        hint: result.created
+          ? `Stored "${name}" (encrypted). Hint: use project_shell_run secret_env=["${name}"] to inject it.`
+          : `Rotated "${name}" (encrypted).`,
+      };
+    }
+
+    case "delete": {
+      const result = await deleteSecret(name);
+      return {
+        status: "completed",
+        result: { kind: "secret", data: { action: "delete", ...result } },
+        ...(result.deleted ? {} : { hint: `"${name}" was not stored; nothing to delete.` }),
+      };
+    }
+
+    default:
+      throw new Error(
+        `[invalid_request] Unknown secret action "${action}". Hint: use get | set | list | delete.`,
+      );
+  }
+}
+
 type OperationHandler = (args: Record<string, unknown>, root: string, sessionId: string) => Promise<RustResponse>;
 
 const operations: Record<string, OperationHandler> = {
@@ -1553,7 +1769,59 @@ const operations: Record<string, OperationHandler> = {
   create_directory: opCreateDirectory,
   delete_path: opDeletePath,
   recent_files: async (args: Record<string, unknown>) => opRecentFiles(args),
+  snapshot_create: opSnapshotCreate,
+  snapshot_list: (args: Record<string, unknown>) => opSnapshotList(args),
+  snapshot_restore: opSnapshotRestore,
+  snapshot_delete: opSnapshotDelete,
+  // Git provider / CI provider / secrets
+  pr_create: opPrCreate,
+  pr_comment: opPrComment,
+  pr_merge: opPrMerge,
+  ci_status: opCiStatus,
+  ci_trigger: opCiTrigger,
+  ci_logs: opCiLogs,
+  secret: opSecret,
 };
+
+/**
+ * A short, secret-free description of an outbound/secret operation for the
+ * audit `command` column. Names and ids only — never tokens or message bodies.
+ */
+function describeExternalOp(operation: string, args: Record<string, unknown>): string | undefined {
+  const repo = typeof args.repo === "string" && args.repo.trim() ? args.repo.trim() : "(resolved)";
+  const str = (key: string): string => (typeof args[key] === "string" ? (args[key] as string).slice(0, 80) : "");
+  let summary: string;
+  switch (operation) {
+    case "pr_create":
+      summary = `POST /pulls repo=${repo} head=${str("head") || "(current)"} base=${str("base") || "(default)"} title="${str("title")}"`;
+      break;
+    case "pr_comment":
+      summary = `POST /issues/${String(args.pr ?? "?")}/comments repo=${repo}`;
+      break;
+    case "pr_merge":
+      summary = `PUT /pulls/${String(args.pr ?? "?")}/merge repo=${repo} method=${str("method") || "merge"} delete_branch=${args.delete_branch === true}`;
+      break;
+    case "ci_status":
+      summary = `GET /actions/runs repo=${repo} run=${String(args.run_id ?? "(recent)")} branch=${str("branch") || "(any)"}`;
+      break;
+    case "ci_trigger":
+      summary = `POST /actions/workflows/${str("workflow")}/dispatches repo=${repo} ref=${str("ref") || "(current)"}`;
+      break;
+    case "ci_logs":
+      summary = `GET /actions/logs repo=${repo} run=${String(args.run_id ?? "-")} job=${String(args.job_id ?? "-")}`;
+      break;
+    case "secret": {
+      const action = String(args.action ?? "").toLowerCase();
+      const name = typeof args.name === "string" ? args.name : "";
+      summary = `secret_${action || "?"} name=${name}${args.reveal === true ? " reveal=true" : ""}`;
+      break;
+    }
+    default:
+      return undefined;
+  }
+  return redactSecretValues(summary).slice(0, 400);
+}
+
 
 /** P2: opRecentFiles — index-backed recent files (falls back to Node-side bounded scan). */
 
@@ -1701,7 +1969,12 @@ export class CoreHost {
           throw new Error("[capability_expired] Capability is expired or revoked. Hint: the scope re-opens automatically on the next call.");
         }
 
-        const startedAt = auditStart(sessionId, p.project_id ?? "chat-terminal", operation, requestId);
+        const reasonText = sanitizeReason(redactSecretValues(typeof p.reason === "string" ? p.reason : ""));
+        const externalSummary = describeExternalOp(operation, args);
+        const startedAt = auditStart(sessionId, p.project_id ?? "chat-terminal", operation, requestId, {
+          reason: reasonText,
+          ...(externalSummary ? { command: externalSummary } : {}),
+        });
 
         if (operation === "shell_status") {
           // Read-only observation window — intentionally not audited,
@@ -1713,7 +1986,9 @@ export class CoreHost {
         if (operation === "shell_run") {
           const projectId = p.project_id ?? "chat-terminal";
           const commandText =
-            typeof args.command === "string" ? redactSecrets(args.command).slice(0, 4000) : null;
+            typeof args.command === "string"
+              ? redactSecretValues(redactSecrets(args.command)).slice(0, 4000)
+              : null;
           try {
             const response = await opShellRun(args, WORKSPACE, sessionId);
             const data = response.result?.data as Record<string, any> | undefined;
