@@ -207,6 +207,9 @@ const EXTERNAL_OPS = new Set([
   "pr_create",
   "pr_comment",
   "pr_merge",
+  "pr_list",
+  "pr_close",
+  "pr_reopen",
   "ci_status",
   "ci_trigger",
   "ci_logs",
@@ -3010,7 +3013,9 @@ export function registerProjectTools(server: McpServer): void {
   );
 
   // -------------------------------------------------------------------------
-  // Git provider: pull requests (GitHub REST, token from the secret store)
+  // Git provider: pull requests / CI. Dialect + endpoint + token are resolved
+  // per call (see lib/git-config.ts), so the same tools drive GitHub, GitLab
+  // and Bitbucket.
   // -------------------------------------------------------------------------
 
   const repoArg = z
@@ -3018,21 +3023,28 @@ export function registerProjectTools(server: McpServer): void {
     .max(200)
     .optional()
     .describe(
-      "Repository as \"owner/name\" (default: VENIRA_GITHUB_REPO, else the workspace .git origin remote).",
+      'Repository as "owner/name" or a PR URL (default: VENIRA_GIT_REPO, git.repo in venira.config.json, else the workspace .git origin remote).',
+    );
+
+  const providerArg = z
+    .enum(["github", "gitlab", "bitbucket"])
+    .optional()
+    .describe(
+      "Provider override for this call (default: VENIRA_GIT_PROVIDER, then venira.config.json, then inferred from the origin remote).",
     );
 
   server.registerTool(
     "project_pr_create",
     {
       ...config(
-        "Open a pull request for the current branch (or an explicit head/base). Repo comes from the git origin; the token comes from project_secret GITHUB_TOKEN.",
+        "Open a pull request for the current branch (or an explicit head/base). Works with GitHub, GitLab and Bitbucket; repo/token/provider are resolved per call.",
         "Create pull request",
         {
           use_when:
             "the change is committed and pushed, and the user asks to open a PR/MR. Default base is the repo's default branch.",
           avoid_when: "the branch is not pushed yet (push first), or a PR for this branch already exists (use project_pr_comment).",
-          speed_profile: "one GitHub API call (~1 network round trip, 2 if the default branch is not cached).",
-          output_kind: "pr_create: repo, number, url, title, state, draft, head, base, created.",
+          speed_profile: "one provider API call (~1 network round trip, 2 if the default branch is not cached).",
+          output_kind: "pr_create: repo, provider, number, url, title, state, draft, head, base, created.",
           batch_safe: false,
         },
         { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
@@ -3044,6 +3056,7 @@ export function registerProjectTools(server: McpServer): void {
         body: z.string().max(65_536).optional().describe("PR description (markdown); usually a summary + test plan."),
         draft: z.boolean().optional().describe("Open as a draft PR."),
         repo: repoArg,
+        provider: providerArg,
         reason: reason_,
       },
     },
@@ -3060,9 +3073,9 @@ export function registerProjectTools(server: McpServer): void {
           use_when:
             "reporting status into the PR thread, answering a review comment, or leaving a file/line review note (path + line).",
           avoid_when: "the PR is not open yet (create it first), or you want to change code (use project_edit_file).",
-          speed_profile: "one GitHub API call (issue-comments, or pull review-comments for inline notes).",
+          speed_profile: "one provider API call (issue-comments, or review-comments for inline notes).",
           output_kind:
-            "pr_comment: repo, pr, inline, comment_id, url, created_at, body_chars (+ path/line/side for inline notes).",
+            "pr_comment: repo, provider, pr, inline, comment_id, url, created_at, body_chars (+ path/line/side for inline notes).",
           batch_safe: false,
         },
         { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
@@ -3076,10 +3089,11 @@ export function registerProjectTools(server: McpServer): void {
           .optional()
           .describe("Workspace/repo file path for an inline review comment (requires `line`); omit for a general comment."),
         line: z.number().int().positive().optional().describe("Line number to anchor the inline note (new side by default)."),
-        start_line: z.number().int().positive().optional().describe("First line of a multi-line inline note (must be <= line)."),
+        start_line: z.number().int().positive().optional().describe("First line of a multi-line inline note (must be <= line; GitHub/GitLab)."),
         side: z.enum(["RIGHT", "LEFT"]).optional().describe("RIGHT = new code (default), LEFT = deleted code."),
         commit_id: z.string().max(64).optional().describe("Commit sha the note is anchored to (default: the PR head)."),
         repo: repoArg,
+        provider: providerArg,
         reason: reason_,
       },
     },
@@ -3096,7 +3110,7 @@ export function registerProjectTools(server: McpServer): void {
           use_when: "CI is green and the user asked to land the PR. Use method=squash for a single commit.",
           avoid_when: "checks are still running (project_ci_status first), or the user only wants a review comment.",
           speed_profile: "2-3 API calls (state check, merge, optional branch delete).",
-          output_kind: "pr_merge: repo, pr, merged, method, sha, head, base, branch_deleted, note?.",
+          output_kind: "pr_merge: repo, provider, pr, merged, method, sha, head, base, branch_deleted, note?.",
           batch_safe: false,
         },
         { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
@@ -3108,10 +3122,88 @@ export function registerProjectTools(server: McpServer): void {
         commit_message: z.string().max(65_536).optional().describe("Body for the merge commit."),
         delete_branch: z.boolean().optional().describe("Delete the head branch after a successful merge (same-repo branches only)."),
         repo: repoArg,
+        provider: providerArg,
         reason: reason_,
       },
     },
     (args) => runOne("pr_merge", args as Args),
+  );
+
+  server.registerTool(
+    "project_pr_list",
+    {
+      ...config(
+        "List pull/merge requests for a repo, optionally filtered by state, head or base branch.",
+        "List pull requests",
+        {
+          use_when: "you need the PR number for a branch (before commenting/merging) or a quick open/closed overview.",
+          avoid_when: "you already know the PR number (use project_pr_comment / project_pr_merge directly).",
+          speed_profile: "one API call; read-only and batch-safe.",
+          output_kind: "pr_list: repo, provider, state, total, prs[] {number, title, state, draft, head, base, author, url}.",
+          batch_safe: true,
+        },
+        { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
+      ),
+      inputSchema: {
+        state: z.enum(["open", "closed", "all"]).optional().describe("Filter by state (default: open)."),
+        head: z.string().max(200).optional().describe("Filter by source/head branch."),
+        base: z.string().max(200).optional().describe("Filter by target/base branch."),
+        limit: z.number().int().min(1).max(100).optional().describe("Max PRs to return (default 20, cap 100)."),
+        repo: repoArg,
+        provider: providerArg,
+      },
+    },
+    (args) => runOne("pr_list", args as Args),
+  );
+
+  server.registerTool(
+    "project_pr_close",
+    {
+      ...config(
+        "Close (decline) an open pull/merge request without merging it.",
+        "Close pull request",
+        {
+          use_when: "a PR is superseded, opened by mistake, or the user asked to abandon it.",
+          avoid_when: "the change should land (use project_pr_merge instead).",
+          speed_profile: "one API call; idempotent (closing a closed PR is a no-op).",
+          output_kind: "pr_close: repo, provider, pr, state, closed, url.",
+          batch_safe: false,
+        },
+        { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+      ),
+      inputSchema: {
+        pr: z.union([z.number().int().positive(), z.string().max(300)]).describe("PR number or PR URL."),
+        repo: repoArg,
+        provider: providerArg,
+        reason: reason_,
+      },
+    },
+    (args) => runOne("pr_close", args as Args),
+  );
+
+  server.registerTool(
+    "project_pr_reopen",
+    {
+      ...config(
+        "Reopen a closed pull/merge request (GitHub, GitLab). Bitbucket returns `unsupported`.",
+        "Reopen pull request",
+        {
+          use_when: "a PR was closed by mistake and the same branch should be reviewed again.",
+          avoid_when: "the branch was deleted or force-pushed away (open a new PR with project_pr_create).",
+          speed_profile: "one API call; idempotent.",
+          output_kind: "pr_reopen: repo, provider, pr, state, reopened, url.",
+          batch_safe: false,
+        },
+        { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+      ),
+      inputSchema: {
+        pr: z.union([z.number().int().positive(), z.string().max(300)]).describe("PR number or PR URL."),
+        repo: repoArg,
+        provider: providerArg,
+        reason: reason_,
+      },
+    },
+    (args) => runOne("pr_reopen", args as Args),
   );
 
   // -------------------------------------------------------------------------
@@ -3122,27 +3214,30 @@ export function registerProjectTools(server: McpServer): void {
     "project_ci_status",
     {
       ...config(
-        "Read GitHub checks: recent Actions runs for a branch/workflow, one run with its jobs (run_id), or branch-protection check-runs for a ref/PR (ref, pr).",
+        "Read CI status: recent runs for a branch/workflow, one run with its jobs, or branch-protection check-runs for a ref/PR (GitHub). GitHub Actions, GitLab pipelines and Bitbucket Pipelines are supported.",
         "CI status",
         {
           use_when:
-            "after pushing or triggering a workflow, to see whether checks passed before merging; pass pr=<number> (or ref=<sha>) for branch-protection check-runs.",
+            "after pushing or triggering a pipeline, to see whether checks passed before merging; pass pr=<number> (or ref=<sha>) for branch-protection check-runs (GitHub).",
           avoid_when: "you need the failure detail (use project_ci_logs with the run_id/job_id).",
           speed_profile: "1-2 API calls; newest runs first. pr= adds one call to resolve the head sha.",
           output_kind:
             "ci_status: overall (success|failure|in_progress|no_runs|no_checks) + runs[] {id, name, status, conclusion, branch, sha, url}; " +
-            "run_id → run + jobs[]; ref/pr → check_runs[] {name, status, conclusion, url}.",
+            "run_id → run + jobs[]; ref/pr → check_runs[] (GitHub) or the newest pipeline (GitLab/Bitbucket).",
           batch_safe: true,
         },
         { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
       ),
       inputSchema: {
-        run_id: z.number().int().positive().optional().describe("Inspect one run (adds its jobs)."),
+        run_id: z
+          .union([z.number().int().positive(), z.string().max(80)])
+          .optional()
+          .describe("Inspect one run: GitHub/GitLab numeric id, or a Bitbucket pipeline UUID."),
         ref: z
           .string()
           .max(200)
           .optional()
-          .describe("Commit sha or branch: read branch-protection check-runs for that ref (instead of workflow runs)."),
+          .describe("Commit sha or branch: read check-runs (GitHub) or the newest pipeline for that ref."),
         pr: z
           .union([z.number().int().positive(), z.string().max(300)])
           .optional()
@@ -3151,6 +3246,7 @@ export function registerProjectTools(server: McpServer): void {
         workflow: z.string().max(200).optional().describe("Workflow file name (ci.yml) or numeric id."),
         limit: z.number().int().min(1).max(50).optional().describe("Max runs (or check-runs) to list (default 10 / 20)."),
         repo: repoArg,
+        provider: providerArg,
       },
     },
     (args) => runOne("ci_status", args as Args),
@@ -3160,22 +3256,28 @@ export function registerProjectTools(server: McpServer): void {
     "project_ci_trigger",
     {
       ...config(
-        "Trigger a GitHub Actions workflow_dispatch on a ref, with optional inputs.",
+        "Trigger a pipeline: GitHub Actions workflow_dispatch, a GitLab pipeline, or a Bitbucket custom pipeline. Ref defaults to the current branch.",
         "Trigger CI workflow",
         {
-          use_when: "re-running a pipeline for a branch without a new commit, or dispatching a workflow with inputs.",
+          use_when: "re-running a pipeline for a branch without a new commit, or dispatching a workflow with inputs/variables.",
           avoid_when: "the workflow has no workflow_dispatch trigger (GitHub rejects it), or a push would do it anyway.",
           speed_profile: "one API call; the new run appears in project_ci_status within ~10s.",
-          output_kind: "ci_trigger: repo, workflow, ref, inputs, triggered, dispatched_at.",
+          output_kind: "ci_trigger: repo, provider, workflow, ref, inputs, triggered, dispatched_at.",
           batch_safe: false,
         },
         { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
       ),
       inputSchema: {
-        workflow: z.string().min(1).max(200).describe("Workflow file name (e.g. ci.yml) or id."),
+        workflow: z
+          .string()
+          .min(1)
+          .max(200)
+          .optional()
+          .describe("GitHub: workflow file name (ci.yml) or id (required). GitLab: optional label. Bitbucket: custom pipeline pattern (default: default)."),
         ref: z.string().max(200).optional().describe("Branch/tag to run on (default: current branch, else default branch)."),
         inputs: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
         repo: repoArg,
+        provider: providerArg,
         reason: reason_,
       },
     },
@@ -3186,24 +3288,31 @@ export function registerProjectTools(server: McpServer): void {
     "project_ci_logs",
     {
       ...config(
-        "Read GitHub Actions logs: a whole run (ZIP parsed in memory) or a single job. Returns the tail, not the whole log.",
+        "Read CI logs: a whole run (GitHub ZIP or up to 3 failing GitLab/Bitbucket jobs) or a single job/step. Returns the tail, not the whole log.",
         "CI logs",
         {
           use_when: "a run failed and you need the error. Pass job_id to isolate the failing job; tail_lines/max_bytes keep it small.",
           avoid_when: "you only need pass/fail (use project_ci_status).",
           speed_profile: "1 download; run archives are parsed in memory with per-entry caps.",
           output_kind:
-            "ci_logs: repo, run_id|job_id, source, entries[] {name, bytes, skipped?}, lines, text (tail), truncated, dropped_lines, dropped_bytes.",
+            "ci_logs: repo, provider, run_id|job_id, source, entries[] {name, bytes, skipped?}, lines, text (tail), truncated, dropped_lines, dropped_bytes.",
           batch_safe: true,
         },
         { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
       ),
       inputSchema: {
-        run_id: z.number().int().positive().optional().describe("Workflow run id (all jobs)."),
-        job_id: z.number().int().positive().optional().describe("Single job id (cheaper and narrower than a run)."),
+        run_id: z
+          .union([z.number().int().positive(), z.string().max(80)])
+          .optional()
+          .describe("Whole run: GitHub/GitLab id, or a Bitbucket pipeline UUID."),
+        job_id: z
+          .union([z.number().int().positive(), z.string().max(161)])
+          .optional()
+          .describe('Single job: GitHub/GitLab job id, or a Bitbucket step UUID (or "pipelineUuid:stepUuid").'),
         tail_lines: z.number().int().min(1).max(5000).optional().describe("Keep only the last N lines (default 500)."),
         max_bytes: z.number().int().min(1).max(4 * 1024 * 1024).optional().describe("Max text bytes returned (default 512KB, cap 4MB)."),
         repo: repoArg,
+        provider: providerArg,
       },
     },
     (args) => runOne("ci_logs", args as Args),

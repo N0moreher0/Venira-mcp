@@ -22,7 +22,7 @@ export type GithubMock = {
   requests: MockRequest[];
   /** Authorization header seen by the blob (log download) server. */
   blobAuth: Array<string | null>;
-  state: { dispatches: number; comments: number; merges: number; branchDeletes: number; pullsCreated: number; inlineComments: number; lastInline: any };
+  state: { dispatches: number; comments: number; merges: number; branchDeletes: number; pullsCreated: number; inlineComments: number; lastInline: any; closes: number; reopens: number; retryOnce: number };
   close: () => Promise<void>;
 };
 
@@ -168,7 +168,7 @@ function listen(server: http.Server): Promise<string> {
 export async function startGithubMock(): Promise<GithubMock> {
   const requests: MockRequest[] = [];
   const blobAuth: Array<string | null> = [];
-  const state = { dispatches: 0, comments: 0, merges: 0, branchDeletes: 0, pullsCreated: 0, inlineComments: 0, lastInline: null as any };
+  const state = { dispatches: 0, comments: 0, merges: 0, branchDeletes: 0, pullsCreated: 0, inlineComments: 0, lastInline: null as any, closes: 0, reopens: 0, retryOnce: 0 };
 
   let blobUrl = "";
 
@@ -247,7 +247,55 @@ export async function startGithubMock(): Promise<GithubMock> {
     const handle = async (): Promise<void> => {
       const base = "/repos/acme/demo";
 
-      if (path === base && req.method === "GET") return json(200, { full_name: "acme/demo", default_branch: "main", private: false });
+      if (path === `${base}` && req.method === "GET") return json(200, { full_name: "acme/demo", default_branch: "main", private: false });
+
+      // Retry/backoff fixture: 500 once, then 200. Used by the HTTP unit checks.
+      if (path === "/retry-once" && req.method === "GET") {
+        state.retryOnce += 1;
+        if (state.retryOnce === 1) return json(500, { message: "transient" });
+        return json(200, { ok: true, attempts: state.retryOnce });
+      }
+      if (path === "/always-500" && req.method === "GET") return json(500, { message: "still broken" });
+
+      if (path === `${base}/pulls` && req.method === "GET") {
+        return json(200, [
+          {
+            number: 7,
+            title: "Add provider tools",
+            state: "open",
+            draft: false,
+            head: { ref: "verify-branch" },
+            base: { ref: "main" },
+            user: { login: "verifier" },
+            created_at: "2026-10-29T02:00:00Z",
+            updated_at: "2026-10-29T02:05:00Z",
+            html_url: "https://github.com/acme/demo/pull/7",
+          },
+          {
+            number: 6,
+            title: "Older change",
+            state: "closed",
+            draft: false,
+            head: { ref: "old-branch" },
+            base: { ref: "main" },
+            user: { login: "verifier" },
+            created_at: "2026-10-28T02:00:00Z",
+            updated_at: "2026-10-28T02:05:00Z",
+            html_url: "https://github.com/acme/demo/pull/6",
+          },
+        ]);
+      }
+
+      if (path === `${base}/pulls/7` && req.method === "PATCH") {
+        const body = await readBody();
+        if (body.state === "closed") state.closes += 1;
+        if (body.state === "open") state.reopens += 1;
+        return json(200, {
+          number: 7,
+          state: body.state === "closed" ? "closed" : "open",
+          html_url: "https://github.com/acme/demo/pull/7",
+        });
+      }
 
       if (path === `${base}/pulls` && req.method === "POST") {
         const body = await readBody();
