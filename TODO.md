@@ -8,7 +8,7 @@
 - ✅ 100% of the logic has been moved to Node (no more Rust corehost)
 - ✅ Audit via SQLite WAL using `better-sqlite3` (replaces `node:sqlite`)
 - ✅ Native shell via `child_process` (no Rust required)
-- ✅ 37 tools working, verify 214/214 PASS, doctor 12/12 PASS
+- ✅ 37 tools working, verify 217/217 PASS, doctor 12/12 PASS
 - ✅ Checkpoints (`project_snapshot`: create/list/restore/delete, content-addressed, git-free rollback)
 - ✅ Audit reasons: mutating tools accept `reason` ("why"), stored in `project_tool_audit.reason` and returned by `project_read_audit`
 - ✅ Git provider (`project_pr_create` / `project_pr_comment` / `project_pr_merge`) over GitHub REST — no `gh` binary
@@ -50,6 +50,7 @@ The whole history in order — what shipped, when, and why.
 | 2026-10-29 | **v1.5.0** | **Inline review comments + check-runs + secret rotation + deterministic diagnostics.** `project_pr_comment` pins notes to a file/line; `project_ci_status` reads branch-protection check-runs (`ref`/`pr`); secret rotation metadata with expiry enforcement; `project_explain_error` (rule table → next actions) and `project_plan_read_batch` (task → ready batch). **37 tools**, verify **211/211**. |
 | 2026-10-29 | **v1.5.1** | **Inline review-comment fix (found by live E2E).** GitHub requires `commit_id` with `line` (bare `line` → 422 "line is not a permitted key"); `project_pr_comment` resolves the PR head sha automatically and honours an explicit `commit_id`. Verify **212/212**. |
 | 2026-10-29 | **v1.5.2** | **Read-planner artifact filter (found by the E2E re-run).** The audit DB (`data/venira.db`, 36 hits) outranked source in `project_plan_read_batch`; candidates now exclude build/vendor dirs and DB/log/binary extensions. Verify **214/214**. |
+| 2026-10-29 | **v1.5.3** | **Read-planner ranking (found by the post-restart bench).** File-name search per keyword (+ snake→kebab retry) so a task naming a file finds that file; scoring = hits + path/name match; prose demoted unless the task asks for docs; lockfiles dropped; calibrated `estimated_ms`. Verify **217/217**. |
 
 ## 🎯 Implementation Roadmap
 
@@ -148,6 +149,8 @@ The whole history in order — what shipped, when, and why.
 - [x] Output: { task, keywords, searched, candidates, steps[{tool, arguments, why}], estimated_ms, notes }
 - [x] Implementation in `lib/read-plan.ts`; falls back to the recent-files index / tree map when keywords are thin
 - [x] Artifact filter: build/vendor dirs + DB/log/binary extensions never rank as read targets
+- [x] Ranking: file-name search per keyword (+ snake→kebab retry), score = hits + path/name match, prose weight 0.3 unless the task mentions docs, lockfiles excluded
+- [x] `estimated_ms` calibrated from the bench (6-file batch ≈ 62 ms)
 - [x] Tool registration in `tools/project.ts` (runPlanReadBatch); outline step for files > 256 KB
 
 ### P3: `project_selective_search` (effort: high, 8-10h) ✅
@@ -228,7 +231,7 @@ The whole history in order — what shipped, when, and why.
 | Shell timeout | `VENIRA_SHELL_TIMEOUT_POLICY=hard` |
 
 ## 🧪 Test plan (next)
-- ✅ `verify.ts`: audit mode, cache control, trace, read_audit, checkpoints, PR/CI/check-runs, inline comments, secrets/rotation, diagnostics + planning, network (214 checks)
+- ✅ `verify.ts`: audit mode, cache control, trace, read_audit, checkpoints, PR/CI/check-runs, inline comments, secrets/rotation, diagnostics + planning, network (217 checks)
 - `bench-mcp.ts`: add a "fresh mode" scenario (VENIRA_CACHE_ALL=0) vs "default"
 - ✅ `doctor.ts`: checks for the P1 env vars + provider/secret config surface
 
@@ -254,6 +257,12 @@ The whole history in order — what shipped, when, and why.
 ---
 
 ## 📝 Change Log
+
+### v1.5.3 (2026-10-29) ✅
+- **Fix (post-restart bench find)**: a task naming a file ranked docs instead of the file. `git-provider` never occurs inside `lib/git-provider.ts`, so content search could not find it. Plans now also run a bounded **file-name search** per keyword (one retry with the other separator: `user_profile` ↔ `user-profile`), and candidates are scored as `hits + 4 × path/name match`.
+- **Ranking**: prose (`*.md`, README/LICENSE/CHANGELOG, `docs/`) keeps only 0.3 of its hits (minus 2) unless the task mentions documentation; generated lockfiles (`package-lock.json`, `yarn.lock`, …) are excluded like other artifacts.
+- **Estimate**: `estimated_ms` calibrated from the bench (6-file batch ≈ 62 ms) instead of a flat 6 ms.
+- **Tests**: verify 217/217 (named-file ranking, docs-when-asked, calibrated estimate); version 1.5.3.
 
 ### v1.5.2 (2026-10-29) ✅
 - **Fix (E2E re-run find)**: `project_plan_read_batch` ranked `data/venira.db` above source (36 hits) — the audit DB contains every command, so its bytes match keyword searches. Candidates now exclude build/vendor directories (`node_modules`, `dist`, `.git`, `__pycache__`, …) and DB/log/binary extensions (`.db`, `.sqlite`, `.log`, `.map`, images, …), both when collecting hits and in `buildReadPlan`.

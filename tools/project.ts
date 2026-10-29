@@ -45,7 +45,14 @@ import {
   type InstallResult,
 } from "../lib/self-install.js";
 import { explainErrorText } from "../lib/diagnostics.js";
-import { buildReadPlan, extractKeywords, isPlannablePath, type PlanCandidate } from "../lib/read-plan.js";
+import {
+  NAME_HIT_POINTS,
+  buildReadPlan,
+  extractKeywords,
+  isPlannablePath,
+  rankCandidates,
+  type PlanCandidate,
+} from "../lib/read-plan.js";
 
 const PERMISSION_MODE = process.env.VENIRA_PERMISSION_MODE ?? "allow_all";
 // allow_all grants the "chat-terminal" scope when there is no Project (same as the native app).
@@ -1926,8 +1933,7 @@ async function runExplainError(args: Args): Promise<ToolResult> {
  * ranked candidates → one ready `project_read_batch` call (+ outline/search
  * follow-ups). Deterministic and read-only.
  */
-async function runPlanReadBatch(args: Args): Promise<ToolResult> {
-  const started = performance.now();
+async function runPlanReadBatch(args: Args): Promise<ToolResult> {  const started = performance.now();
   const requestId = newRequestId();
   const task = typeof args.task_description === "string" ? args.task_description.trim() : "";
   if (!task) {
@@ -1955,6 +1961,33 @@ async function runPlanReadBatch(args: Args): Promise<ToolResult> {
   for (const rel of hints) candidates.set(rel, { relative_path: rel, reason: "files_hint", hits: 3 });
 
   let searched = false;
+  const addCandidate = (rel: string, reason: string, points: number) => {
+    if (!rel || !isPlannablePath(rel)) return;
+    const existing = candidates.get(rel);
+    if (existing) existing.hits = (existing.hits ?? 0) + points;
+    else candidates.set(rel, { relative_path: rel, reason, hits: points });
+  };
+
+  /**
+   * File-name search. One retry with the other word separator covers the common
+   * snake_case <-> kebab-case mismatch (`user_profile` vs `user-profile.ts`).
+   */
+  const searchNames = async (keyword: string): Promise<Array<{ relative_path?: unknown }>> => {
+    const run = async (query: string) => {
+      const res = (await execute("search", { query, kind: "file_name", limit: 8 })) as RustResponse;
+      return ((res.result?.data as { hits?: unknown[] } | undefined)?.hits ?? []) as Array<{ relative_path?: unknown }>;
+    };
+    const hits = await run(keyword);
+    if (hits.length > 0) return hits;
+    const swapped = keyword.includes("_") ? keyword.replace(/_/g, "-") : keyword.replace(/-/g, "_");
+    if (swapped === keyword) return hits;
+    try {
+      return await run(swapped);
+    } catch {
+      return hits;
+    }
+  };
+
   for (const keyword of includeSearch ? keywords.slice(0, 3) : []) {
     try {
       const searchRes = (await execute("search", {
@@ -1965,17 +1998,24 @@ async function runPlanReadBatch(args: Args): Promise<ToolResult> {
       searched = true;
       const hits = (searchRes.result?.data as { hits?: unknown[] } | undefined)?.hits ?? [];
       for (const hit of hits as Array<{ relative_path?: unknown }>) {
-        const rel = String(hit.relative_path ?? "");
-        if (!rel) continue;
         // The audit DB / build output match keyword searches but are never
         // useful read targets, so they must not rank in the plan.
-        if (!isPlannablePath(rel)) continue;
-        const existing = candidates.get(rel);
-        if (existing) existing.hits = (existing.hits ?? 0) + 1;
-        else candidates.set(rel, { relative_path: rel, reason: `search:${keyword}`, hits: 1 });
+        addCandidate(String(hit.relative_path ?? ""), `search:${keyword}`, 1);
       }
     } catch {
       /* a single search failure (policy/glob) must not fail the plan */
+    }
+    // Content search cannot find a file *named* after the task: the string
+    // "git-provider" never occurs inside lib/git-provider.ts. A bounded
+    // file-name search covers exactly that case.
+    try {
+      const nameHits = await searchNames(keyword);
+      searched = true;
+      for (const hit of nameHits) {
+        addCandidate(String(hit.relative_path ?? ""), `name:${keyword}`, NAME_HIT_POINTS);
+      }
+    } catch {
+      /* name search is a bonus signal: content hits still stand */
     }
   }
 
@@ -1998,9 +2038,7 @@ async function runPlanReadBatch(args: Args): Promise<ToolResult> {
     }
   }
 
-  const ranked = [...candidates.values()]
-    .sort((a, b) => (b.hits ?? 0) - (a.hits ?? 0) || a.relative_path.localeCompare(b.relative_path))
-    .slice(0, maxFiles);
+  const ranked = rankCandidates([...candidates.values()], keywords, task, maxFiles);
 
   const plan = buildReadPlan({ task, keywords, candidates: ranked, maxFiles, includeSearch, searched });
   const response: RustResponse = {
@@ -2880,7 +2918,7 @@ export function registerProjectTools(server: McpServer): void {
     "project_plan_read_batch",
     {
       ...config(
-        "Plan a read: extract keywords from the task, run bounded searches (+recent files), rank candidate source files (build output, DB/log artifacts excluded), and return a ready project_read_batch call with an estimate. Deterministic planner, no model call.",
+        "Plan a read: extract keywords from the task, run bounded content + file-name searches (+recent files), rank candidate source files by hits, path/name match and prose weight (build output, DB/log artifacts excluded), and return a ready project_read_batch call with a calibrated estimate. Deterministic planner, no model call.",
         "Plan reads from a task",
         {
           use_when:

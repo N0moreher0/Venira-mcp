@@ -986,6 +986,48 @@ check(
   planSource.data?.candidates,
 );
 
+// A file *named* after the task is the target even when the word never occurs
+// inside it (the live symptom: "git-provider" ranked docs, not lib/git-provider.ts).
+const nameToken = `plan_name_${Date.now()}`;
+const nameSlug = nameToken.toLowerCase().replace(/_/g, "-");
+await fs.mkdir(`${dir}/docs`, { recursive: true });
+await fs.writeFile(`${dir}/${nameToken}-impl.ts`, "export const noop = () => 0;\n");
+await fs.writeFile(`${dir}/docs/${nameSlug}.md`, `${nameToken} prose\n`.repeat(25));
+const planName = asEnvelope(
+  await call("project_plan_read_batch", { task_description: `update ${nameToken} handling`, include_search: true }),
+);
+const nameCandidates = (planName.data?.candidates ?? []) as Array<{ relative_path?: string; score?: number }>;
+const nameFiles = nameCandidates.map((c) => String(c.relative_path));
+const implIndex = nameFiles.findIndex((file) => file.endsWith(`${nameToken}-impl.ts`));
+const docIndex = nameFiles.findIndex((file) => file.includes(`docs/${nameSlug}`));
+check(
+  "plan_read_batch_ranks_named_file",
+  planName.ok === true && implIndex !== -1 && (docIndex === -1 || docIndex > implIndex),
+  { candidates: nameCandidates.map((c) => `${c.relative_path}=${c.score}`) },
+);
+
+// Prose must not outrank code for a code task, but must keep its hits when the
+// task is explicitly about documentation.
+const planDocs = asEnvelope(
+  await call("project_plan_read_batch", { task_description: "document the retry handling in README", max_files: 4 }),
+);
+check(
+  "plan_read_batch_docs_when_asked",
+  planDocs.ok === true &&
+    (planDocs.data?.candidates ?? []).some((c: { relative_path?: string }) => /readme/i.test(String(c.relative_path))),
+  planDocs.data?.candidates,
+);
+
+// Estimate must be calibrated against the measured batch (6 files ≈ 62 ms), not
+// the old flat 6 ms.
+const planEstimate = Number(planTask.data?.estimated_ms ?? 0);
+const planFileCount = (planTask.data?.candidates ?? []).length;
+check(
+  "plan_read_batch_estimate_calibrated",
+  planTask.ok === true && planEstimate >= 8 + 9 * Math.min(planFileCount, 8),
+  { estimated_ms: planEstimate, files: planFileCount },
+);
+
 // 11e. Network kill switch + missing token (separate clients, real env variants).
 const offlineTransport = new StdioClientTransport({
   command: "node",
