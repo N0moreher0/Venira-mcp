@@ -375,7 +375,7 @@ project_snapshot({ action: "restore", id: "snap-…" })                  // roll
 | Tool | Purpose | Notes |
 |---|---|---|
 | `project_pr_create` | Open a pull request for the current (or explicit) branch | `title` required · `head` defaults to the current branch · `base` defaults to the repo default branch (cached 5 min) · `body`, `draft`, `repo`, `reason`. Returns `number`, `url`, `state`, `head`, `base`. |
-| `project_pr_comment` | Post a comment on a PR: general thread comment **or inline review note** | `pr` accepts a number **or** a full PR URL · `body` (markdown) · for an inline note add `path` + `line` (plus optional `start_line`, `side: RIGHT\|LEFT`, `commit_id`) and it switches to the pull review-comment API · `repo`, `reason`. Returns `inline`, `comment_id`, `url`. |
+| `project_pr_comment` | Post a comment on a PR: general thread comment **or inline review note** | `pr` accepts a number **or** a full PR URL · `body` (markdown) · for an inline note add `path` + `line` (plus optional `start_line`, `side: RIGHT\|LEFT`, `commit_id`) and it switches to the pull review-comment API · `commit_id` defaults to the **PR head sha** (GitHub requires it whenever `line` is used) · `repo`, `reason`. Returns `inline`, `path`, `line`, `commit_id`, `comment_id`, `url`. |
 | `project_pr_merge` | Merge a PR and optionally delete the head branch | `method: merge \| squash \| rebase` · `commit_title`, `commit_message`, `delete_branch` · `repo`, `reason`. A closed/already-merged PR returns `already_merged` instead of an error; a conflicting PR returns `conflict`. |
 
 The token comes from `project_secret` (`GITHUB_TOKEN`), then `VENIRA_GITHUB_TOKEN`, then
@@ -568,9 +568,9 @@ venira-mcp/
 │   ├── smoke.ts              # In-process backend sanity check
 │   ├── bench.ts              # In-process backend benchmark
 │   ├── bench-mcp.ts          # End-to-end MCP benchmark
-│   ├── verify.ts             # 211 end-to-end checks (cache, batch, shell, audit, modes,
-│   │                         #   snapshots, secrets/rotation, GitHub PR/CI/check-runs against
-│   │                         #   a local mock, diagnostics + read planning)
+│   ├── verify.ts             # 212 end-to-end checks (cache, batch, shell, audit, modes,
+│   │                         #   snapshots, secrets/rotation, GitHub PR/CI/check-runs/inline
+│   │                         #   comments against a local mock, diagnostics + read planning)
 │   ├── github-mock.ts        # In-process GitHub API + pre-signed-blob mock (no network, no token)
 │   └── doctor.ts             # 12 preflight checks (workspace, data dir, tools, health, shell, P1 config)
 ├── opencode.example.json     # Ready-to-edit OpenCode MCP config
@@ -922,7 +922,7 @@ etc. The model is expected to read `hint` first.
 npm run build        # type-check + emit dist/
 npm run smoke        # in-process sanity (backend reachable, path lock works)
 npm run doctor       # preflight: 12 checks incl. audit DB, shell smoke, P1 config surface
-npm run verify       # behavioural regression suite (211 checks, ~90 s)
+npm run verify       # behavioural regression suite (212 checks, ~90 s)
 npm run bench        # in-process numbers
 npm run bench:mcp    # end-to-end numbers
 ```
@@ -1000,6 +1000,7 @@ The full history, in order — from the standalone rewrite to the provider, secr
 | 2026-10-29 | (post-1.3.0) | P2.5 self-install: `project_detect_harnesses` + `project_install_self` (OpenCode / Claude / Cursor / Codex / Kimi / DeepSeek / Antigravity), atomic config merge + backup. |
 | 2026-10-29 | **v1.4.0** | **Checkpoints + audit reasons + Git/PR + CI + encrypted secrets.** `project_snapshot` (content-addressed, deduplicated, sha256-verified rollback), `reason` on mutations stored in the audit trail, GitHub pull-request and Actions tools, an AES-256-GCM secret store with `secret_env` injection, and a network safety layer. **35 tools**, verify **186/186**. |
 | 2026-10-29 | **v1.5.0** | **Inline review comments + check-runs + secret rotation + deterministic diagnostics.** `project_pr_comment` pins notes to a file/line (`path`, `line`, `start_line`, `side`, `commit_id`); `project_ci_status` reads branch-protection **check-runs** (`ref` / `pr`); the secret store tracks `expires_at` / `last_used_at` / `use_count` / `rotated_at` and refuses expired credentials; new `project_explain_error` (rule table → next actions) and `project_plan_read_batch` (task → ready read batch). **37 tools**, verify **211/211**. |
+| 2026-10-29 | **v1.5.1** | **Inline review-comment fix (found by a live E2E run).** GitHub requires `commit_id` whenever `line` is used (a bare `line` is rejected with 422 "line is not a permitted key"); `project_pr_comment` now resolves the PR head sha automatically (one extra API call only for inline notes) and honours an explicit `commit_id`. Verify **212/212**. |
 
 ### 14.2 What v1.5.0 added
 
@@ -1039,6 +1040,11 @@ The full history, in order — from the standalone rewrite to the provider, secr
   planning), and the tool-count expectations moved to 37 (36 when one is disabled).
 - **Docs** — README (tools 37, new §4.9, roadmap), TODO.md, `package.json` metadata and the
   server's MCP instructions/decision tree (now 14 steps) updated in the same change.
+
+**Fix shipped in v1.5.1 (found by a live E2E run):** GitHub requires `commit_id` whenever `line`
+is used — a bare `line` returns `422 "line is not a permitted key"`. `project_pr_comment` now
+resolves the PR head sha automatically (one extra API call, inline notes only) and still honours
+an explicit `commit_id` (e.g. anchoring to an older revision). The response echoes `commit_id`.
 
 ### 14.3 What v1.4.0 added
 

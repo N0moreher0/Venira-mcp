@@ -8,7 +8,7 @@
 - ✅ 100% of the logic has been moved to Node (no more Rust corehost)
 - ✅ Audit via SQLite WAL using `better-sqlite3` (replaces `node:sqlite`)
 - ✅ Native shell via `child_process` (no Rust required)
-- ✅ 37 tools working, verify 211/211 PASS, doctor 12/12 PASS
+- ✅ 37 tools working, verify 212/212 PASS, doctor 12/12 PASS
 - ✅ Checkpoints (`project_snapshot`: create/list/restore/delete, content-addressed, git-free rollback)
 - ✅ Audit reasons: mutating tools accept `reason` ("why"), stored in `project_tool_audit.reason` and returned by `project_read_audit`
 - ✅ Git provider (`project_pr_create` / `project_pr_comment` / `project_pr_merge`) over GitHub REST — no `gh` binary
@@ -48,6 +48,7 @@ The whole history in order — what shipped, when, and why.
 | 2026-10-29 | (post-1.3.0) | P2.5 self-install: `project_detect_harnesses` + `project_install_self` (OpenCode / Claude / Cursor / Codex / Kimi / DeepSeek / Antigravity) with atomic config merge + backup. |
 | 2026-10-29 | **v1.4.0** | **Checkpoints + audit reasons + Git/PR + CI + encrypted secrets.** `project_snapshot` (content-addressed, deduplicated, sha256-verified rollback), `reason` on every mutation stored in the audit trail, GitHub pull-request + Actions tools, AES-256-GCM secret store with `secret_env` injection, network safety layer. **35 tools**, verify **186/186**. |
 | 2026-10-29 | **v1.5.0** | **Inline review comments + check-runs + secret rotation + deterministic diagnostics.** `project_pr_comment` pins notes to a file/line; `project_ci_status` reads branch-protection check-runs (`ref`/`pr`); secret rotation metadata with expiry enforcement; `project_explain_error` (rule table → next actions) and `project_plan_read_batch` (task → ready batch). **37 tools**, verify **211/211**. |
+| 2026-10-29 | **v1.5.1** | **Inline review-comment fix (found by live E2E).** GitHub requires `commit_id` with `line` (bare `line` → 422 "line is not a permitted key"); `project_pr_comment` resolves the PR head sha automatically and honours an explicit `commit_id`. Verify **212/212**. |
 
 ## 🎯 Implementation Roadmap
 
@@ -193,8 +194,9 @@ The whole history in order — what shipped, when, and why.
 ### Inline PR review comments ✅
 - [x] `project_pr_comment` + `path` + `line` → `POST /repos/{o}/{r}/pulls/{n}/comments` (pins the note to the diff)
 - [x] Optional `start_line` (multi-line range), `side: RIGHT|LEFT`, `commit_id` (defaults to the PR head)
+- [x] `commit_id` is resolved from the PR head sha when omitted (GitHub requires it with `line`; bare `line` → 422)
 - [x] Validation: `line`/`start_line` without `path` (and `path` without `line`) → `invalid_request`; `start_line <= line`
-- [x] Result carries `inline: true`, `path`, `line`, `start_line`, `side`
+- [x] Result carries `inline: true`, `path`, `line`, `start_line`, `side`, `commit_id`
 
 ### Branch-protection check-runs ✅
 - [x] `project_ci_status` + `ref` (sha/branch) or `pr` (resolved to the head sha) → `GET /commits/{ref}/check-runs`
@@ -224,7 +226,7 @@ The whole history in order — what shipped, when, and why.
 | Shell timeout | `VENIRA_SHELL_TIMEOUT_POLICY=hard` |
 
 ## 🧪 Test plan (next)
-- ✅ `verify.ts`: audit mode, cache control, trace, read_audit, checkpoints, PR/CI/check-runs, secrets/rotation, diagnostics + planning, network (211 checks)
+- ✅ `verify.ts`: audit mode, cache control, trace, read_audit, checkpoints, PR/CI/check-runs, inline comments, secrets/rotation, diagnostics + planning, network (212 checks)
 - `bench-mcp.ts`: add a "fresh mode" scenario (VENIRA_CACHE_ALL=0) vs "default"
 - ✅ `doctor.ts`: checks for the P1 env vars + provider/secret config surface
 
@@ -250,6 +252,10 @@ The whole history in order — what shipped, when, and why.
 ---
 
 ## 📝 Change Log
+
+### v1.5.1 (2026-10-29) ✅
+- **Fix (live E2E find)**: GitHub requires `commit_id` whenever `line` is used in the pull review-comment API (a bare `line` returns 422 "line is not a permitted key"). `project_pr_comment` now resolves the PR head sha automatically (one extra API call, inline notes only), honours an explicit `commit_id`, and echoes it in the response.
+- **Tests**: verify 212/212 (inline payload asserts the resolved sha + an explicit override); version 1.5.1.
 
 ### v1.5.0 (2026-10-29) ✅
 - **Inline PR review comments**: `project_pr_comment` accepts `path` + `line` (+ `start_line`, `side`, `commit_id`) and posts through the pull review-comment API; general comments unchanged
