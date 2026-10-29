@@ -834,7 +834,7 @@ check(
     prList.data?.prs?.[0]?.head === "verify-branch",
   prList,
 );
-const prListBadState = asEnvelope(await call("project_pr_list", { state: "open" }));
+const prListBadState = asEnvelope(await call("project_pr_list", { state: "bogus" }));
 check("pr_list_state_validated", prListBadState.error?.code === "invalid_request", prListBadState);
 
 const prClose = asEnvelope(await call("project_pr_close", { pr: 7 }));
