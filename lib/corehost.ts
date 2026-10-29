@@ -54,9 +54,12 @@ import {
   opCiLogs,
   opCiStatus,
   opCiTrigger,
+  opPrClose,
   opPrComment,
   opPrCreate,
+  opPrList,
   opPrMerge,
+  opPrReopen,
 } from "./git-provider.js";
 import {
   assertSecretName,
@@ -1837,6 +1840,9 @@ const operations: Record<string, OperationHandler> = {
   pr_create: opPrCreate,
   pr_comment: opPrComment,
   pr_merge: opPrMerge,
+  pr_list: opPrList,
+  pr_close: opPrClose,
+  pr_reopen: opPrReopen,
   ci_status: opCiStatus,
   ci_trigger: opCiTrigger,
   ci_logs: opCiLogs,
@@ -1865,6 +1871,15 @@ function describeExternalOp(operation: string, args: Record<string, unknown>): s
     }
     case "pr_merge":
       summary = `PUT /pulls/${String(args.pr ?? "?")}/merge repo=${repo} method=${str("method") || "merge"} delete_branch=${args.delete_branch === true}`;
+      break;
+    case "pr_list":
+      summary = `GET /pulls repo=${repo} state=${str("state") || "open"} head=${str("head") || "(any)"}`;
+      break;
+    case "pr_close":
+      summary = `PATCH /pulls/${String(args.pr ?? "?")} repo=${repo} state=closed`;
+      break;
+    case "pr_reopen":
+      summary = `PATCH /pulls/${String(args.pr ?? "?")} repo=${repo} state=open`;
       break;
     case "ci_status":
       summary =
