@@ -30,7 +30,7 @@ import https from "node:https";
 import path from "node:path";
 import zlib from "node:zlib";
 import { WORKSPACE } from "./workspace.js";
-import { getSecretValueSync } from "./secrets.js";
+import { getSecretMeta, getSecretValueSync, markSecretUsed } from "./secrets.js";
 
 type Resp = {
   status?: string;
@@ -88,11 +88,31 @@ export function apiBaseUrl(): string {
 type TokenOrigin = "secret" | "env:VENIRA_GITHUB_TOKEN" | "env:GITHUB_TOKEN" | "env:GH_TOKEN" | "missing";
 
 function resolveToken(): { token: string | null; origin: TokenOrigin } {
+  // Rotation metadata is checked *before* decryption: an expired token must
+  // fail with an actionable error, not reach GitHub and come back as 401.
+  let meta;
   try {
-    const secret = getSecretValueSync("GITHUB_TOKEN");
-    if (secret && secret.trim()) return { token: secret.trim(), origin: "secret" };
+    meta = getSecretMeta("GITHUB_TOKEN");
   } catch {
-    /* store locked or corrupt: fall through to env */
+    meta = undefined; // store locked/corrupt: fall through to env
+  }
+  if (meta) {
+    if (meta.expired) {
+      const at = meta.expires_at === null ? "unknown" : new Date(meta.expires_at).toISOString();
+      throw new Error(
+        `[secret_expired] Secret "GITHUB_TOKEN" expired at ${at}. ` +
+          `Hint: rotate it with project_secret action=set name=GITHUB_TOKEN value=<new token> (add expires_in_days to track the next rotation).`,
+      );
+    }
+    try {
+      const secret = getSecretValueSync("GITHUB_TOKEN");
+      if (secret && secret.trim()) {
+        void markSecretUsed("GITHUB_TOKEN", "provider").catch(() => undefined);
+        return { token: secret.trim(), origin: "secret" };
+      }
+    } catch {
+      /* decryption failed: fall through to env */
+    }
   }
   for (const [name, origin] of [
     ["VENIRA_GITHUB_TOKEN", "env:VENIRA_GITHUB_TOKEN"],
@@ -656,6 +676,32 @@ function summarizeJob(job: any): Record<string, unknown> {
   };
 }
 
+function summarizeCheckRun(check: any): Record<string, unknown> {
+  const output = check?.output ?? {};
+  return {
+    id: check?.id ?? null,
+    name: check?.name ?? null,
+    status: check?.status ?? null,
+    conclusion: check?.conclusion ?? null,
+    started_at: check?.started_at ?? null,
+    completed_at: check?.completed_at ?? null,
+    url: check?.html_url ?? check?.details_url ?? null,
+    app: check?.app?.name ?? null,
+    summary: typeof output.title === "string" ? output.title.slice(0, 160) : null,
+  };
+}
+
+/** Branch-protection checks (check-runs API), not Actions workflow runs. */
+function overallFromChecks(checks: Array<Record<string, unknown>>): string {
+  if (checks.length === 0) return "no_checks";
+  const active = checks.some((c) => ["queued", "in_progress", "requested", "waiting", "pending"].includes(String(c.status)));
+  if (active) return "in_progress";
+  const failed = checks.some((c) =>
+    ["failure", "timed_out", "cancelled", "startup_failure", "action_required", "neutral"].includes(String(c.conclusion)),
+  );
+  return failed ? "failure" : "success";
+}
+
 function overallFrom(runs: Array<Record<string, unknown>>): string {
   if (runs.length === 0) return "no_runs";
   const active = runs.some((r) => r.status === "in_progress" || r.status === "queued" || r.status === "requested" || r.status === "waiting");
@@ -713,10 +759,65 @@ export async function opPrComment(args: Record<string, unknown>): Promise<Resp> 
   const repo = resolveRepo(args);
   const pr = prNumberFrom(args, "pr");
   const body = requireText(args, "body", "pass body=\"...\" (markdown is fine).");
-  const { json } = await ghJson("POST", `/repos/${repo.owner}/${repo.name}/issues/${pr}/comments`, { body: { body } });
+  const repoLabel = `${repo.owner}/${repo.name}`;
+  const filePath = text(args, "path");
+
+  // Inline review comment: `path` + `line` switch to the review-comment API,
+  // which pins the note to a file/line in the "Files changed" tab. A general
+  // comment (no path) still uses the issue-comment API.
+  if (!filePath) {
+    if (args.line !== undefined || args.start_line !== undefined) {
+      throw new Error(
+        "[invalid_request] `line`/`start_line` need `path` (inline comments are anchored to a file). " +
+          "Hint: pass path=\"src/app.ts\" and line=42, or drop line for a general PR comment.",
+      );
+    }
+    const { json } = await ghJson("POST", `/repos/${repo.owner}/${repo.name}/issues/${pr}/comments`, { body: { body } });
+    return ok("pr_comment", {
+      repo: repoLabel,
+      pr,
+      inline: false,
+      comment_id: json?.id ?? null,
+      url: json?.html_url ?? null,
+      created_at: json?.created_at ?? null,
+      body_chars: body.length,
+    });
+  }
+
+  const line = Number(args.line);
+  if (!Number.isFinite(line) || line <= 0) {
+    throw new Error(
+      "[invalid_request] `line` must be a positive line number when `path` is set. " +
+        "Hint: use project_read_ranges to confirm the line, then comment on it.",
+    );
+  }
+  const side = (text(args, "side") || "RIGHT").toUpperCase();
+  if (!["RIGHT", "LEFT"].includes(side)) {
+    throw new Error(
+      `[invalid_request] \`side\` must be RIGHT (new code) or LEFT (deleted code), got "${side}".`,
+    );
+  }
+  const startLine = Number(args.start_line ?? 0);
+  if (startLine > 0 && startLine > line) {
+    throw new Error("[invalid_request] `start_line` must be <= `line` (GitHub anchors the range as start_line..line).");
+  }
+
+  const payload: Record<string, unknown> = { body, path: filePath, line: Math.floor(line), side };
+  if (startLine > 0) {
+    payload.start_line = Math.floor(startLine);
+    payload.start_side = side;
+  }
+  const commitId = text(args, "commit_id");
+  if (commitId) payload.commit_id = commitId;
+  const { json } = await ghJson("POST", `/repos/${repo.owner}/${repo.name}/pulls/${pr}/comments`, { body: payload });
   return ok("pr_comment", {
-    repo: `${repo.owner}/${repo.name}`,
+    repo: repoLabel,
     pr,
+    inline: true,
+    path: filePath,
+    line: Math.floor(line),
+    ...(startLine > 0 ? { start_line: Math.floor(startLine) } : {}),
+    side,
     comment_id: json?.id ?? null,
     url: json?.html_url ?? null,
     created_at: json?.created_at ?? null,
@@ -811,6 +912,54 @@ export async function opCiStatus(args: Record<string, unknown>): Promise<Resp> {
   const repo = resolveRepo(args);
   const base = `/repos/${repo.owner}/${repo.name}`;
   const runId = Number(args.run_id ?? 0);
+
+  // Check-runs mode: `ref` (branch/sha) or `pr` (resolved to its head sha).
+  // This is the branch-protection surface, separate from Actions workflow runs.
+  const refText = text(args, "ref");
+  if (refText || args.pr !== undefined) {
+    let targetRef = refText;
+    let prNumber: number | null = null;
+    if (!targetRef) {
+      prNumber = prNumberFrom(args, "pr");
+      const pull = await ghJson("GET", `${base}/pulls/${prNumber}`, { allowAnonymous: true });
+      const sha = String(pull.json?.head?.sha ?? "");
+      if (!sha) {
+        throw new Error(
+          `[check_runs_unavailable] PR ${prNumber} has no head sha (closed or fork-only?). Hint: pass ref=\"<sha>\" instead.`,
+        );
+      }
+      targetRef = sha;
+    }
+    if (!/^[A-Za-z0-9._/-]{1,200}$/.test(targetRef) || targetRef.includes("..")) {
+      throw new Error(
+        `[invalid_request] \`ref\` must be a branch name or commit sha (letters, digits, . _ / -), got "${targetRef}".`,
+      );
+    }
+    const perPage = positiveInt(args.limit, 20, 50);
+    const { json } = await ghJson("GET", `${base}/commits/${targetRef}/check-runs?per_page=${perPage}`, {
+      allowAnonymous: true,
+    });
+    const checkRuns = ((json?.check_runs ?? []) as any[]).map(summarizeCheckRun);
+    const overall = overallFromChecks(checkRuns);
+    return ok(
+      "ci_status",
+      {
+        repo: `${repo.owner}/${repo.name}`,
+        source: "check-runs",
+        overall,
+        ref: targetRef,
+        pr: prNumber,
+        check_runs: checkRuns,
+        check_runs_total: json?.total_count ?? checkRuns.length,
+      },
+      {
+        hint:
+          checkRuns.length === 0
+            ? "No check-runs for this ref (the repo may not use checks, or the ref has no pushed commit). Hint: use branch/workflow to read Actions runs instead."
+            : undefined,
+      },
+    );
+  }
 
   if (runId > 0) {
     if (!Number.isFinite(runId)) {

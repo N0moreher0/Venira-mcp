@@ -60,9 +60,12 @@ import {
 } from "./git-provider.js";
 import {
   assertSecretName,
+  assertSecretUsable,
   deleteSecret,
   getSecretValueSync,
   listSecrets,
+  markSecretUsed,
+  MAX_EXPIRY_DAYS,
   redactSecretValues,
   setSecret,
 } from "./secrets.js";
@@ -1396,6 +1399,9 @@ async function opShellRun(
   // through the environment: the command string stays free of values.
   const secretEnvValues: Record<string, string> = {};
   for (const name of secretNames) {
+    // Expiry/missing are checked here: an unusable credential must fail before
+    // the child process starts, with a rotation hint the agent can act on.
+    assertSecretUsable(name);
     const value = getSecretValueSync(name);
     if (value === undefined) {
       throw new Error(
@@ -1404,6 +1410,10 @@ async function opShellRun(
       );
     }
     secretEnvValues[name] = value;
+  }
+  // Best-effort rotation bookkeeping: last_used_at / use_count.
+  for (const name of secretNames) {
+    void markSecretUsed(name, "tool").catch(() => undefined);
   }
 
   let child: ChildProcess;
@@ -1624,6 +1634,37 @@ function opShellCancel(args: Record<string, unknown>): RustResponse {
 
 const MAX_REVEAL_VALUE_CHARS = 16 * 1024;
 
+/**
+ * Expiry arguments for `project_secret action=set`:
+ * `expires_in_days` (1..3650) or `expires_at` (epoch ms / ISO-8601), not both.
+ * Returns undefined when the caller did not set an expiry (keep the previous one).
+ */
+function parseExpiryArgs(args: Record<string, unknown>): number | null | undefined {
+  const rawDays = args.expires_in_days;
+  const rawAt = args.expires_at;
+  if (rawDays !== undefined && rawAt !== undefined) {
+    throw new Error("[invalid_request] Pass either expires_in_days or expires_at, not both.");
+  }
+  if (rawDays !== undefined) {
+    const days = Number(rawDays);
+    if (!Number.isFinite(days) || days < 1 || days > MAX_EXPIRY_DAYS) {
+      throw new Error(
+        `[invalid_request] \`expires_in_days\` must be between 1 and ${MAX_EXPIRY_DAYS}. Hint: 90 for quarterly rotation.`,
+      );
+    }
+    return Date.now() + Math.round(days * 24 * 60 * 60 * 1000);
+  }
+  if (rawAt === undefined || rawAt === null) return undefined;
+  if (typeof rawAt === "number" && Number.isFinite(rawAt)) return rawAt;
+  if (typeof rawAt === "string") {
+    const parsed = Date.parse(rawAt);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  throw new Error(
+    "[invalid_request] `expires_at` must be epoch milliseconds or ISO-8601 (e.g. \"2027-01-31T00:00:00Z\").",
+  );
+}
+
 async function opSecret(args: Record<string, unknown>): Promise<RustResponse> {
   const action = String(args.action ?? "").trim().toLowerCase();
   const rawName = typeof args.name === "string" ? args.name.trim() : "";
@@ -1669,8 +1710,23 @@ async function opSecret(args: Record<string, unknown>): Promise<RustResponse> {
         length: meta.length,
         sha256_12: meta.sha256_12,
         updated_at: meta.updated_at,
+        expires_at: meta.expires_at,
+        expired: meta.expired,
+        days_left: meta.days_left,
+        last_used_at: meta.last_used_at,
+        use_count: meta.use_count,
+        rotated_at: meta.rotated_at,
         revealed: false,
       };
+      if (meta.expired) {
+        return {
+          status: "completed",
+          result: { kind: "secret", data: base },
+          hint:
+            `"${name}" expired at ${meta.expires_at === null ? "unknown" : new Date(meta.expires_at).toISOString()} and will not be injected. ` +
+            `Hint: rotate it with action=set name=${name} value=<new value> expires_in_days=<n>.`,
+        };
+      }
       if (!reveal) {
         return {
           status: "completed",
@@ -1728,7 +1784,11 @@ async function opSecret(args: Record<string, unknown>): Promise<RustResponse> {
           "[invalid_request] `value` is required. Hint: pass value=<secret>, or value_env=<HOST_ENV_VAR> to avoid writing it in the tool call.",
         );
       }
-      const result = await setSecret(name, value);
+      const result = await setSecret(name, value, { expiresAt: parseExpiryArgs(args) });
+      const expiryNote =
+        result.expires_at === null
+          ? ""
+          : ` Expires ${new Date(result.expires_at).toISOString()} (${result.days_left} day(s)).`;
       return {
         status: "completed",
         result: {
@@ -1736,8 +1796,8 @@ async function opSecret(args: Record<string, unknown>): Promise<RustResponse> {
           data: { action: "set", ...result },
         },
         hint: result.created
-          ? `Stored "${name}" (encrypted). Hint: use project_shell_run secret_env=["${name}"] to inject it.`
-          : `Rotated "${name}" (encrypted).`,
+          ? `Stored "${name}" (encrypted).${expiryNote} Hint: use project_shell_run secret_env=["${name}"] to inject it.`
+          : `Rotated "${name}" (encrypted).${expiryNote} The previous value is overwritten and the use counter is reset.`,
       };
     }
 
@@ -1795,14 +1855,22 @@ function describeExternalOp(operation: string, args: Record<string, unknown>): s
     case "pr_create":
       summary = `POST /pulls repo=${repo} head=${str("head") || "(current)"} base=${str("base") || "(default)"} title="${str("title")}"`;
       break;
-    case "pr_comment":
-      summary = `POST /issues/${String(args.pr ?? "?")}/comments repo=${repo}`;
+    case "pr_comment": {
+      const inline =
+        typeof args.path === "string" && args.path
+          ? ` inline path=${str("path")} line=${String(args.line ?? "?")}`
+          : " (general)";
+      summary = `POST /issues/${String(args.pr ?? "?")}/comments repo=${repo}${inline}`;
       break;
+    }
     case "pr_merge":
       summary = `PUT /pulls/${String(args.pr ?? "?")}/merge repo=${repo} method=${str("method") || "merge"} delete_branch=${args.delete_branch === true}`;
       break;
     case "ci_status":
-      summary = `GET /actions/runs repo=${repo} run=${String(args.run_id ?? "(recent)")} branch=${str("branch") || "(any)"}`;
+      summary =
+        typeof args.ref === "string" || args.pr !== undefined
+          ? `GET /commits/${str("ref") || `pr:${String(args.pr ?? "?")}`}/check-runs repo=${repo}`
+          : `GET /actions/runs repo=${repo} run=${String(args.run_id ?? "(recent)")} branch=${str("branch") || "(any)"}`;
       break;
     case "ci_trigger":
       summary = `POST /actions/workflows/${str("workflow")}/dispatches repo=${repo} ref=${str("ref") || "(current)"}`;

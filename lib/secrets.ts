@@ -57,6 +57,18 @@ export type SecretMeta = {
   length: number;
   sha256_12: string;
   updated_at: number;
+  /** Absolute expiry (epoch ms), or null when the secret never expires. */
+  expires_at: number | null;
+  /** True when `expires_at` is in the past: the value is kept (rotation), never injected. */
+  expired: boolean;
+  /** Whole days until `expires_at` (negative when overdue), null when no expiry is set. */
+  days_left: number | null;
+  /** Last time the value was injected into a shell (or used by the provider), null if never. */
+  last_used_at: number | null;
+  /** Number of successful uses since the current value was written. */
+  use_count: number;
+  /** When the current value was written (a re-set counts as a rotation). */
+  rotated_at: number;
 };
 
 type StoredEntry = {
@@ -67,7 +79,18 @@ type StoredEntry = {
   sha256: string;
   length: number;
   updated_at: number;
+  /** Optional rotation metadata; absent in stores written before v1.5.0. */
+  expires_at?: number | null;
+  last_used_at?: number | null;
+  use_count?: number;
+  rotated_at?: number;
 };
+
+/** Rotation bookkeeping lives next to the ciphertext, never in the plaintext. */
+type SetSecretOptions = { expiresAt?: number | null; source?: "tool" | "provider" };
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+export const MAX_EXPIRY_DAYS = 3650;
 
 type StoreFile = { version: 1; secrets: Record<string, StoredEntry> };
 
@@ -219,15 +242,57 @@ function valuesSync(): Map<string, string> {
 /** Metadata only: no decryption, no values. */
 export function listSecrets(): SecretMeta[] {
   const store = readStoreSync();
+  const now = Date.now();
   return Object.entries(store.secrets)
     .filter(([, entry]) => entry && typeof entry === "object")
-    .map(([name, entry]) => ({
-      name,
-      length: typeof entry.length === "number" ? entry.length : 0,
-      sha256_12: typeof entry.sha256 === "string" ? entry.sha256.slice(0, 12) : "",
-      updated_at: typeof entry.updated_at === "number" ? entry.updated_at : 0,
-    }))
+    .map(([name, entry]) => {
+      const expiresAt = typeof entry.expires_at === "number" ? entry.expires_at : null;
+      return {
+        name,
+        length: typeof entry.length === "number" ? entry.length : 0,
+        sha256_12: typeof entry.sha256 === "string" ? entry.sha256.slice(0, 12) : "",
+        updated_at: typeof entry.updated_at === "number" ? entry.updated_at : 0,
+        expires_at: expiresAt,
+        expired: expiresAt !== null && expiresAt <= now,
+        days_left: expiresAt === null ? null : Math.floor((expiresAt - now) / DAY_MS),
+        last_used_at: typeof entry.last_used_at === "number" ? entry.last_used_at : null,
+        use_count: typeof entry.use_count === "number" ? entry.use_count : 0,
+        rotated_at: typeof entry.rotated_at === "number" ? entry.rotated_at : typeof entry.updated_at === "number" ? entry.updated_at : 0,
+      };
+    })
     .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** Metadata for one name (undefined when it is not stored). Never decrypts. */
+export function getSecretMeta(name: string): SecretMeta | undefined {
+  return listSecrets().find((entry) => entry.name === name);
+}
+
+export function isSecretExpired(name: string): boolean {
+  const meta = getSecretMeta(name);
+  return Boolean(meta?.expired);
+}
+
+/**
+ * Guard used by every injection point (`secret_env`, provider tokens): a
+ * missing or expired secret fails with an action-shaped error instead of
+ * handing an unusable credential to a child process.
+ */
+export function assertSecretUsable(name: string): void {
+  const meta = getSecretMeta(name);
+  if (!meta) {
+    throw new Error(
+      `[secret_missing] secret_env refers to "${name}" but it is not in the secret store. ` +
+        `Hint: run project_secret action=list, or action=set name=${name}.`,
+    );
+  }
+  if (meta.expired) {
+    const at = meta.expires_at === null ? "unknown" : new Date(meta.expires_at).toISOString();
+    throw new Error(
+      `[secret_expired] Secret "${name}" expired at ${at}. ` +
+        `Hint: rotate it with project_secret action=set name=${name} value=<new value> (add expires_in_days to track the next rotation).`,
+    );
+  }
 }
 
 export function hasSecret(name: string): boolean {
@@ -260,7 +325,8 @@ async function writeStore(store: StoreFile): Promise<void> {
 export async function setSecret(
   name: string,
   value: string,
-): Promise<SecretMeta & { created: boolean }> {
+  options: SetSecretOptions = {},
+): Promise<SecretMeta & { created: boolean; rotated: boolean }> {
   const cleanName = assertSecretName(name);
   if (typeof value !== "string" || value.length === 0) {
     throw new Error("[invalid_request] `value` must be a non-empty string.");
@@ -274,25 +340,72 @@ export async function setSecret(
       `[resource_limit] Secret value is ${bytes} bytes; the limit is ${MAX_VALUE_BYTES}. Hint: store a shorter token or reference a file path instead.`,
     );
   }
+  if (options.expiresAt !== undefined && options.expiresAt !== null) {
+    const expiresAt = options.expiresAt;
+    if (!Number.isFinite(expiresAt)) {
+      throw new Error("[invalid_request] `expires_at` must be epoch milliseconds or an ISO timestamp.");
+    }
+    if (expiresAt > Date.now() + MAX_EXPIRY_DAYS * DAY_MS) {
+      throw new Error(
+        `[invalid_request] Expiry is more than ${MAX_EXPIRY_DAYS} days away. Hint: pass expires_in_days (1-${MAX_EXPIRY_DAYS}).`,
+      );
+    }
+  }
   const store = readStoreSync();
   const key = await ensureKey();
-  const created = !store.secrets[cleanName];
+  const now = Date.now();
+  const previous = store.secrets[cleanName];
+  const created = !previous;
+  // A re-set is a rotation: keep the old expiry unless a new one is given, drop
+  // the use counter (it belongs to the previous value) and mark the write time.
+  const expiresAt =
+    options.expiresAt === undefined ? (previous?.expires_at ?? null) : options.expiresAt;
   const sha256 = crypto.createHash("sha256").update(value, "utf8").digest("hex");
   store.secrets[cleanName] = {
     v: 1,
     ...encrypt(value, key),
     sha256,
     length: bytes,
-    updated_at: Date.now(),
+    updated_at: now,
+    expires_at: expiresAt,
+    last_used_at: null,
+    use_count: 0,
+    rotated_at: now,
   };
   await writeStore(store);
   return {
     name: cleanName,
     length: bytes,
     sha256_12: sha256.slice(0, 12),
-    updated_at: store.secrets[cleanName].updated_at,
+    updated_at: now,
+    expires_at: expiresAt,
+    expired: expiresAt !== null && expiresAt <= now,
+    days_left: expiresAt === null ? null : Math.floor((expiresAt - now) / DAY_MS),
+    last_used_at: null,
+    use_count: 0,
+    rotated_at: now,
     created,
+    rotated: !created,
   };
+}
+
+/**
+ * Record a successful use (injection into a shell, provider token read).
+ * Best-effort: a failed metadata write must never break the call that used the
+ * secret, so callers can ignore rejections. Writes are debounced to at most one
+ * per second per name to keep tight shell loops cheap.
+ */
+export async function markSecretUsed(name: string, source: SetSecretOptions["source"] = "tool"): Promise<void> {
+  const store = readStoreSync();
+  const entry = store.secrets[name];
+  if (!entry || typeof entry !== "object") return;
+  const now = Date.now();
+  const last = typeof entry.last_used_at === "number" ? entry.last_used_at : 0;
+  if (now - last < 1_000) return; // debounce
+  entry.last_used_at = now;
+  entry.use_count = (typeof entry.use_count === "number" ? entry.use_count : 0) + 1;
+  void source;
+  await writeStore(store);
 }
 
 export async function deleteSecret(name: string): Promise<{ name: string; deleted: boolean }> {
@@ -323,12 +436,23 @@ export function redactSecretValues(text: string): string {
   return out;
 }
 
-export function secretsHealth(): { store: string; count: number; encryption: string } {
+export function secretsHealth(): {
+  store: string;
+  count: number;
+  encryption: string;
+  expired: number;
+  with_expiry: number;
+} {
   let count = 0;
+  let expired = 0;
+  let withExpiry = 0;
   try {
-    count = listSecrets().length;
+    const all = listSecrets();
+    count = all.length;
+    expired = all.filter((entry) => entry.expired).length;
+    withExpiry = all.filter((entry) => entry.expires_at !== null).length;
   } catch {
     /* health must not fail because of a corrupt store */
   }
-  return { store: secretsDir(), count, encryption: "aes-256-gcm" };
+  return { store: secretsDir(), count, encryption: "aes-256-gcm", expired, with_expiry: withExpiry };
 }
