@@ -568,7 +568,7 @@ venira-mcp/
 │   ├── smoke.ts              # In-process backend sanity check
 │   ├── bench.ts              # In-process backend benchmark
 │   ├── bench-mcp.ts          # End-to-end MCP benchmark
-│   ├── verify.ts             # 217 end-to-end checks (cache, batch, shell, audit, modes,
+│   ├── verify.ts             # 218 end-to-end checks (cache, batch, shell, audit, modes,
 │   │                         #   snapshots, secrets/rotation, GitHub PR/CI/check-runs/inline
 │   │                         #   comments against a local mock, diagnostics + read planning)
 │   ├── github-mock.ts        # In-process GitHub API + pre-signed-blob mock (no network, no token)
@@ -922,7 +922,7 @@ etc. The model is expected to read `hint` first.
 npm run build        # type-check + emit dist/
 npm run smoke        # in-process sanity (backend reachable, path lock works)
 npm run doctor       # preflight: 12 checks incl. audit DB, shell smoke, P1 config surface
-npm run verify       # behavioural regression suite (217 checks, ~90 s)
+npm run verify       # behavioural regression suite (218 checks, ~90 s)
 npm run bench        # in-process numbers
 npm run bench:mcp    # end-to-end numbers
 ```
@@ -1003,6 +1003,7 @@ The full history, in order — from the standalone rewrite to the provider, secr
 | 2026-10-29 | **v1.5.1** | **Inline review-comment fix (found by a live E2E run).** GitHub requires `commit_id` whenever `line` is used (a bare `line` is rejected with 422 "line is not a permitted key"); `project_pr_comment` now resolves the PR head sha automatically (one extra API call only for inline notes) and honours an explicit `commit_id`. Verify **212/212**. |
 | 2026-10-29 | **v1.5.2** | **Read-planner artifact filter (found by the live E2E re-run).** `project_plan_read_batch` ranked `data/venira.db` (36 hits) above source because the audit DB contains every command; candidates now exclude build/vendor dirs and DB/log/binary extensions, both when collecting and when planning. Verify **214/214**. |
 | 2026-10-29 | **v1.5.3** | **Read-planner ranking (found by the post-restart bench).** A task naming a file ranked docs, not the file: `git-provider` never appears inside `lib/git-provider.ts`, so content search missed it. Plans now run a bounded **file-name search** per keyword (+ snake→kebab retry), score candidates by hits + path/name match, demote prose (`*.md`, README/LICENSE/docs) unless the task asks for documentation, drop lockfiles, and report a **calibrated** `estimated_ms` (6-file batch = 62 ms, was a flat 6 ms). Verify **217/217**. |
+| 2026-10-29 | **v1.5.4** | **Planner never proposes secrets (found by the v1.5.3 E2E loop).** A secret-related task ranked `data/secrets.json` (encrypted store) and `data/secrets.key` into the top 6, so an agent following the plan would read key material. Candidates now exclude `.env*`, `secrets.{json,key,yaml,yml}`, `*.key/.pem/.p12/.pfx/.jks/.keystore/.crt`, `id_rsa`, `.npmrc`, `.netrc`, `credentials.json`. Verify **218/218**. |
 
 ### 14.2 What v1.5.0 added
 
@@ -1064,6 +1065,13 @@ unless the task mentions documentation. Lockfiles (`package-lock.json`, `yarn.lo
 excluded like other artifacts, and `estimated_ms` is calibrated from the bench (a 6-file batch
 measured 62 ms, the old flat value was 6 ms). Result on the reported task: `lib/git-provider.ts`
 ranks #1 (score 7) with no `.db`/lock/doc at the top.
+
+**Fix shipped in v1.5.4 (found by the first v1.5.3 E2E loop):** the planner proposed reading credentials.
+A secret-related task ranked `data/secrets.json` (the encrypted store) and `data/secrets.key` into the
+top 6 — an agent that followed the plan would have read key material into its context. Candidates now
+exclude `.env*`, `secrets.{json,key,yaml,yml}`, `*.key/.pem/.p12/.pfx/.jks/.keystore/.crt/.der`,
+`id_(rsa|dsa|ecdsa|ed25519)`, `.npmrc`, `.netrc`, `.pgpass` and `credentials.json`, alongside the
+existing artifact/lockfile rules.
 
 ### 14.3 What v1.4.0 added
 
