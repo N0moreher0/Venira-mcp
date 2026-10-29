@@ -77,6 +77,32 @@ const OUTLINE_THRESHOLD_BYTES = 256 * 1024;
 const BATCH_MAX = 8;
 
 /**
+ * Directories that never contain code worth reading in a first pass (build
+ * output, vendored deps, caches). Names are matched per path segment.
+ */
+const ARTIFACT_DIRS = new Set([
+  "node_modules", ".git", "dist", "build", "out", "coverage", ".venv", "venv",
+  "__pycache__", ".next", ".cache", "target", ".idea", ".vscode",
+]);
+
+/**
+ * Binary/data/log extensions. A plan should point at source, not at the audit
+ * DB or a lockfile copy: those match keyword searches (the DB literally stores
+ * every command) but reading them is useless.
+ */
+const ARTIFACT_EXT_RE =
+  /\.(db|sqlite|sqlite3|db-wal|db-shm|log|lock|map|zip|gz|tgz|tar|png|jpe?g|gif|ico|bmp|webp|pdf|woff2?|ttf|eot|bin|exe|dll|so|dylib|class|jar|pyc|o|a)$/i;
+
+/** True when a path is a plausible source file to read (not an artifact). */
+export function isPlannablePath(relativePath: string): boolean {
+  const clean = String(relativePath ?? "").replace(/\\/g, "/").toLowerCase().trim();
+  if (!clean) return false;
+  const segments = clean.split("/").filter(Boolean);
+  if (segments.some((segment) => ARTIFACT_DIRS.has(segment))) return false;
+  return !ARTIFACT_EXT_RE.test(clean);
+}
+
+/**
  * Turn candidates into an executable plan. `searched` says whether the caller
  * already ran the keyword search (so the plan does not repeat it).
  */
@@ -89,7 +115,9 @@ export function buildReadPlan(params: {
   searched: boolean;
 }): ReadPlan {
   const maxFiles = Math.max(1, Math.min(BATCH_MAX, params.maxFiles));
-  const candidates = params.candidates.slice(0, maxFiles);
+  // Defense in depth: callers already filter, but artifacts (DB/log/build
+  // output) must never reach the first read step even if one slips through.
+  const candidates = params.candidates.filter((c) => isPlannablePath(c.relative_path)).slice(0, maxFiles);
   const steps: NextAction[] = [];
   let estimated = 0;
 

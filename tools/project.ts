@@ -45,7 +45,7 @@ import {
   type InstallResult,
 } from "../lib/self-install.js";
 import { explainErrorText } from "../lib/diagnostics.js";
-import { buildReadPlan, extractKeywords, type PlanCandidate } from "../lib/read-plan.js";
+import { buildReadPlan, extractKeywords, isPlannablePath, type PlanCandidate } from "../lib/read-plan.js";
 
 const PERMISSION_MODE = process.env.VENIRA_PERMISSION_MODE ?? "allow_all";
 // allow_all grants the "chat-terminal" scope when there is no Project (same as the native app).
@@ -1967,6 +1967,9 @@ async function runPlanReadBatch(args: Args): Promise<ToolResult> {
       for (const hit of hits as Array<{ relative_path?: unknown }>) {
         const rel = String(hit.relative_path ?? "");
         if (!rel) continue;
+        // The audit DB / build output match keyword searches but are never
+        // useful read targets, so they must not rank in the plan.
+        if (!isPlannablePath(rel)) continue;
         const existing = candidates.get(rel);
         if (existing) existing.hits = (existing.hits ?? 0) + 1;
         else candidates.set(rel, { relative_path: rel, reason: `search:${keyword}`, hits: 1 });
@@ -1981,6 +1984,7 @@ async function runPlanReadBatch(args: Args): Promise<ToolResult> {
   if (candidates.size < 2) {
     try {
       for (const recent of queryRecentFiles(12, false)) {
+        if (!isPlannablePath(recent.relative_path)) continue;
         if (!candidates.has(recent.relative_path)) {
           candidates.set(recent.relative_path, {
             relative_path: recent.relative_path,
@@ -2876,7 +2880,7 @@ export function registerProjectTools(server: McpServer): void {
     "project_plan_read_batch",
     {
       ...config(
-        "Plan a read: extract keywords from the task, run bounded searches (+recent files), rank candidate files, and return a ready project_read_batch call with an estimate. Deterministic planner, no model call.",
+        "Plan a read: extract keywords from the task, run bounded searches (+recent files), rank candidate source files (build output, DB/log artifacts excluded), and return a ready project_read_batch call with an estimate. Deterministic planner, no model call.",
         "Plan reads from a task",
         {
           use_when:

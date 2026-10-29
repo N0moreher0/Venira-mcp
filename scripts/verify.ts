@@ -956,6 +956,36 @@ check(
 const planEmpty = asEnvelope(await call("project_plan_read_batch", { task_description: "   " }));
 check("plan_read_batch_requires_task", planEmpty.error?.code === "invalid_request", planEmpty);
 
+// Artifacts (audit DB, logs, build output) match keyword searches but must never
+// rank as read targets — the real-world symptom was data/venira.db topping a plan.
+const artifactToken = `PLAN_ARTIFACT_${Date.now()}`;
+await fs.writeFile(`${dir}/plan-artifact.db`, `noise ${artifactToken}\n`);
+await fs.writeFile(`${dir}/plan-artifact.log`, `${artifactToken}\n`);
+const planArtifact = asEnvelope(
+  await call("project_plan_read_batch", { task_description: artifactToken, include_search: true }),
+);
+const artifactCandidates = (planArtifact.data?.candidates ?? []) as Array<{ relative_path?: string }>;
+const artifactRequests = ((planArtifact.data?.steps ?? []) as Array<{ arguments?: { requests?: Array<{ arguments?: { relative_path?: string } }> } }>)
+  .flatMap((step) => step.arguments?.requests ?? []);
+check(
+  "plan_read_batch_excludes_artifacts",
+  planArtifact.ok === true &&
+    artifactCandidates.every((c) => !/\.(db|log)$/i.test(String(c.relative_path))) &&
+    artifactRequests.every((r) => !/\.(db|log)$/i.test(String(r.arguments?.relative_path))),
+  { candidates: artifactCandidates.map((c) => c.relative_path), requests: artifactRequests.map((r) => r.arguments?.relative_path) },
+);
+const planSource = asEnvelope(
+  await call("project_plan_read_batch", { task_description: "inline review comment git-provider" }),
+);
+check(
+  "plan_read_batch_ranks_source",
+  planSource.ok === true &&
+    (planSource.data?.candidates ?? []).some((c: { relative_path?: string }) =>
+      String(c.relative_path).endsWith("lib/git-provider.ts"),
+    ),
+  planSource.data?.candidates,
+);
+
 // 11e. Network kill switch + missing token (separate clients, real env variants).
 const offlineTransport = new StdioClientTransport({
   command: "node",
