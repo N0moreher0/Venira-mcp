@@ -8,8 +8,16 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { promises as fs } from "node:fs";
+import { startGithubMock } from "./github-mock.js";
 
 const SESSION_ID = `verify-${Date.now()}`;
+
+/**
+ * Local GitHub API mock (no network, no real token). It also serves the log
+ * archive from a second origin, so we can prove the token is dropped on
+ * GitHub's pre-signed-blob redirect.
+ */
+const githubMock = await startGithubMock();
 
 function verifyEnv(extraEnv: Record<string, string> = {}, outputMode = "full") {
   return {
@@ -18,6 +26,11 @@ function verifyEnv(extraEnv: Record<string, string> = {}, outputMode = "full") {
     VENIRA_UNRESTRICTED: "0",
     VENIRA_SESSION_ID: SESSION_ID,
     VENIRA_OUTPUT_MODE: outputMode,
+    // Point the provider at the mock; a fixed repo keeps resolution
+    // independent from this checkout's real git remote.
+    VENIRA_GITHUB_API_URL: githubMock.apiUrl,
+    VENIRA_GITHUB_REPO: "acme/demo",
+    VENIRA_GITHUB_TOKEN: "verify-github-token",
     ...extraEnv,
   };
 }
@@ -41,6 +54,9 @@ const transport = new StdioClientTransport({
   env: verifyEnv({ VENIRA_SHELL_TIMEOUT_POLICY: "hard" }, "full"), // full mode for the remaining checks
   stderr: "pipe",
 });
+if (process.env.VENIRA_VERIFY_DEBUG === "1") {
+  transport.stderr?.on("data", (chunk: Buffer) => console.error("[server]", chunk.toString("utf8")));
+}
 const client = new Client({ name: "verify", version: "0.0.0" }, { capabilities: {} });
 await client.connect(transport);
 
@@ -52,6 +68,8 @@ const check = (label: string, condition: boolean, extra?: unknown) => {
 };
 
 const dir = ".verify-tmp";
+// Start from a clean directory: a previous crashed run must not change counts.
+await fs.rm(dir, { recursive: true, force: true });
 await fs.mkdir(dir, { recursive: true });
 const names = Array.from({ length: 8 }, (_, i) => `${dir}/f${i}.txt`);
 await Promise.all(names.map((name, i) => fs.writeFile(name, `noi dung ${i}\n`.repeat(50))));
@@ -72,8 +90,29 @@ check("instructions_present", instructions?.includes("Decision tree") ?? false, 
 await client2.close();
 
 const tools = await client.listTools();
-const expectedCount = 27;
-check("tool_count", tools.tools.length === 27, { actual: tools.tools.length });
+const expectedCount = 35;
+check("tool_count", tools.tools.length === expectedCount, { actual: tools.tools.length, expected: expectedCount });
+const snapshotTool = tools.tools.find((t) => t.name === "project_snapshot");
+check("tool_snapshot_present", !!snapshotTool, tools.tools.map((t) => t.name));
+const expectedNewTools = [
+  "project_pr_create",
+  "project_pr_comment",
+  "project_pr_merge",
+  "project_ci_status",
+  "project_ci_trigger",
+  "project_ci_logs",
+  "project_secret",
+];
+check(
+  "tool_new_surface_present",
+  expectedNewTools.every((name) => tools.tools.some((t) => t.name === name)),
+  tools.tools.map((t) => t.name).filter((name) => !name.startsWith("project_") || expectedNewTools.includes(name)),
+);
+check(
+  "tool_edit_reason_param",
+  !!tools.tools.find((t) => t.name === "project_edit_file")?.inputSchema?.properties?.reason,
+  undefined,
+);
 
 const pair = tools.tools.find((t) => t.name === "project_read_file");
 const readBatch = tools.tools.find((t) => t.name === "project_read_batch");
@@ -350,7 +389,7 @@ await disabledClient.connect(disabledTransport);
 const disabledList = await disabledClient.listTools();
 check(
   "disable_tools_hidden",
-  !disabledList.tools.some((t) => t.name === "project_shell_run") && disabledList.tools.length === 26,
+  !disabledList.tools.some((t) => t.name === "project_shell_run") && disabledList.tools.length === 34,
   disabledList.tools.map((t) => t.name),
 );
 await disabledClient.close();
@@ -406,6 +445,40 @@ const list2 = await call("project_list_files", { relative_path: dir, depth: 1 })
 const list2Data = JSON.parse((list2 as { content?: { text?: string }[] })?.content?.[0]?.text ?? "{}");
 const list2Count = list2Data.data?.entries?.length ?? 0;
 check("list_cache_invalidate_after_write", list2Count === list1Count + 1, { list1Count, list2Count });
+
+// 11b. Checkpoints + edit reason: snapshot -> tamper -> restore -> delete.
+await fs.writeFile(`${dir}/snap-target.txt`, "snapshot original content\n");
+const snapCreate = asEnvelope(
+  await call("project_snapshot", {
+    action: "create",
+    paths: [dir],
+    label: "verify checkpoint",
+    reason: "VERIFY_REASON_SNAPSHOT",
+  }),
+);
+check(
+  "snapshot_create",
+  snapCreate.ok === true && snapCreate.kind === "snapshot_create" && (snapCreate.data?.file_count ?? 0) >= 8,
+  snapCreate,
+);
+const snapId = String(snapCreate.data?.id ?? "");
+await call("project_write_file", {
+  relative_path: `${dir}/snap-target.txt`,
+  content: "tampered by verify\n",
+  reason: "VERIFY_REASON_EDIT",
+});
+const snapRestore = asEnvelope(await call("project_snapshot", { action: "restore", id: snapId }));
+check(
+  "snapshot_restore",
+  snapRestore.ok === true && snapRestore.kind === "snapshot_restore" && (snapRestore.data?.restored_count ?? 0) >= 8,
+  snapRestore,
+);
+const targetRestored = textOf(await call("project_read_file", { relative_path: `${dir}/snap-target.txt` }));
+check("snapshot_restore_content", targetRestored.includes("snapshot original content"), targetRestored.slice(0, 80));
+const snapList = asEnvelope(await call("project_snapshot", { action: "list" }));
+check("snapshot_list", snapList.ok === true && (snapList.data?.total ?? 0) >= 1, snapList.data?.total);
+const snapDelete = asEnvelope(await call("project_snapshot", { action: "delete", id: snapId }));
+check("snapshot_delete", snapDelete.ok === true && snapDelete.data?.deleted === true, snapDelete);
 
 // 12. Compact JSON: text must be a single line
 results.compact_single_line = !textOf(await call("project_read_file", { relative_path: "package.json" })).includes("\n  ");
@@ -487,6 +560,299 @@ const batchBudgetData = JSON.parse((batchBudget as { content?: { text?: string }
 const budgetErr = (batchBudgetData.data?.responses as unknown[])[0] as { ok?: boolean; error?: { code?: string } };
 check("batch_item_budget_exceeded", budgetErr?.ok === false && budgetErr?.error?.code === "resource_limit", budgetErr?.error);
 
+// 11c. Secrets: encrypted store, metadata-only reads, env-gated reveal.
+console.log("[verify] checking secrets...");
+const SECRET_NAME = "VERIFY_TOKEN";
+const SECRET_VALUE = "verify-secret-value-9f3a1b2c";
+const secretSet = asEnvelope(
+  await call("project_secret", { action: "set", name: SECRET_NAME, value: SECRET_VALUE }),
+);
+check(
+  "secret_set",
+  secretSet.ok === true &&
+    secretSet.kind === "secret" &&
+    secretSet.data?.action === "set" &&
+    secretSet.data?.length === Buffer.byteLength(SECRET_VALUE),
+  secretSet,
+);
+check("secret_set_value_not_returned", !JSON.stringify(secretSet).includes(SECRET_VALUE), secretSet);
+
+const secretGet = asEnvelope(await call("project_secret", { action: "get", name: SECRET_NAME }));
+check(
+  "secret_get_metadata_only",
+  secretGet.ok === true &&
+    secretGet.data?.revealed === false &&
+    typeof secretGet.data?.sha256_12 === "string" &&
+    !("value" in (secretGet.data ?? {})) &&
+    !JSON.stringify(secretGet).includes(SECRET_VALUE),
+  secretGet,
+);
+const secretReveal = asEnvelope(
+  await call("project_secret", { action: "get", name: SECRET_NAME, reveal: true }),
+);
+check("secret_reveal_gated", secretReveal.error?.code === "reveal_denied", secretReveal);
+
+const secretList = asEnvelope(await call("project_secret", { action: "list" }));
+check(
+  "secret_list_names_only",
+  secretList.ok === true &&
+    (secretList.data?.secrets ?? []).some((s: { name?: string }) => s.name === SECRET_NAME) &&
+    !JSON.stringify(secretList).includes(SECRET_VALUE),
+  secretList.data,
+);
+
+const secretDenied = asEnvelope(
+  await call("project_secret", { action: "set", name: "NODE_OPTIONS", value: "--require=/tmp/evil.js" }),
+);
+check("secret_dangerous_name_denied", secretDenied.error?.code === "invalid_request", secretDenied);
+
+const secretFile = path.resolve(
+  process.env.VENIRA_DATA_DIR ?? path.join(process.cwd(), "data"),
+  "secrets.json",
+);
+const secretRaw = await fs.readFile(secretFile, "utf8").catch(() => "");
+check(
+  "secret_encrypted_at_rest",
+  secretRaw.includes(SECRET_NAME) && !secretRaw.includes(SECRET_VALUE) && secretRaw.includes('"iv"'),
+  { bytes: secretRaw.length, has_name: secretRaw.includes(SECRET_NAME) },
+);
+
+const secretsModule = await import("../lib/secrets.js");
+const redactionUnit = secretsModule.redactSecretValues(`fallback ${SECRET_VALUE} fallback`);
+check("secret_redaction_unit", redactionUnit === "fallback [REDACTED] fallback", redactionUnit);
+
+// secret_env injects the value into the child, and every returned tail is scrubbed.
+const injected = asEnvelope(
+  await call("project_shell_run", {
+    command: `node -e "console.log('LEAK:' + process.env.${SECRET_NAME})"`,
+    shell: shellFor,
+    secret_env: [SECRET_NAME],
+  }),
+);
+const injectedRunId = String(injected.data?.run_id ?? "");
+let injectedStatus: Record<string, any> = {};
+for (let i = 0; i < 20; i++) {
+  injectedStatus = asEnvelope(
+    await call("project_shell_status", { run_id: injectedRunId, wait_seconds: 1 }),
+  );
+  if (!injectedStatus?.data?.running) break;
+}
+const injectedTail = String(injectedStatus?.data?.stdout_tail ?? "");
+check(
+  "secret_env_injected_and_redacted",
+  injectedStatus?.data?.running === false &&
+    injectedTail.includes("LEAK:[REDACTED]") &&
+    !JSON.stringify(injectedStatus).includes(SECRET_VALUE),
+  injectedTail.slice(0, 120),
+);
+
+const missingSecret = asEnvelope(
+  await call("project_shell_run", { command: "echo hi", shell: shellFor, secret_env: ["NOT_STORED_XYZ"] }),
+);
+check("secret_env_missing", missingSecret.error?.code === "secret_missing", missingSecret);
+
+// 11d. GitHub provider + CI against the local mock (no network, fixed token).
+console.log("[verify] checking git/ci provider...");
+const prCreate = asEnvelope(
+  await call("project_pr_create", { title: "Add provider tools", head: "verify-branch", draft: true }),
+);
+check(
+  "pr_create",
+  prCreate.ok === true &&
+    prCreate.kind === "pr_create" &&
+    prCreate.data?.number === 7 &&
+    prCreate.data?.base === "main" &&
+    prCreate.data?.head === "verify-branch" &&
+    prCreate.data?.created === true,
+  prCreate,
+);
+check(
+  "pr_create_uses_token_header",
+  githubMock.requests.some(
+    (r) => r.path.startsWith("/repos/acme/demo/pulls") && r.auth === "Bearer verify-github-token",
+  ),
+  githubMock.requests.filter((r) => r.path.startsWith("/repos/acme/demo/pulls")),
+);
+
+const prComment = asEnvelope(await call("project_pr_comment", { pr: 7, body: "LGTM from verify" }));
+check(
+  "pr_comment",
+  prComment.ok === true && prComment.data?.comment_id === 1001 && prComment.data?.pr === 7,
+  prComment,
+);
+const prCommentUrl = asEnvelope(
+  await call("project_pr_comment", { pr: "https://github.com/acme/demo/pull/7", body: "URL form" }),
+);
+check("pr_comment_accepts_url", prCommentUrl.ok === true && prCommentUrl.data?.comment_id === 1002, prCommentUrl);
+
+const prMerge = asEnvelope(
+  await call("project_pr_merge", { pr: 7, method: "squash", delete_branch: true, reason: "VERIFY_PROVIDER_REASON" }),
+);
+check(
+  "pr_merge",
+  prMerge.ok === true &&
+    prMerge.data?.merged === true &&
+    prMerge.data?.sha === "sha-merge" &&
+    prMerge.data?.method === "squash",
+  prMerge,
+);
+check("pr_merge_deletes_branch", prMerge.data?.branch_deleted === true && githubMock.state.branchDeletes === 1, {
+  state: githubMock.state,
+});
+
+const prMissing = asEnvelope(await call("project_pr_merge", { pr: 999 }));
+check("pr_merge_not_found", prMissing.error?.code === "not_found", prMissing);
+
+const ciList = asEnvelope(await call("project_ci_status", { limit: 3 }));
+check(
+  "ci_status_list",
+  ciList.ok === true && ciList.data?.runs?.length === 2 && ciList.data?.overall === "failure",
+  ciList.data,
+);
+const ciRun = asEnvelope(await call("project_ci_status", { run_id: 99 }));
+check(
+  "ci_status_run_with_jobs",
+  ciRun.ok === true && ciRun.data?.run?.id === 99 && ciRun.data?.jobs?.length === 2 && ciRun.data?.overall === "failure",
+  ciRun.data,
+);
+const ciTrigger = asEnvelope(
+  await call("project_ci_trigger", { workflow: "ci.yml", ref: "main", inputs: { suite: "full", retries: 1 } }),
+);
+check(
+  "ci_trigger",
+  ciTrigger.ok === true &&
+    ciTrigger.data?.triggered === true &&
+    ciTrigger.data?.inputs?.suite === "full" &&
+    githubMock.state.dispatches === 1,
+  ciTrigger,
+);
+
+const ciLogs = asEnvelope(await call("project_ci_logs", { run_id: 99 }));
+check(
+  "ci_logs_run_zip",
+  ciLogs.ok === true &&
+    ciLogs.data?.entries?.length === 2 &&
+    String(ciLogs.data?.text ?? "").includes("FAIL src/demo.test.ts:42") &&
+    ciLogs.data?.truncated === false,
+  { entries: ciLogs.data?.entries, truncated: ciLogs.data?.truncated },
+);
+const ciLogsTail = asEnvelope(await call("project_ci_logs", { run_id: 99, tail_lines: 1 }));
+check(
+  "ci_logs_tail_lines",
+  String(ciLogsTail.data?.text ?? "").trim() === "Test run finished with 1 failed" &&
+    ciLogsTail.data?.truncated === true,
+  { text: ciLogsTail.data?.text, truncated: ciLogsTail.data?.truncated },
+);
+const ciJobLogs = asEnvelope(await call("project_ci_logs", { job_id: 1, tail_lines: 3 }));
+check(
+  "ci_logs_job",
+  ciJobLogs.ok === true && String(ciJobLogs.data?.text ?? "").includes("FAIL demo.test.ts:42"),
+  ciJobLogs.data?.text,
+);
+check(
+  "ci_logs_redirect_drops_auth",
+  githubMock.blobAuth.length === 3 && githubMock.blobAuth.every((auth) => auth === null),
+  githubMock.blobAuth,
+);
+
+// 11e. Network kill switch + missing token (separate clients, real env variants).
+const offlineTransport = new StdioClientTransport({
+  command: "node",
+  args: ["dist/server.js"],
+  cwd: process.cwd(),
+  env: verifyEnv({ VENIRA_SESSION_ID: `${SESSION_ID}-offline`, VENIRA_NETWORK: "0" }, "full"),
+  stderr: "pipe",
+});
+const offlineClient = new Client({ name: "verify-offline", version: "0.0.0" }, { capabilities: {} });
+await offlineClient.connect(offlineTransport);
+const offline = asEnvelope(
+  await offlineClient.callTool({ name: "project_ci_status", arguments: { limit: 1 } }),
+);
+check("network_kill_switch", offline.error?.code === "network_disabled", offline);
+await offlineClient.close();
+
+const authTransport = new StdioClientTransport({
+  command: "node",
+  args: ["dist/server.js"],
+  cwd: process.cwd(),
+  env: verifyEnv(
+    {
+      VENIRA_SESSION_ID: `${SESSION_ID}-auth`,
+      VENIRA_DATA_DIR: path.join(".verify-tmp", "data-auth"),
+      VENIRA_GITHUB_TOKEN: "",
+      GITHUB_TOKEN: "",
+      GH_TOKEN: "",
+    },
+    "full",
+  ),
+  stderr: "pipe",
+});
+const authClient = new Client({ name: "verify-auth", version: "0.0.0" }, { capabilities: {} });
+await authClient.connect(authTransport);
+const noAuth = asEnvelope(
+  await authClient.callTool({ name: "project_ci_trigger", arguments: { workflow: "ci.yml" } }),
+);
+check("provider_auth_missing", noAuth.error?.code === "auth_missing", noAuth);
+await authClient.close();
+
+// 11f. Provider unit checks (repo parsing, https-only, kill switch).
+const provider = await import("../lib/git-provider.js");
+let repoSource = "";
+try {
+  repoSource = provider.resolveRepo().source;
+} catch {
+  repoSource = "error";
+}
+check("provider_repo_from_git_origin", repoSource === "git", repoSource);
+
+let injectionRejected = false;
+try {
+  provider.parseRepoRef("acme/demo/../../evil", "arg");
+} catch {
+  injectionRejected = true;
+}
+check("provider_repo_rejects_path_injection", injectionRejected, undefined);
+check(
+  "provider_repo_accepts_https",
+  provider.parseRepoRef("https://github.com/acme/demo.git", "arg").name === "demo",
+  undefined,
+);
+
+const savedApiUrl = process.env.VENIRA_GITHUB_API_URL;
+process.env.VENIRA_GITHUB_API_URL = "http://evil.example.com";
+let httpsOnly = false;
+try {
+  provider.apiBaseUrl();
+} catch {
+  httpsOnly = true;
+}
+process.env.VENIRA_GITHUB_API_URL = savedApiUrl;
+check("provider_https_only", httpsOnly, undefined);
+
+const savedNetwork = process.env.VENIRA_NETWORK;
+process.env.VENIRA_NETWORK = "0";
+const networkOff = provider.networkEnabled() === false;
+process.env.VENIRA_NETWORK = savedNetwork;
+check("provider_network_unit", networkOff, undefined);
+
+const healthProvider = asEnvelope(await call("project_health", { include_audit: false }));
+check(
+  "health_secrets_and_network",
+  healthProvider.data?.secrets?.encryption === "aes-256-gcm" &&
+    healthProvider.data?.secrets?.count >= 1 &&
+    healthProvider.data?.network?.github?.repo === "acme/demo" &&
+    healthProvider.data?.network?.github?.auth === "present" &&
+    !JSON.stringify(healthProvider.data?.network ?? {}).includes(SECRET_VALUE),
+  { secrets: healthProvider.data?.secrets, network: healthProvider.data?.network },
+);
+
+const secretDelete = asEnvelope(await call("project_secret", { action: "delete", name: SECRET_NAME }));
+check(
+  "secret_delete",
+  secretDelete.ok === true && secretDelete.data?.deleted === true,
+  secretDelete,
+);
+
 // 19. Marcet summary mode
 console.log("[verify] checking summary mode...");
 const clientSummary = await new Client({ name: "verify-summary", version: "0.0.0" }, { capabilities: {} });
@@ -523,6 +889,7 @@ let rows: Array<{
   operation?: string;
   outcome?: string;
   reason_code?: string;
+  reason?: string | null;
   completed_at?: number | null;
   decision?: string | null;
   policy_rule?: string | null;
@@ -533,7 +900,7 @@ if (db) {
   for (let i = 0; i < 50; i++) {
     rows = db
       .prepare(
-        "SELECT operation, outcome, reason_code, completed_at, decision, policy_rule, command, approver FROM project_tool_audit WHERE session_id = ? ORDER BY id",
+        "SELECT operation, outcome, reason_code, reason, completed_at, decision, policy_rule, command, approver FROM project_tool_audit WHERE session_id = ? ORDER BY id",
       )
       .all(SESSION_ID) as typeof rows;
     if (rows.length > 0 && rows.every((row) => row.completed_at !== null)) break;
@@ -579,9 +946,55 @@ if (rows.length > 0) {
       shellRows.every((r) => !String(r.command ?? "").includes("sk-verify-secret")),
     shellRows.map((r) => r.command),
   );
+  check(
+    "audit_reason_recorded",
+    rows.some((r) => r.operation === "write_file" && r.reason === "VERIFY_REASON_EDIT") &&
+      rows.some((r) => r.operation === "snapshot_create" && r.reason === "VERIFY_REASON_SNAPSHOT"),
+    rows.filter((r) => r.reason).map((r) => ({ op: r.operation, reason: r.reason })),
+  );
+  check(
+    "audit_snapshot_ops",
+    ["snapshot_create", "snapshot_restore", "snapshot_list", "snapshot_delete"].every((op) =>
+      rows.some((r) => r.operation === op),
+    ),
+    rows.filter((r) => String(r.operation ?? "").startsWith("snapshot_")).map((r) => r.operation),
+  );
+  check(
+    "audit_provider_ops",
+    ["pr_create", "pr_comment", "pr_merge", "ci_status", "ci_trigger", "ci_logs", "secret"].every((op) =>
+      rows.some((r) => r.operation === op),
+    ),
+    rows.filter((r) => ["pr_create", "pr_comment", "pr_merge", "ci_status", "ci_trigger", "ci_logs", "secret"].includes(String(r.operation ?? ""))).map((r) => r.operation),
+  );
+  check(
+    "audit_provider_command_summary",
+    rows.some((r) => r.operation === "pr_merge" && String(r.command ?? "").includes("PUT /pulls/7/merge")) &&
+      rows.some((r) => r.operation === "secret" && String(r.command ?? "").includes("secret_set name=VERIFY_TOKEN")),
+    rows.filter((r) => r.command).map((r) => r.command),
+  );
+  check(
+    "audit_secret_value_never_logged",
+    rows.every(
+      (r) =>
+        !String(r.command ?? "").includes(SECRET_VALUE) &&
+        !String(r.reason ?? "").includes(SECRET_VALUE),
+    ),
+    rows.map((r) => r.command).filter(Boolean),
+  );
 }
+
+// 16. project_read_audit surfaces `reason` to the agent (not just SQLite).
+const auditRead = asEnvelope(
+  await call("project_read_audit", { session_id: SESSION_ID, operation: "write_file", limit: 20 }),
+);
+check(
+  "audit_tool_exposes_reason",
+  (auditRead.data?.rows ?? []).some((r: { reason?: string }) => r.reason === "VERIFY_REASON_EDIT"),
+  auditRead.data?.rows,
+);
 
 console.log("[verify] done");
 await fs.rm(dir, { recursive: true, force: true });
 await client.close();
+await githubMock.close();
 console.log(JSON.stringify(results, null, 2));

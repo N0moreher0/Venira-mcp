@@ -1,14 +1,19 @@
-# VENIRA MCP CODING — TODO LIST (standalone v1.0.0 → v1.3.0)
+# VENIRA MCP CODING — TODO LIST (standalone v1.0.0 → v1.4.0)
 
 > Standalone: pure-Node backend, no external binary.
 > Each item lists effort (low/med/high), priority (P0/P1/P2/P3), and status.
 
-## 📊 Current state (standalone v1.0.0)
+## 📊 Current state (standalone v1.4.0)
 
 - ✅ 100% of the logic has been moved to Node (no more Rust corehost)
 - ✅ Audit via SQLite WAL using `better-sqlite3` (replaces `node:sqlite`)
 - ✅ Native shell via `child_process` (no Rust required)
-- ✅ 25 tools working, verify 26/26 PASS, doctor 12/12 PASS
+- ✅ 35 tools working, verify 186/186 PASS, doctor 12/12 PASS
+- ✅ Checkpoints (`project_snapshot`: create/list/restore/delete, content-addressed, git-free rollback)
+- ✅ Audit reasons: mutating tools accept `reason` ("why"), stored in `project_tool_audit.reason` and returned by `project_read_audit`
+- ✅ Git provider (`project_pr_create` / `project_pr_comment` / `project_pr_merge`) over GitHub REST — no `gh` binary
+- ✅ CI provider (`project_ci_status` / `project_ci_trigger` / `project_ci_logs`) over GitHub Actions — ZIP logs parsed in memory
+- ✅ Secrets (`project_secret`: get/set/list/delete) — AES-256-GCM at rest, metadata-only reads, `secret_env` injection, value redaction
 - ✅ `search_cache_invalidated` fix (0-hit results are no longer cached)
 - ✅ Dual license: MIT + Apache-2.0
 - ✅ CI/CD GitHub Actions (no more Rust build needed)
@@ -21,6 +26,24 @@
 - ✅ P2 fuzzy edit + SQLite recent files index
 - ✅ P3 code intelligence: `project_diff_files`, `project_symbol_references`, `project_selective_search`
 - ⏸️ P3 deferred: `project_explain_error`, `project_plan_read_batch` (require OpenCode model access)
+
+## 🕒 Full timeline (v1.0.0 → v1.4.0)
+
+The whole history in order — what shipped, when, and why.
+
+| Date | Version | Milestone |
+|---|---|---|
+| 2026-10-27 | **v1.0.0** | **Standalone rewrite.** The Rust `corehost` binary + JSON-Lines IPC replaced by an in-process pure-Node backend (`lib/corehost.ts`): SQLite WAL audit (`better-sqlite3`), native shell via `child_process` with process-tree kill, async shell runs, capability scope, structured envelopes with hints, validated read caches, batch reads. Ships as `npm i venira-mcp` — no binary, no GUI. |
+| 2026-10-27 | v1.0.0 | Repo translated to English (code comments, tool descriptions, TODO, roadmap docs). |
+| 2026-10-28 | v1.0.1–v1.0.7 | Release plumbing: npm metadata + OIDC trusted publishing, Docker multi-stage image, `--version`/`--help`, doctor works from any directory, zod 4 + MCP SDK 1.32 (security advisory), standard `LICENSE-MIT`/`LICENSE-APACHE`, `scripts/` shipped in the image, package renamed to `venira-mcp` (bins `venira` + `venira-mcp`). |
+| 2026-10-28 | v1.1.0 | Shell policy hardening: `balanced`/`strict`/`permissive`/`off`, HMAC-signed single-use approval tokens, session grants, policy file only from an explicit env path (never the workspace). |
+| 2026-10-28 | v1.1.3 | `project_execute_js` — sandboxed synchronous JS inside the workspace (whitelisted env, output caps). |
+| 2026-10-28 | v1.1.7 | Audit writer compatible with legacy DB schemas (in-place migration instead of failed writes). |
+| 2026-10-28 | v1.1.9 | CLI `--workspace/-w` + `--data-dir` (no config switching between projects), `VENIRA_PERMISSION_MODE`. |
+| 2026-10-28 | **v1.2.0** | P1: cache controls (`VENIRA_CACHE_ALL`, `VENIRA_CACHE_LIST_ONLY`, `VENIRA_CACHE_SEARCH_ONLY`), request tracing (`VENIRA_TRACE` / `VENIRA_TRACE_FILE` / `project_trace_status`), `project_read_audit`, shell UX (`VENIRA_SHELL_TAIL_MAX`, `VENIRA_SHELL_EXIT_EARLY`, `VENIRA_SHELL_TIMEOUT_POLICY`, `project_shell_cancel_session`). Verify/doctor raised to 25 tools. |
+| 2026-10-28 | **v1.3.0** | P2/P3 code intelligence: `project_outline_symbol`, `project_file_symbols`, `project_diff_files`, `project_symbol_references`, `project_selective_search`; fuzzy edit (`VENIRA_EDIT_FUZZY`); SQLite recent-files index (`project_file_index`, index-first + bounded fallback). |
+| 2026-10-29 | (post-1.3.0) | P2.5 self-install: `project_detect_harnesses` + `project_install_self` (OpenCode / Claude / Cursor / Codex / Kimi / DeepSeek / Antigravity) with atomic config merge + backup. |
+| 2026-10-29 | **v1.4.0** | **Checkpoints + audit reasons + Git/PR + CI + encrypted secrets.** `project_snapshot` (content-addressed, deduplicated, sha256-verified rollback), `reason` on every mutation stored in the audit trail, GitHub pull-request + Actions tools, AES-256-GCM secret store with `secret_env` injection, network safety layer. **35 tools**, verify **186/186**. |
 
 ## 🎯 Implementation Roadmap
 
@@ -119,11 +142,45 @@
 - [ ] Status: DEFERRED — requires OpenCode model access, low priority
 
 ### P3: `project_selective_search` (effort: high, 8-10h) ✅
-- [ ] "Smart" search: combine multiple queries (AND/OR/NOT), fuzzy, scoring
+- [x] "Smart" search: combine multiple queries (AND/OR/NOT), fuzzy, scoring
 - [x] Args: { queries: [{ pattern, must?, weight? }], limit }
 - [x] Data: { hits, scores, matched_queries }
 - [x] Implementation in `lib/symbol-diff.ts` (selectiveSearch function)
 - [x] Tool registration in `tools/project.ts` (runSelectiveSearch)
+
+## 🚀 Provider Tools (Oct 2026) ✅
+
+### Git / PR provider (`lib/git-provider.ts`) ✅
+- [x] `project_pr_create` — `title`, `head` (default: current branch), `base` (default: repo default branch, cached 5 min), `body`, `draft`, `repo`
+- [x] `project_pr_comment` — `pr` accepts a number or a PR URL; `body` markdown
+- [x] `project_pr_merge` — `method: merge|squash|rebase`, `commit_title`, `commit_message`, `delete_branch`
+- [x] Repo resolution: `repo` arg → `VENIRA_GITHUB_REPO` → `.git/config` origin (worktrees via `commondir`)
+- [x] Token resolution: secret `GITHUB_TOKEN` → `VENIRA_GITHUB_TOKEN` → `GITHUB_TOKEN` → `GH_TOKEN`
+- [x] Error mapping: `auth_missing`, `auth_failed`, `not_found`, `conflict`, `rate_limited`, `forbidden`, `timeout`
+- [x] Already-merged/closed PR returns `already_merged` (not an error); branch delete is best-effort
+
+### CI provider (GitHub Actions) ✅
+- [x] `project_ci_status` — runs for branch/workflow (`limit` ≤ 50) or one run + its jobs; `overall` summary
+- [x] `project_ci_trigger` — `workflow_dispatch` with `ref` + ≤ 10 validated `inputs`
+- [x] `project_ci_logs` — whole run (in-memory ZIP: EOCD + central dir, stored/deflate) or one job; `tail_lines`/`max_bytes` caps
+- [x] Archive caps: 32 MB archive, 4 MB/entry, 8 MB text, default `tail_lines=500` / `max_bytes=512KB` (cap 4MB)
+- [x] Redirect handling drops `Authorization` when the origin changes (pre-signed blob URL)
+
+### Secrets (`lib/secrets.ts`) ✅
+- [x] `project_secret` — one tool, `action: get|set|list|delete` (same action pattern as `project_snapshot`)
+- [x] AES-256-GCM at rest (`<data>/secrets.json` + `<data>/secrets.key`, 0600, atomic temp+rename)
+- [x] `get`/`list` metadata only (`length`, `sha256_12`, `updated_at`); plaintext requires `reveal=true` **and** `VENIRA_SECRET_ALLOW_REVEAL=1`
+- [x] `value_env` alternative keeps the value out of tool arguments entirely
+- [x] `project_shell_run secret_env: string[]` (≤ 16) — decrypted **after** approval, injected into the child env
+- [x] Loader-hijack denylist (`NODE_OPTIONS`, `LD_PRELOAD`, `DYLD_*`, `PYTHONSTARTUP`, `PYTHONPATH`, `BASH_ENV`, `ENV`, `PROMPT_COMMAND`, `GIT_SSH_COMMAND`)
+- [x] `redactSecretValues` scrubs values (≥ 8 chars) from shell tails + audit `command`/`reason`
+- [x] Secret store excluded from checkpoints/restore/`delete_extra`
+
+### Network safety ✅
+- [x] `VENIRA_NETWORK=0` kill switch → `network_disabled` before a socket is opened
+- [x] `VENIRA_GITHUB_API_URL` must be https (http only for localhost / `VENIRA_GITHUB_ALLOW_HTTP=1`)
+- [x] `node:http(s)` client with timeouts, response caps, manual redirects (no global `fetch`)
+- [x] e2e mock (`scripts/github-mock.ts`): API origin + second-origin blob server, records auth headers
 
 ## 📝 Notes for "strict" / "absolute" users
 
@@ -131,24 +188,24 @@
 |---|---|
 | Stale cache | `VENIRA_CACHE_ALL=0` |
 | Blind-edit failure | Pipeline: read → edit (always) + `expected_sha256` |
-| Fuzzy edit | `VENIRA_EDIT_FUZZY=1` (P2, not yet available) |
+| Fuzzy edit | `VENIRA_EDIT_FUZZY=1` (P2) |
 | Shell timeout | `VENIRA_SHELL_TIMEOUT_POLICY=hard` |
 
 ## 🧪 Test plan (next)
-- `verify.ts`: add checks for audit mode, cache control, trace, read_audit
+- ✅ `verify.ts`: audit mode, cache control, trace, read_audit, checkpoints, PR/CI, secrets, network (186 checks)
 - `bench-mcp.ts`: add a "fresh mode" scenario (VENIRA_CACHE_ALL=0) vs "default"
-- `doctor.ts`: add checks for the 4 new env vars
+- ✅ `doctor.ts`: checks for the P1 env vars + provider/secret config surface
 
-## 📅 Estimated timeline
-- **v1.1.0** (P1, ~1 week): ✅ Cache control + Trace + read_audit + Shell UX (COMPLETED)
-- **v1.1.2** (~2 days): Updated verify/doctor tool counts to 25
-- **v1.2.0** (P2, ~2-3 weeks):
-  - ~~Fuzzy edit + port recent_files to an index~~ (COMPLETED)
-  - project_outline_symbol (COMPLETED)
-- **v1.3.0** (P3, ~1-2 months):
-  - diff + symbols + references + selective_search (COMPLETED)
-  - explain_error + plan_read_batch (DEFERRED, requires OpenCode model access)
-- **v1.4.0** (bonus): chroma/supabase/db integration, pricing/debugging, metrics UI
+## 📅 Estimated timeline (delivered)
+- **v1.1.0** (P1, ~1 week): ✅ Cache control + Trace + read_audit + Shell UX
+- **v1.1.2** (~2 days): ✅ verify/doctor tool counts raised to 25
+- **v1.1.9**: ✅ CLI `--workspace` / `--data-dir`, `VENIRA_PERMISSION_MODE`
+- **v1.2.0** (P2, ~2-3 weeks): ✅ Fuzzy edit + recent-files index + outline_symbol
+- **v1.3.0** (P3, ~1-2 months): ✅ diff + symbols + references + selective_search
+- **v1.3.0+** (P2.5): ✅ self-install (`project_detect_harnesses` / `project_install_self`)
+- **v1.4.0**: ✅ checkpoints + audit reasons + Git/PR + CI + secrets (35 tools, verify 186/186)
+- **v1.5.0** (candidate): inline PR review comments, PR check-runs, GitLab/Bitbucket dialect, secret rotation metadata, multi-repo workspaces
+- **Backlog**: `explain_error` + `plan_read_batch` (deferred — need model access), chroma/supabase integration, metrics UI
 
 ## ✅ Success criteria
 - [x] The model picks the right tool per the rules (each P0/P1 done)
@@ -161,7 +218,44 @@
 
 ## 📝 Change Log
 
-### v1.2.0 (2025-10-28) ✅
+### v1.4.0 (2026-10-29) ✅
+- **Git / PR provider**: `project_pr_create`, `project_pr_comment`, `project_pr_merge` (GitHub REST, repo/token auto-resolution)
+- **CI provider**: `project_ci_status`, `project_ci_trigger`, `project_ci_logs` (Actions; in-memory ZIP logs with tail caps)
+- **Secrets**: `project_secret` (get/set/list/delete), AES-256-GCM at rest, metadata-only reads, `reveal` env gate
+- **Shell**: `project_shell_run secret_env` injection + redaction of values in output and audit
+- **Network**: `VENIRA_NETWORK` kill switch, https-only API base, redirect token hygiene, `node:http(s)` client
+- **Checkpoints**: secret store (`secrets.json` / `secrets.key`) excluded from capture/restore/`delete_extra`
+- **Audit**: external ops log a secret-free summary in `command` (e.g. `PUT /pulls/7/merge repo=… method=squash`)
+- **Tests**: 35 tools, verify 186/186 PASS (mock GitHub API + blob server), doctor expects 35
+
+### v1.0.0 (2026-10-27) ✅
+- **Standalone rewrite**: Rust `corehost` + JSON-Lines IPC → in-process pure-Node backend (`lib/corehost.ts`), no external binary
+- SQLite WAL audit via `better-sqlite3` (replaces `node:sqlite`), native shell via `child_process` (async runs, process-tree kill)
+- Capability scope, structured envelopes + hints, validated read caches, `project_read_batch`
+- Dual license (MIT + Apache-2.0), CI/CD GitHub Actions without a Rust toolchain
+
+### v1.0.1–v1.0.7 (2026-10-28) ✅
+- npm metadata + OIDC trusted publishing, Docker multi-stage image, `--version` / `--help`
+- Doctor works from any directory; zod 4 + MCP SDK 1.32 (security advisory fix)
+- `LICENSE-MIT` / `LICENSE-APACHE` filenames, `scripts/` shipped in the image
+- Package renamed to `venira-mcp`, bins `venira` + `venira-mcp`
+
+### v1.1.0 (2026-10-28) ✅
+- Shell policy levels `balanced` / `strict` / `permissive` / `off`
+- HMAC-signed single-use approval tokens + session grants
+- Policy file loaded only from an explicit env path (never from the workspace)
+
+### v1.1.3 (2026-10-28) ✅
+- `project_execute_js`: sandboxed synchronous JS inside the workspace (whitelisted env, output caps)
+
+### v1.1.7 (2026-10-28) ✅
+- Audit writer migrates legacy DB schemas in place instead of failing writes
+
+### v1.1.9 (2026-10-28) ✅
+- CLI `--workspace` / `-w` and `--data-dir` flags (no config switching)
+- `VENIRA_PERMISSION_MODE` surface
+
+### v1.2.0 (2026-10-28) ✅
 - **P1**: Cache control env vars (`CACHE_ALL_ENABLED`, `CACHE_LIST_ONLY_ENABLED`, `CACHE_SEARCH_ONLY_ENABLED`)
 - **P1**: Request tracing (`lib/tracer.ts`, `project_trace_status` tool)
 - **P1**: Read audit (`project_read_audit` tool)
@@ -185,4 +279,4 @@
 
 ---
 
-Next steps: P3 explain_error + plan_read_batch (deferred, needs OpenCode model access). All P1/P2 P0 roadmap items complete.
+Next steps: P3 explain_error + plan_read_batch (deferred, needs OpenCode model access). All P1/P2/P0 roadmap items plus Git/PR, CI and secrets providers are complete.
