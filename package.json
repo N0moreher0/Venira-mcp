@@ -1,7 +1,7 @@
 {
   "name": "venira-mcp",
-  "version": "1.4.0",
-  "description": "venira-mcp — a standalone Model Context Protocol (MCP) server that gives coding agents (OpenCode, Claude Desktop, any MCP client) 35 workspace-scoped tools: file read/write/edit/delete, batch reads, line-range reads, content search, recent files, code intelligence, async shell run/poll/cancel, git-free checkpoints/rollback, pull requests + GitHub Actions (status/trigger/logs), encrypted secrets injected as env vars, and a full SQLite WAL audit trail where mutations can record a reason. Pure Node, no external binary. Structured JSON envelopes with hints and cached validated reads. npm i venira-mcp, then point your MCP client at `venira` or `venira-mcp`.",
+  "version": "1.5.0",
+  "description": "venira-mcp — a standalone Model Context Protocol (MCP) server that gives coding agents (OpenCode, Claude Desktop, any MCP client) 37 workspace-scoped tools: file read/write/edit/delete, batch reads, line-range reads, content search, recent files, code intelligence, async shell run/poll/cancel, git-free checkpoints/rollback, pull requests + GitHub Actions (status/trigger/logs, inline review comments, check-runs), encrypted secrets with rotation metadata, deterministic error diagnosis + read planning, and a full SQLite WAL audit trail where mutations can record a reason. Pure Node, no external binary. Structured JSON envelopes with hints and cached validated reads. npm i venira-mcp, then point your MCP client at `venira` or `venira-mcp`.",
   "keywords": [
     "mcp",
     "model-context-protocol",
@@ -29,6 +29,10 @@
     "github-actions",
     "ci",
     "secrets",
+    "secret-rotation",
+    "diagnostics",
+    "error-explanation",
+    "read-planning",
     "venira",
     "venira-mcp"
   ],

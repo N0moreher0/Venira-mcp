@@ -22,11 +22,13 @@ Decision tree
 5. Write whole file -> project_write_file; small precise change -> project_edit_file; delete -> project_delete_path (destructive, not undoable).
 6. Before a large/multi-file change chain -> project_snapshot action=create (paths default ["."]); if it goes wrong -> action=restore id=<id> (dry_run first if unsure). No git needed.
 7. Build/test/long command -> project_shell_run (returns run_id immediately), then poll project_shell_status with wait_seconds 5..30 until running=false; project_shell_cancel to stop.
-8. Tokens/credentials -> project_secret (action=set|get|list|delete). Never paste a key into a command: store it once, then inject it with project_shell_run secret_env=["NAME"].
-9. Pull requests -> project_pr_create (open), project_pr_comment (reply/report), project_pr_merge (land, optionally delete the branch).
-10. CI -> project_ci_status (runs + jobs), project_ci_trigger (workflow_dispatch), project_ci_logs (tail of a run or one job).
-11. Debug latency/errors or check host/audit DB -> project_health.
-12. Unsure which tool exists -> use the Code Mode tool-discovery helper (findTools; named search in older builds), not a Venira tool.
+8. Tokens/credentials -> project_secret (action=set|get|list|delete). Never paste a key into a command: store it once, then inject it with project_shell_run secret_env=["NAME"]. Set expires_in_days when the user knows the rotation window; expired secrets are refused (rotate with action=set).
+9. Pull requests -> project_pr_create (open), project_pr_comment (thread reply, or an inline note with path + line), project_pr_merge (land, optionally delete the branch).
+10. CI -> project_ci_status (runs + jobs; pr/ref for branch-protection check-runs), project_ci_trigger (workflow_dispatch), project_ci_logs (tail of a run or one job).
+11. Something failed and the cause is unclear -> project_explain_error with error_text or log_tail; then apply the first diagnosis (it returns ready next_actions).
+12. Starting an unfamiliar task -> project_plan_read_batch(task_description, files_hint?) and run steps[0] (a ready read_batch) instead of guessing files.
+13. Debug latency/errors or check host/audit DB -> project_health.
+14. Unsure which tool exists -> use the Code Mode tool-discovery helper (findTools; named search in older builds), not a Venira tool.
 
 Rules
 - Prefer Venira for read-heavy/batch work; single tiny native operations are fine either way.
@@ -34,8 +36,9 @@ Rules
 - project_read_batch and project_list_files/search results are cached briefly; mutations invalidate caches automatically.
 - Always pass \`reason\` ("why", e.g. "fix null pointer at line 45") on write/edit/delete/create/snapshot/pr/ci: it is stored in the audit trail (redacted, single line, <=400 chars), so future sessions know the intent. Read it back with project_read_audit.
 - Checkpoints are content-addressed and deduplicated: repeating action=create after a small edit costs only the changed bytes; restore is sha256-verified per file and only rewrites captured paths (delete_extra is opt-in and capped at 500).
-- Secrets are encrypted at rest and never logged: project_secret get returns metadata (length + sha256 prefix), values reach processes only via secret_env, and shell output/audit text is scrubbed of stored values.
-- GitHub tools resolve the repo from \`repo\` -> VENIRA_GITHUB_REPO -> .git/config origin; the token comes from secret GITHUB_TOKEN or VENIRA_GITHUB_TOKEN. VENIRA_NETWORK=0 disables all outbound calls.
+- Secrets are encrypted at rest and never logged: project_secret get returns metadata (length + sha256 prefix, expires_at/days_left, last_used_at/use_count), values reach processes only via secret_env, and shell output/audit text is scrubbed of stored values. Expired secrets fail with secret_expired before a child starts.
+- GitHub tools resolve the repo from \`repo\` -> VENIRA_GITHUB_REPO -> .git/config origin; the token comes from secret GITHUB_TOKEN or VENIRA_GITHUB_TOKEN (expiry is enforced, use tracking is recorded). VENIRA_NETWORK=0 disables all outbound calls.
+- project_explain_error and project_plan_read_batch are deterministic (no model call): explain_error maps signatures to next_actions, plan_read_batch returns a ready batch call.
 - Never loop on a non-retryable error (not_found, scope_denied, invalid_request, sensitive_result, audit_unavailable). Read the hint and change the request or tell the user.
 - Output modes: VENIRA_OUTPUT_MODE=full|compact|summary (default full). summary trims payloads; request full data when editing.`;
 
