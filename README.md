@@ -445,7 +445,7 @@ project_shell_run({ command: "npm publish --dry-run", shell: "bash", secret_env:
 | Tool | Purpose | Notes |
 |---|---|---|
 | `project_explain_error` | Turn a failure into a cause + next tool calls | Feed `error_text` or `log_tail` (e.g. the tail from `project_ci_logs` / `project_shell_status`). Matches a rule table (POSIX errno, TypeScript/Python/pytest, git, npm, GitHub, venira codes) and returns `matched`, `summary`, `error_line`, `language`, `diagnoses[]` (`rule_id`, `likely_cause`, `suggested_fix[]`, `retry_hint`, `next_actions[]`) and a deduped `next_actions[]`. Unknown signatures return `matched: false` with a triage note — never an error. |
-| `project_plan_read_batch` | Plan which files to read for a task, in one call | `task_description` (one line) → keywords (quoted terms, identifiers, words) → up to 3 bounded content searches → candidates ranked by hit count (+ `files_hint`, + recent edits when the search is thin) → `steps[]` with a **ready-to-send** `project_read_batch` call, `estimated_ms`. `max_files` ≤ 8, `include_search: false` to plan from hints only. |
+| `project_plan_read_batch` | Plan which files to read for a task, in one call | `task_description` (one line) → keywords (quoted terms, identifiers, words) → up to 3 bounded content searches → candidates ranked by hit count (+ `files_hint`, + recent edits when the search is thin) → `steps[]` with a **ready-to-send** `project_read_batch` call, `estimated_ms`. Build/vendor dirs and DB/log/binary artifacts are excluded from candidates. `max_files` ≤ 8, `include_search: false` to plan from hints only. |
 
 Both are pure local logic: no network, no model, no file contents in the response (the plan points
 at files; you decide which step to run). They exist to cut the "guess → read → repeat" loop that
@@ -568,7 +568,7 @@ venira-mcp/
 │   ├── smoke.ts              # In-process backend sanity check
 │   ├── bench.ts              # In-process backend benchmark
 │   ├── bench-mcp.ts          # End-to-end MCP benchmark
-│   ├── verify.ts             # 212 end-to-end checks (cache, batch, shell, audit, modes,
+│   ├── verify.ts             # 214 end-to-end checks (cache, batch, shell, audit, modes,
 │   │                         #   snapshots, secrets/rotation, GitHub PR/CI/check-runs/inline
 │   │                         #   comments against a local mock, diagnostics + read planning)
 │   ├── github-mock.ts        # In-process GitHub API + pre-signed-blob mock (no network, no token)
@@ -922,7 +922,7 @@ etc. The model is expected to read `hint` first.
 npm run build        # type-check + emit dist/
 npm run smoke        # in-process sanity (backend reachable, path lock works)
 npm run doctor       # preflight: 12 checks incl. audit DB, shell smoke, P1 config surface
-npm run verify       # behavioural regression suite (212 checks, ~90 s)
+npm run verify       # behavioural regression suite (214 checks, ~90 s)
 npm run bench        # in-process numbers
 npm run bench:mcp    # end-to-end numbers
 ```
@@ -1001,6 +1001,7 @@ The full history, in order — from the standalone rewrite to the provider, secr
 | 2026-10-29 | **v1.4.0** | **Checkpoints + audit reasons + Git/PR + CI + encrypted secrets.** `project_snapshot` (content-addressed, deduplicated, sha256-verified rollback), `reason` on mutations stored in the audit trail, GitHub pull-request and Actions tools, an AES-256-GCM secret store with `secret_env` injection, and a network safety layer. **35 tools**, verify **186/186**. |
 | 2026-10-29 | **v1.5.0** | **Inline review comments + check-runs + secret rotation + deterministic diagnostics.** `project_pr_comment` pins notes to a file/line (`path`, `line`, `start_line`, `side`, `commit_id`); `project_ci_status` reads branch-protection **check-runs** (`ref` / `pr`); the secret store tracks `expires_at` / `last_used_at` / `use_count` / `rotated_at` and refuses expired credentials; new `project_explain_error` (rule table → next actions) and `project_plan_read_batch` (task → ready read batch). **37 tools**, verify **211/211**. |
 | 2026-10-29 | **v1.5.1** | **Inline review-comment fix (found by a live E2E run).** GitHub requires `commit_id` whenever `line` is used (a bare `line` is rejected with 422 "line is not a permitted key"); `project_pr_comment` now resolves the PR head sha automatically (one extra API call only for inline notes) and honours an explicit `commit_id`. Verify **212/212**. |
+| 2026-10-29 | **v1.5.2** | **Read-planner artifact filter (found by the live E2E re-run).** `project_plan_read_batch` ranked `data/venira.db` (36 hits) above source because the audit DB contains every command; candidates now exclude build/vendor dirs and DB/log/binary extensions, both when collecting and when planning. Verify **214/214**. |
 
 ### 14.2 What v1.5.0 added
 
@@ -1045,6 +1046,12 @@ The full history, in order — from the standalone rewrite to the provider, secr
 is used — a bare `line` returns `422 "line is not a permitted key"`. `project_pr_comment` now
 resolves the PR head sha automatically (one extra API call, inline notes only) and still honours
 an explicit `commit_id` (e.g. anchoring to an older revision). The response echoes `commit_id`.
+
+**Fix shipped in v1.5.2 (found by the live E2E re-run):** `project_plan_read_batch` ranked
+`data/venira.db` first (36 hits) because the audit DB stores every command, so its bytes match
+keyword searches. Candidates now drop build/vendor directories (`node_modules`, `dist`, `.git`,
+`__pycache__`, …) and DB/log/binary extensions (`.db`, `.sqlite`, `.log`, `.map`, images, …) at
+both collection and planning time; source files rank as intended.
 
 ### 14.3 What v1.4.0 added
 
