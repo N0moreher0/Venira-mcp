@@ -1018,6 +1018,24 @@ check(
   planDocs.data?.candidates,
 );
 
+// Credentials and key material must never be proposed as read targets (the live
+// E2E run ranked data/secrets.json + data/secrets.key for a secret-related task).
+const secretToken = `PLAN_SECRET_${Date.now()}`;
+await fs.writeFile(`${dir}/secrets.json`, `{"token":"${secretToken}"}\n`);
+await fs.writeFile(`${dir}/secrets.key`, `${secretToken}\n`);
+await fs.writeFile(`${dir}/deploy.key`, `${secretToken}\n`);
+await fs.writeFile(`${dir}/.env`, `TOKEN=${secretToken}\n`);
+const planSecret = asEnvelope(
+  await call("project_plan_read_batch", { task_description: `rotate ${secretToken} token`, include_search: true }),
+);
+const secretFiles: string[] = (planSecret.data?.candidates ?? []).map((c: { relative_path?: string }) => String(c.relative_path));
+check(
+  "plan_read_batch_excludes_secrets",
+  planSecret.ok === true &&
+    secretFiles.every((file) => !/(^|\/)(secrets\.(json|key)|deploy\.key|\.env)$/i.test(file)),
+  { candidates: secretFiles },
+);
+
 // Estimate must be calibrated against the measured batch (6 files ≈ 62 ms), not
 // the old flat 6 ms.
 const planEstimate = Number(planTask.data?.estimated_ms ?? 0);
