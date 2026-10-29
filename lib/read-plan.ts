@@ -110,13 +110,22 @@ const ARTIFACT_EXT_RE =
 const LOCKFILE_RE =
   /^(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb|composer\.lock|gemfile\.lock|manifest\.lock)$/i;
 
+/**
+ * Credentials and key material. A plan must never suggest reading them: the
+ * live E2E run ranked `data/secrets.json` and `data/secrets.key` (the encrypted
+ * store and its key) into the top 6 of a secret-related task.
+ */
+const SENSITIVE_FILE_RE =
+  /^(\.env(\..*)?|secrets\.(json|key|yaml|yml)|\.netrc|\.npmrc|\.pgpass|credentials(\.json)?|id_(rsa|dsa|ecdsa|ed25519)(\.pub)?)$|\.(key|pem|p12|pfx|jks|keystore|crt|cer|der|asc|gpg)$/i;
+
 /** True when a path is a plausible source file to read (not an artifact). */
 export function isPlannablePath(relativePath: string): boolean {
   const clean = String(relativePath ?? "").replace(/\\/g, "/").toLowerCase().trim();
   if (!clean) return false;
   const segments = clean.split("/").filter(Boolean);
   if (segments.some((segment) => ARTIFACT_DIRS.has(segment))) return false;
-  if (LOCKFILE_RE.test(segments[segments.length - 1] ?? "")) return false;
+  const base = segments[segments.length - 1] ?? "";
+  if (LOCKFILE_RE.test(base) || SENSITIVE_FILE_RE.test(base)) return false;
   return !ARTIFACT_EXT_RE.test(clean);
 }
 
