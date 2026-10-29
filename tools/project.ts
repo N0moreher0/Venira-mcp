@@ -20,6 +20,9 @@ import type { RustResponse, ToolResult } from "../lib/output.js";
 import { VERSION } from "../lib/version.js";
 import { executeJs } from "../lib/js-executor.js";
 import { queryRecentFiles } from "../lib/corehost.js";
+import { snapshotHealth } from "../lib/snapshots.js";
+import { githubHealth } from "../lib/git-provider.js";
+import { secretsHealth } from "../lib/secrets.js";
 import {
   toHostPath,
   UNRESTRICTED,
@@ -187,14 +190,38 @@ export async function cancelAllShellRuns(): Promise<void> {
 // ---------------------------------------------------------------------------
 type Args = Record<string, unknown>;
 
+/**
+ * Operations that talk to GitHub/CI or to the secret store. They take no
+ * workspace path, so `prepare()` must not invent one for them.
+ */
+const EXTERNAL_OPS = new Set([
+  "pr_create",
+  "pr_comment",
+  "pr_merge",
+  "ci_status",
+  "ci_trigger",
+  "ci_logs",
+  "secret",
+]);
+
 /** Convert path fields to absolute workspace paths; drop undefined values. */
 function prepare(operation: string, args: Args): Args {
   const out: Args = {};
   for (const [key, value] of Object.entries(args)) {
     if (value !== undefined) out[key] = value;
   }
+  if (EXTERNAL_OPS.has(operation)) {
+    // No path fields: repo/PR/run ids are remote identifiers.
+    return out;
+  }
   if (operation === "shell_run") {
     out.relative_cwd = toHostPath(out.relative_cwd as string | undefined);
+  } else if (operation.startsWith("snapshot_")) {
+    // Checkpoints accept `paths[]`; resolve each entry inside the workspace
+    // (absolute paths are still validated, never trusted blindly).
+    if (Array.isArray(out.paths)) {
+      out.paths = (out.paths as unknown[]).map((entry) => toHostPath(String(entry)));
+    }
   } else if (operation !== "shell_status" && operation !== "cancel") {
     out.relative_path = toHostPath(out.relative_path as string | undefined);
   }
@@ -206,6 +233,12 @@ function timeoutFor(operation: string, args: Args): number {
     const wait = Number(args.wait_seconds ?? 0);
     return Math.min(30, Math.max(0, Number.isFinite(wait) ? wait : 0)) * 1000 + 15_000;
   }
+  // Checkpoints walk/hash/rewrite many files, so they get a larger budget.
+  if (operation === "snapshot_create") return 120_000;
+  if (operation === "snapshot_restore") return 120_000;
+  // Network calls: GitHub can be slow, and log archives are bigger.
+  if (operation === "ci_logs") return 90_000;
+  if (EXTERNAL_OPS.has(operation)) return 60_000;
   return 30_000;
 }
 
@@ -214,13 +247,19 @@ const UNQUEUED = new Set(["shell_status", "cancel"]);
 
 async function executeOnce(operation: string, args: Args): Promise<unknown> {
   const cap = await capabilityReady();
+  const payload = prepare(operation, args);
+  // `reason` is the "why" of a mutation. It travels both as an envelope field
+  // (the host writes it into the audit row) and inside the operation args so
+  // the result can echo it back as `data.reason`.
+  const reason = typeof payload.reason === "string" ? payload.reason : undefined;
   const envelope = {
     contract_version: 1,
     request_id: newRequestId(),
     session_id: SESSION_ID,
     project_id: cap.projectId,
     capability_id: cap.id,
-    operation: { name: operation, arguments: prepare(operation, args) },
+    ...(reason !== undefined ? { reason } : {}),
+    operation: { name: operation, arguments: payload },
   };
   const timeout = timeoutFor(operation, args);
   const call = () => {
@@ -496,6 +535,15 @@ function invalidatePath(absolutePath: string): void {
   }
 }
 
+/** A restore can rewrite any file under the workspace: drop every cache. */
+function invalidateAllCaches(): void {
+  readCache.clear();
+  infoCache.clear();
+  readBytes = 0;
+  infoBytes = 0;
+  invalidateListCaches();
+}
+
 function invalidateListCaches(): void {
   listCache.clear();
   searchCache.clear();
@@ -599,6 +647,10 @@ async function executeCached(operation: string, args: Args): Promise<Execution> 
           /* an invalid path already returned an error; no cache to clean */
         }
         invalidateListCaches();
+      }
+      if (operation === "snapshot_restore" || operation === "snapshot_delete") {
+        invalidateAllCaches();
+        recentEdits.clear();
       }
       if (operation.startsWith("shell_") || operation === "cancel") {
         trackShell(operation, response.result?.data);
@@ -1134,7 +1186,12 @@ async function runCreate(args: Args): Promise<ToolResult> {
       recordMetric("create", performance.now() - started, false);
       return toolResult(fail, true);
     }
-    const result = (await execute("create_directory", { relative_path: args.relative_path, create_parents: args.create_dirs ?? true })) as RustResponse;
+    const dirParams: Args = {
+      relative_path: args.relative_path,
+      create_parents: args.create_dirs ?? true,
+    };
+    if (typeof args.reason === "string") dirParams.reason = args.reason;
+    const result = (await execute("create_directory", dirParams)) as RustResponse;
     recordMetric("create", performance.now() - started, true);
     return toolResult(buildEnvelope("create", result, { requestId, elapsedMs: performance.now() - started }));
   }
@@ -1149,6 +1206,7 @@ async function runCreate(args: Args): Promise<ToolResult> {
   const fileParams: Args = { relative_path: args.relative_path, content: args.content, create_dirs: args.create_dirs ?? true };
   if (args.mode !== undefined) fileParams.mode = args.mode;
   if (args.expected_sha256 !== undefined) fileParams.expected_sha256 = args.expected_sha256;
+  if (typeof args.reason === "string") fileParams.reason = args.reason;
   const result = (await execute("write_file", fileParams)) as RustResponse;
   recordMetric("create", performance.now() - started, true);
   return toolResult(buildEnvelope("create", result, { requestId, elapsedMs: performance.now() - started }));
@@ -1298,6 +1356,15 @@ async function runHealth(args: Args): Promise<ToolResult> {
         tracked: shellRuns.size,
         policy: shellPolicySnapshot(),
       },
+      // Checkpoints: manifest-level only (no blob walk, so health stays fast).
+      snapshots: await snapshotHealth().catch(() => ({ store: "", checkpoints: 0, logical_bytes: 0 })),
+      // Secrets: counts + encryption only; the store path is reported, never values.
+      secrets: secretsHealth(),
+      // GitHub/CI: repo detection, api base, auth presence (never the token).
+      network: {
+        enabled: (process.env.VENIRA_NETWORK ?? "1") !== "0",
+        github: githubHealth(),
+      },
       metrics: metricsSnapshot(),
       // P1: config + observability surfaces
       cache: {
@@ -1330,6 +1397,13 @@ async function runHealth(args: Args): Promise<ToolResult> {
 // Tool registration
 // ---------------------------------------------------------------------------
 const path_ = z.string().describe("Path inside the workspace (relative, or absolute inside the workspace)");
+const reason_ = z
+  .string()
+  .max(400)
+  .optional()
+  .describe(
+    "Why this change is made (e.g. \"sua loi null pointer o dong 45\"). Recorded in the audit trail so later sessions know the intent. Single line, max 400 chars, secrets are redacted.",
+  );
 const editOp = z.object({
   old_text: z.string(),
   new_text: z.string(),
@@ -1433,8 +1507,14 @@ async function runReadAudit(args: Args): Promise<ToolResult> {
     if (typeof args.operation === "string") { where.push("operation = ?"); values.push(args.operation); }
     if (typeof args.outcome === "string") { where.push("outcome = ?"); values.push(args.outcome); }
     if (typeof args.since_unix === "number") { where.push("started_at >= ?"); values.push(Math.floor(args.since_unix * 1000)); }
+    // `reason` is a newer additive column: probe first so an older DB file
+    // (written before the migration) still returns rows instead of erroring.
+    const columns = new Set(
+      (db.prepare("PRAGMA table_info(project_tool_audit)").all() as Array<{ name: string }>).map((c) => c.name),
+    );
+    const reasonColumn = columns.has("reason") ? ", reason" : "";
     const sql =
-      `SELECT session_id, operation, outcome, reason_code, request_id, started_at, completed_at, elapsed_ms ` +
+      `SELECT session_id, operation, outcome, reason_code, request_id, started_at, completed_at, elapsed_ms${reasonColumn} ` +
       `FROM project_tool_audit ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ` +
       `ORDER BY started_at DESC LIMIT ?`;
     const rows = db.prepare(sql).all(...values, limit + 1) as unknown[];
@@ -1451,6 +1531,7 @@ async function runReadAudit(args: Args): Promise<ToolResult> {
           operation: row.operation,
           outcome: row.outcome,
           ...(row.reason_code ? { reason_code: row.reason_code } : {}),
+          ...(typeof row.reason === "string" && row.reason ? { reason: row.reason } : {}),
           request_id: row.request_id,
           started_at: typeof row.started_at === "number" ? Math.floor(row.started_at / 1000) : row.started_at,
           ...(row.completed_at != null ? { completed_at: Math.floor((row.completed_at as number) / 1000) } : {}),
@@ -1476,6 +1557,64 @@ async function runReadAudit(args: Args): Promise<ToolResult> {
       true,
     );
   }
+}
+
+async function runSnapshot(args: Args): Promise<ToolResult> {
+  const started = performance.now();
+  const action = typeof args.action === "string" ? args.action : "create";
+  const operation =
+    action === "list"
+      ? "snapshot_list"
+      : action === "restore"
+        ? "snapshot_restore"
+        : action === "delete"
+          ? "snapshot_delete"
+          : action === "create"
+            ? "snapshot_create"
+            : null;
+  if (!operation) {
+    const requestId = newRequestId();
+    const elapsedMs = performance.now() - started;
+    recordMetric("snapshot", elapsedMs, false);
+    return toolResult(
+      errorEnvelope(
+        "snapshot",
+        new Error(
+          `[invalid_request] action must be create|list|restore|delete. Received: ${JSON.stringify(action)}.`,
+        ),
+        { requestId, elapsedMs },
+      ),
+      true,
+    );
+  }
+  // `action` is transport-level sugar; the host operation is explicit so each
+  // one gets its own audit row (snapshot_create / ... / snapshot_delete).
+  const payload: Args = {};
+  for (const [key, value] of Object.entries(args)) {
+    if (key !== "action" && value !== undefined) payload[key] = value;
+  }
+  return runOne(operation, payload);
+}
+
+async function runSecret(args: Args): Promise<ToolResult> {
+  // One tool, four verbs: the transport-level `action` maps to the single
+  // `secret` host operation so the audit trail stays grouped and consistent
+  // with `project_snapshot`.
+  const action = typeof args.action === "string" ? args.action.trim().toLowerCase() : "";
+  if (!["get", "set", "list", "delete"].includes(action)) {
+    const requestId = newRequestId();
+    return toolResult(
+      errorEnvelope(
+        "secret",
+        new Error(
+          `[invalid_request] action must be get|set|list|delete. Received: ${JSON.stringify(args.action)}. Hint: action=set to store, action=get for metadata, action=list for names.`,
+        ),
+        { requestId, elapsedMs: 0 },
+      ),
+      true,
+    );
+  }
+  return runOne("secret", args);
 }
 
 async function runCancelShellSession(): Promise<ToolResult> {
@@ -2025,6 +2164,7 @@ export function registerProjectTools(server: McpServer): void {
         mode: z.enum(["create", "overwrite", "append"]).optional(),
         create_dirs: z.boolean().optional(),
         expected_sha256: z.string().optional(),
+        reason: reason_,
       },
     },
     (args) => runOne("write_file", args),
@@ -2057,6 +2197,7 @@ export function registerProjectTools(server: McpServer): void {
         fuzzy_distance: z.number().int().min(0).max(10).optional().describe("P2: Max Levenshtein distance for fuzzy matching (default 3)."),
         ignore_indentation: z.boolean().optional().describe("P2: Ignore leading whitespace differences in fuzzy matching."),
         case_insensitive: z.boolean().optional().describe("P2: Case-insensitive fuzzy matching."),
+        reason: reason_,
       },
     },
     (args) => runOne("edit_file", args),
@@ -2075,6 +2216,7 @@ export function registerProjectTools(server: McpServer): void {
       inputSchema: {
         relative_path: path_,
         create_parents: z.boolean().optional(),
+        reason: reason_,
       },
     },
     (args) => runOne("create_directory", args),
@@ -2093,6 +2235,7 @@ export function registerProjectTools(server: McpServer): void {
       inputSchema: {
         relative_path: path_,
         recursive: z.boolean().optional(),
+        reason: reason_,
       },
     },
     (args) => runOne("delete_path", args),
@@ -2123,6 +2266,14 @@ export function registerProjectTools(server: McpServer): void {
         shell: z.enum(["powershell", "cmd", "bash"]).optional(),
         command: z.string().describe("Command line to execute."),
         relative_cwd: z.string().optional().describe("Working directory inside the workspace (default: workspace root)."),
+        secret_env: z
+          .array(z.string())
+          .max(16)
+          .optional()
+          .describe(
+            "Names of stored secrets (project_secret) to inject as environment variables for this command, " +
+              "e.g. [\"GITHUB_TOKEN\"]. The value never appears in the command, the audit log or the output.",
+          ),
         timeout_ms: z
           .number()
           .int()
@@ -2202,6 +2353,7 @@ export function registerProjectTools(server: McpServer): void {
         mode: z.enum(["create", "overwrite", "append"]).optional(),
         create_dirs: z.boolean().optional(),
         expected_sha256: z.string().optional(),
+        reason: reason_,
       },
     },
     (args) => runCreate(args as Args),
@@ -2533,6 +2685,293 @@ export function registerProjectTools(server: McpServer): void {
       },
     },
     (args) => runInstallSelf(args as Args),
+  );
+
+  // -------------------------------------------------------------------------
+  // Checkpoints: snapshot + rollback without git
+  // -------------------------------------------------------------------------
+
+  server.registerTool(
+    "project_snapshot",
+    {
+      ...config(
+        "Checkpoint/rollback for the workspace: snapshot the current bytes before a large edit chain, then restore in one call. Content-addressed and deduplicated (only changed files cost new space).",
+        "Workspace checkpoint",
+        {
+          use_when:
+            "before a multi-file refactor/rename: action=create (paths defaults to ['.']) then action=restore with the returned id if the change goes wrong.",
+          avoid_when: "the repo is clean in git (git is cheaper), or only one file changed and can be re-edited.",
+          speed_profile:
+            "create walks/hashes the captured files (skips .git/node_modules/dist, symlinks, huge files); repeats only store new blobs. restore is atomic per file, concurrency 4, sha256-verified by default.",
+          output_kind:
+            "snapshot_create: id, label, file_count, total_bytes, new_blob_bytes, skipped[], truncated; " +
+            "snapshot_list: checkpoints[]; snapshot_restore: restored_count/restored[], deleted_count, skipped[]; snapshot_delete: deleted, bytes_freed.",
+          batch_safe: false,
+        },
+        { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+      ),
+      inputSchema: {
+        action: z.enum(["create", "list", "restore", "delete"]).default("create"),
+        id: z.string().optional().describe("Checkpoint id (required for restore/delete; returned by create/list)."),
+        label: z
+          .string()
+          .max(400)
+          .optional()
+          .describe("Human label for the checkpoint, e.g. \"before refactor auth\"."),
+        paths: z
+          .array(z.string())
+          .max(64)
+          .optional()
+          .describe("Paths to capture (default ['.']); restore accepts a subset to filter files."),
+        exclude: z.array(z.string()).max(64).optional().describe("Extra directory/file names to skip."),
+        respect_default_excludes: z
+          .boolean()
+          .optional()
+          .describe("Default true: skip .git/node_modules/dist/build/.next/.venv/__pycache__ and the snapshot store itself."),
+        max_files: z.number().int().min(1).max(4000).optional(),
+        max_total_bytes: z.number().int().min(1).max(512 * 1024 * 1024).optional(),
+        dry_run: z.boolean().optional().describe("restore only: report what would change without writing."),
+        verify: z.boolean().optional().describe("restore only: sha256-verify each blob before writing (default true)."),
+        delete_extra: z
+          .boolean()
+          .optional()
+          .describe("restore only: also delete files inside captured dirs that are not in the checkpoint (default false, capped at 500)."),
+        limit: z.number().int().min(1).max(100).optional().describe("list only: max checkpoints to return (default 20)."),
+        reason: reason_,
+      },
+    },
+    (args) => runSnapshot(args as Args),
+  );
+
+  // -------------------------------------------------------------------------
+  // Git provider: pull requests (GitHub REST, token from the secret store)
+  // -------------------------------------------------------------------------
+
+  const repoArg = z
+    .string()
+    .max(200)
+    .optional()
+    .describe(
+      "Repository as \"owner/name\" (default: VENIRA_GITHUB_REPO, else the workspace .git origin remote).",
+    );
+
+  server.registerTool(
+    "project_pr_create",
+    {
+      ...config(
+        "Open a pull request for the current branch (or an explicit head/base). Repo comes from the git origin; the token comes from project_secret GITHUB_TOKEN.",
+        "Create pull request",
+        {
+          use_when:
+            "the change is committed and pushed, and the user asks to open a PR/MR. Default base is the repo's default branch.",
+          avoid_when: "the branch is not pushed yet (push first), or a PR for this branch already exists (use project_pr_comment).",
+          speed_profile: "one GitHub API call (~1 network round trip, 2 if the default branch is not cached).",
+          output_kind: "pr_create: repo, number, url, title, state, draft, head, base, created.",
+          batch_safe: false,
+        },
+        { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+      ),
+      inputSchema: {
+        title: z.string().min(1).max(256).describe("PR title (imperative, one line)."),
+        head: z.string().max(200).optional().describe("Source branch (default: the current branch)."),
+        base: z.string().max(200).optional().describe("Target branch (default: the repository default branch)."),
+        body: z.string().max(65_536).optional().describe("PR description (markdown); usually a summary + test plan."),
+        draft: z.boolean().optional().describe("Open as a draft PR."),
+        repo: repoArg,
+        reason: reason_,
+      },
+    },
+    (args) => runOne("pr_create", args as Args),
+  );
+
+  server.registerTool(
+    "project_pr_comment",
+    {
+      ...config(
+        "Post a comment (or review note) on a pull request or issue. Accepts a PR number or a full PR URL.",
+        "Comment on PR",
+        {
+          use_when: "reporting status into the PR thread, answering a review comment, or linking CI results.",
+          avoid_when: "the comment belongs in a code review with inline locations (GitHub UI) rather than a general comment.",
+          speed_profile: "one GitHub API call.",
+          output_kind: "pr_comment: repo, pr, comment_id, url, created_at, body_chars.",
+          batch_safe: false,
+        },
+        { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+      ),
+      inputSchema: {
+        pr: z.union([z.number().int().positive(), z.string().max(300)]).describe("PR number or PR URL."),
+        body: z.string().min(1).max(65_536).describe("Comment body (markdown)."),
+        repo: repoArg,
+        reason: reason_,
+      },
+    },
+    (args) => runOne("pr_comment", args as Args),
+  );
+
+  server.registerTool(
+    "project_pr_merge",
+    {
+      ...config(
+        "Merge a pull request (merge/squash/rebase) and optionally delete the head branch. Refuses cleanly when the PR is closed or conflicting.",
+        "Merge pull request",
+        {
+          use_when: "CI is green and the user asked to land the PR. Use method=squash for a single commit.",
+          avoid_when: "checks are still running (project_ci_status first), or the user only wants a review comment.",
+          speed_profile: "2-3 API calls (state check, merge, optional branch delete).",
+          output_kind: "pr_merge: repo, pr, merged, method, sha, head, base, branch_deleted, note?.",
+          batch_safe: false,
+        },
+        { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+      ),
+      inputSchema: {
+        pr: z.union([z.number().int().positive(), z.string().max(300)]).describe("PR number or PR URL."),
+        method: z.enum(["merge", "squash", "rebase"]).optional().describe("Merge strategy (default: merge)."),
+        commit_title: z.string().max(256).optional().describe("Title for the merge commit (squash/merge)."),
+        commit_message: z.string().max(65_536).optional().describe("Body for the merge commit."),
+        delete_branch: z.boolean().optional().describe("Delete the head branch after a successful merge (same-repo branches only)."),
+        repo: repoArg,
+        reason: reason_,
+      },
+    },
+    (args) => runOne("pr_merge", args as Args),
+  );
+
+  // -------------------------------------------------------------------------
+  // CI provider: GitHub Actions status / trigger / logs
+  // -------------------------------------------------------------------------
+
+  server.registerTool(
+    "project_ci_status",
+    {
+      ...config(
+        "Read GitHub Actions state: the latest runs for a branch/workflow, or one run (with its jobs) by run_id.",
+        "CI status",
+        {
+          use_when: "after pushing or triggering a workflow, to see whether checks passed before merging.",
+          avoid_when: "you need the failure detail (use project_ci_logs with the run_id/job_id).",
+          speed_profile: "1-2 API calls; newest runs first.",
+          output_kind:
+            "ci_status: overall (success|failure|in_progress|no_runs), runs[] {id, name, status, conclusion, branch, sha, url}, or run + jobs[] for run_id.",
+          batch_safe: true,
+        },
+        { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
+      ),
+      inputSchema: {
+        run_id: z.number().int().positive().optional().describe("Inspect one run (adds its jobs)."),
+        branch: z.string().max(200).optional().describe("Filter runs by branch."),
+        workflow: z.string().max(200).optional().describe("Workflow file name (ci.yml) or numeric id."),
+        limit: z.number().int().min(1).max(50).optional().describe("Max runs to list (default 10)."),
+        repo: repoArg,
+      },
+    },
+    (args) => runOne("ci_status", args as Args),
+  );
+
+  server.registerTool(
+    "project_ci_trigger",
+    {
+      ...config(
+        "Trigger a GitHub Actions workflow_dispatch on a ref, with optional inputs.",
+        "Trigger CI workflow",
+        {
+          use_when: "re-running a pipeline for a branch without a new commit, or dispatching a workflow with inputs.",
+          avoid_when: "the workflow has no workflow_dispatch trigger (GitHub rejects it), or a push would do it anyway.",
+          speed_profile: "one API call; the new run appears in project_ci_status within ~10s.",
+          output_kind: "ci_trigger: repo, workflow, ref, inputs, triggered, dispatched_at.",
+          batch_safe: false,
+        },
+        { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+      ),
+      inputSchema: {
+        workflow: z.string().min(1).max(200).describe("Workflow file name (e.g. ci.yml) or id."),
+        ref: z.string().max(200).optional().describe("Branch/tag to run on (default: current branch, else default branch)."),
+        inputs: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
+        repo: repoArg,
+        reason: reason_,
+      },
+    },
+    (args) => runOne("ci_trigger", args as Args),
+  );
+
+  server.registerTool(
+    "project_ci_logs",
+    {
+      ...config(
+        "Read GitHub Actions logs: a whole run (ZIP parsed in memory) or a single job. Returns the tail, not the whole log.",
+        "CI logs",
+        {
+          use_when: "a run failed and you need the error. Pass job_id to isolate the failing job; tail_lines/max_bytes keep it small.",
+          avoid_when: "you only need pass/fail (use project_ci_status).",
+          speed_profile: "1 download; run archives are parsed in memory with per-entry caps.",
+          output_kind:
+            "ci_logs: repo, run_id|job_id, source, entries[] {name, bytes, skipped?}, lines, text (tail), truncated, dropped_lines, dropped_bytes.",
+          batch_safe: true,
+        },
+        { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
+      ),
+      inputSchema: {
+        run_id: z.number().int().positive().optional().describe("Workflow run id (all jobs)."),
+        job_id: z.number().int().positive().optional().describe("Single job id (cheaper and narrower than a run)."),
+        tail_lines: z.number().int().min(1).max(5000).optional().describe("Keep only the last N lines (default 500)."),
+        max_bytes: z.number().int().min(1).max(4 * 1024 * 1024).optional().describe("Max text bytes returned (default 512KB, cap 4MB)."),
+        repo: repoArg,
+      },
+    },
+    (args) => runOne("ci_logs", args as Args),
+  );
+
+  // -------------------------------------------------------------------------
+  // Secrets: safe env-var storage for tokens and other credentials
+  // -------------------------------------------------------------------------
+
+  server.registerTool(
+    "project_secret",
+    {
+      ...config(
+        "Manage API tokens/credentials without leaking them: values are encrypted at rest and never returned by default. " +
+          "Inject them into commands with project_shell_run secret_env=[\"NAME\"] instead of pasting them into a command line.",
+        "Manage secrets",
+        {
+          use_when:
+            "storing a token (action=set), checking whether one exists (action=get metadata / action=list), " +
+            "removing one (action=delete). Then use secret_env on project_shell_run or the built-in GitHub tools.",
+          avoid_when:
+            "the value is a normal, non-secret config (put it in .env or the config file); or you need the plaintext " +
+            "printed (only with reveal=true + VENIRA_SECRET_ALLOW_REVEAL=1).",
+          speed_profile: "fast; encrypted AES-256-GCM store, atomic writes, values decrypted only when injected.",
+          output_kind:
+            "secret_set: name, length, sha256_12, updated_at, created; secret_get: metadata (revealed=false) or value when reveal is allowed; " +
+            "secret_list: secrets[] (names only); secret_delete: deleted.",
+          batch_safe: false,
+        },
+        { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+      ),
+      inputSchema: {
+        action: z.enum(["get", "set", "list", "delete"]).default("list"),
+        name: z
+          .string()
+          .max(64)
+          .optional()
+          .describe("Env-var style name, e.g. GITHUB_TOKEN (required for get/set/delete)."),
+        value: z
+          .string()
+          .max(16 * 1024)
+          .optional()
+          .describe("Secret value for action=set. Prefer value_env so it never appears in the transcript."),
+        value_env: z
+          .string()
+          .max(64)
+          .optional()
+          .describe("Read the value from this host environment variable instead of `value` (never logged)."),
+        reveal: z
+          .boolean()
+          .optional()
+          .describe("action=get: return the plaintext value. Requires VENIRA_SECRET_ALLOW_REVEAL=1 on the host; prefer secret_env injection."),
+        reason: reason_,
+      },
+    },
+    (args) => runSecret(args as Args),
   );
 }
 
