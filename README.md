@@ -277,15 +277,31 @@ Or point at a local build (after `git clone` + `npm install` + `npm run build`):
 | `VENIRA_SNAPSHOT_MAX_FILE_BYTES` | `33554432` (32 MiB) | Files larger than this are skipped and reported in `skipped[]`. |
 | `VENIRA_SNAPSHOT_MAX_BYTES` | `536870912` (512 MiB) | Per-checkpoint logical byte cap (the caller can lower it, never raise it). |
 | `VENIRA_NETWORK` | `"1"` | `"0"` is a hard kill switch: `project_pr_*` / `project_ci_*` return `network_disabled` and never open a socket. |
-| `VENIRA_GITHUB_API_URL` | `https://api.github.com` | API base (GitHub Enterprise: `https://<host>/api/v3`). Must be **https**; plain http is only accepted for localhost mock servers (or with `VENIRA_GITHUB_ALLOW_HTTP=1`, for tests). |
-| `VENIRA_GITHUB_ALLOW_HTTP` | unset | `"1"` allows a non-https API base. Only for local test servers — tokens over plaintext are a leak. |
-| `VENIRA_GITHUB_REPO` | unset | Fallback `owner/name` when the caller omits `repo`. Resolution order: `repo` arg → this env → `.git/config` `origin` URL. |
-| `VENIRA_GITHUB_TOKEN` | unset | Fallback token when the encrypted secret store has no `GITHUB_TOKEN`. The token is attached as a header and dropped on cross-origin redirects. |
-| `VENIRA_SECRET_ALLOW_REVEAL` | unset | `"1"` allows `project_secret action=get reveal=true` to return plaintext. Off by default: agents get metadata (length + sha256 prefix) only. |
+| `VENIRA_GIT_PROVIDER` | inferred | `github` \| `gitlab` \| `bitbucket`. When unset, inferred from the `origin` remote host (`github.com` → github, `gitlab` → gitlab, `bitbucket` → bitbucket). |
+| `VENIRA_GIT_API_URL` | per provider | Override API base: GitHub `https://api.github.com` · GitLab `https://gitlab.com/api/v4` · Bitbucket `https://api.bitbucket.org/2.0`. Must be https (localhost ok, or `VENIRA_GIT_ALLOW_HTTP=1`). |
+| `VENIRA_GIT_ALLOW_HTTP` | unset | `"1"` allows a non-https API base (local test servers only). |
+| `VENIRA_GIT_REPO` | unset | Fallback `owner/name` when the caller omits `repo`. Resolution: arg → this env → `git.repo` in `venira.config.json` → `.git/config` `origin` URL. |
+| `VENIRA_GIT_TOKEN` | unset | Fallback token when no provider-specific secret is found. Resolution chain: `VENIRA_GIT_TOKEN` → `VENIRA_GITHUB_TOKEN`/`GITHUB_TOKEN`/`GH_TOKEN` (GitHub) → `VENIRA_GITLAB_TOKEN`/`GITLAB_TOKEN`/`GL_TOKEN` (GitLab) → `VENIRA_BITBUCKET_TOKEN`/`BITBUCKET_TOKEN`/`BB_TOKEN` (Bitbucket) → secret store (`GITHUB_TOKEN`, `GITLAB_TOKEN`, `BITBUCKET_TOKEN` by provider). |
+| `VENIRA_GIT_SECRET_NAME` | per provider | Name of the secret in the encrypted store (`GITHUB_TOKEN` \| `GITLAB_TOKEN` \| `BITBUCKET_TOKEN`). |
+| `VENIRA_GIT_USERNAME` | unset | Bitbucket Basic auth username (when set, token is used as app password). |
+| `VENIRA_GIT_TIMEOUT_MS` | `60000` | Request timeout (1 s – 600 s, capped). |
+| `VENIRA_GIT_LOG_TIMEOUT_MS` | `90000` | Log download timeout (1 s – 900 s, capped). |
+| `VENIRA_GIT_MAX_BYTES` | `8388608` (8 MB) | Response body cap for API calls (1 KB – 64 MB, capped). |
+| `VENIRA_GIT_LOG_MAX_BYTES` | `524288` (512 KB) | Text output cap for logs (1 KB – 4 MB, capped). |
+| `VENIRA_GIT_LOG_ZIP_BYTES` | `33554432` (32 MB) | ZIP download cap for run logs (1 KB – 128 MB, capped). |
+| `VENIRA_GIT_LOG_ENTRY_BYTES` | `4194304` (4 MB) | Per-entry cap inside log archives (1 KB – 32 MB, capped). |
+| `VENIRA_GIT_LOG_TEXT_BYTES` | `8388608` (8 MB) | Concatenated text cap for log output (1 KB – 32 MB, capped). |
+| `VENIRA_GIT_MAX_REDIRECTS` | `5` | Max redirects per request (0 – 10, capped). |
+| `VENIRA_GIT_RETRIES` | `1` | GET retries on 5xx/network error (0 – 3, capped). |
+| `VENIRA_GIT_PROXY` | from `HTTPS_PROXY` | Explicit HTTPS proxy (CONNECT tunnel); overrides `HTTPS_PROXY`/`HTTP_PROXY`. `NO_PROXY` matching supported. |
+| `VENIRA_GITHUB_API_URL` | `https://api.github.com` | Legacy alias for `VENIRA_GIT_API_URL` (GitHub only). |
+| `VENIRA_GITHUB_ALLOW_HTTP` | unset | Legacy alias for `VENIRA_GIT_ALLOW_HTTP`. |
+| `VENIRA_GITHUB_REPO` | unset | Legacy alias for `VENIRA_GIT_REPO`. |
+| `VENIRA_GITHUB_TOKEN` | unset | Legacy alias for `VENIRA_GIT_TOKEN` (GitHub only). |
 
 ---
 
-## 4. Tools (37)
+## 4. Tools (40)
 
 Every tool returns the standard envelope ([§8](#8-envelopes-hints--error-codes)):
 
@@ -370,45 +386,38 @@ project_snapshot({ action: "restore", id: "snap-…", dry_run: true })   // insp
 project_snapshot({ action: "restore", id: "snap-…" })                  // roll back
 ```
 
-### 4.6 Git provider: pull requests (GitHub REST, no `gh` binary)
+### 4.6 Git provider: pull requests (GitHub, GitLab, Bitbucket)
 
 | Tool | Purpose | Notes |
 |---|---|---|
-| `project_pr_create` | Open a pull request for the current (or explicit) branch | `title` required · `head` defaults to the current branch · `base` defaults to the repo default branch (cached 5 min) · `body`, `draft`, `repo`, `reason`. Returns `number`, `url`, `state`, `head`, `base`. |
-| `project_pr_comment` | Post a comment on a PR: general thread comment **or inline review note** | `pr` accepts a number **or** a full PR URL · `body` (markdown) · for an inline note add `path` + `line` (plus optional `start_line`, `side: RIGHT\|LEFT`, `commit_id`) and it switches to the pull review-comment API · `commit_id` defaults to the **PR head sha** (GitHub requires it whenever `line` is used) · `repo`, `reason`. Returns `inline`, `path`, `line`, `commit_id`, `comment_id`, `url`. |
-| `project_pr_merge` | Merge a PR and optionally delete the head branch | `method: merge \| squash \| rebase` · `commit_title`, `commit_message`, `delete_branch` · `repo`, `reason`. A closed/already-merged PR returns `already_merged` instead of an error; a conflicting PR returns `conflict`. |
+| `project_pr_create` | Open a pull/merge request for the current (or explicit) branch | `title` required · `head` defaults to the current branch · `base` defaults to the repo default branch (cached 5 min) · `body`, `draft`, `repo`, `provider`, `reason`. Returns `number`, `url`, `state`, `head`, `base`, `provider`. |
+| `project_pr_comment` | Post a comment on a PR/MR: general thread comment **or inline review note** | `pr` accepts a number **or** a full PR/MR URL · `body` (markdown) · for an inline note add `path` + `line` (plus optional `start_line`, `side: RIGHT\|LEFT`, `commit_id`) · `commit_id` defaults to the **PR head sha** · `repo`, `provider`, `reason`. Returns `inline`, `path`, `line`, `commit_id`, `comment_id`, `url`. |
+| `project_pr_merge` | Merge a PR/MR and optionally delete the head branch | `method: merge \| squash \| rebase` · `commit_title`, `commit_message`, `delete_branch` · `repo`, `provider`, `reason`. A closed/already-merged PR returns `already_merged`; a conflicting PR returns `conflict`. Bitbucket uses `merge_commit` / `squash` / `fast_forward` strategies. |
+| `project_pr_list` | List pull/merge requests for a repo | `state: open \| closed \| all` (default `open`) · `head`, `base` filters · `limit` ≤ 100 · `repo`, `provider`. Returns `repo`, `provider`, `state`, `total`, `prs[]` with `number`, `title`, `state`, `draft`, `head`, `base`, `author`, `url`. |
+| `project_pr_close` | Close/decline an open PR/MR | `pr` (number or URL) · `repo`, `provider`, `reason`. Idempotent (closing a closed PR is a no-op). Bitbucket calls this "decline". |
+| `project_pr_reopen` | Reopen a closed PR/MR | `pr` (number or URL) · `repo`, `provider`, `reason`. Idempotent. GitHub & GitLab supported; Bitbucket returns `unsupported` (open a new PR instead). |
 
-The token comes from `project_secret` (`GITHUB_TOKEN`), then `VENIRA_GITHUB_TOKEN`, then
-`GITHUB_TOKEN` / `GH_TOKEN`. Owner/name are validated against `[A-Za-z0-9._-]`, so a crafted
-`repo` value cannot inject a path or query string. Requests go over `node:https` with a timeout,
-a response-size cap and manual redirect handling: the `Authorization` header is only attached
-while the request still targets the API host.
+The provider, API base, token and limits are resolved per call from **call args → `venira.config.json` → environment → inferred remote → default** (see §3.4). The token comes from `project_secret` (`GITHUB_TOKEN`/`GITLAB_TOKEN`/`BITBUCKET_TOKEN` by provider), then provider-specific env vars (`VENIRA_GITHUB_TOKEN`/`GITHUB_TOKEN`/`GH_TOKEN`, `VENIRA_GITLAB_TOKEN`/`GITLAB_TOKEN`/`GL_TOKEN`, `VENIRA_BITBUCKET_TOKEN`/`BITBUCKET_TOKEN`/`BB_TOKEN`), then the generic `VENIRA_GIT_TOKEN`. Owner/name are validated against `[A-Za-z0-9._-]`. Requests go over `node:https` with configurable timeout, response-size cap, redirect limit and manual redirect handling: the auth header is only attached while the request still targets the API host. An optional CONNECT proxy (`VENIRA_GIT_PROXY` > `HTTPS_PROXY` > config) with `NO_PROXY` matching is supported.
 
 ```jsonc
 project_pr_create({ title: "Add provider tools", head: "feature/x", reason: "open PR for review" })
-// → { repo: "acme/demo", number: 7, url: "https://github.com/acme/demo/pull/7", state: "open", created: true }
+// → { repo: "acme/demo", provider: "github", number: 7, url: "https://github.com/acme/demo/pull/7", state: "open", created: true }
 project_pr_merge({ pr: 7, method: "squash", delete_branch: true })
-```
-
-### 4.7 CI provider: GitHub Actions (status / trigger / logs)
+```### 4.7 CI provider: GitHub Actions, GitLab Pipelines, Bitbucket Pipelines
 
 | Tool | Purpose | Notes |
 |---|---|---|
-| `project_ci_status` | Read the latest runs for a branch/workflow, one run **with its jobs**, or branch-protection **check-runs** | `branch`, `workflow` (file name or id), `limit` ≤ 50 → workflow runs; `run_id` → run + `jobs[]`; `ref` (sha/branch) or `pr` (resolved to the head sha) → `check_runs[]`. Returns `overall` (`success \| failure \| in_progress \| no_runs \| no_checks`). |
-| `project_ci_trigger` | Dispatch a `workflow_dispatch` | `workflow` required · `ref` defaults to the current branch → default branch · `inputs` (≤ 10 string/number/boolean values), `reason`. |
-| `project_ci_logs` | Read the tail of a run's or job's logs | `run_id` (ZIP parsed **in memory**) or `job_id` (narrower, cheaper) · `tail_lines` (default 500) · `max_bytes` (default 512 KB, cap 4 MB). Archive cap 32 MB, per-entry cap 4 MB, unsupported/encrypted entries are reported in `entries[].skipped`. |
+| `project_ci_status` | Read the latest runs for a branch/workflow, one run **with its jobs**, or branch-protection **check-runs** (GitHub) | `branch`, `workflow` (file name or id), `limit` ≤ 50 → workflow runs / pipelines; `run_id` → run + `jobs[]`; `ref` (sha/branch) or `pr` (resolved to the head sha) → `check_runs[]` (GitHub) or newest pipeline (GitLab/Bitbucket). Returns `overall` (`success \| failure \| in_progress \| no_runs \| no_checks`), `source` (`actions` \| `pipelines` \| `check-runs`), `provider`. |
+| `project_ci_trigger` | Dispatch a workflow / pipeline | `workflow` (GitHub: file name or id; GitLab/Bitbucket: optional label/pattern) · `ref` defaults to current branch → default branch · `inputs`/`variables` (string/number/boolean), `reason`. |
+| `project_ci_logs` | Read the tail of a run's or job's logs | `run_id` (GitHub: ZIP; GitLab/Bitbucket: up to 3 failing jobs/steps) or `job_id` (GitHub/GitLab: job id; Bitbucket: step UUID or `pipeline:step`) · `tail_lines` (default 500) · `max_bytes` (default 512 KB, cap 4 MB). Archive cap 32 MB, per-entry cap 4 MB, unsupported/encrypted entries reported in `entries[].skipped`. |
 
-Logs are never extracted to disk (no zip-slip) and never fully returned: the response is the
-tail plus `entries[]`, `lines`, `truncated`, `dropped_lines` and `dropped_bytes`. The download
-redirects to a pre-signed storage URL, and the token is dropped on that hop by design.
+Logs are never extracted to disk (no zip-slip) and never fully returned: the response is the tail plus `entries[]`, `lines`, `truncated`, `dropped_lines` and `dropped_bytes`. The download redirects to a pre-signed storage URL, and the token is dropped on that hop by design.
 
 ```jsonc
 project_ci_status({ branch: "feature/x", limit: 3 })
-// → { overall: "failure", runs: [{ id: 99, conclusion: "failure", url: "…/runs/99" }, …] }
-project_ci_logs({ run_id: 99, tail_lines: 50 })   // or { job_id: 2 } to isolate a failing job
-```
-
-### 4.8 Secrets (encrypted at rest, never in the transcript)
+// → { overall: "failure", source: "pipelines", provider: "gitlab", runs: [{ id: 77, conclusion: "failure", url: "…/pipelines/77" }, …] }
+project_ci_logs({ run_id: 77, tail_lines: 50 })   // or { job_id: 2 } / { run_id: "uuid", job_id: "uuid" } for Bitbucket
+```### 4.8 Secrets (encrypted at rest, never in the transcript)
 
 | Tool | Purpose | Notes |
 |---|---|---|
@@ -1123,14 +1132,27 @@ existing artifact/lockfile rules.
 | Inline PR review comments (file/line) | ✅ shipped (v1.5.0) | `project_pr_comment` with `path`, `line`, `start_line`, `side`, `commit_id`. |
 | PR checks API (`check-runs`) in `project_ci_status` | ✅ shipped (v1.5.0) | `ref` / `pr` → `GET /commits/{ref}/check-runs`. |
 | Secret rotation metadata (expiry, last used) | ✅ shipped (v1.5.0) | `expires_at`, `days_left`, `last_used_at`, `use_count`, `rotated_at`; expired secrets refused. |
-| GitLab / Bitbucket providers | 🚧 v1.6.0 (in progress) | One `GitDialect` per provider (`lib/git-github.ts`, `lib/git-gitlab.ts`, `lib/git-bitbucket.ts`); the PR/CI tools keep the same arguments. |
-| Multi-repo workspaces | 🚧 v1.6.0 (in progress) | `venira.config.json` maps `owner/name` → provider / API base / secret, so one workspace can drive several repos and accounts. |
-| Configurable git client | 🚧 v1.6.0 (in progress) | Timeouts, byte caps, redirects, retries and proxy come from env or config instead of constants; provider is inferred from the `origin` host when not set. |
+| GitLab / Bitbucket providers | ✅ shipped (v1.6.0) | One `GitDialect` per provider (`lib/git-github.ts`, `lib/git-gitlab.ts`, `lib/git-bitbucket.ts`); the PR/CI tools keep the same arguments. |
+| Multi-repo workspaces | ✅ shipped (v1.6.0) | `venira.config.json` maps `owner/name` → provider / API base / secret, so one workspace can drive several repos and accounts. |
+| Configurable git client | ✅ shipped (v1.6.0) | Timeouts, byte caps, redirects, retries and proxy come from env or config instead of constants; provider is inferred from the `origin` host when not set. |
 
-### 14.5 v1.6.0 plan — provider-agnostic, configurable git layer
+### 14.5 v1.6.0 — provider-agnostic, configurable git layer (shipped)
 
 The v1.5 git tools were **configurable per call but hardcoded per install**: GitHub-only
 dialect, fixed secret/env names, fixed timeouts and caps, no proxy. v1.6.0 turns those
+constants into configuration and adds a second and third dialect.
+
+**Delivered**
+
+- `lib/git-config.ts` resolves one context per call: `provider → api_url → repo → token → limits`, in the order **call args → `venira.config.json` → environment → built-in default**.
+- `lib/git-http.ts` owns the request loop: manual redirects with token drop, response caps, retries for idempotent GETs, and an optional `CONNECT` proxy with `NO_PROXY` matching.
+- `lib/git-github.ts` / `git-gitlab.ts` / `git-bitbucket.ts` implement the same operations (`create`, `comment`, `merge`, `list`, `close`, `reopen`, CI status/trigger/logs); `lib/git-provider.ts` routes to the active dialect.
+- New tools: `project_pr_list`, `project_pr_close`, `project_pr_reopen` (**40 tools** total).
+- `venira.config.json` (`git.provider`, `api_url`, `secret`, `username`, `timeout_ms`, `log_timeout_ms`, `max_bytes`, `log_max_bytes`, `log_zip_bytes`, `log_entry_bytes`, `log_text_bytes`, `max_redirects`, `retries`, `proxy`, `repos{}`) + matching `VENIRA_GIT_*` env overrides; provider inferred from the remote host (`github` / `gitlab` / `bitbucket`) when unset.
+- Hard safety ceilings on all limits; invalid values fail with `invalid_request` + hint; no secret is ever echoed.
+- Proxy (`VENIRA_GIT_PROXY` > `HTTPS_PROXY` > config) with `NO_PROXY`; tunable timeouts/caps with hard ceilings; retry GET on 5xx/network errors (`VENIRA_GIT_RETRIES`, default 1).
+- GitLab (`/api/v4`): MR create/note/merge/list/close/reopen, pipelines, jobs trace. Bitbucket Cloud (`/2.0`): PR create/comment/merge/list/decline/reopen, pipelines + step logs.
+- `build` / `verify` / `doctor` green; release workflow publishes via OIDC.. v1.6.0 turns those
 constants into configuration and adds a second and third dialect.
 
 **Design**

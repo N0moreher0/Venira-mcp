@@ -9,6 +9,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { promises as fs } from "node:fs";
 import { startGithubMock } from "./github-mock.js";
+import { startBitbucketMock, startGitlabMock } from "./git-mocks.js";
 
 const SESSION_ID = `verify-${Date.now()}`;
 
@@ -18,6 +19,8 @@ const SESSION_ID = `verify-${Date.now()}`;
  * GitHub's pre-signed-blob redirect.
  */
 const githubMock = await startGithubMock();
+const gitlabMock = await startGitlabMock();
+const bitbucketMock = await startBitbucketMock();
 
 function verifyEnv(extraEnv: Record<string, string> = {}, outputMode = "full") {
   return {
@@ -90,7 +93,7 @@ check("instructions_present", instructions?.includes("Decision tree") ?? false, 
 await client2.close();
 
 const tools = await client.listTools();
-const expectedCount = 37;
+const expectedCount = 40;
 check("tool_count", tools.tools.length === expectedCount, { actual: tools.tools.length, expected: expectedCount });
 const snapshotTool = tools.tools.find((t) => t.name === "project_snapshot");
 check("tool_snapshot_present", !!snapshotTool, tools.tools.map((t) => t.name));
@@ -98,6 +101,9 @@ const expectedNewTools = [
   "project_pr_create",
   "project_pr_comment",
   "project_pr_merge",
+  "project_pr_list",
+  "project_pr_close",
+  "project_pr_reopen",
   "project_ci_status",
   "project_ci_trigger",
   "project_ci_logs",
@@ -817,6 +823,33 @@ check("pr_merge_deletes_branch", prMerge.data?.branch_deleted === true && github
 const prMissing = asEnvelope(await call("project_pr_merge", { pr: 999 }));
 check("pr_merge_not_found", prMissing.error?.code === "not_found", prMissing);
 
+const prList = asEnvelope(await call("project_pr_list", { state: "open", limit: 5 }));
+check(
+  "pr_list",
+  prList.ok === true &&
+    prList.kind === "pr_list" &&
+    prList.data?.provider === "github" &&
+    prList.data?.prs?.length === 2 &&
+    prList.data?.prs?.[0]?.number === 7 &&
+    prList.data?.prs?.[0]?.head === "verify-branch",
+  prList,
+);
+const prListBadState = asEnvelope(await call("project_pr_list", { state: "open" }));
+check("pr_list_state_validated", prListBadState.error?.code === "invalid_request", prListBadState);
+
+const prClose = asEnvelope(await call("project_pr_close", { pr: 7 }));
+check(
+  "pr_close",
+  prClose.ok === true && prClose.data?.state === "closed" && prClose.data?.closed === true && githubMock.state.closes === 1,
+  prClose,
+);
+const prReopen = asEnvelope(await call("project_pr_reopen", { pr: 7 }));
+check(
+  "pr_reopen",
+  prReopen.ok === true && prReopen.data?.state === "open" && prReopen.data?.reopened === true && githubMock.state.reopens === 1,
+  prReopen,
+);
+
 const ciList = asEnvelope(await call("project_ci_status", { limit: 3 }));
 check(
   "ci_status_list",
@@ -891,6 +924,130 @@ check(
   githubMock.blobAuth.length === 3 && githubMock.blobAuth.every((auth) => auth === null),
   githubMock.blobAuth,
 );
+
+// 11d-ter. Provider dialects: GitLab + Bitbucket Cloud against local mocks.
+console.log("[verify] checking gitlab/bitbucket dialects...");
+async function providerClient(extraEnv: Record<string, string>) {
+  const providerTransport = new StdioClientTransport({
+    command: "node",
+    args: ["dist/server.js"],
+    cwd: process.cwd(),
+    env: verifyEnv(extraEnv, "full"),
+    stderr: "pipe",
+  });
+  const providerClientInstance = new Client({ name: "verify-provider", version: "0.0.0" }, { capabilities: {} });
+  await providerClientInstance.connect(providerTransport);
+  return providerClientInstance;
+}
+const providerCall = async (target: Client, name: string, args: Record<string, unknown>) => {
+  const raw = await target.callTool({ name, arguments: args });
+  return JSON.parse((raw as { content?: { text?: string }[] }).content?.[0]?.text ?? "{}");
+};
+
+const gl = await providerClient({
+  VENIRA_GIT_PROVIDER: "gitlab",
+  VENIRA_GIT_API_URL: gitlabMock.apiUrl,
+  VENIRA_GIT_REPO: "acme/demo",
+  VENIRA_GIT_TOKEN: "verify-gitlab-token",
+  VENIRA_GIT_RETRIES: "0",
+});
+const glCreate = await providerCall(gl, "project_pr_create", { title: "Add GitLab dialect", head: "verify-branch", body: "MR body" });
+check(
+  "gitlab_pr_create",
+  glCreate.ok === true && glCreate.data?.provider === "gitlab" && glCreate.data?.number === 11 && glCreate.data?.base === "main",
+  glCreate,
+);
+const glComment = await providerCall(gl, "project_pr_comment", { pr: 11, body: "LGTM from verify" });
+check("gitlab_pr_comment", glComment.ok === true && glComment.data?.comment_id === 501 && gitlabMock.state.comments === 1, glComment);
+const glInline = await providerCall(gl, "project_pr_comment", { pr: 11, body: "inline note", path: "src/app.ts", line: 42 });
+check(
+  "gitlab_pr_comment_inline",
+  glInline.ok === true &&
+    glInline.data?.inline === true &&
+    glInline.data?.commit_id === "head-sha" &&
+    gitlabMock.state.lastInline?.position?.new_line === 42 &&
+    gitlabMock.state.lastInline?.position?.position_type === "text",
+  { data: glInline.data, position: gitlabMock.state.lastInline?.position },
+);
+const glList = await providerCall(gl, "project_pr_list", { state: "open" });
+check("gitlab_pr_list", glList.ok === true && glList.data?.provider === "gitlab" && glList.data?.prs?.length === 1, glList);
+const glClose = await providerCall(gl, "project_pr_close", { pr: 11 });
+check("gitlab_pr_close", glClose.ok === true && glClose.data?.state === "closed" && gitlabMock.state.closes === 1, glClose);
+const glReopen = await providerCall(gl, "project_pr_reopen", { pr: 11 });
+check("gitlab_pr_reopen", glReopen.ok === true && glReopen.data?.state === "open" && gitlabMock.state.reopens === 1, glReopen);
+const glMerge = await providerCall(gl, "project_pr_merge", { pr: 11, method: "squash", delete_branch: true });
+check("gitlab_pr_merge", glMerge.ok === true && glMerge.data?.merged === true && glMerge.data?.sha === "gl-merge-sha", glMerge);
+const glCi = await providerCall(gl, "project_ci_status", { ref: "verify-branch" });
+check(
+  "gitlab_ci_status",
+  glCi.ok === true && glCi.data?.provider === "gitlab" && glCi.data?.source === "pipelines" && glCi.data?.overall === "failure" && glCi.data?.runs?.[0]?.id === 77,
+  glCi,
+);
+const glRun = await providerCall(gl, "project_ci_status", { run_id: 77 });
+check("gitlab_ci_run", glRun.ok === true && glRun.data?.run?.id === 77 && glRun.data?.jobs?.length === 2 && glRun.data?.overall === "failure", glRun);
+const glTrigger = await providerCall(gl, "project_ci_trigger", { ref: "main", inputs: { suite: "full" } });
+check("gitlab_ci_trigger", glTrigger.ok === true && glTrigger.data?.triggered === true && glTrigger.data?.pipeline_id === 78, glTrigger);
+const glJobLogs = await providerCall(gl, "project_ci_logs", { job_id: 7 });
+check("gitlab_ci_logs_job", glJobLogs.ok === true && String(glJobLogs.data?.text ?? "").includes("FAIL src/demo.test.ts:42"), glJobLogs.data?.text);
+const glRunLogs = await providerCall(gl, "project_ci_logs", { run_id: 77, tail_lines: 2 });
+check("gitlab_ci_logs_run", glRunLogs.ok === true && String(glRunLogs.data?.text ?? "").includes("FAIL src/demo.test.ts:42") && glRunLogs.data?.truncated === true, glRunLogs.data);
+check(
+  "gitlab_token_header",
+  gitlabMock.requests.some((request) => request.path.includes("/merge_requests") && request.privateToken === "verify-gitlab-token"),
+  gitlabMock.requests.slice(0, 3),
+);
+await gl.close();
+
+const bb = await providerClient({
+  VENIRA_GIT_PROVIDER: "bitbucket",
+  VENIRA_GIT_API_URL: bitbucketMock.apiUrl,
+  VENIRA_GIT_REPO: "acme/demo",
+  VENIRA_GIT_TOKEN: "verify-bb-token",
+  VENIRA_GIT_USERNAME: "bot",
+  VENIRA_GIT_RETRIES: "0",
+});
+const bbCreate = await providerCall(bb, "project_pr_create", { title: "Add Bitbucket dialect", head: "verify-branch" });
+check(
+  "bitbucket_pr_create",
+  bbCreate.ok === true && bbCreate.data?.provider === "bitbucket" && bbCreate.data?.number === 21 && bbCreate.data?.base === "main",
+  bbCreate,
+);
+const bbComment = await providerCall(bb, "project_pr_comment", { pr: 21, body: "LGTM from verify" });
+check("bitbucket_pr_comment", bbComment.ok === true && bbComment.data?.comment_id === 701, bbComment);
+const bbInline = await providerCall(bb, "project_pr_comment", { pr: 21, body: "inline", path: "src/app.ts", line: 9 });
+check(
+  "bitbucket_pr_comment_inline",
+  bbInline.ok === true && bbInline.data?.inline === true && bitbucketMock.state.lastInline?.to === 9 && bitbucketMock.state.lastInline?.path === "src/app.ts",
+  { data: bbInline.data, inline: bitbucketMock.state.lastInline },
+);
+const bbList = await providerCall(bb, "project_pr_list", { state: "open" });
+check("bitbucket_pr_list", bbList.ok === true && bbList.data?.prs?.length === 1 && bbList.data?.provider === "bitbucket", bbList);
+const bbClose = await providerCall(bb, "project_pr_close", { pr: 21 });
+check("bitbucket_pr_close", bbClose.ok === true && bbClose.data?.state === "closed" && bitbucketMock.state.declines === 1, bbClose);
+const bbReopen = await providerCall(bb, "project_pr_reopen", { pr: 21 });
+check("bitbucket_pr_reopen_unsupported", bbReopen.ok === false && bbReopen.error?.code === "unsupported", bbReopen);
+const bbMerge = await providerCall(bb, "project_pr_merge", { pr: 21, method: "squash", delete_branch: true });
+check("bitbucket_pr_merge", bbMerge.ok === true && bbMerge.data?.merged === true && bbMerge.data?.sha === "bb-merge-sha", bbMerge);
+const bbCi = await providerCall(bb, "project_ci_status", { ref: "verify-branch" });
+check(
+  "bitbucket_ci_status",
+  bbCi.ok === true && bbCi.data?.source === "pipelines" && bbCi.data?.overall === "failure" && bbCi.data?.runs?.[0]?.id === "{pipeline-1}",
+  bbCi,
+);
+const bbRun = await providerCall(bb, "project_ci_status", { run_id: "{pipeline-1}" });
+check("bitbucket_ci_run", bbRun.ok === true && bbRun.data?.jobs?.length === 1 && bbRun.data?.overall === "failure", bbRun);
+const bbTrigger = await providerCall(bb, "project_ci_trigger", { ref: "main" });
+check("bitbucket_ci_trigger", bbTrigger.ok === true && bbTrigger.data?.triggered === true && bbTrigger.data?.workflow === "default", bbTrigger);
+const bbLogs = await providerCall(bb, "project_ci_logs", { run_id: "{pipeline-1}", job_id: "{step-1}" });
+check("bitbucket_ci_logs_step", bbLogs.ok === true && String(bbLogs.data?.text ?? "").includes("FAIL demo.test.ts:42"), bbLogs.data?.text);
+check(
+  "bitbucket_basic_auth",
+  bitbucketMock.requests.some(
+    (request) => request.path.includes("/pullrequests") && request.auth === `Basic ${Buffer.from("bot:verify-bb-token").toString("base64")}`,
+  ),
+  bitbucketMock.requests.slice(0, 2).map((r) => r.auth),
+);
+await bb.close();
 
 // 11d-bis. Diagnostics + read planning (deterministic, no model call).
 console.log("[verify] checking diagnostics + read planning...");
@@ -1125,6 +1282,138 @@ process.env.VENIRA_NETWORK = "0";
 const networkOff = provider.networkEnabled() === false;
 process.env.VENIRA_NETWORK = savedNetwork;
 check("provider_network_unit", networkOff, undefined);
+
+// 11g. Config precedence, limits and HTTP knobs (pure unit checks).
+console.log("[verify] checking git config precedence + http knobs...");
+const { gitContext, gitHealth } = await import("../lib/git-config.js");
+const { gitFetch, shouldBypassProxy } = await import("../lib/git-http.js");
+const cfgPath = `${dir}/venira.config.json`;
+await fs.writeFile(
+  cfgPath,
+  JSON.stringify({
+    git: {
+      provider: "gitlab",
+      api_url: gitlabMock.apiUrl,
+      repo: "acme/demo",
+      timeout_ms: 5000,
+      retries: 0,
+      secret: "GITLAB_TOKEN",
+      repos: { "acme/demo": { provider: "bitbucket", secret: "BB_ALT" } },
+    },
+  }),
+);
+const touched = [
+  "VENIRA_CONFIG_FILE",
+  "VENIRA_GIT_PROVIDER",
+  "VENIRA_GIT_API_URL",
+  "VENIRA_GIT_REPO",
+  "VENIRA_GIT_TOKEN",
+  "VENIRA_GIT_SECRET_NAME",
+  "VENIRA_GIT_TIMEOUT_MS",
+  "VENIRA_GIT_MAX_REDIRECTS",
+  "VENIRA_GIT_RETRIES",
+  "VENIRA_GIT_USERNAME",
+  "NO_PROXY",
+  "no_proxy",
+];
+const savedEnv = new Map(touched.map((key) => [key, process.env[key]]));
+process.env.VENIRA_CONFIG_FILE = cfgPath;
+process.env.VENIRA_GIT_REPO = "acme/demo";
+process.env.VENIRA_GIT_TOKEN = "unit-token";
+process.env.VENIRA_GITHUB_API_URL = gitlabMock.apiUrl;
+delete process.env.VENIRA_GIT_PROVIDER;
+delete process.env.VENIRA_GIT_API_URL;
+delete process.env.VENIRA_GIT_SECRET_NAME;
+delete process.env.VENIRA_GIT_TIMEOUT_MS;
+delete process.env.VENIRA_GIT_MAX_REDIRECTS;
+delete process.env.VENIRA_GIT_RETRIES;
+delete process.env.VENIRA_GIT_USERNAME;
+
+const cfgCtx = gitContext();
+check(
+  "config_repo_override",
+  cfgCtx.provider === "bitbucket" &&
+    cfgCtx.provider_source === "config:repo" &&
+    cfgCtx.secret_name === "BB_ALT" &&
+    cfgCtx.api_base === gitlabMock.apiUrl &&
+    cfgCtx.timeout_ms === 5000,
+  { provider: cfgCtx.provider, source: cfgCtx.provider_source, secret: cfgCtx.secret_name, api: cfgCtx.api_base, timeout: cfgCtx.timeout_ms },
+);
+
+process.env.VENIRA_GIT_PROVIDER = "gitlab";
+const envCtx = gitContext();
+check("config_env_beats_file", envCtx.provider === "gitlab" && envCtx.provider_source === "env", {
+  provider: envCtx.provider,
+  source: envCtx.provider_source,
+});
+
+process.env.VENIRA_GIT_TIMEOUT_MS = "2500";
+const timeoutCtx = gitContext();
+check("config_env_timeout", timeoutCtx.timeout_ms === 2500, timeoutCtx.timeout_ms);
+
+process.env.VENIRA_GIT_MAX_REDIRECTS = "99";
+let redirectsRejected = false;
+try {
+  gitContext();
+} catch (error) {
+  redirectsRejected = error instanceof Error && error.message.startsWith("[invalid_request]");
+}
+process.env.VENIRA_GIT_MAX_REDIRECTS = "5";
+check("config_limit_ceiling", redirectsRejected, undefined);
+
+process.env.VENIRA_GIT_PROVIDER = "svn";
+let providerRejected = false;
+try {
+  gitContext();
+} catch (error) {
+  providerRejected = error instanceof Error && error.message.startsWith("[invalid_request]");
+}
+process.env.VENIRA_GIT_PROVIDER = "gitlab";
+check("config_provider_validated", providerRejected, undefined);
+
+process.env.NO_PROXY = ".internal,api.github.com";
+check(
+  "config_no_proxy",
+  shouldBypassProxy("api.github.com") &&
+    shouldBypassProxy("build.internal") &&
+    shouldBypassProxy("foo.internal") &&
+    !shouldBypassProxy("gitlab.com"),
+  { github: shouldBypassProxy("api.github.com"), internal: shouldBypassProxy("foo.internal"), gitlab: shouldBypassProxy("gitlab.com") },
+);
+
+// Retry: one 500 then 200 with retries=1; with retries=0 the 500 surfaces.
+process.env.VENIRA_GIT_PROVIDER = "github";
+process.env.VENIRA_GIT_API_URL = githubMock.apiUrl;
+process.env.VENIRA_GIT_RETRIES = "1";
+const retryCtx = gitContext();
+const retried = await gitFetch(retryCtx, "/retry-once");
+check("http_retries_get", retried.status === 200 && githubMock.state.retryOnce === 2, { status: retried.status, attempts: githubMock.state.retryOnce });
+process.env.VENIRA_GIT_RETRIES = "0";
+const noRetryCtx = gitContext();
+let noRetryFailed = false;
+try {
+  await gitFetch(noRetryCtx, "/always-500");
+} catch (error) {
+  noRetryFailed = error instanceof Error && error.message.startsWith("[provider_error]");
+}
+check("http_no_retry_when_zero", noRetryFailed, undefined);
+
+const healthJson = JSON.stringify(gitHealth());
+check(
+  "config_health_no_secret",
+  gitHealth().provider === "github" &&
+    !healthJson.includes("unit-token") &&
+    healthJson.includes("acme/demo") &&
+    healthJson.includes("\"retries\":0"),
+  gitHealth(),
+);
+
+for (const key of touched) {
+  const value = savedEnv.get(key);
+  if (value === undefined) delete process.env[key];
+  else process.env[key] = value;
+}
+await fs.rm(cfgPath, { force: true });
 
 const healthProvider = asEnvelope(await call("project_health", { include_audit: false }));
 check(

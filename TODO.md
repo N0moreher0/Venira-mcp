@@ -237,20 +237,20 @@ The whole history in order — what shipped, when, and why.
 - `bench-mcp.ts`: add a "fresh mode" scenario (VENIRA_CACHE_ALL=0) vs "default"
 - ✅ `doctor.ts`: checks for the P1 env vars + provider/secret config surface
 
-## 🚧 v1.6.0 — configurable git layer (plan)
+## 🚧 v1.6.0 — configurable git layer (plan) ✅
 
 Goal: the git tools stop being GitHub-only and stop baking constants into the binary.
 
-- [ ] **Config precedence** — call args → `venira.config.json` → `VENIRA_GIT_*` env → default; one resolver (`lib/git-config.ts`)
-- [ ] **Provider selection** — `VENIRA_GIT_PROVIDER` / `git.provider` / inferred from the `origin` host (`github.com`, `gitlab.*`, `bitbucket.*`)
-- [ ] **Tokens** — `git.secret` / `git.repos[repo].secret` / `VENIRA_GIT_SECRET_NAME`, env chain per provider, optional `username` (Bitbucket Basic)
-- [ ] **HTTP knobs** — `timeout_ms`, `log_timeout_ms`, `max_bytes`, `max_redirects`, `retries` (GET only), hard safety ceilings
-- [ ] **Proxy** — `VENIRA_GIT_PROXY` > `HTTPS_PROXY` > config, `NO_PROXY` matching, CONNECT tunnel for https
-- [ ] **GitLab dialect** — MR create/comment/merge/list/close/reopen; pipelines status/trigger; job trace logs
-- [ ] **Bitbucket Cloud dialect** — PR create/comment/merge/list/decline/reopen; pipelines status/trigger; step logs
-- [ ] **New tools** — `project_pr_list`, `project_pr_close`, `project_pr_reopen` (40 tools)
-- [ ] **Tests** — mocks per dialect, config precedence, proxy/NO_PROXY, retries, cap ceilings
-- [ ] **Docs** — README env table + §4.6/§4.7/§4.9, roadmap rows, changelog, tag `v1.6.0`
+- [x] **Config precedence** — call args → `venira.config.json` → `VENIRA_GIT_*` env → default; one resolver (`lib/git-config.ts`)
+- [x] **Provider selection** — `VENIRA_GIT_PROVIDER` / `git.provider` / inferred from the `origin` host (`github.com`, `gitlab.*`, `bitbucket.*`)
+- [x] **Tokens** — `git.secret` / `git.repos[repo].secret` / `VENIRA_GIT_SECRET_NAME`, env chain per provider, optional `username` (Bitbucket Basic)
+- [x] **HTTP knobs** — `timeout_ms`, `log_timeout_ms`, `max_bytes`, `max_redirects`, `retries` (GET only), hard safety ceilings
+- [x] **Proxy** — `VENIRA_GIT_PROXY` > `HTTPS_PROXY` > config, `NO_PROXY` matching, CONNECT tunnel for https
+- [x] **GitLab dialect** — MR create/comment/merge/list/close/reopen; pipelines status/trigger; job trace logs
+- [x] **Bitbucket Cloud dialect** — PR create/comment/merge/list/decline/reopen; pipelines status/trigger; step logs
+- [x] **New tools** — `project_pr_list`, `project_pr_close`, `project_pr_reopen` (40 tools)
+- [x] **Tests** — mocks per dialect, config precedence, proxy/NO_PROXY, retries, cap ceilings
+- [x] **Docs** — README env table + §4.6/§4.7/§4.9, roadmap rows, changelog, tag `v1.6.0`
 
 ## 📅 Estimated timeline (delivered)
 - **v1.1.0** (P1, ~1 week): ✅ Cache control + Trace + read_audit + Shell UX
@@ -262,7 +262,7 @@ Goal: the git tools stop being GitHub-only and stop baking constants into the bi
 - **v1.4.0**: ✅ checkpoints + audit reasons + Git/PR + CI + secrets (35 tools, verify 186/186)
 - **v1.5.0**: ✅ inline PR review comments + check-runs + secret rotation + deterministic `explain_error` / `plan_read_batch` (37 tools, verify 211/211)
 - **v1.5.1 → v1.5.4**: ✅ hardening found by live E2E + bench — inline `commit_id`, planner artifact/lockfile/credential filters, name/path ranking + calibrated estimate (verify 218/218)
-- **v1.6.0** (in progress): configurable git layer — config file, provider dialects (GitLab/Bitbucket), proxy, retries, PR list/close/reopen (40 tools)
+- **v1.6.0** ✅: configurable git layer — config file, provider dialects (GitLab/Bitbucket), proxy, retries, PR list/close/reopen (40 tools)
 - **Backlog**: chroma/supabase integration, metrics UI
 
 ## ✅ Success criteria
@@ -281,6 +281,16 @@ Goal: the git tools stop being GitHub-only and stop baking constants into the bi
 - **Ranking**: prose (`*.md`, README/LICENSE/CHANGELOG, `docs/`) keeps only 0.3 of its hits (minus 2) unless the task mentions documentation; generated lockfiles (`package-lock.json`, `yarn.lock`, …) are excluded like other artifacts.
 - **Estimate**: `estimated_ms` calibrated from the bench (6-file batch ≈ 62 ms) instead of a flat 6 ms.
 - **Tests**: verify 217/217 (named-file ranking, docs-when-asked, calibrated estimate); version 1.5.3.
+
+### v1.6.0 (2026-10-29) ✅
+- **Configurable git layer**: provider selection (GitHub/GitLab/Bitbucket), per-call config precedence (args → config file → env → default), `venira.config.json` with `git.provider`, `api_url`, `secret`, `username`, `timeout_ms`, `log_timeout_ms`, `max_bytes`, `log_max_bytes`, `log_zip_bytes`, `log_entry_bytes`, `log_text_bytes`, `max_redirects`, `retries`, `proxy`, `repos{}`; matching `VENIRA_GIT_*` env vars.
+- **Provider dialects**: GitHub (REST), GitLab (`/api/v4`), Bitbucket Cloud (`/2.0`); unified tool surface with `provider` arg; `project_pr_list`, `project_pr_close`, `project_pr_reopen` (40 tools).
+- **HTTP layer**: manual redirects with auth drop on cross-origin, response caps, GET retries (0-3), CONNECT proxy with `NO_PROXY` matching.
+- **Hard safety ceilings** on all limits; invalid values fail with `invalid_request` + hint; secrets never echoed.
+- **GitLab**: MR create/note/merge/list/close/reopen; pipelines status/trigger; job trace logs (up to 3 failing jobs).
+- **Bitbucket**: PR create/comment/merge/list/decline/reopen; pipelines status/trigger; step logs (pipeline UUID + step UUID).
+- **Tests**: GitHub/GitLab/Bitbucket mocks, config precedence, proxy/NO_PROXY, retries, cap ceilings.
+- **Docs**: README env table, §4.6/§4.7 provider-agnostic, roadmap shipped.
 
 ### v1.5.4 (2026-10-29) ✅
 - **Fix (E2E v1.5.3 loop find)**: `project_plan_read_batch` proposed reading credentials — a secret-related task ranked `data/secrets.json` (encrypted store) and `data/secrets.key` into the top 6.
