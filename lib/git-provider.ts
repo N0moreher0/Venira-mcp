@@ -710,6 +710,20 @@ function overallFrom(runs: Array<Record<string, unknown>>): string {
   return failed ? "failure" : "success";
 }
 
+/**
+ * Resolve a PR's head sha. GitHub requires `commit_id` for review comments that
+ * use `line` (a bare `line` is rejected with 422 "line is not a permitted
+ * key"), and check-runs are addressed by sha, so both paths share this lookup.
+ */
+async function pullHeadSha(basePath: string, pr: number, hint: string): Promise<string> {
+  const pull = await ghJson("GET", `${basePath}/pulls/${pr}`, { allowAnonymous: true });
+  const sha = String(pull.json?.head?.sha ?? "");
+  if (!sha) {
+    throw new Error(`[not_found] PR ${pr} has no head sha (closed or fork-only?). Hint: ${hint}`);
+  }
+  return sha;
+}
+
 // ---------------------------------------------------------------------------
 // Pull requests
 // ---------------------------------------------------------------------------
@@ -760,6 +774,7 @@ export async function opPrComment(args: Record<string, unknown>): Promise<Resp> 
   const pr = prNumberFrom(args, "pr");
   const body = requireText(args, "body", "pass body=\"...\" (markdown is fine).");
   const repoLabel = `${repo.owner}/${repo.name}`;
+  const base = `/repos/${repo.owner}/${repo.name}`;
   const filePath = text(args, "path");
 
   // Inline review comment: `path` + `line` switch to the review-comment API,
@@ -772,7 +787,7 @@ export async function opPrComment(args: Record<string, unknown>): Promise<Resp> 
           "Hint: pass path=\"src/app.ts\" and line=42, or drop line for a general PR comment.",
       );
     }
-    const { json } = await ghJson("POST", `/repos/${repo.owner}/${repo.name}/issues/${pr}/comments`, { body: { body } });
+    const { json } = await ghJson("POST", `${base}/issues/${pr}/comments`, { body: { body } });
     return ok("pr_comment", {
       repo: repoLabel,
       pr,
@@ -807,9 +822,13 @@ export async function opPrComment(args: Record<string, unknown>): Promise<Resp> 
     payload.start_line = Math.floor(startLine);
     payload.start_side = side;
   }
-  const commitId = text(args, "commit_id");
-  if (commitId) payload.commit_id = commitId;
-  const { json } = await ghJson("POST", `/repos/${repo.owner}/${repo.name}/pulls/${pr}/comments`, { body: payload });
+  // GitHub requires `commit_id` whenever `line` is used (a bare `line` is
+  // rejected with 422 "line is not a permitted key"), so default to the PR head
+  // sha instead of making every caller look it up.
+  const commitId =
+    text(args, "commit_id") || (await pullHeadSha(base, pr, 'pass commit_id="<sha>" explicitly.'));
+  payload.commit_id = commitId;
+  const { json } = await ghJson("POST", `${base}/pulls/${pr}/comments`, { body: payload });
   return ok("pr_comment", {
     repo: repoLabel,
     pr,
@@ -818,6 +837,7 @@ export async function opPrComment(args: Record<string, unknown>): Promise<Resp> 
     line: Math.floor(line),
     ...(startLine > 0 ? { start_line: Math.floor(startLine) } : {}),
     side,
+    commit_id: commitId,
     comment_id: json?.id ?? null,
     url: json?.html_url ?? null,
     created_at: json?.created_at ?? null,
@@ -921,14 +941,7 @@ export async function opCiStatus(args: Record<string, unknown>): Promise<Resp> {
     let prNumber: number | null = null;
     if (!targetRef) {
       prNumber = prNumberFrom(args, "pr");
-      const pull = await ghJson("GET", `${base}/pulls/${prNumber}`, { allowAnonymous: true });
-      const sha = String(pull.json?.head?.sha ?? "");
-      if (!sha) {
-        throw new Error(
-          `[check_runs_unavailable] PR ${prNumber} has no head sha (closed or fork-only?). Hint: pass ref=\"<sha>\" instead.`,
-        );
-      }
-      targetRef = sha;
+      targetRef = await pullHeadSha(base, prNumber, 'pass ref="<sha>" instead.');
     }
     if (!/^[A-Za-z0-9._/-]{1,200}$/.test(targetRef) || targetRef.includes("..")) {
       throw new Error(
