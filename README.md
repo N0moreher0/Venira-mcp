@@ -1123,8 +1123,37 @@ existing artifact/lockfile rules.
 | Inline PR review comments (file/line) | ✅ shipped (v1.5.0) | `project_pr_comment` with `path`, `line`, `start_line`, `side`, `commit_id`. |
 | PR checks API (`check-runs`) in `project_ci_status` | ✅ shipped (v1.5.0) | `ref` / `pr` → `GET /commits/{ref}/check-runs`. |
 | Secret rotation metadata (expiry, last used) | ✅ shipped (v1.5.0) | `expires_at`, `days_left`, `last_used_at`, `use_count`, `rotated_at`; expired secrets refused. |
-| GitLab / Bitbucket providers | 💡 v1.6 candidate | The provider layer is isolated in `lib/git-provider.ts`; a second dialect would mirror it. |
-| Multi-repo workspaces | 💡 v1.6 candidate | Today: one repo inferred from the workspace `.git`, override per call via `repo`. |
+| GitLab / Bitbucket providers | 🚧 v1.6.0 (in progress) | One `GitDialect` per provider (`lib/git-github.ts`, `lib/git-gitlab.ts`, `lib/git-bitbucket.ts`); the PR/CI tools keep the same arguments. |
+| Multi-repo workspaces | 🚧 v1.6.0 (in progress) | `venira.config.json` maps `owner/name` → provider / API base / secret, so one workspace can drive several repos and accounts. |
+| Configurable git client | 🚧 v1.6.0 (in progress) | Timeouts, byte caps, redirects, retries and proxy come from env or config instead of constants; provider is inferred from the `origin` host when not set. |
+
+### 14.5 v1.6.0 plan — provider-agnostic, configurable git layer
+
+The v1.5 git tools were **configurable per call but hardcoded per install**: GitHub-only
+dialect, fixed secret/env names, fixed timeouts and caps, no proxy. v1.6.0 turns those
+constants into configuration and adds a second and third dialect.
+
+**Design**
+
+- `lib/git-config.ts` resolves one context per call:
+  `provider → api_url → repo → token → limits`, in the order
+  **call args → `venira.config.json` → environment → built-in default**.
+- `lib/git-http.ts` owns the request loop: manual redirects with token drop, response caps,
+  retries for idempotent GETs, and an optional `CONNECT` proxy with `NO_PROXY` matching.
+- `lib/git-github.ts` / `git-gitlab.ts` / `git-bitbucket.ts` implement the same operations
+  (`create`, `comment`, `merge`, `list`, `close`, `reopen`, CI status/trigger/logs);
+  `lib/git-provider.ts` routes to the active dialect.
+- New tools: `project_pr_list`, `project_pr_close`, `project_pr_reopen` (**40 tools**).
+
+**Phases**
+
+| Phase | Scope | Acceptance |
+|---|---|---|
+| 1. Config | `venira.config.json` (`git.provider`, `api_url`, `secret`, `username`, `timeout_ms`, `log_timeout_ms`, `max_bytes`, `max_redirects`, `retries`, `proxy`, `repos{}`) + matching `VENIRA_GIT_*` env overrides; provider inferred from the remote host (`github` / `gitlab` / `bitbucket`) when unset. | Every value has a documented default; invalid values fail with `invalid_request` + hint; no secret is ever echoed. |
+| 2. HTTP | Proxy (`VENIRA_GIT_PROXY` > `HTTPS_PROXY` > config) with `NO_PROXY`; tunable timeouts/caps with hard safety ceilings; retry GET on 5xx/network errors (`VENIRA_GIT_RETRIES`, default 1). | Mock tests prove CONNECT + no-proxy bypass, retry count, and that caps cannot exceed their ceiling. |
+| 3. Dialects | GitLab (`/api/v4`): MR create/note/merge/list/close/reopen, pipelines, jobs trace. Bitbucket Cloud (`/2.0`): PR create/comment/merge/list/decline/reopen, pipelines + step logs. | Same tool arguments return the same envelope shape (`repo`, `number`, `url`, `state`, `overall`). |
+| 4. PR lifecycle | `project_pr_list` (state/head/base/limit), `project_pr_close`, `project_pr_reopen`. | Closing a PR no longer needs a raw `PATCH`; list is batch-safe and read-only. |
+| 5. Docs + release | README env table + §4.6/§4.7, TODO roadmap, changelog, tag `v1.6.0`. | `build` / `verify` / `doctor` green; release workflow publishes via OIDC. |
 
 ---
 
