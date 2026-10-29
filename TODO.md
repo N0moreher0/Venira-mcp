@@ -1,19 +1,22 @@
-# VENIRA MCP CODING — TODO LIST (standalone v1.0.0 → v1.4.0)
+# VENIRA MCP CODING — TODO LIST (standalone v1.0.0 → v1.5.0)
 
 > Standalone: pure-Node backend, no external binary.
 > Each item lists effort (low/med/high), priority (P0/P1/P2/P3), and status.
 
-## 📊 Current state (standalone v1.4.0)
+## 📊 Current state (standalone v1.5.0)
 
 - ✅ 100% of the logic has been moved to Node (no more Rust corehost)
 - ✅ Audit via SQLite WAL using `better-sqlite3` (replaces `node:sqlite`)
 - ✅ Native shell via `child_process` (no Rust required)
-- ✅ 35 tools working, verify 186/186 PASS, doctor 12/12 PASS
+- ✅ 37 tools working, verify 211/211 PASS, doctor 12/12 PASS
 - ✅ Checkpoints (`project_snapshot`: create/list/restore/delete, content-addressed, git-free rollback)
 - ✅ Audit reasons: mutating tools accept `reason` ("why"), stored in `project_tool_audit.reason` and returned by `project_read_audit`
 - ✅ Git provider (`project_pr_create` / `project_pr_comment` / `project_pr_merge`) over GitHub REST — no `gh` binary
 - ✅ CI provider (`project_ci_status` / `project_ci_trigger` / `project_ci_logs`) over GitHub Actions — ZIP logs parsed in memory
 - ✅ Secrets (`project_secret`: get/set/list/delete) — AES-256-GCM at rest, metadata-only reads, `secret_env` injection, value redaction
+- ✅ Secret rotation metadata — `expires_at`/`expires_in_days`, `days_left`, `last_used_at`, `use_count`, `rotated_at`; expired secrets refused (`secret_expired`) before a child starts or a provider call
+- ✅ Inline PR review comments — `project_pr_comment` with `path` + `line` (+ `start_line`, `side`, `commit_id`)
+- ✅ Branch-protection check-runs — `project_ci_status` with `ref` / `pr` → `GET /commits/{ref}/check-runs`
 - ✅ `search_cache_invalidated` fix (0-hit results are no longer cached)
 - ✅ Dual license: MIT + Apache-2.0
 - ✅ CI/CD GitHub Actions (no more Rust build needed)
@@ -25,9 +28,9 @@
 - ✅ P2 code intelligence: `project_outline_symbol` / `project_file_symbols`
 - ✅ P2 fuzzy edit + SQLite recent files index
 - ✅ P3 code intelligence: `project_diff_files`, `project_symbol_references`, `project_selective_search`
-- ⏸️ P3 deferred: `project_explain_error`, `project_plan_read_batch` (require OpenCode model access)
+- ✅ P3 diagnostics + planning: `project_explain_error` (deterministic rule table → next actions) and `project_plan_read_batch` (task → ready read batch) — no model call needed
 
-## 🕒 Full timeline (v1.0.0 → v1.4.0)
+## 🕒 Full timeline (v1.0.0 → v1.5.0)
 
 The whole history in order — what shipped, when, and why.
 
@@ -44,6 +47,7 @@ The whole history in order — what shipped, when, and why.
 | 2026-10-28 | **v1.3.0** | P2/P3 code intelligence: `project_outline_symbol`, `project_file_symbols`, `project_diff_files`, `project_symbol_references`, `project_selective_search`; fuzzy edit (`VENIRA_EDIT_FUZZY`); SQLite recent-files index (`project_file_index`, index-first + bounded fallback). |
 | 2026-10-29 | (post-1.3.0) | P2.5 self-install: `project_detect_harnesses` + `project_install_self` (OpenCode / Claude / Cursor / Codex / Kimi / DeepSeek / Antigravity) with atomic config merge + backup. |
 | 2026-10-29 | **v1.4.0** | **Checkpoints + audit reasons + Git/PR + CI + encrypted secrets.** `project_snapshot` (content-addressed, deduplicated, sha256-verified rollback), `reason` on every mutation stored in the audit trail, GitHub pull-request + Actions tools, AES-256-GCM secret store with `secret_env` injection, network safety layer. **35 tools**, verify **186/186**. |
+| 2026-10-29 | **v1.5.0** | **Inline review comments + check-runs + secret rotation + deterministic diagnostics.** `project_pr_comment` pins notes to a file/line; `project_ci_status` reads branch-protection check-runs (`ref`/`pr`); secret rotation metadata with expiry enforcement; `project_explain_error` (rule table → next actions) and `project_plan_read_batch` (task → ready batch). **37 tools**, verify **211/211**. |
 
 ## 🎯 Implementation Roadmap
 
@@ -129,17 +133,19 @@ The whole history in order — what shipped, when, and why.
 - [x] workspace scope: uses content search via "search" op
 - [x] Tool registration in `tools/project.ts` (runSymbolReferences)
 
-### P3: `project_explain_error` (effort: high, 10-15h) ⏸️
-- [ ] LLM-based: error → explanation + how to fix it (uses the OpenCode model)
-- [ ] Args: { error_message?, log_tail?, context_file? }
-- [ ] Data: { explanation, suggested_fix, retry_hint }
-- [ ] Status: DEFERRED — requires OpenCode model access, low priority
+### P3: `project_explain_error` (effort: high, 10-15h) ✅
+- [x] Rule-based (no model call): error block / log tail → cause + fixes + ready next tool calls
+- [x] Args: { error_text?, log_tail?, language? }
+- [x] Data: { matched, summary, error_line, language, diagnoses[] {rule_id, likely_cause, suggested_fix, retry_hint, next_actions}, next_actions }
+- [x] Implementation in `lib/diagnostics.ts` (~28 signatures: errno, TS/JS, Python/pytest, git, npm, GitHub 401/403/429, SQLite, venira codes)
+- [x] Tool registration in `tools/project.ts` (runExplainError); unknown input returns `matched: false` (never an error)
 
-### P3: `project_plan_read_batch` (effort: medium, 4-6h) ⏸️
-- [ ] A "planning" tool for reading files: suggests which batch/ranges/search to use
-- [ ] Input: { task_description, files_hint? }
-- [ ] Output: { recommended: [{ operation, args, why }], estimated_ms }
-- [ ] Status: DEFERRED — requires OpenCode model access, low priority
+### P3: `project_plan_read_batch` (effort: medium, 4-6h) ✅
+- [x] Deterministic planner: keywords → bounded content searches → ranked candidates → a ready `project_read_batch` request
+- [x] Input: { task_description, files_hint?, max_files?, include_search? }
+- [x] Output: { task, keywords, searched, candidates, steps[{tool, arguments, why}], estimated_ms, notes }
+- [x] Implementation in `lib/read-plan.ts`; falls back to the recent-files index / tree map when keywords are thin
+- [x] Tool registration in `tools/project.ts` (runPlanReadBatch); outline step for files > 256 KB
 
 ### P3: `project_selective_search` (effort: high, 8-10h) ✅
 - [x] "Smart" search: combine multiple queries (AND/OR/NOT), fuzzy, scoring
@@ -182,6 +188,32 @@ The whole history in order — what shipped, when, and why.
 - [x] `node:http(s)` client with timeouts, response caps, manual redirects (no global `fetch`)
 - [x] e2e mock (`scripts/github-mock.ts`): API origin + second-origin blob server, records auth headers
 
+## 🚀 v1.5.0 Additions (Oct 2026) ✅
+
+### Inline PR review comments ✅
+- [x] `project_pr_comment` + `path` + `line` → `POST /repos/{o}/{r}/pulls/{n}/comments` (pins the note to the diff)
+- [x] Optional `start_line` (multi-line range), `side: RIGHT|LEFT`, `commit_id` (defaults to the PR head)
+- [x] Validation: `line`/`start_line` without `path` (and `path` without `line`) → `invalid_request`; `start_line <= line`
+- [x] Result carries `inline: true`, `path`, `line`, `start_line`, `side`
+
+### Branch-protection check-runs ✅
+- [x] `project_ci_status` + `ref` (sha/branch) or `pr` (resolved to the head sha) → `GET /commits/{ref}/check-runs`
+- [x] `overall`: `success | failure | in_progress | no_checks`; `check_runs[]`: name, status, conclusion, app, url, summary
+- [x] Ref validation (`[A-Za-z0-9._/-]`, max 200, rejects `..`) before the URL is built
+- [x] Actions mode (`branch` / `workflow` / `run_id`) unchanged
+
+### Secret rotation metadata ✅
+- [x] `SecretMeta`: `expires_at`, `expired`, `days_left`, `last_used_at`, `use_count`, `rotated_at`
+- [x] `action=set` accepts `expires_in_days` (1..3650) or `expires_at` (epoch ms / ISO-8601); both → `invalid_request`
+- [x] A re-`set` is a rotation: overwrite, reset the use counter, keep the previous expiry unless a new one is given
+- [x] Expiry enforced at injection (`secret_env` + provider token) before decryption → `secret_expired` + rotate hint
+- [x] Use tracking is fire-and-forget (1 s debounce per name); a metadata write failure never fails the call
+
+### Deterministic diagnostics + planning ✅
+- [x] `lib/diagnostics.ts` — ~28 rule signatures → cause, fixes, retry hint, deduped `next_actions`
+- [x] `lib/read-plan.ts` — quoted phrases/identifiers/words → up to 3 bounded searches → ranked candidates → ready batch
+- [x] Both are pure local logic: no model call, no network, no file contents in the response
+
 ## 📝 Notes for "strict" / "absolute" users
 
 | Problem | Config to be "absolute" |
@@ -192,7 +224,7 @@ The whole history in order — what shipped, when, and why.
 | Shell timeout | `VENIRA_SHELL_TIMEOUT_POLICY=hard` |
 
 ## 🧪 Test plan (next)
-- ✅ `verify.ts`: audit mode, cache control, trace, read_audit, checkpoints, PR/CI, secrets, network (186 checks)
+- ✅ `verify.ts`: audit mode, cache control, trace, read_audit, checkpoints, PR/CI/check-runs, secrets/rotation, diagnostics + planning, network (211 checks)
 - `bench-mcp.ts`: add a "fresh mode" scenario (VENIRA_CACHE_ALL=0) vs "default"
 - ✅ `doctor.ts`: checks for the P1 env vars + provider/secret config surface
 
@@ -204,8 +236,9 @@ The whole history in order — what shipped, when, and why.
 - **v1.3.0** (P3, ~1-2 months): ✅ diff + symbols + references + selective_search
 - **v1.3.0+** (P2.5): ✅ self-install (`project_detect_harnesses` / `project_install_self`)
 - **v1.4.0**: ✅ checkpoints + audit reasons + Git/PR + CI + secrets (35 tools, verify 186/186)
-- **v1.5.0** (candidate): inline PR review comments, PR check-runs, GitLab/Bitbucket dialect, secret rotation metadata, multi-repo workspaces
-- **Backlog**: `explain_error` + `plan_read_batch` (deferred — need model access), chroma/supabase integration, metrics UI
+- **v1.5.0**: ✅ inline PR review comments + check-runs + secret rotation + deterministic `explain_error` / `plan_read_batch` (37 tools, verify 211/211)
+- **v1.6.0** (candidate): GitLab/Bitbucket provider dialect, multi-repo workspaces
+- **Backlog**: chroma/supabase integration, metrics UI
 
 ## ✅ Success criteria
 - [x] The model picks the right tool per the rules (each P0/P1 done)
@@ -217,6 +250,15 @@ The whole history in order — what shipped, when, and why.
 ---
 
 ## 📝 Change Log
+
+### v1.5.0 (2026-10-29) ✅
+- **Inline PR review comments**: `project_pr_comment` accepts `path` + `line` (+ `start_line`, `side`, `commit_id`) and posts through the pull review-comment API; general comments unchanged
+- **Branch-protection check-runs**: `project_ci_status` adds `ref` / `pr` → `GET /commits/{ref}/check-runs`, `overall` gains `no_checks`, `check_runs[]` summarised; Actions mode unchanged
+- **Secret rotation metadata**: `expires_at` / `expires_in_days`, `expired`, `days_left`, `last_used_at`, `use_count`, `rotated_at`; re-`set` rotates (counter reset, previous expiry kept unless replaced); expired secrets refused at injection (`secret_expired`)
+- **Diagnostics**: `project_explain_error` — deterministic rule table (~28 signatures) → cause + fixes + ready `next_actions`, no model call
+- **Read planning**: `project_plan_read_batch` — keywords → bounded searches → ranked candidates → ready `project_read_batch` call + estimate, no model call
+- **Secrets health**: `project_health` reports `expired` / `with_expiry`
+- **Tests**: 37 tools, verify 211/211 PASS (mock GitHub API + check-runs + inline comments), doctor expects 37
 
 ### v1.4.0 (2026-10-29) ✅
 - **Git / PR provider**: `project_pr_create`, `project_pr_comment`, `project_pr_merge` (GitHub REST, repo/token auto-resolution)
@@ -279,4 +321,4 @@ The whole history in order — what shipped, when, and why.
 
 ---
 
-Next steps: P3 explain_error + plan_read_batch (deferred, needs OpenCode model access). All P1/P2/P0 roadmap items plus Git/PR, CI and secrets providers are complete.
+Next steps: v1.6 candidates are the GitLab/Bitbucket provider dialect and multi-repo workspaces. All P0/P1/P2/P3 roadmap items (including `project_explain_error` and `project_plan_read_batch`), plus the Git/PR, CI, check-run, secrets/rotation and diagnostics surfaces, are complete.

@@ -22,7 +22,7 @@ export type GithubMock = {
   requests: MockRequest[];
   /** Authorization header seen by the blob (log download) server. */
   blobAuth: Array<string | null>;
-  state: { dispatches: number; comments: number; merges: number; branchDeletes: number; pullsCreated: number };
+  state: { dispatches: number; comments: number; merges: number; branchDeletes: number; pullsCreated: number; inlineComments: number; lastInline: any };
   close: () => Promise<void>;
 };
 
@@ -129,6 +129,32 @@ const JOBS = [
   { id: 2, name: "test", status: "completed", conclusion: "failure", started_at: "2026-10-29T02:02:05Z", completed_at: "2026-10-29T02:04:00Z", html_url: "https://github.com/acme/demo/runs/2", runner_name: "ubuntu-latest" },
 ];
 
+/** Branch-protection check-runs (one passing, one failing). */
+const CHECK_RUNS = [
+  {
+    id: 501,
+    name: "build",
+    status: "completed",
+    conclusion: "success",
+    started_at: "2026-10-29T02:00:05Z",
+    completed_at: "2026-10-29T02:02:00Z",
+    html_url: "https://github.com/acme/demo/runs/501",
+    app: { name: "GitHub Actions" },
+    output: { title: "ok" },
+  },
+  {
+    id: 502,
+    name: "lint",
+    status: "completed",
+    conclusion: "failure",
+    started_at: "2026-10-29T02:02:05Z",
+    completed_at: "2026-10-29T02:03:00Z",
+    html_url: "https://github.com/acme/demo/runs/502",
+    app: { name: "GitHub Actions" },
+    output: { title: "3 warnings" },
+  },
+];
+
 function listen(server: http.Server): Promise<string> {
   return new Promise((resolve, reject) => {
     server.once("error", reject);
@@ -142,7 +168,7 @@ function listen(server: http.Server): Promise<string> {
 export async function startGithubMock(): Promise<GithubMock> {
   const requests: MockRequest[] = [];
   const blobAuth: Array<string | null> = [];
-  const state = { dispatches: 0, comments: 0, merges: 0, branchDeletes: 0, pullsCreated: 0 };
+  const state = { dispatches: 0, comments: 0, merges: 0, branchDeletes: 0, pullsCreated: 0, inlineComments: 0, lastInline: null as any };
 
   let blobUrl = "";
 
@@ -245,7 +271,7 @@ export async function startGithubMock(): Promise<GithubMock> {
           merged: false,
           mergeable: true,
           title: "Add provider tools",
-          head: { ref: "verify-branch", repo: { full_name: "acme/demo" } },
+          head: { ref: "verify-branch", sha: "0123456789abcdef0123456789abcdef01234567", repo: { full_name: "acme/demo" } },
           base: { ref: "main" },
         });
       }
@@ -263,6 +289,26 @@ export async function startGithubMock(): Promise<GithubMock> {
           id: 1000 + state.comments,
           html_url: `https://github.com/acme/demo/pull/7#issuecomment-${1000 + state.comments}`,
           created_at: "2026-10-29T02:10:00Z",
+        });
+      }
+
+      // Inline review comments: pinned to a file/line in the "Files changed" tab.
+      if (/^\/repos\/acme\/demo\/pulls\/7\/comments$/u.test(path) && req.method === "POST") {
+        const body = await readBody();
+        state.inlineComments += 1;
+        state.lastInline = body;
+        return json(201, {
+          id: 2000 + state.inlineComments,
+          html_url: `https://github.com/acme/demo/pull/7#discussion_r${2000 + state.inlineComments}`,
+          created_at: "2026-10-29T02:11:00Z",
+        });
+      }
+
+      // Branch-protection checks (check-runs API).
+      if (/^\/repos\/acme\/demo\/commits\/.+\/check-runs$/u.test(path) && req.method === "GET") {
+        return json(200, {
+          total_count: CHECK_RUNS.length,
+          check_runs: CHECK_RUNS,
         });
       }
 

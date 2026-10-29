@@ -44,6 +44,8 @@ import {
   type HarnessName,
   type InstallResult,
 } from "../lib/self-install.js";
+import { explainErrorText } from "../lib/diagnostics.js";
+import { buildReadPlan, extractKeywords, type PlanCandidate } from "../lib/read-plan.js";
 
 const PERMISSION_MODE = process.env.VENIRA_PERMISSION_MODE ?? "allow_all";
 // allow_all grants the "chat-terminal" scope when there is no Project (same as the native app).
@@ -1828,8 +1830,7 @@ async function runSymbolReferences(args: Args): Promise<ToolResult> {
   return toolResult(buildEnvelope("symbol_references", response, { requestId, elapsedMs, cached: false }));
 }
 
-async function runSelectiveSearch(args: Args): Promise<ToolResult> {
-  const started = performance.now();
+async function runSelectiveSearch(args: Args): Promise<ToolResult> {  const started = performance.now();
   const requestId = newRequestId();
   const queries = args.queries as Array<{ pattern: string; must?: boolean; weight?: number }> | undefined;
   if (!Array.isArray(queries) || queries.length === 0) {
@@ -1875,6 +1876,147 @@ async function runSelectiveSearch(args: Args): Promise<ToolResult> {
   const elapsedMs = performance.now() - started;
   recordMetric("selective_search", elapsedMs, true);
   return toolResult(buildEnvelope("selective_search", response, { requestId, elapsedMs, cached: false }));
+}
+
+// ---------------------------------------------------------------------------
+// Diagnostics + read planning (deterministic, no model call)
+// ---------------------------------------------------------------------------
+
+/** Map a familiar failure to its cause and the next tool call (rules, not a model). */
+async function runExplainError(args: Args): Promise<ToolResult> {
+  const started = performance.now();
+  const requestId = newRequestId();
+  const errorText = typeof args.error_text === "string" ? args.error_text : "";
+  const logTail = typeof args.log_tail === "string" ? args.log_tail : "";
+  if (!errorText.trim() && !logTail.trim()) {
+    const elapsedMs = performance.now() - started;
+    return toolResult(
+      errorEnvelope(
+        "explain_error",
+        new Error(
+          "[invalid_request] Pass error_text (the error block) or log_tail (the last lines of output). " +
+            "Hint: project_ci_logs and project_shell_status already return a tail.",
+        ),
+        { requestId, elapsedMs },
+      ),
+      true,
+    );
+  }
+  const result = explainErrorText({ error_text: errorText, log_tail: logTail });
+  const language =
+    result.language ?? (typeof args.language === "string" && args.language.trim() ? args.language.trim() : null);
+  const response: RustResponse = {
+    status: "completed",
+    result: { kind: "explain_error", data: { ...result, language } },
+    ...(result.matched
+      ? {}
+      : {
+          hint:
+            "No known signature matched. Hint: read the failing file:line with project_read_ranges, then narrow the loop " +
+            "(one test / one command) before changing code.",
+        }),
+  };
+  const elapsedMs = performance.now() - started;
+  recordMetric("explain_error", elapsedMs, true);
+  return toolResult(buildEnvelope("explain_error", response, { requestId, elapsedMs, cached: false }));
+}
+
+/**
+ * Turn a task sentence into a real read plan: keywords → bounded searches →
+ * ranked candidates → one ready `project_read_batch` call (+ outline/search
+ * follow-ups). Deterministic and read-only.
+ */
+async function runPlanReadBatch(args: Args): Promise<ToolResult> {
+  const started = performance.now();
+  const requestId = newRequestId();
+  const task = typeof args.task_description === "string" ? args.task_description.trim() : "";
+  if (!task) {
+    const elapsedMs = performance.now() - started;
+    return toolResult(
+      errorEnvelope(
+        "plan_read_batch",
+        new Error(
+          "[invalid_request] `task_description` is required. Hint: describe the change in one line, e.g. " +
+            '"add retry handling to the GitHub client".',
+        ),
+        { requestId, elapsedMs },
+      ),
+      true,
+    );
+  }
+  const maxFiles = Math.max(1, Math.min(8, Number(args.max_files ?? 6) || 6));
+  const keywords = extractKeywords(task, Math.max(1, Math.min(5, Number(args.max_keywords ?? 5) || 5)));
+  const includeSearch = args.include_search !== false;
+  const hints = Array.isArray(args.files_hint)
+    ? (args.files_hint as unknown[]).map((value) => String(value).trim()).filter(Boolean).slice(0, 16)
+    : [];
+
+  const candidates = new Map<string, PlanCandidate>();
+  for (const rel of hints) candidates.set(rel, { relative_path: rel, reason: "files_hint", hits: 3 });
+
+  let searched = false;
+  for (const keyword of includeSearch ? keywords.slice(0, 3) : []) {
+    try {
+      const searchRes = (await execute("search", {
+        query: keyword,
+        kind: "literal_content",
+        limit: 25,
+      })) as RustResponse;
+      searched = true;
+      const hits = (searchRes.result?.data as { hits?: unknown[] } | undefined)?.hits ?? [];
+      for (const hit of hits as Array<{ relative_path?: unknown }>) {
+        const rel = String(hit.relative_path ?? "");
+        if (!rel) continue;
+        const existing = candidates.get(rel);
+        if (existing) existing.hits = (existing.hits ?? 0) + 1;
+        else candidates.set(rel, { relative_path: rel, reason: `search:${keyword}`, hits: 1 });
+      }
+    } catch {
+      /* a single search failure (policy/glob) must not fail the plan */
+    }
+  }
+
+  // Fallback: the SQLite recent-files index keeps the plan useful on a cold
+  // keyword match (a bare task description has no identifiers to search for).
+  if (candidates.size < 2) {
+    try {
+      for (const recent of queryRecentFiles(12, false)) {
+        if (!candidates.has(recent.relative_path)) {
+          candidates.set(recent.relative_path, {
+            relative_path: recent.relative_path,
+            reason: "recent_edit",
+            size_bytes: recent.size,
+          });
+        }
+      }
+    } catch {
+      /* index unavailable: plan works from hints/keywords only */
+    }
+  }
+
+  const ranked = [...candidates.values()]
+    .sort((a, b) => (b.hits ?? 0) - (a.hits ?? 0) || a.relative_path.localeCompare(b.relative_path))
+    .slice(0, maxFiles);
+
+  const plan = buildReadPlan({ task, keywords, candidates: ranked, maxFiles, includeSearch, searched });
+  const response: RustResponse = {
+    status: "completed",
+    result: {
+      kind: "plan_read_batch",
+      data: {
+        task,
+        keywords: plan.keywords,
+        searched,
+        candidates: plan.candidates,
+        steps: plan.steps,
+        estimated_ms: plan.estimated_ms,
+        notes: plan.notes,
+      },
+    },
+  };
+  const elapsedMs = performance.now() - started;
+  recordMetric("plan_read_batch", elapsedMs, true);
+  return toolResult(buildEnvelope("plan_read_batch", response, { requestId, elapsedMs, cached: false }));
 }
 
 // ---------------------------------------------------------------------------
@@ -2688,6 +2830,88 @@ export function registerProjectTools(server: McpServer): void {
   );
 
   // -------------------------------------------------------------------------
+  // Diagnostics + read planning (deterministic, no model call)
+  // -------------------------------------------------------------------------
+
+  server.registerTool(
+    "project_explain_error",
+    {
+      ...config(
+        "Diagnose a failure from its error text / log tail: known signatures (errno, TypeScript, Python, git, npm, GitHub, venira codes) → likely cause + ready-to-send next tool calls. Rule-based, offline, instant.",
+        "Explain an error",
+        {
+          use_when:
+            "a command, test, build or provider call failed and you want the fastest route to the fix (feed it the stderr tail or the CI log tail).",
+          avoid_when:
+            "you already know the cause and only need the file contents (use project_read_file / project_read_ranges).",
+          speed_profile: "pure local rules, < 1 ms; no network and no model call.",
+          output_kind:
+            "explain_error: matched, summary, error_line, language, diagnoses[] {rule_id, title, likely_cause, suggested_fix[], retry_hint?, next_actions[]}, next_actions[].",
+          batch_safe: true,
+        },
+        { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+      ),
+      inputSchema: {
+        error_text: z
+          .string()
+          .max(32 * 1024)
+          .optional()
+          .describe("The error block (stderr, exception, compiler output). One of error_text/log_tail is required."),
+        log_tail: z
+          .string()
+          .max(32 * 1024)
+          .optional()
+          .describe("Tail of the failing output (e.g. project_ci_logs / project_shell_status text)."),
+        language: z
+          .string()
+          .max(40)
+          .optional()
+          .describe("Optional language hint (typescript|python|rust|go|...) when the text does not show a file extension."),
+      },
+    },
+    (args) => runExplainError(args as Args),
+  );
+
+  server.registerTool(
+    "project_plan_read_batch",
+    {
+      ...config(
+        "Plan a read: extract keywords from the task, run bounded searches (+recent files), rank candidate files, and return a ready project_read_batch call with an estimate. Deterministic planner, no model call.",
+        "Plan reads from a task",
+        {
+          use_when:
+            "starting a task in an unfamiliar area and you do not know which files matter yet (one call instead of guess-read-repeat).",
+          avoid_when:
+            "you already know the exact files (call project_read_batch directly), or the task is a one-line lookup (project_search).",
+          speed_profile: "1-3 bounded content searches (~20 ms each) + local ranking; no file contents are returned.",
+          output_kind:
+            "plan_read_batch: task, keywords[], searched, candidates[] {relative_path, reason, hits}, steps[] {tool, arguments, why}, estimated_ms, notes.",
+          batch_safe: true,
+        },
+        { readOnlyHint: true, idempotentHint: false, openWorldHint: false },
+      ),
+      inputSchema: {
+        task_description: z
+          .string()
+          .min(1)
+          .max(2_000)
+          .describe('What you are about to do, in one line, e.g. "add retry handling to the GitHub client".'),
+        files_hint: z
+          .array(z.string().max(300))
+          .max(16)
+          .optional()
+          .describe("Files you already suspect (ranked first, no search needed for them)."),
+        max_files: z.number().int().min(1).max(8).optional().describe("Max candidates to plan (default 6; batch accepts 8)."),
+        include_search: z
+          .boolean()
+          .optional()
+          .describe("Run keyword searches to discover candidates (default true; false plans only from files_hint/recent files)."),
+      },
+    },
+    (args) => runPlanReadBatch(args as Args),
+  );
+
+  // -------------------------------------------------------------------------
   // Checkpoints: snapshot + rollback without git
   // -------------------------------------------------------------------------
 
@@ -2788,13 +3012,15 @@ export function registerProjectTools(server: McpServer): void {
     "project_pr_comment",
     {
       ...config(
-        "Post a comment (or review note) on a pull request or issue. Accepts a PR number or a full PR URL.",
+        "Post a comment on a pull request: a general thread comment, or an inline review note pinned to a file/line (pass path + line). Accepts a PR number or a full PR URL.",
         "Comment on PR",
         {
-          use_when: "reporting status into the PR thread, answering a review comment, or linking CI results.",
-          avoid_when: "the comment belongs in a code review with inline locations (GitHub UI) rather than a general comment.",
-          speed_profile: "one GitHub API call.",
-          output_kind: "pr_comment: repo, pr, comment_id, url, created_at, body_chars.",
+          use_when:
+            "reporting status into the PR thread, answering a review comment, or leaving a file/line review note (path + line).",
+          avoid_when: "the PR is not open yet (create it first), or you want to change code (use project_edit_file).",
+          speed_profile: "one GitHub API call (issue-comments, or pull review-comments for inline notes).",
+          output_kind:
+            "pr_comment: repo, pr, inline, comment_id, url, created_at, body_chars (+ path/line/side for inline notes).",
           batch_safe: false,
         },
         { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
@@ -2802,6 +3028,15 @@ export function registerProjectTools(server: McpServer): void {
       inputSchema: {
         pr: z.union([z.number().int().positive(), z.string().max(300)]).describe("PR number or PR URL."),
         body: z.string().min(1).max(65_536).describe("Comment body (markdown)."),
+        path: z
+          .string()
+          .max(300)
+          .optional()
+          .describe("Workspace/repo file path for an inline review comment (requires `line`); omit for a general comment."),
+        line: z.number().int().positive().optional().describe("Line number to anchor the inline note (new side by default)."),
+        start_line: z.number().int().positive().optional().describe("First line of a multi-line inline note (must be <= line)."),
+        side: z.enum(["RIGHT", "LEFT"]).optional().describe("RIGHT = new code (default), LEFT = deleted code."),
+        commit_id: z.string().max(64).optional().describe("Commit sha the note is anchored to (default: the PR head)."),
         repo: repoArg,
         reason: reason_,
       },
@@ -2845,23 +3080,34 @@ export function registerProjectTools(server: McpServer): void {
     "project_ci_status",
     {
       ...config(
-        "Read GitHub Actions state: the latest runs for a branch/workflow, or one run (with its jobs) by run_id.",
+        "Read GitHub checks: recent Actions runs for a branch/workflow, one run with its jobs (run_id), or branch-protection check-runs for a ref/PR (ref, pr).",
         "CI status",
         {
-          use_when: "after pushing or triggering a workflow, to see whether checks passed before merging.",
+          use_when:
+            "after pushing or triggering a workflow, to see whether checks passed before merging; pass pr=<number> (or ref=<sha>) for branch-protection check-runs.",
           avoid_when: "you need the failure detail (use project_ci_logs with the run_id/job_id).",
-          speed_profile: "1-2 API calls; newest runs first.",
+          speed_profile: "1-2 API calls; newest runs first. pr= adds one call to resolve the head sha.",
           output_kind:
-            "ci_status: overall (success|failure|in_progress|no_runs), runs[] {id, name, status, conclusion, branch, sha, url}, or run + jobs[] for run_id.",
+            "ci_status: overall (success|failure|in_progress|no_runs|no_checks) + runs[] {id, name, status, conclusion, branch, sha, url}; " +
+            "run_id → run + jobs[]; ref/pr → check_runs[] {name, status, conclusion, url}.",
           batch_safe: true,
         },
         { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
       ),
       inputSchema: {
         run_id: z.number().int().positive().optional().describe("Inspect one run (adds its jobs)."),
+        ref: z
+          .string()
+          .max(200)
+          .optional()
+          .describe("Commit sha or branch: read branch-protection check-runs for that ref (instead of workflow runs)."),
+        pr: z
+          .union([z.number().int().positive(), z.string().max(300)])
+          .optional()
+          .describe("PR number or PR URL: read check-runs for the PR head commit."),
         branch: z.string().max(200).optional().describe("Filter runs by branch."),
         workflow: z.string().max(200).optional().describe("Workflow file name (ci.yml) or numeric id."),
-        limit: z.number().int().min(1).max(50).optional().describe("Max runs to list (default 10)."),
+        limit: z.number().int().min(1).max(50).optional().describe("Max runs (or check-runs) to list (default 10 / 20)."),
         repo: repoArg,
       },
     },
@@ -2930,19 +3176,22 @@ export function registerProjectTools(server: McpServer): void {
     {
       ...config(
         "Manage API tokens/credentials without leaking them: values are encrypted at rest and never returned by default. " +
-          "Inject them into commands with project_shell_run secret_env=[\"NAME\"] instead of pasting them into a command line.",
+          "Inject them into commands with project_shell_run secret_env=[\"NAME\"] instead of pasting them into a command line. " +
+          "Rotation metadata (expiry, last use, use count) is tracked by default and expired secrets are refused.",
         "Manage secrets",
         {
           use_when:
-            "storing a token (action=set), checking whether one exists (action=get metadata / action=list), " +
+            "storing a token (action=set), checking whether one exists or is due for rotation (action=get / action=list), " +
             "removing one (action=delete). Then use secret_env on project_shell_run or the built-in GitHub tools.",
           avoid_when:
             "the value is a normal, non-secret config (put it in .env or the config file); or you need the plaintext " +
             "printed (only with reveal=true + VENIRA_SECRET_ALLOW_REVEAL=1).",
-          speed_profile: "fast; encrypted AES-256-GCM store, atomic writes, values decrypted only when injected.",
+          speed_profile:
+            "fast; encrypted AES-256-GCM store, atomic writes, values decrypted only when injected. Expiry/use fields are metadata only.",
           output_kind:
-            "secret_set: name, length, sha256_12, updated_at, created; secret_get: metadata (revealed=false) or value when reveal is allowed; " +
-            "secret_list: secrets[] (names only); secret_delete: deleted.",
+            "secret_set: name, length, sha256_12, updated_at, expires_at, days_left, created, rotated; " +
+            "secret_get/list: metadata only (expires_at, expired, days_left, last_used_at, use_count, rotated_at); " +
+            "secret_delete: deleted.",
           batch_safe: false,
         },
         { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
@@ -2964,6 +3213,17 @@ export function registerProjectTools(server: McpServer): void {
           .max(64)
           .optional()
           .describe("Read the value from this host environment variable instead of `value` (never logged)."),
+        expires_in_days: z
+          .number()
+          .int()
+          .min(1)
+          .max(3650)
+          .optional()
+          .describe("action=set: expiry in days (e.g. 90 for quarterly rotation). Expired secrets are not injected."),
+        expires_at: z
+          .union([z.number().int(), z.string().max(60)])
+          .optional()
+          .describe("action=set: absolute expiry (epoch ms or ISO-8601), instead of expires_in_days."),
         reveal: z
           .boolean()
           .optional()
