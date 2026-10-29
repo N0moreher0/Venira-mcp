@@ -1,6 +1,6 @@
 {
   "name": "venira-mcp",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "description": "venira-mcp — a standalone Model Context Protocol (MCP) server that gives coding agents (OpenCode, Claude Desktop, any MCP client) 37 workspace-scoped tools: file read/write/edit/delete, batch reads, line-range reads, content search, recent files, code intelligence, async shell run/poll/cancel, git-free checkpoints/rollback, pull requests + GitHub Actions (status/trigger/logs, inline review comments, check-runs), encrypted secrets with rotation metadata, deterministic error diagnosis + read planning, and a full SQLite WAL audit trail where mutations can record a reason. Pure Node, no external binary. Structured JSON envelopes with hints and cached validated reads. npm i venira-mcp, then point your MCP client at `venira` or `venira-mcp`.",
   "keywords": [
     "mcp",

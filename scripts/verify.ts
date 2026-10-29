@@ -758,7 +758,8 @@ check(
     prInline.data?.path === "src/app.ts" &&
     prInline.data?.line === 42 &&
     prInline.data?.start_line === 40 &&
-    prInline.data?.side === "RIGHT",
+    prInline.data?.side === "RIGHT" &&
+    prInline.data?.commit_id === "0123456789abcdef0123456789abcdef01234567",
   prInline,
 );
 check(
@@ -767,8 +768,29 @@ check(
     githubMock.state.lastInline?.path === "src/app.ts" &&
     githubMock.state.lastInline?.line === 42 &&
     githubMock.state.lastInline?.start_line === 40 &&
-    githubMock.state.lastInline?.start_side === "RIGHT",
+    githubMock.state.lastInline?.start_side === "RIGHT" &&
+    // GitHub requires commit_id whenever line is used; it is resolved from the PR head.
+    githubMock.state.lastInline?.commit_id === "0123456789abcdef0123456789abcdef01234567",
   githubMock.state.lastInline,
+);
+
+// An explicit commit_id must be honoured (anchoring to an older revision).
+const prInlineCommit = asEnvelope(
+  await call("project_pr_comment", {
+    pr: 7,
+    body: "explicit anchor",
+    path: "src/app.ts",
+    line: 10,
+    commit_id: "feedfacefeedfacefeedfacefeedfacefeedface",
+  }),
+);
+check(
+  "pr_comment_inline_explicit_commit",
+  prInlineCommit.ok === true &&
+    prInlineCommit.data?.commit_id === "feedfacefeedfacefeedfacefeedfacefeedface" &&
+    githubMock.state.inlineComments === 2 &&
+    githubMock.state.lastInline?.commit_id === "feedfacefeedfacefeedfacefeedfacefeedface",
+  { data: prInlineCommit.data, lastInline: githubMock.state.lastInline },
 );
 const prInlineNoLine = asEnvelope(
   await call("project_pr_comment", { pr: 7, body: "no anchor", path: "src/app.ts" }),
