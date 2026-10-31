@@ -1574,6 +1574,9 @@ check(
   auditRead.data?.rows,
 );
 
+check("policy_unit_git_push_ask", policyModule.evaluateShellCommand("git push --force origin main", ws, { mode: "balanced" }).tier === "ask", policyModule.evaluateShellCommand("git push --force origin main", ws, { mode: "balanced" }));
+check("policy_unit_node_eval_ask", policyModule.evaluateShellCommand('node -e "console.log(1)"', ws, { mode: "balanced" }).tier === "ask", policyModule.evaluateShellCommand('node -e "console.log(1)"', ws, { mode: "balanced" }));
+check("policy_unit_git_status_allow", policyModule.evaluateShellCommand("git status", ws, { mode: "balanced" }).tier === "allow", policyModule.evaluateShellCommand("git status", ws, { mode: "balanced" }));
 console.log("[verify] done");
 await fs.rm(dir, { recursive: true, force: true });
 await client.close();
