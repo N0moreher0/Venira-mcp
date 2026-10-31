@@ -934,6 +934,19 @@ async function runEditBatch(args: Args): Promise<ToolResult> {
   const maxItemBytes = Number(args.max_response_bytes_per_item ?? 1_048_576);
   const responses: unknown[] = [];
   let totalBytes = 0;
+  // Transactional: capture affected files before applying edits.
+  const distinctPaths = [...new Set(items.map((i) => String(i?.relative_path ?? "")).filter(Boolean))];
+  let snapshotId: string | undefined;
+  if (distinctPaths.length > 0) {
+    try {
+      const snap = await executeCached("snapshot_create", { action: "create", paths: distinctPaths, label: "edit_batch", reason: "edit_batch" });
+      snapshotId = String((snap.response?.result?.data as { id?: unknown } | undefined)?.id ?? "");
+      if (!snapshotId) snapshotId = undefined;
+    } catch {
+      snapshotId = undefined;
+    }
+  }
+  let failed = false;
   for (const item of items) {
     const itemStarted = performance.now();
     try {
@@ -954,9 +967,13 @@ async function runEditBatch(args: Args): Promise<ToolResult> {
       recordMetric("edit_file", performance.now() - itemStarted, true);
       responses.push({ ok: true, response: envelope });
     } catch (error) {
+      failed = true;
       recordMetric("edit_file", performance.now() - itemStarted, false);
       const failure = parseToolError(error);
       responses.push({ ok: false, error: { code: failure.code, message: failure.message, retryable: failure.retryable } });
+      if (snapshotId) {
+        try { await executeCached("snapshot_restore", { action: "restore", id: snapshotId }); } catch { /* best-effort */ }
+      }
     }
   }
   const elapsedMs = performance.now() - started;

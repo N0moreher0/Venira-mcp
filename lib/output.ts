@@ -295,6 +295,21 @@ export function buildEnvelope(
   return envelope;
 }
 
+export class VeniraError extends Error {
+  code: string;
+  retryable: boolean;
+  data?: unknown;
+  next_actions?: unknown[];
+  constructor(code: string, message: string, options: { retryable?: boolean; data?: unknown; next_actions?: unknown[] } = {}) {
+    super(message);
+    this.name = "VeniraError";
+    this.code = code;
+    this.retryable = options.retryable ?? false;
+    this.data = options.data;
+    this.next_actions = options.next_actions;
+  }
+}
+
 export type Failure = {
   code: string;
   message: string;
@@ -346,6 +361,10 @@ const DEFAULT_NEXT_ACTIONS: Record<string, unknown[]> = {
 export function parseToolError(error: unknown): Failure & { data?: unknown } {
   const errorData = error && typeof error === "object" ? (error as { data?: unknown }).data : undefined;
   const raw = (error instanceof Error ? error.message : String(error)).trim();
+  const veniraData = error instanceof VeniraError ? error.data : (error && typeof error === "object" ? (error as { data?: unknown }).data : undefined);
+  if (error instanceof VeniraError && !/\[[a-z0-9_]+\]/.test(raw)) {
+    // Fall through; VeniraError already supplies a code not in brackets.
+  }
   const match = /^\[([a-z0-9_]+)\]\s*([\s\S]*)$/i.exec(raw);
   let code = match ? match[1].toLowerCase() : "";
   let body = match ? match[2].trim() : raw;
@@ -364,7 +383,7 @@ export function parseToolError(error: unknown): Failure & { data?: unknown } {
     message: body || raw,
     hint,
     retryable: RETRYABLE.has(code),
-    ...(errorData !== undefined ? { data: errorData } : {}),
+    ...(veniraData !== undefined ? { data: veniraData } : errorData !== undefined ? { data: errorData } : {}),
   };
 }
 
