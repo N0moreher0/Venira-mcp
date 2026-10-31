@@ -1179,6 +1179,8 @@ constants into configuration and adds a second and third dialect.
 
 ---
 
+> Note: shell policy matches command text; `bash -c`, encodings and indirection can evade it. It is a guardrail, not a sandbox. `VENIRA_PROFILE=core|full` (default full) reduces the registered tool set.
+
 ## License
 
 Dual-licensed under **MIT OR Apache-2.0** — pick whichever fits your project.
