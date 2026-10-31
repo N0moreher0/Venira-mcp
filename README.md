@@ -1,11 +1,11 @@
 # venira-mcp
 
-> Fast, workspace-scoped **MCP server for coding agents** (OpenCode, Claude Desktop, any MCP client). 37 tools, structured JSON envelopes, validated read caches, async shell, code-intelligence (outline/symbols/diff/references/selective search), fuzzy edit, SQLite recent-files index, **git-free checkpoints/rollback**, **audit reasons ("why")**, **pull requests + GitHub Actions**, **encrypted secrets with rotation metadata**, **deterministic error diagnosis + read planning**, and full SQLite audit trail — **pure Node, no external binary, no GUI.**
+> Fast, workspace-scoped **MCP server for coding agents** (OpenCode, Claude Desktop, any MCP client). 40 tools by default, structured JSON envelopes, validated read caches, async shell, code-intelligence (outline/symbols/diff/references/selective search), fuzzy edit, SQLite recent-files index, **git-free checkpoints/rollback**, **audit reasons ("why")**, **pull requests + GitHub Actions**, **encrypted secrets with rotation metadata**, **deterministic error diagnosis + read planning**, and full SQLite audit trail — **pure Node, no external binary, no GUI.**
 
 ```
 ┌──────────────┐   stdio (MCP)   ┌────────────────────────────────────────────┐
 │ MCP client    │ ◄──────────────► │  venira-mcp (Node, single process)        │
-│ (OpenCode,    │                  │  37 tools · read caches · async shell     │
+│ (OpenCode,    │                  │  40 tools · read caches · async shell     │
 │  Claude, ...) │                  │  SQLite audit (WAL) · p50/p95 metrics     │
 └──────────────┘                  └────────────────────────────────────────────┘
 ```
@@ -244,7 +244,7 @@ Or point at a local build (after `git clone` + `npm install` + `npm run build`):
 | `VENIRA_UNRESTRICTED` | `"0"` | `"1"` disables workspace locking (absolute paths anywhere work). **Do not set in production.** |
 | `VENIRA_DEFAULT_SHELL` | platform default | `powershell` / `cmd` / `bash` used when `project_shell_run` receives no `shell` argument. |
 | `VENIRA_PERMISSION_MODE` | `"allow_all"` (MCP standalone) | `"manual"` / `"best_effort"` / `"allow_all"` permission mode for coding tool calls. |
-| `VENIRA_ALLOW_JS_EXEC` | `"1"` | `"0"` disables optional `project_execute_js` (code execution capability). |
+| `VENIRA_ALLOW_JS_EXEC` | `"0"` | `"1"` enables optional `project_execute_js` (code execution capability). Default off starting v1.7.0. |
 | `VENIRA_SHELL_MODE` | `balanced` | Shell policy mode: `balanced` (deny catastrophes, ask on high risk, allow the rest) · `strict` (allow list + approval for everything else) · `permissive` (only hard denials) · `off` (no policy at all). |
 | `VENIRA_SHELL_POLICY_FILE` | unset | **Explicit** path to a JSON policy (`{ mode, allow[], ask[], deny[] }`). Never read from the workspace, so a cloned repo cannot ship its own permissive policy. |
 | `VENIRA_SHELL_APPROVAL_TTL_MS` | `600000` (10 min) | Lifetime of approval tokens and session grants. |

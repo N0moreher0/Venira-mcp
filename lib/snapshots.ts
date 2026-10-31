@@ -16,11 +16,11 @@
  * `resolveWithin`, symlinks are skipped (never followed), and the
  * snapshot store itself is excluded from captures.
  */
-import { promises as fs } from "node:fs";
+import { promises as fs, existsSync } from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { gunzipSync, gzipSync } from "node:zlib";
-import { resolveWithin } from "./workspace.js";
+import { resolveWithin, defaultDataDir } from "./workspace.js";
 import { redactSecrets } from "./shell-policy.js";
 import type { RustResponse } from "./output.js";
 
@@ -56,7 +56,9 @@ const DEFAULT_EXCLUDES = new Set([
 export function snapshotDataDir(): string {
   const dataDir = process.env.VENIRA_DATA_DIR
     ? path.resolve(process.env.VENIRA_DATA_DIR)
-    : path.join(path.resolve(process.env.VENIRA_WORKSPACE ?? process.cwd()), "data");
+    : existsSync(path.resolve(process.env.VENIRA_WORKSPACE ?? process.cwd(), "data"))
+      ? path.join(path.resolve(process.env.VENIRA_WORKSPACE ?? process.cwd()), "data")
+      : defaultDataDir();
   return path.join(dataDir, SNAPSHOT_DIR_NAME);
 }
 

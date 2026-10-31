@@ -161,7 +161,7 @@ function veniraMcpEntry(opts: { workspace?: string; dataDir?: string }): {
       VENIRA_PERMISSION_MODE: "allow_all",
       VENIRA_OUTPUT_MODE: "full",
       VENIRA_PRETTY: "0",
-      VENIRA_ALLOW_JS_EXEC: "1",
+      VENIRA_ALLOW_JS_EXEC: "0",
       VENIRA_AUDIT_FAST: "1",
       VENIRA_READ_CACHE_BYTES: "67108864",
       VENIRA_CACHE_ALL: "1",

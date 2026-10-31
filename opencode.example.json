@@ -24,7 +24,7 @@
         // Set to "1" for pretty-printed JSON in tool results (costs bytes; leave off for agents).
         "VENIRA_PRETTY": "0",
         // Enable optional JS execution tool (default 1). Set "0" to disable.
-        "VENIRA_ALLOW_JS_EXEC": "1",
+        "VENIRA_ALLOW_JS_EXEC": "0",
         // Set to "1" for fast audit DB mode.
         "VENIRA_AUDIT_FAST": "1",
         // Read cache budget in bytes (default 64 MiB).

@@ -250,6 +250,8 @@ export type EnvelopeOptions = {
   hint?: string;
   /** Extra machine-readable payload for error envelopes (e.g. approval tokens). */
   data?: unknown;
+  /** Suggested next tool calls to recover from this failure. */
+  next_actions?: unknown[];
 };
 
 export function buildEnvelope(
@@ -298,6 +300,7 @@ export type Failure = {
   message: string;
   hint?: string;
   retryable: boolean;
+  data?: unknown;
 };
 
 const RETRYABLE = new Set(["io_error", "capability_expired", "host_timeout", "host_unavailable"]);
@@ -335,7 +338,13 @@ function classify(raw: string): string {
   return "internal";
 }
 
-export function parseToolError(error: unknown): Failure {
+const DEFAULT_NEXT_ACTIONS: Record<string, unknown[]> = {
+  not_found: [{ tool: "project_list_files", arguments: { relative_path: "." }, why: "locate the correct path" }],
+  path_escape: [{ tool: "project_list_files", arguments: { relative_path: "." }, why: "stay inside the workspace" }],
+};
+
+export function parseToolError(error: unknown): Failure & { data?: unknown } {
+  const errorData = error && typeof error === "object" ? (error as { data?: unknown }).data : undefined;
   const raw = (error instanceof Error ? error.message : String(error)).trim();
   const match = /^\[([a-z0-9_]+)\]\s*([\s\S]*)$/i.exec(raw);
   let code = match ? match[1].toLowerCase() : "";
@@ -355,6 +364,7 @@ export function parseToolError(error: unknown): Failure {
     message: body || raw,
     hint,
     retryable: RETRYABLE.has(code),
+    ...(errorData !== undefined ? { data: errorData } : {}),
   };
 }
 
@@ -376,7 +386,8 @@ export function errorEnvelope(
       retryable: failure.retryable,
     },
     ...(hint ? { hint } : {}),
-    ...(options.data !== undefined ? { data: options.data } : {}),
+    ...(options.data !== undefined ? { data: options.data } : failure.data !== undefined ? { data: failure.data } : {}),
+    ...(options.next_actions !== undefined ? { next_actions: options.next_actions } : DEFAULT_NEXT_ACTIONS[failure.code] ? { next_actions: DEFAULT_NEXT_ACTIONS[failure.code] } : {}),
     elapsed_ms: round(options.elapsedMs ?? 0),
   };
 }

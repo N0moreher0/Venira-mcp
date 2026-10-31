@@ -9,7 +9,8 @@ import {
   warmUp,
 } from "./tools/project.js";
 import { VERSION } from "./lib/version.js";
-import { UNRESTRICTED, WORKSPACE } from "./lib/workspace.js";
+import { UNRESTRICTED, WORKSPACE, migrateLegacyDataDirIfNeeded } from "./lib/workspace.js";
+migrateLegacyDataDirIfNeeded();
 
 const INSTRUCTIONS = `Venira coding tools operate on the workspace ${WORKSPACE}.
 Every call returns a JSON envelope: { ok, status, request_id, kind, data, truncated?, summary?, hint?, cached?, elapsed_ms }. On failure: { ok:false, error:{ code, message, retryable }, hint } and the MCP result has isError=true. Read "hint" first; it says how to fix the request.

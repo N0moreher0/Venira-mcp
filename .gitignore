@@ -1,5 +1,14 @@
 # Dependencies
-node_modules/
+node_modules
+*.log
+server.err
+server.log
+*.tgz
+check-*.js
+poll-ci.js
+create-pr.js
+*-new.txt
+section*.txt/
 
 # Build output
 dist/

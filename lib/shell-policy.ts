@@ -582,7 +582,29 @@ const ASK_RULES: AskRule[] = [
   {
     id: "dynamic_execution",
     reason: "This evaluates a string as code, which the policy cannot inspect.",
-    test: (parsed) => parsed.segments.some((segment) => ["eval", "exec", "source", ".", "invoke-expression", "iex"].includes(segment.command)),
+    test: (parsed) =>
+      parsed.segments.some((segment) => {
+        if (["eval", "exec", "source", ".", "invoke-expression", "iex"].includes(segment.command)) return true;
+        const flags = segment.argv;
+        const interpreters: Record<string, string[]> = {
+          node: ["-e", "--eval", "-p", "--print"],
+          nodejs: ["-e", "--eval", "-p", "--print"],
+          python: ["-c"],
+          python3: ["-c"],
+          deno: ["eval"],
+          bash: ["-c"],
+          sh: ["-c"],
+          zsh: ["-c"],
+          powershell: ["-command", "-encodedcommand"],
+          pwsh: ["-command", "-encodedcommand"],
+          cmd: ["/c"],
+          perl: ["-e"],
+          ruby: ["-e"],
+        };
+        const expected = interpreters[segment.command];
+        if (!expected) return false;
+        return flags.some((flag) => expected.includes(flag.toLowerCase()));
+      }),
   },
   {
     id: "recursive_delete_glob",
@@ -605,6 +627,26 @@ const SAFE_COMMANDS = new Set([
   "node_modules",
   "git",
 ]);
+
+function isSafeSegment(segment: Segment): boolean {
+  if (!SAFE_COMMANDS.has(segment.command)) return false;
+  if (segment.command === "git") {
+    const safeSubs = new Set(["status", "diff", "log", "show", "add", "commit", "branch"]);
+    if (!segment.subcommand || !safeSubs.has(segment.subcommand)) return false;
+    if (segment.subcommand === "branch" && /\s-D\b/.test(segment.argv.join(" "))) return false;
+    return true;
+  }
+  if (segment.command === "node") {
+    const evalFlags = ["-e", "--eval", "-p", "--print"];
+    if (segment.argv.some((arg) => evalFlags.includes(arg.toLowerCase()))) return false;
+    const hasFileArg = segment.argv.some((arg) => !arg.startsWith("-"));
+    return hasFileArg;
+  }
+  if (segment.command === "npx") {
+    return segment.argv.includes("--no-install");
+  }
+  return true;
+}
 
 /** Read-only / workspace-local commands allowed without approval in `strict`. */
 const STRICT_ALLOW: Array<{ command: string; subcommands?: string[] }> = [
@@ -819,6 +861,13 @@ export function evaluateShellCommand(
   // 3. Risk heuristics that apply in balanced/strict. `permissive` keeps only
   //    the hard denials above, so an existing workflow cannot start prompting.
   if (mode !== "permissive") {
+    // Risk heuristics run first so a "safe command head" cannot bypass an ask
+    // rule (e.g. `git push --force`, `node -e ...`, `npx <pkg>`).
+    for (const rule of ASK_RULES) {
+      if (rule.test(parsed, cwd)) {
+        return { tier: "ask", rule: `ask.${rule.id}`, reason: rule.reason, mode, command_hash: hash };
+      }
+    }
     // Safe dev-workspace commands are exempt from ask rules in balanced/strict.
     // If the command contains shell operators (pipe, redirect, background)
     // the exemption does not apply — those need human review.
@@ -826,14 +875,9 @@ export function evaluateShellCommand(
       !parsed.has_pipe &&
       !parsed.has_redirect &&
       !parsed.has_background &&
-      parsed.segments.every((segment) => SAFE_COMMANDS.has(segment.command));
+      parsed.segments.every((segment) => isSafeSegment(segment));
     if (allSafe) {
       return { tier: "allow", rule: "safe_command", reason: "Routine dev-workspace command.", mode, command_hash: hash };
-    }
-    for (const rule of ASK_RULES) {
-      if (rule.test(parsed, cwd)) {
-        return { tier: "ask", rule: `ask.${rule.id}`, reason: rule.reason, mode, command_hash: hash };
-      }
     }
   }
   for (const rule of policy.ask) {

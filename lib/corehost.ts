@@ -42,7 +42,7 @@ import {
   verifyApprovalToken,
   type Decision,
 } from "./shell-policy.js";
-import { WORKSPACE, PLATFORM, resolveWithin } from "./workspace.js";
+import { WORKSPACE, PLATFORM, resolveWithin, isProtectedPath, defaultDataDir } from "./workspace.js";
 import {
   opSnapshotCreate,
   opSnapshotDelete,
@@ -81,7 +81,10 @@ let auditDb: Database.Database | null = null;
 
 function auditDbPath(): string {
   const dataDir =
-    process.env.VENIRA_DATA_DIR ?? path.join(WORKSPACE, "data");
+    process.env.VENIRA_DATA_DIR ??
+    (existsSync(path.join(WORKSPACE, "data"))
+      ? path.join(WORKSPACE, "data")
+      : defaultDataDir());
   return path.join(dataDir, "venira.db");
 }
 
@@ -543,6 +546,11 @@ async function opReadFile(
   root: string,
 ): Promise<RustResponse> {
   const absPath = resolveInWorkspace(args.relative_path as string, root);
+  if (isProtectedPath(absPath)) {
+    throw new Error(
+      `[sensitive_result] Path is protected by policy: ${args.relative_path}. Hint: this file contains secrets or the audit DB and cannot be read via path ops.`,
+    );
+  }
   let stat;
   try {
     stat = await fs.stat(absPath);
@@ -625,6 +633,9 @@ async function opGetFileInfo(
   root: string,
 ): Promise<RustResponse> {
   const absPath = resolveInWorkspace(args.relative_path as string, root);
+  if (isProtectedPath(absPath)) {
+    throw new Error(`[sensitive_result] Path is protected by policy: ${args.relative_path}. Hint: do not probe protected files.`);
+  }
   let stat;
   try {
     stat = await fs.stat(absPath);
@@ -652,6 +663,9 @@ async function opListFiles(
   root: string,
 ): Promise<RustResponse> {
   const targetPath = resolveInWorkspace(args.relative_path as string, root);
+  if (isProtectedPath(targetPath)) {
+    throw new Error(`[sensitive_result] Path is protected by policy: ${args.relative_path}. Hint: do not list protected files.`);
+  }
   const limit = Math.min(200, (args.limit as number | undefined) ?? 200);
   const depth = Math.min(3, Math.max(1, (args.depth as number | undefined) ?? 1));
   const includeIgnored = args.include_ignored === true;
@@ -686,6 +700,7 @@ async function opListFiles(
       if (!isDir) {
         try { size = (await fs.stat(absEntry)).size; } catch { continue; }
       }
+      if (isProtectedPath(absEntry)) continue;
       entries.push({
         relative_path: relPath.replace(/\\/g, "/"),
         kind: isDir ? "directory" : "file",
@@ -723,6 +738,9 @@ async function opSearch(
   const query = args.query as string;
   const kind = (args.kind as string) ?? "literal_content";
   const searchRoot = resolveInWorkspace(args.relative_path as string, root);
+  if (isProtectedPath(searchRoot)) {
+    throw new Error(`[sensitive_result] Path is protected by policy: ${args.relative_path}. Hint: do not search protected files.`);
+  }
   const glob = args.glob as string | undefined;
   const excludeGlob = args.exclude_glob as string | undefined;
   const caseSensitive = args.case_sensitive !== false;
@@ -778,6 +796,7 @@ async function opSearch(
           if (IGNORED.has(entry.name)) continue;
           await walk(abs);
         } else if (entry.isFile()) {
+          if (isProtectedPath(abs)) continue;
           files.push(abs);
         }
       }
@@ -891,6 +910,9 @@ async function opWriteFile(
   root: string,
 ): Promise<RustResponse> {
   const absPath = resolveInWorkspace(args.relative_path as string, root);
+  if (isProtectedPath(absPath)) {
+    throw new Error(`[sensitive_result] Path is protected by policy: ${args.relative_path}. Hint: do not write protected files.`);
+  }
   const content = args.content as string;
   const mode = (args.mode as string | undefined) ?? "overwrite";
   const createDirs = args.create_dirs === true;
@@ -957,6 +979,9 @@ async function opEditFile(
   root: string,
 ): Promise<RustResponse> {
   const absPath = resolveInWorkspace(args.relative_path as string, root);
+  if (isProtectedPath(absPath)) {
+    throw new Error(`[sensitive_result] Path is protected by policy: ${args.relative_path}. Hint: do not edit protected files.`);
+  }
   const edits = args.edits as
     | Array<{ old_text: string; new_text: string; replace_all?: boolean }>
     | undefined;
@@ -996,6 +1021,14 @@ async function opEditFile(
   for (const edit of editList) {
     const { old_text, new_text, replace_all } = edit;
     if (old_text === new_text) continue;
+    if (!(replace_all || replaceAll)) {
+      const occurrences = (content.split(old_text).length - 1);
+      if (occurrences > 1) {
+        throw new Error(
+          `[old_text_ambiguous] old_text matches ${occurrences} locations in ${args.relative_path}. Extend old_text to include more context or set replace_all=true.`,
+        );
+      }
+    }
     let idx = content.indexOf(old_text);
     
     // P2: Fuzzy match fallback
@@ -1009,9 +1042,11 @@ async function opEditFile(
     }
     
     if (idx === -1) {
-      throw new Error(
-        `[conflict] old_text not found in ${args.relative_path}. Hint: re-read the file to confirm the exact text.${fuzzyEnabled ? " (Fuzzy edit enabled with distance " + fuzzyDistance + ")" : ""}`,
+      const __err: any = new Error(
+        `[old_text_not_found] old_text not found in ${args.relative_path}. Hint: re-read the file to confirm the exact text.${fuzzyEnabled ? " (Fuzzy edit enabled with distance " + fuzzyDistance + ")" : ""}`,
       );
+      __err.data = { occurrences: 0, suggestion: "re-read file and copy exact old_text" };
+      throw __err;
     }
     if (replace_all || replaceAll) {
       const parts = content.split(old_text);
@@ -1208,6 +1243,9 @@ async function opDeletePath(
   root: string,
 ): Promise<RustResponse> {
   const absPath = resolveInWorkspace(args.relative_path as string, root);
+  if (isProtectedPath(absPath)) {
+    throw new Error(`[sensitive_result] Path is protected by policy: ${args.relative_path}. Hint: do not delete protected files.`);
+  }
   const recursive = args.recursive === true;
   let entriesDeleted = 0;
   let bytesDeleted = 0;

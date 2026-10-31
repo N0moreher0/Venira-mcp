@@ -252,6 +252,60 @@ Goal: the git tools stop being GitHub-only and stop baking constants into the bi
 - [x] **Tests** — mocks per dialect, config precedence, proxy/NO_PROXY, retries, cap ceilings
 - [x] **Docs** — README env table + §4.6/§4.7/§4.9, roadmap rows, changelog, tag `v1.6.0`
 
+## 🚧 v1.7.0 — safety gaps & actionable errors (plan)
+
+Goal: close the gaps found in a source review of v1.6.0 (the safety promises in README §6 must hold in code) and make every failure tell the agent exactly what to do next. Nothing here is implemented yet; each item lists priority and rough effort.
+
+### A. Safety gaps (P0)
+- [ ] **Enforce `VENIRA_ALLOW_JS_EXEC`** (P0, low). The README documents it, but no code reads it (only `lib/self-install.ts` writes `"1"` into harness configs). Check it at the top of `runExecuteJs`, skip registering the tool when it is `0`, and **change the default to `0`**. Add a verify check: with `0`, `project_execute_js` is absent from `tools/list` and a direct call returns `unsupported`.
+- [ ] **Put `project_execute_js` behind the same policy gate as `project_shell_run`** (P0, med), or document loudly that it sits outside shell policy and the workspace lock (the spawned `node` can use `fs`/`child_process` anywhere). Until then it undermines every `ask`/`deny` rule.
+- [ ] **Shared `isProtectedPath()` guard** (P0, med). `secrets.json`, `secrets.key`, `venira.db` (+ `-wal`/`-shm`) must be refused by *every* path-taking op (`read_file`, `read_ranges`, `read_batch`, `search`, `selective_search`, `list_files` content views, `write`/`edit`/`create`/`delete`, `diff_files`, `symbol_references`) with `sensitive_result`. Today only `read-plan.ts` (ranking) and `snapshots.ts` (skip list) know about them, so `project_read_file({ relative_path: "data/secrets.key" })` works.
+- [ ] **Default data dir outside the workspace** (P0, med). Use the OS user-data dir (`%LOCALAPPDATA%\venira`, `~/.local/share/venira`, `~/Library/Application Support/venira`); keep `VENIRA_DATA_DIR` / `--data-dir` as overrides; migrate an existing `<workspace>/data` on first start with a notice. Keeps the key and ciphertext away from anything an agent can read and out of `git add .`.
+- [ ] **Docs honesty pass on defaults** (P1, low). README §6 says "conservative by default" while `VENIRA_PERMISSION_MODE` defaults to `allow_all` and `execute_js` defaults to on; state defaults next to the controls and say plainly that the shell policy is a guardrail against mistakes, not a sandbox (it matches command text; `bash -c`, encodings and indirection can evade it).
+- [ ] **Optional OS keychain backend for the secret key** (P2, high) instead of `secrets.key` on disk.
+
+### A2. Second-pass findings (P0 unless noted)
+Found by reading `lib/shell-policy.ts`, `lib/workspace.ts`, `lib/corehost.ts`, `lib/self-install.ts`.
+- [ ] **Shell policy: the safe-command exemption runs before the ask rules** (P0, low). In `evaluate()` step 3, `allSafe` returns `allow` before `ASK_RULES` are consulted, and `SAFE_COMMANDS` contains `git`, `node` and `npx`. So in `balanced` *and* `strict`, a command made only of those heads (no pipe/redirect/background) is auto-allowed: `git push --force`, `git reset --hard`, `git clean -fdx`, `git branch -D` (the `git_history_rewrite` rule is unreachable for them), `node -e "..."` and `npx <any package>` (network + code execution, bypassing `network_access` / `package_mutation`). This contradicts README §6.1 and `shell-security.md`. Fix: evaluate `ASK_RULES` first, or narrow the exemption to specific subcommands (`git status|diff|log|show|add|commit|branch` without `-D`, `node <workspace file>` without `-e/--eval/-p/--print`, no bare `npx` unless `--no-install` on a workspace-local bin).
+- [ ] **Policy test matrix** (P0, med). Table-driven verify check that runs the real `evaluate()` for every `HARD_DENY` and `ASK_RULES` id and for the safe-command combinations (`git push --force` -> `approval_required`, `node -e` -> `approval_required`, `git status` -> `allow`), in `balanced` and `strict`. The current 218 checks did not catch the ordering bug above.
+- [ ] **Inline-code interpreters** (P1, low): extend `dynamic_execution` to `node -e/--eval/-p`, `python -c`, `bash|sh|zsh -c`, `powershell -Command/-EncodedCommand`, `cmd /c`, `deno eval`, `perl -e`, `ruby -e` -> `ask` (best effort; say so in the docs).
+- [ ] **Symlink / junction containment** (P0, med). `resolveWithin` / `resolveInWorkspace` only compare normalized strings (`path.relative`); there is no `realpath` anywhere in the read/write path. A symlink (or Windows junction) inside the workspace that points outside is followed by `read_file`, `write_file`, `edit_file`, `delete_path` (listing/search skip symlinks, direct ops do not). Resolve `realpath` of the target (or of the nearest existing ancestor for creates), re-check containment, refuse writes through a symlinked parent; add verify cases for a symlink and a junction.
+- [ ] **`project_install_self` has no approval or dry-run** (P0, med). It merges Venira into other harnesses' config files (OpenCode, Claude, Cursor, ...) and writes `VENIRA_PERMISSION_MODE=allow_all` and `VENIRA_ALLOW_JS_EXEC=1` (`lib/self-install.ts`), and nothing in the module or handler asks for confirmation. An agent that can call it can change the permission posture for the *next* start. Make `dry_run` the default, require the same signed approval token as `project_shell_run`, never alter security-relevant keys (`VENIRA_UNRESTRICTED`, `VENIRA_PERMISSION_MODE`, `VENIRA_SHELL_MODE`, `VENIRA_ALLOW_JS_EXEC`) on an existing entry, and write conservative values (`0`) for new installs.
+- [ ] **Document approval lifetime** (P2, low): the HMAC key (`APPROVAL_SECRET`) is random per process start, so approval tokens and session grants do not survive a restart; state this in README §6.1.
+
+### B. Edit correctness (P0)
+- [ ] **No silent first-match edits** (P0, low). In `opEditFile`, when `old_text` occurs more than once and `replace_all` is not set, the code currently uses `indexOf` and edits the first match without telling the caller. Count matches first; if > 1, fail with `old_text_ambiguous` (see C) and write nothing.
+- [ ] Multi-edit atomicity: all `edits[]` validated against the in-memory content before any write; on failure report the failing `index` and that nothing was written.
+
+### C. Error clarity — structured, recoverable errors (P0/P1)
+Today failures are thrown as `Error("[code] message Hint: ...")` and re-parsed in `lib/output.ts`; `[conflict]` covers both "text not found" and "file changed", and `invalid_request` rarely names the field.
+- [ ] **Typed error object** (P0, med): replace string-prefixed throws with `VeniraError { code, message, retryable, data?, next_actions? }`; `errorEnvelope` serializes it as-is (keep parsing the legacy prefix as a fallback).
+- [ ] **Split `conflict`** (P0, low): `old_text_not_found`, `old_text_ambiguous`, `stale_content` (keep `conflict` as an alias for one release).
+- [ ] **Recovery data in `error.data`** (P1, med; hard size caps, never include content of `sensitive_result` paths):
+  - `old_text_not_found`: up to 3 nearest candidates (reuse `findFuzzyMatch`/LCS) with line numbers and a short note on the difference (indentation, trailing whitespace, line endings, case).
+  - `old_text_ambiguous`: up to 5 match locations (line + 2 lines of context) and a hint to extend `old_text` or set `replace_all`.
+  - `stale_content`: current `sha256` + `mtime` (+ optional short diff since the agent's last read).
+  - `not_found`: closest existing paths ("did you mean ...").
+  - `path_escape`: normalized path and workspace root (common on Windows drive letters and `..`).
+  - `invalid_request`: offending field path and expected type (`edits[2].new_text: expected string`).
+  - `scope_denied` / `internal`: name the missing capability or a stable `error_id` plus the next action; no bare "check stderr".
+- [ ] **`next_actions[]` on every error** (P1, med): ready-to-send tool calls in the same shape `project_explain_error` returns, so the agent does not need an extra `explain_error` round-trip for errors the server already understands.
+- [ ] **Batch error semantics** (P1, med): per-item `index`, `executed[]` / `skipped[]`, and for write batches whether a rollback happened and the `snapshot_id`; read batches default to per-item results, with optional `stop_on_error`.
+- [ ] **Loop metric** (P2, low): count identical-tool failures with near-identical arguments in `project_tool_audit` and surface it in `project_health`; use it to confirm the new messages reduce retry loops.
+- [ ] Tests: one verify check per new code (shape of `error.data`, size caps, sensitive paths excluded).
+
+### D. Batch + single tool design (P1)
+- [ ] **Single tools are thin wrappers over the batch core** (P1, med): one code path for cache, audit, `reason`, `expected_sha256`, envelope and errors; tests written once cover both.
+- [ ] **`project_edit_batch` — transactional write batch** (P1, high): optional auto-snapshot (`project_snapshot`), validate all edits first, apply, verify (`expected_sha256` per file), roll back everything on any failure; `reason` recorded once for the batch plus per item; `stop_on_error` semantics documented.
+- [ ] **Selection rule in the first sentence of each description** (P1, low): "one file -> `project_read_file`; two or more reads, or search -> read -> read -> `project_read_batch`", same for edits.
+- [ ] **Adoption metric** (P2, low): from the audit log, count runs of >= 3 consecutive single reads/edits within a short window that should have been a batch; tune descriptions before changing code.
+
+### E. Tool surface and integration (P2)
+- [ ] **`VENIRA_PROFILE=core|full`** (P2, low): `core` registers only what built-in agent tools lack (snapshot, audit/health, secret, shell policy/async shell, diagnostics, batch, PR/CI); `full` = current 40 tools. `VENIRA_DISABLE_TOOLS` stays for fine-tuning. Reduces schema/context cost and tool-choice confusion.
+- [ ] **Keep `lib/corehost.ts` as a library with two thin adapters** (P2, med): MCP server (today) and a native tool adapter for a fork/embedded agent. A native integration lets Venira *replace* the host's own bash/edit/write tools, so shell policy and the workspace lock cannot be bypassed (with MCP alongside native tools they can). This supersedes the "do not natively integrate yet" note in `TOOL-ROADMAP.md`; revisit once A and C are done.
+- [ ] **Docs consistency** (P1, low) — verified in README v1.6.0: tool count (37 in the intro/diagram vs 40 in §4 and the changelog), `verify` (~30 checks in the scripts list vs 218 in the architecture tree), `doctor` (7 vs 12), a reference to a non-existent "§3.4", the decision-tree anchor `#410-...` pointing at the shell section (the tree is §4.11), and the claim that Node >= 20 "ships `node:sqlite`" (it appeared later; audit uses `better-sqlite3` anyway). Add a CI check that fails when the tool count in README disagrees with `tools/list`.
+- [ ] **Stop shipping build artifacts in the repo/package** (P2, low): `*.log`, `server.err`, `venira-mcp-*.tgz`, `check-*.js` / `poll-ci.js` / `create-pr.js` scratch scripts and `*-new.txt` / `section*.txt` drafts are in the project root; move to `scripts/dev/` or `.gitignore`, and keep `.npmignore` strict.
+
 ## 📅 Estimated timeline (delivered)
 - **v1.1.0** (P1, ~1 week): ✅ Cache control + Trace + read_audit + Shell UX
 - **v1.1.2** (~2 days): ✅ verify/doctor tool counts raised to 25
@@ -263,7 +317,8 @@ Goal: the git tools stop being GitHub-only and stop baking constants into the bi
 - **v1.5.0**: ✅ inline PR review comments + check-runs + secret rotation + deterministic `explain_error` / `plan_read_batch` (37 tools, verify 211/211)
 - **v1.5.1 → v1.5.4**: ✅ hardening found by live E2E + bench — inline `commit_id`, planner artifact/lockfile/credential filters, name/path ranking + calibrated estimate (verify 218/218)
 - **v1.6.0** ✅: configurable git layer — config file, provider dialects (GitLab/Bitbucket), proxy, retries, PR list/close/reopen (40 tools)
-- **Backlog**: chroma/supabase integration, metrics UI
+- **v1.7.0** (planned): safety gaps (shell-policy ordering, `execute_js` gate, protected paths, symlink containment, `install_self` approval, data dir), typed actionable errors, transactional `project_edit_batch`, `VENIRA_PROFILE`
+- **Backlog**: chroma/supabase integration, metrics UI, native-tool adapter (see v1.7.0 §E)
 
 ## ✅ Success criteria
 - [x] The model picks the right tool per the rules (each P0/P1 done)

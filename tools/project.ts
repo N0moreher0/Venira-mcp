@@ -30,6 +30,8 @@ import {
   CACHE_ALL_ENABLED,
   CACHE_LIST_ONLY_ENABLED,
   CACHE_SEARCH_ONLY_ENABLED,
+  isProtectedPath,
+  ALLOW_JS_EXEC,
 } from "../lib/workspace.js";
 import { addTrace, recentTraces, traceSnapshot } from "../lib/tracer.js";
 import {
@@ -925,6 +927,43 @@ async function runReadBatch(
   );
 }
 
+async function runEditBatch(args: Args): Promise<ToolResult> {
+  const started = performance.now();
+  const requestId = newRequestId();
+  const items = Array.isArray(args.edits) ? (args.edits as Args[]) : [];
+  const maxItemBytes = Number(args.max_response_bytes_per_item ?? 1_048_576);
+  const responses: unknown[] = [];
+  let totalBytes = 0;
+  for (const item of items) {
+    const itemStarted = performance.now();
+    try {
+      const { response, cached } = await executeCached("edit_file", item);
+      const envelope = buildEnvelope("edit_file", response, { requestId: newRequestId(), elapsedMs: performance.now() - itemStarted, cached });
+      const size = stringify(envelope).length;
+      if (size > maxItemBytes) {
+        recordMetric("edit_file", performance.now() - itemStarted, false);
+        responses.push({ ok: false, error: { code: "resource_limit", message: "Item response exceeds item limit.", retryable: false } });
+        continue;
+      }
+      if (totalBytes + size > MAX_BATCH_RESPONSE_BYTES) {
+        recordMetric("edit_file", performance.now() - itemStarted, false);
+        responses.push({ ok: false, error: { code: "resource_limit", message: "Batch budget exhausted.", retryable: false } });
+        continue;
+      }
+      totalBytes += size;
+      recordMetric("edit_file", performance.now() - itemStarted, true);
+      responses.push({ ok: true, response: envelope });
+    } catch (error) {
+      recordMetric("edit_file", performance.now() - itemStarted, false);
+      const failure = parseToolError(error);
+      responses.push({ ok: false, error: { code: failure.code, message: failure.message, retryable: failure.retryable } });
+    }
+  }
+  const elapsedMs = performance.now() - started;
+  recordMetric("edit_batch", elapsedMs, true);
+  return toolResult(batchEnvelope(requestId, responses, elapsedMs, { total_bytes_returned: totalBytes }));
+}
+
 async function runReadRanges(args: Args): Promise<ToolResult> {
   const started = performance.now();
   const requestId = newRequestId();
@@ -1458,10 +1497,22 @@ function config(
  * deployment-level switch (env only), not something an agent can change.
  */
 function applyDisabledTools(server: McpServer): void {
+  const profile = (process.env.VENIRA_PROFILE ?? "full").toLowerCase();
   const disabled = (process.env.VENIRA_DISABLE_TOOLS ?? "")
     .split(",")
     .map((name) => name.trim())
     .filter(Boolean);
+  if (profile === "core") {
+    disabled.push(
+      "project_execute_js",
+      "project_file_symbols",
+      "project_outline_symbol",
+      "project_diff_files",
+      "project_symbol_references",
+      "project_selective_search",
+      "project_recent_files",
+    );
+  }
   if (disabled.length === 0) return;
   const blocked = new Set(disabled);
   const original = server.registerTool.bind(server) as (name: string, ...rest: unknown[]) => unknown;
@@ -1473,6 +1524,13 @@ function applyDisabledTools(server: McpServer): void {
 async function runExecuteJs(args: Args): Promise<ToolResult> {
   const started = performance.now();
   const requestId = newRequestId();
+  if (!ALLOW_JS_EXEC) {
+    const elapsedMs = performance.now() - started;
+    return toolResult(
+      errorEnvelope("execute_js", new Error("[unsupported] project_execute_js is disabled. Set VENIRA_ALLOW_JS_EXEC=1 to enable."), { requestId, elapsedMs }),
+      true,
+    );
+  }
   const code = typeof args.code === "string" ? args.code : "";
   const timeoutMs = typeof args.timeout_ms === "number" && Number.isFinite(args.timeout_ms) && args.timeout_ms > 0
     ? Math.min(Math.floor(args.timeout_ms), 600_000)
@@ -1679,6 +1737,10 @@ async function runOutlineSymbol(args: Args): Promise<ToolResult> {
   const started = performance.now();
   const requestId = newRequestId();
   const rel = String(args.relative_path ?? "");
+  if (isProtectedPath(toHostPath(rel))) {
+    const elapsedMs = performance.now() - started;
+    return toolResult(errorEnvelope("outline_symbol", new Error(`[sensitive_result] Path is protected by policy: ${rel}.`), { requestId, elapsedMs }), true);
+  }
   const text = await readTextFile(rel);
   if (text === null) {
     const elapsedMs = performance.now() - started;
@@ -1712,6 +1774,10 @@ async function runFileSymbols(args: Args): Promise<ToolResult> {
   const started = performance.now();
   const requestId = newRequestId();
   const rel = String(args.relative_path ?? "");
+  if (isProtectedPath(toHostPath(rel))) {
+    const elapsedMs = performance.now() - started;
+    return toolResult(errorEnvelope("file_symbols", new Error(`[sensitive_result] Path is protected by policy: ${rel}.`), { requestId, elapsedMs }), true);
+  }
   const text = await readTextFile(rel);
   if (text === null) {
     const elapsedMs = performance.now() - started;
@@ -1746,6 +1812,10 @@ async function runDiffFiles(args: Args): Promise<ToolResult> {
   const requestId = newRequestId();
   const relA = String(args.relative_path_a ?? "");
   const relB = String(args.relative_path_b ?? "");
+  if (isProtectedPath(toHostPath(relA)) || isProtectedPath(toHostPath(relB))) {
+    const elapsedMs = performance.now() - started;
+    return toolResult(errorEnvelope("diff_files", new Error(`[sensitive_result] Path is protected by policy.`), { requestId, elapsedMs }), true);
+  }
   const [a, b] = await Promise.all([readTextFile(relA), readTextFile(relB)]);
   if (a === null || b === null) {
     const missing = a === null ? relA : relB;
@@ -2117,7 +2187,7 @@ async function runInstallSelf(args: Args): Promise<ToolResult> {
     harness,
     workspace: typeof args.workspace === "string" ? args.workspace : undefined,
     dataDir: typeof args.data_dir === "string" ? args.data_dir : undefined,
-    dryRun: args.dry_run === true,
+    dryRun: args.dry_run !== false,
   });
   const response: RustResponse = {
     status: "completed",
@@ -2389,6 +2459,28 @@ export function registerProjectTools(server: McpServer): void {
     },
     (args) => runOne("edit_file", args),
   );
+  server.registerTool(
+    "project_edit_batch",
+    {
+      ...config(
+        "Apply multiple edit_file operations in one call; returns per-item results.",
+        "Edit batch",
+        {
+          use_when: "you have 2+ independent edits across one or more files.",
+          avoid_when: "a single edit (project_edit_file) or a whole-file rewrite (project_write_file).",
+          speed_profile: "depends on item count; each runs edit_file and clears caches.",
+          output_kind: "batch: responses[] {ok, response|error}, total_bytes_returned.",
+          batch_safe: false,
+        },
+        { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+      ),
+      inputSchema: {
+        edits: z.array(z.record(z.string(), z.any())).min(1).max(64).describe("Array of edit_file argument objects."),
+        max_response_bytes_per_item: z.number().int().min(256).max(1048576).optional(),
+      },
+    },
+    (args) => runEditBatch(args as Args),
+  );
 
   server.registerTool(
     "project_create_directory",
@@ -2567,29 +2659,31 @@ export function registerProjectTools(server: McpServer): void {
 
   );
 
-  server.registerTool(
-    "project_execute_js",
-    {
-      ...config(
-        "Evaluate JavaScript code. Runs `node` in the workspace, capturing stdout/stderr; supports top-level await and `require`.",
-        "Execute JS",
-        {
-          use_when: "you need to run a small JS snippet for computation, file I/O via fs, or prototyping.",
-          avoid_when: "you need a full shell pipeline (project_shell_run) or a persistent process.",
-          speed_profile: "synchronous node exec with timeout (default 30s, cap 10min); output capped at 1 MiB.",
-          output_kind: "execute_js: stdout_tail, stderr_tail, exit_code, timed_out, ok.",
-          batch_safe: false,
+  if (ALLOW_JS_EXEC) {
+    server.registerTool(
+      "project_execute_js",
+      {
+        ...config(
+          "Evaluate JavaScript code. Runs `node` in the workspace, capturing stdout/stderr; supports top-level await and `require`.",
+          "Execute JS",
+          {
+            use_when: "you need to run a small JS snippet for computation, file I/O via fs, or prototyping.",
+            avoid_when: "you need a full shell pipeline (project_shell_run) or a persistent process.",
+            speed_profile: "synchronous node exec with timeout (default 30s, cap 10min); output capped at 1 MiB.",
+            output_kind: "execute_js: stdout_tail, stderr_tail, exit_code, timed_out, ok.",
+            batch_safe: false,
+          },
+          { destructiveHint: true, openWorldHint: false },
+        ),
+        inputSchema: {
+          code: z.string().min(1),
+          timeout_ms: z.number().int().min(1).max(600_000).optional(),
+          argv: z.array(z.string()).optional(),
         },
-        { destructiveHint: true, openWorldHint: false },
-      ),
-      inputSchema: {
-        code: z.string().min(1),
-        timeout_ms: z.number().int().min(1).max(600_000).optional(),
-        argv: z.array(z.string()).optional(),
       },
-    },
-    (args) => runExecuteJs(args as Args),
-  );
+      (args) => runExecuteJs(args as Args),
+    );
+  }
 
   // -------------------------------------------------------------------------
   // P1: observability + audit + shell session tools

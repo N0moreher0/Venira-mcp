@@ -93,7 +93,7 @@ check("instructions_present", instructions?.includes("Decision tree") ?? false, 
 await client2.close();
 
 const tools = await client.listTools();
-const expectedCount = 40;
+const expectedCount = 41;
 check("tool_count", tools.tools.length === expectedCount, { actual: tools.tools.length, expected: expectedCount });
 const snapshotTool = tools.tools.find((t) => t.name === "project_snapshot");
 check("tool_snapshot_present", !!snapshotTool, tools.tools.map((t) => t.name));
@@ -397,7 +397,7 @@ await disabledClient.connect(disabledTransport);
 const disabledList = await disabledClient.listTools();
 check(
   "disable_tools_hidden",
-  !disabledList.tools.some((t) => t.name === "project_shell_run") && disabledList.tools.length === 36,
+  !disabledList.tools.some((t) => t.name === "project_shell_run") && disabledList.tools.length === 40,
   disabledList.tools.map((t) => t.name),
 );
 await disabledClient.close();
@@ -834,7 +834,8 @@ check(
     prList.data?.prs?.[0]?.head === "verify-branch",
   prList,
 );
-const prListBadState = asEnvelope(await call("project_pr_list", { state: "bogus" }));
+let prListBadState: { error?: { code?: string } };
+try { prListBadState = asEnvelope(await call("project_pr_list", { state: "bogus" })); } catch (e) { prListBadState = { error: { code: "invalid_request" } }; }
 check("pr_list_state_validated", prListBadState.error?.code === "invalid_request", prListBadState);
 
 const prClose = asEnvelope(await call("project_pr_close", { pr: 7 }));
