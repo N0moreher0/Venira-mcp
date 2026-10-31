@@ -81,10 +81,7 @@ let auditDb: Database.Database | null = null;
 
 function auditDbPath(): string {
   const dataDir =
-    process.env.VENIRA_DATA_DIR ??
-    (existsSync(path.join(WORKSPACE, "data"))
-      ? path.join(WORKSPACE, "data")
-      : defaultDataDir());
+    process.env.VENIRA_DATA_DIR ?? defaultDataDir();
   return path.join(dataDir, "venira.db");
 }
 

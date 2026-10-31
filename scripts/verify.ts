@@ -405,8 +405,14 @@ await disabledClient.close();
 // 15. Audit (standalone: DB is in <workspace>/data or VENIRA_DATA_DIR)
 import path from "node:path";
 import Database from "better-sqlite3";
+function defaultDataDir(): string {
+  const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
+  if (process.platform === "win32") return path.join(process.env.LOCALAPPDATA ?? path.join(home, "AppData", "Local"), "venira");
+  if (process.platform === "darwin") return path.join(home, "Library", "Application Support", "venira");
+  return path.join(home, ".local", "share", "venira");
+}
 const auditDbPath = path.resolve(
-  process.env.VENIRA_DATA_DIR ?? path.join(process.cwd(), "data"),
+  process.env.VENIRA_DATA_DIR ?? defaultDataDir(),
   "venira.db",
 );
 let db: InstanceType<typeof Database> | null = null;

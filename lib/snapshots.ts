@@ -56,9 +56,7 @@ const DEFAULT_EXCLUDES = new Set([
 export function snapshotDataDir(): string {
   const dataDir = process.env.VENIRA_DATA_DIR
     ? path.resolve(process.env.VENIRA_DATA_DIR)
-    : existsSync(path.resolve(process.env.VENIRA_WORKSPACE ?? process.cwd(), "data"))
-      ? path.join(path.resolve(process.env.VENIRA_WORKSPACE ?? process.cwd()), "data")
-      : defaultDataDir();
+    : defaultDataDir();
   return path.join(dataDir, SNAPSHOT_DIR_NAME);
 }
 
