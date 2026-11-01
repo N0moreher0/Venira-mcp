@@ -154,7 +154,10 @@ vault and are never returned to the agent or stored in MCP config. This uses the
 to support private repositories, which grants broad repository access to the authorized GitHub
 account. The `offline_access` scope enables refreshable tokens when supported by GitHub. Each user authorizes their own GitHub account. Local clients running as the same OS user
 share the default per-user vault; if a client uses a custom `VENIRA_DATA_DIR`, use that same data
-directory for the other clients.
+directory for the other clients. For the simplest setup, leave `VENIRA_DATA_DIR` unset so the CLI
+and every client resolve the same OS-specific default (on Windows, `%LOCALAPPDATA%\venira`). If a
+custom directory is required, run `npx venira-mcp --data-dir "<same-path>" --setup-github` and set
+that identical path in every MCP client.
 
 Copilot does not support MCP `inputs` prompts. The workspace config therefore does not request or
 store a token. If you prefer environment-based configuration, set `VENIRA_GIT_TOKEN` in the
