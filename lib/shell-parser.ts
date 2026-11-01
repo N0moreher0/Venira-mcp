@@ -31,13 +31,52 @@ const RUNNERS = new Set([
 ]);
 
 const REDIRECT_NEEDS_TARGET = new Set([">", ">>", ">|", "<", "<<", "&>", "&>>"]);
+const GIT_OPTIONS_WITH_VALUE = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env", "--super-prefix"]);
+
+function gitSubcommand(argv: string[]): string | null {
+  for (let i = 1; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (GIT_OPTIONS_WITH_VALUE.has(arg)) {
+      if (i + 1 >= argv.length) return null;
+      i += 1;
+      continue;
+    }
+    if (
+      arg === "--exec-path" ||
+      arg === "--no-pager" ||
+      arg === "--paginate" ||
+      arg === "--no-replace-objects" ||
+      arg === "--no-lazy-fetch" ||
+      arg === "--no-optional-locks" ||
+      arg === "--bare" ||
+      arg === "--literal-pathspecs" ||
+      arg === "--glob-pathspecs" ||
+      arg === "--noglob-pathspecs" ||
+      arg === "--icase-pathspecs" ||
+      arg === "-p" ||
+      arg === "-P"
+    ) {
+      continue;
+    }
+    if (arg.startsWith("--git-dir=") || arg.startsWith("--work-tree=") ||
+      arg.startsWith("--namespace=") || arg.startsWith("--config-env=") ||
+      arg.startsWith("--super-prefix=") || arg.startsWith("--exec-path=")) {
+      continue;
+    }
+    if (arg.startsWith("-")) continue;
+    return arg.toLowerCase();
+  }
+  return null;
+}
 
 function makeSegment(argv: string[], raw: string): Segment {
   const first = argv[0] ?? "";
   const base = first.split(/[\\/]/).pop() ?? first;
   const command = PLATFORM === "win32" ? base.replace(/\.(exe|cmd|bat|ps1)$/i, "").toLowerCase() : base;
   let subcommand: string | null = null;
-  if (RUNNERS.has(command)) {
+  if (command === "git") {
+    subcommand = gitSubcommand(argv);
+  } else if (RUNNERS.has(command)) {
     subcommand = argv.slice(1).find((arg) => !arg.startsWith("-")) ?? null;
     if (subcommand) subcommand = subcommand.toLowerCase();
   } else if (argv.length > 1 && !argv[1].startsWith("-")) {

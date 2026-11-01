@@ -1,6 +1,6 @@
 # ROADMAP_HARDENING — venira-mcp (bản cập nhật)
 
-> Đối chiếu lại với bản hotfix v1.7.1, 2026-11-01.
+> Baseline hotfix v1.7.1 (2026-11-01); cập nhật các phần việc đang làm ngày 2026-11-02.
 > Mức độ: **P0** sửa ngay · **P1** sửa sớm · **P2** cải thiện. Cỡ việc: **S** < 2h · **M** ~1 ngày · **L** nhiều ngày.
 > Nhãn: ✅ đã chạy thử trên bản này · 📖 chỉ đọc code · ❓ chưa kiểm lại.
 
@@ -26,6 +26,11 @@
 | S7 | `old_text` có `min(1)` | 📖 `tools/project.ts` L1476, L2478 |
 | S10 | `echo $(curl …)` → `ask.command_substitution` | ✅ |
 | S11 (một phần) | `cat ~/.ssh/id_rsa` → `deny.protected_file_access` | ✅ |
+| S16 | `cat .env`/`cat < .env`/`.env` glob → `deny.protected_file_access`; `git push --no-verify` and `git -C/-c ... push` → `ask.git_history_rewrite` | ✅ isolated `test:shell-security` + policy corpus |
+| S17 | GitHub Device Flow: người dùng authorize trực tiếp trên GitHub; access/refresh token lưu vault mã hóa, không trả về agent | ✅ mock trong `test:github-device-flow` |
+| S18 | `--setup-github` nhập PAT trong terminal ẩn, xác nhận rồi lưu vault mã hóa dùng chung theo OS user | 📖 `scripts/setup-github.ts`; test thủ công cần terminal |
+| S19 | Secretlint quét request/response Git provider, giá trị vault/env và biến thể mã hóa; chặn request hoặc giữ lại output; scanner lỗi thì fail-closed | ✅ `test:provider-secret-guard` |
+| S20 | Bổ sung nhận diện credential env như `DATABASE_URL`, kiểm tra Base64/URL-encoded; xử lý Git global options và protected paths qua redirection/glob | ✅ provider guard tests + shell regressions/corpus |
 | R1 | Ghi/sửa file atomic (temp + rename) | 📖 `corehost.ts` L977–987, L1139–1145 |
 | R2 | `edit_file` nhận biết CRLF/BOM, trả `eol` | 📖 `corehost.ts` L1057–1066 |
 | R4 | Dọn `shellRuns` (giữ ≤ 64 run đã xong, bỏ run > 30 phút) | 📖 `corehost.ts` L393–406 |
@@ -55,7 +60,6 @@
 | ID | Mức | Vấn đề | Bằng chứng |
 |----|-----|--------|-----------|
 | S3 (phần còn lại) | P0 | Elicitation channel mặc định; model không tự duyệt khi `VENIRA_SHELL_AUTO_APPROVE_TOKEN=0` | 📖 `tools/project.ts` L689–790 |
-| S11 (mở rộng) | P1 | `protected_file_access` thêm `.env*`, `*.pem`, `.npmrc`, `.git-credentials`, `VENIRA_DATA_DIR`; `ask.read_outside_workspace` | ❓ |
 | S5 (JSONC parser) | P1 | Dùng `jsonc-parser` giữ comment, test fixture thật | ✅ `lib/self-install.ts`, verify fixture |
 
 ### P1 / P2 — độ tin cậy
@@ -78,6 +82,14 @@
 ---
 
 ## 3. Lộ trình
+
+### Phase 0.1 — GitHub auth + provider secret guard (đang làm, chưa phát hành)
+- [x] **S16** — hồi quy trực tiếp và qua MCP cho `cat .env` bị deny và `git push --no-verify` vẫn yêu cầu phê duyệt; test dùng data/vault tạm, không đọc vault thật; `npm run verify` trả exit code khác 0 khi assertion lỗi.
+- [x] **S17** — GitHub Device Flow trong `project_github_connect`; token chỉ lưu local encrypted vault, không lộ cho model; có test mock cho pending/connected/refresh.
+- [x] **S18** — CLI `--setup-github` nhập PAT với terminal echo tắt và xác nhận trước khi lưu.
+- [x] **S19** — Secretlint quét request/response provider, kiểm tra giá trị secret đã biết, fail-closed; test `npm run test:provider-secret-guard`.
+- [x] Gộp hồi quy OAuth + secret guard + shell-security vào `npm run verify`.
+- [ ] Chạy build/verify xanh trên CI trước khi phát hành sau các pentest fixes.
 
 ### Phase 0 — Hotfix v1.7.1 (làm trước, phát hành riêng)
 - [x] **S3** — mặc định trả `approval_id`; human chạy `npx venira-mcp --approve <id>` trong terminal tương tác. Giữ cờ `VENIRA_SHELL_AUTO_APPROVE_TOKEN=1` cho legacy (ghi rõ rủi ro). (S)

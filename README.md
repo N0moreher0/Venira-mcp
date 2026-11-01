@@ -135,7 +135,7 @@ integration over Docker.
 ```bash
 npm run smoke    # in-process: list a dir, read package.json, verify path-escape is blocked
 npm run doctor   # preflight checks: workspace, data dir, tool count, health, shell, version
-npm run verify   # end-to-end MCP regression suite: cache, batch, shell, audit, modes
+npm run verify   # behavioral + security regressions: MCP, shell policy, provider secret guard, GitHub OAuth
 npm run bench    # in-process corehost-tier benchmark (read throughput, batch, parallel)
 npm run bench:mcp# end-to-end MCP benchmark (first call, batch 8, search, health, …)
 ```
@@ -658,7 +658,7 @@ This project is intentionally **conservative by default**:
 | **Workspace lock** | ON | `lib/workspace.ts` resolves every path against `VENIRA_WORKSPACE` (or `process.cwd()`). A path that escapes (`../..`, absolute outside root) throws `path_escape`. |
 | **Unrestricted mode** | OFF | `VENIRA_UNRESTRICTED=1` disables the lock (use only when you fully understand the consequences — the agent can read/write anywhere on the machine). |
 | **Shell cwd** | workspace | `project_shell_run` with no `relative_cwd` runs in the workspace root; the command itself is still whatever the agent passes. |
-| **Shell policy** | `balanced` | Hard-coded catastrophes are always denied; risky operations (writes outside workspace, network fetches, package mutation, history rewrite…) require `ask` and receive a pending approval_id for human approval. `VENIRA_SHELL_MODE` can be (`strict` / `permissive` / `off`) to adjust granularity. Conversation can mark a command known-safe (allow-list) after guidance (the UI does not show raw commands). |
+| **Shell policy** | `balanced` | Hard-coded catastrophes and protected credential paths (including redirects and matching globs) are denied; risky operations (writes outside workspace, network fetches, package mutation, every Git push even with global options or `--no-verify`…) require human approval. `VENIRA_SHELL_MODE` can be (`strict` / `permissive` / `off`) to adjust granularity. Conversation can mark a command known-safe (allow-list) after guidance (the UI does not show raw commands). |
 | **Audit** | ON | Auditable operations (including failures, shell runs and cancellations) are written to `project_tool_audit` in a SQLite WAL database when the database is available; audit failures are surfaced. Long-poll observation calls such as `project_shell_status` are intentionally not audit rows. |
 | **`sensitive_result`** | — | The envelope carries `retryable: false` and a "do not retry" hint when content is withheld by policy. |
 | **`expected_sha256`** | opt-in | `project_write_file` / `project_edit_file` / `project_create` accept a content hash; a mismatch aborts with `conflict` — protects against blind overwrites when the agent re-applies an old edit. |
@@ -666,6 +666,7 @@ This project is intentionally **conservative by default**:
 | **Network (provider APIs)** | opt-in per call, kill switch | Built-in `project_pr_*` / `project_ci_*` calls are governed by `VENIRA_NETWORK=0` and require an HTTPS API base (HTTP is allowed for localhost/tests). Shell commands are separate and may access the network when shell policy allows them. |
 | **Token transport** | header only | The configured provider token travels as an `Authorization` header, never in a command string or a URL. On a cross-origin pre-signed log-download redirect it is **dropped** because the origin changed. |
 | **Secrets at rest** | AES-256-GCM | Values are encrypted in `secrets.json`; new Windows installs use the optional Windows Credential Manager backend (`keytar`) when available, while existing/unsupported installs use `secrets.key` (`0600`, atomic). `get`/`list` return metadata only unless `VENIRA_SECRET_ALLOW_REVEAL=1` *and* `reveal=true` are both set. |
+| **Git provider DLP** | fail closed | PR/CI request arguments and final HTTP payloads are scanned locally with Secretlint's recommended rules (including GitHub/GitLab tokens and private keys); known vault and sensitive environment values are also checked. Detected requests are cancelled before sending, provider output with a detected credential is withheld from the AI, and scanner failure blocks the request. A response-side block may follow a completed mutation; do not retry it blindly. |
 | **Secret leakage** | redacted | Stored values (≥ 8 chars) are scrubbed from shell tails and from the audit `command`/`reason` columns; external ops log a summary (`PUT /pulls/7/merge repo=… method=squash`) instead of the body. Checkpoints and `delete_extra` skip the secret store. |
 
 **Threats this does NOT protect against:** a malicious prompt can still instruct the agent to
@@ -992,11 +993,15 @@ etc. The model is expected to read `hint` first.
 npm run build        # type-check + emit dist/
 npm run smoke        # in-process sanity (backend reachable, path lock works)
 npm run doctor       # preflight: 12 checks incl. audit DB, shell smoke, P1 config surface
-npm run verify       # behavioural regression suite (assertion count varies by enabled profile)
+npm run verify       # behavioral + security regressions: MCP, shell policy, provider-secret guard, GitHub OAuth
 npm run test:policy-corpus # 255 deterministic shell-policy cases
 npm run bench        # in-process numbers
 npm run bench:mcp    # end-to-end numbers
 ```
+
+`better-sqlite3` ships a Node-ABI-specific native addon. Run `npm ci` under each Node
+runtime you use; if you switch Node versions while keeping `node_modules`, rebuild it with
+`npm rebuild better-sqlite3` before testing. Do not copy the compiled addon between runtimes.
 
 **Adding a new tool**
 
@@ -1060,6 +1065,7 @@ The full history, in order — from the standalone rewrite to the provider, secr
 
 | Date | Version | Milestone |
 |---|---|---|
+| 2026-11-02 | **Unreleased after v1.7.1** | **GitHub account authorization + provider secret guard.** `project_github_connect` uses GitHub Device Flow and stores access/refresh tokens in the encrypted per-user vault without returning them to the agent; `--setup-github` provides a hidden-terminal fallback for manual PAT entry. GitHub/GitLab credentials and private keys are scanned locally on provider requests/responses, with fail-closed blocking/withholding. `npm run verify` now includes `.env` read denial, `git push --no-verify` approval, secret-guard and OAuth regression tests. |
 | 2026-11-01 | **v1.7.1** | **Security hotfix + shell UX.** Legacy audit schemas with required `created_at` now receive compatible writes; download-to-shell detection covers chained commands; container stop/remove and all `git push` operations require approval; approval documentation now matches the pending CLI/HMAC flow and per-user data directory; `project_shell_run.early_exit` can wait for completion and return bounded final output with `run_id`/`shell_id`. |
 | 2026-10-27 | **v1.0.0** | **Standalone rewrite.** The Rust `corehost` binary and JSON-Lines IPC were replaced by an in-process pure-Node backend (`lib/corehost.ts`). SQLite WAL audit via `better-sqlite3`, async shell with process-tree kill, long-lived capability scope, structured envelopes with hints, validated read caches, batch reads. Ships as `npm i venira-mcp` (no binary, no GUI). |
 | 2026-10-28 | v1.0.1–v1.0.7 | Release plumbing: npm metadata, OIDC trusted publishing, Docker multi-stage image, `--version` / `--help`, doctor works from any directory, zod 4 + MCP SDK 1.32 (security advisory fix), standard `LICENSE-MIT` / `LICENSE-APACHE` filenames, `scripts/` shipped in the image. |
@@ -1241,6 +1247,30 @@ constants into configuration and adds a second and third dialect.
 | 5. Docs + release | README env table + §4.6/§4.7, TODO roadmap, changelog, tag `v1.6.0`. | `build` / `verify` / `doctor` green; release workflow publishes via OIDC. |
 
 ---
+
+### 14.6 Unreleased after v1.7.1 — GitHub authorization and secret guard
+
+- **GitHub Device Flow** — `project_github_connect` starts authorization and returns only a
+  verification URL, short code, and opaque pending ID. The user authorizes Venira directly on
+  GitHub; access/refresh tokens are encrypted in the local per-user vault and never returned to
+  the model. The flow requests `repo offline_access` (broad repository access) and refreshes
+  expiring credentials when supported.
+- **Hidden-terminal token setup** — `npx venira-mcp --setup-github` asks for a PAT with hidden
+  input and confirmation, then stores it in the same encrypted vault. This is a manual fallback,
+  not a chat prompt; clients running as the same OS user can share the default vault.
+- **Provider secret guard** — Secretlint's recommended rules plus GitLab-token detection scan
+  provider arguments, the final HTTP path/body, provider error bodies, and returned tool data.
+  Known vault/sensitive-environment values and their encoded variants are checked too. Unsafe
+  outbound requests are blocked before network access; unsafe output is withheld. Scan failures
+  fail closed. A response-side block can occur after a mutation completed, so the caller must not
+  blindly retry it.
+- **Regression coverage** — `npm run verify` runs the MCP behavior suite, provider-secret-guard,
+  GitHub Device Flow, and isolated shell-security tests. The suite includes `cat .env` (deny) and
+  `git push --no-verify` (human approval required), plus local mock checks that blocked provider
+  content is not sent or returned. It uses a temporary data/vault directory rather than the
+  developer's real per-user vault. Any failed assertion makes the command exit nonzero.
+  These deterministic tests demonstrate the covered cases; they do not prove the shell policy is
+  a sandbox or protect against every encoding/indirection or a compromised host.
 
 > Note: shell policy matches command text; `bash -c`, encodings and indirection can evade it. It is a guardrail, not a sandbox. `VENIRA_PROFILE=core|full` (default full) reduces the registered tool set.
 
