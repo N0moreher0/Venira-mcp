@@ -339,7 +339,7 @@ export async function gitFetch(ctx: GitContext, apiPath: string, opts: FetchOpts
   if (!token && !opts.allowAnonymous) {
     throw new Error(
       `[auth_missing] No ${ctx.provider} token available (looked for secret "${ctx.secret_name}"). ` +
-        `Hint: run project_secret action=set name=${ctx.secret_name} value=<token>.`,
+        `Hint: for GitHub, use project_github_connect action=start; otherwise run project_secret action=set name=${ctx.secret_name} value=<token>.`,
     );
   }
 

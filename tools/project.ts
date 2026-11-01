@@ -218,6 +218,7 @@ const EXTERNAL_OPS = new Set([
   "ci_trigger",
   "ci_logs",
   "secret",
+  "github_connect",
 ]);
 
 /** Convert path fields to absolute workspace paths; drop undefined values. */
@@ -3617,6 +3618,41 @@ export function registerProjectTools(server: McpServer): void {
   // -------------------------------------------------------------------------
 
   server.registerTool(
+    "project_github_connect",
+    {
+      ...config(
+        "Connect GitHub through its Device Flow. The user authorizes at github.com; access and refresh tokens are saved in the encrypted local vault and are never returned.",
+        "Connect GitHub",
+        {
+          use_when:
+            "the user wants to connect or replace the local GitHub credential without pasting a token into chat.",
+          avoid_when:
+            "the user only needs GitHub public read access or has already configured a token.",
+          speed_profile:
+            "start returns a short-lived verification code; poll only at the interval GitHub specifies.",
+          output_kind:
+            "github_connect: start returns verification_uri, user_code, pending_id and expiry; poll returns pending, denied, expired or connected (never a token).",
+          batch_safe: false,
+        },
+        { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+      ),
+      inputSchema: {
+        action: z.enum(["start", "poll"]),
+        replace_existing: z
+          .boolean()
+          .optional()
+          .describe("action=start: explicitly authorize replacing an existing GitHub credential."),
+        pending_id: z
+          .string()
+          .max(64)
+          .optional()
+          .describe("action=poll: opaque id returned by action=start; it does not contain the device code or token."),
+      },
+    },
+    (args) => runOne("github_connect", args as Args),
+  );
+
+  server.registerTool(
     "project_secret",
     {
       ...config(
@@ -3626,7 +3662,7 @@ export function registerProjectTools(server: McpServer): void {
         "Manage secrets",
         {
           use_when:
-            "storing a token (action=set), checking whether one exists or is due for rotation (action=get / action=list), " +
+            "storing a non-GitHub token (action=set), checking whether one exists or is due for rotation (action=get / action=list), " +
             "removing one (action=delete). Then use secret_env on project_shell_run or the built-in GitHub tools.",
           avoid_when:
             "the value is a normal, non-secret config (put it in .env or the config file); or you need the plaintext " +
