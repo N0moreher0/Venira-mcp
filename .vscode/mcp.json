@@ -8,7 +8,6 @@
       ],
       "env": {
         "VENIRA_WORKSPACE": "${workspaceFolder}",
-        "VENIRA_DATA_DIR": "${userHome}\\AppData\\Local\\venira",
         "VENIRA_UNRESTRICTED": "0",
         "VENIRA_DEFAULT_SHELL": "powershell",
         "VENIRA_SHELL_MODE": "balanced",
