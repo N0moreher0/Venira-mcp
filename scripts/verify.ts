@@ -282,8 +282,8 @@ const runData = JSON.parse(run.content?.[0]?.text ?? "{}");
 check("shell_run_ok", runData.ok === true && runData?.data?.run_id != null, runData);
 const runId = runData?.data?.run_id;
 let status: Record<string, any> = {};
-for (let i = 0; i < 20; i++) {
-  const statusCall = await call("project_shell_status", { run_id: runId as string, wait_seconds: 1 });
+for (let i = 0; i < 12; i++) {
+  const statusCall = await call("project_shell_status", { run_id: runId as string, wait_seconds: 5 });
   status = JSON.parse((statusCall as { content?: { text?: string }[] })?.content?.[0]?.text ?? "{}");
   if (!status?.data?.running) break;
 }
