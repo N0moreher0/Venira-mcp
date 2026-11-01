@@ -146,11 +146,12 @@ npm run bench:mcp# end-to-end MCP benchmark (first call, batch 8, search, health
 
 ### 3.1 VS Code (`.vscode/mcp.json`)
 
-This repo includes a workspace MCP config. On startup, VS Code securely prompts for an optional
-GitHub token and passes it to Venira as `VENIRA_GIT_TOKEN`; the token is not stored in this file.
-Leave it blank if you do not use GitHub PR/CI tools. For a fine-grained token, grant only the
-repository permissions needed (typically Pull requests: read/write and Contents: read).
-After updating the config, restart the Venira MCP server from VS Code's MCP controls.
+This repo includes a workspace MCP config that reads `VENIRA_GIT_TOKEN` from the environment of
+the VS Code process. Copilot does not support MCP `inputs` prompts, so do not put a token directly
+in this file or paste it into chat. On Windows, set the variable in the environment used to launch
+VS Code, then fully restart VS Code and restart the Venira MCP server. Leave it unset if you do
+not use GitHub PR/CI tools. For a fine-grained token, grant only the repository permissions needed
+(typically Pull requests: read/write and Contents: read).
 
 ### 3.2 OpenCode (`opencode.jsonc` or `.opencode/opencode.jsonc`)
 
