@@ -318,6 +318,18 @@ const asEnvelope = (result: unknown) => JSON.parse(textOf(result) || "{}");
 // Unit checks first (no server interaction)
 const ws = process.cwd();
 const policyModule = await import("../lib/shell-policy.js");
+const powershellWrite = policyModule.evaluateShellCommand("Remove-Item -Recurse 'C:\\Users\\Public\\venira-test'", ws);
+check(
+  "policy_unit_windows_path_outside_workspace",
+  powershellWrite.tier === "ask" && powershellWrite.rule === "ask.writes_outside_workspace",
+  powershellWrite,
+);
+const powershellNetwork = policyModule.evaluateShellCommand("Invoke-WebRequest https://example.com", ws);
+check(
+  "policy_unit_powershell_network_case_insensitive",
+  powershellNetwork.tier === "ask" && powershellNetwork.rule === "ask.network_access",
+  powershellNetwork,
+);
 check(
   "policy_unit_allow",
   policyModule.evaluateShellCommand("git status", ws).tier === "allow",

@@ -110,6 +110,7 @@ export function isOutsideWorkspace(target: string, cwd: string): boolean {
   if (/(^|[\\/])(?:\$(?:env:)?[A-Za-z_][A-Za-z0-9_]*|%[A-Za-z_][A-Za-z0-9_]*%?)/.test(raw)) return true;
   if (/^[|&<>]/.test(raw)) return false;
   const expanded = expandHome(raw);
+  if (path.win32.isAbsolute(expanded) && !path.isAbsolute(expanded)) return true;
   const abs = path.resolve(cwd, expanded);
   const rel = path.relative(WORKSPACE, abs);
   return rel === ".." || rel.startsWith(".." + path.sep) || path.isAbsolute(rel);

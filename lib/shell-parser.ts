@@ -72,7 +72,7 @@ function gitSubcommand(argv: string[]): string | null {
 function makeSegment(argv: string[], raw: string): Segment {
   const first = argv[0] ?? "";
   const base = first.split(/[\\/]/).pop() ?? first;
-  const command = PLATFORM === "win32" ? base.replace(/\.(exe|cmd|bat|ps1)$/i, "").toLowerCase() : base;
+  const command = PLATFORM === "win32" ? base.replace(/\.(exe|cmd|bat|ps1)$/i, "").toLowerCase() : base.toLowerCase();
   let subcommand: string | null = null;
   if (command === "git") {
     subcommand = gitSubcommand(argv);
