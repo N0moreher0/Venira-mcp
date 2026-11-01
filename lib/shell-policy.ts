@@ -38,7 +38,20 @@ import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { existsSync, readFileSync } from "node:fs";
-import { PLATFORM, UNRESTRICTED, WORKSPACE } from "./workspace.js";
+import { UNRESTRICTED, WORKSPACE, activeDataDir } from "./workspace.js";
+import { parseShellCommand, type ParsedCommand, type Segment } from "./shell-parser.js";
+import {
+  NETWORK_COMMANDS,
+  PKG_MANAGERS,
+  PKG_MUTATING,
+  PKG_SAFE,
+  READ_COMMANDS,
+  SHELL_COMMANDS,
+  STRICT_ALLOW,
+} from "./shell-policy-rules.js";
+import { evaluateParsedShellCommand, type AskRule, type HardDenyRule } from "./shell-policy-evaluate.js";
+
+export { tokenize } from "./shell-tokenizer.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -65,26 +78,7 @@ export type ShellPolicy = {
   source: string;
 };
 
-export type Segment = {
-  raw: string;
-  argv: string[];
-  command: string;
-  subcommand: string | null;
-};
-
-export type ParsedCommand = {
-  raw: string;
-  segments: Segment[];
-  operators: string[];
-  redirect_targets: string[];
-  cd_targets: string[];
-  has_operator: boolean;
-  has_pipe: boolean;
-  has_redirect: boolean;
-  has_substitution: boolean;
-  has_background: boolean;
-  empty: boolean;
-};
+export type { ParsedCommand, Segment };
 
 export type Decision = {
   tier: Tier;
@@ -94,251 +88,7 @@ export type Decision = {
   command_hash: string;
 };
 
-// ---------------------------------------------------------------------------
-// Parser
-// ---------------------------------------------------------------------------
-
-const REDIRECT_OPS = new Set([">", ">>", ">|", "<", "<<", "&>", "&>>"]);
-const SEPARATOR_OPS = new Set([";", "&&", "||", "|", "&"]);
-
-type Token = { type: "word" | "op" | "redirect"; value: string };
-
-/**
- * Split a raw command line into words / operators / redirects, honouring
- * quotes and backslash escapes. Deliberately conservative: anything this
- * parser cannot model makes the command *more* likely to require approval,
- * never less.
- */
-export function tokenize(raw: string): { tokens: Token[]; has_substitution: boolean } {
-  const tokens: Token[] = [];
-  let word = "";
-  let hasWord = false;
-  let quote: "'" | '"' | null = null;
-  let hasSubstitution = false;
-
-  const flush = (): void => {
-    if (!hasWord) return;
-    tokens.push({ type: "word", value: word });
-    word = "";
-    hasWord = false;
-  };
-  const pushOp = (op: string): void => {
-    flush();
-    tokens.push({ type: REDIRECT_OPS.has(op) || op.startsWith(">&") ? "redirect" : "op", value: op });
-  };
-
-  for (let i = 0; i < raw.length; i += 1) {
-    const ch = raw[i];
-
-    if (quote === "'") {
-      if (ch === "'") quote = null;
-      else {
-        word += ch;
-        hasWord = true;
-      }
-      continue;
-    }
-
-    if (quote === '"') {
-      if (ch === '"') {
-        quote = null;
-        continue;
-      }
-      if (ch === "\\" && i + 1 < raw.length) {
-        word += raw[i + 1];
-        i += 1;
-        hasWord = true;
-        continue;
-      }
-      if (ch === "`" || (ch === "$" && raw[i + 1] === "(")) hasSubstitution = true;
-      word += ch;
-      hasWord = true;
-      continue;
-    }
-
-    if (ch === "\\") {
-      if (i + 1 < raw.length) {
-        word += raw[i + 1];
-        i += 1;
-        hasWord = true;
-      }
-      continue;
-    }
-    if (ch === "'" || ch === '"') {
-      quote = ch;
-      hasWord = true;
-      continue;
-    }
-    if (ch === " " || ch === "\t" || ch === "\n" || ch === "\r") {
-      flush();
-      continue;
-    }
-    if (ch === "`") {
-      hasSubstitution = true;
-      word += ch;
-      hasWord = true;
-      continue;
-    }
-    if (ch === "$" && raw[i + 1] === "(") {
-      hasSubstitution = true;
-      word += ch;
-      hasWord = true;
-      continue;
-    }
-
-    if (";&|<>".includes(ch)) {
-      // File-descriptor redirects such as 2>&1 or 1>&2: keep the whole thing
-      // as one redirect token, and drop the numeric fd word we already have.
-      if ((ch === ">" || ch === "&") && raw[i + 1] === "&" && /^[0-9]*$/.test(word)) {
-        let j = i + 2;
-        let fd = "";
-        while (j < raw.length && /[0-9-]/.test(raw[j])) {
-          fd += raw[j];
-          j += 1;
-        }
-        word = "";
-        hasWord = false;
-        tokens.push({ type: "redirect", value: ">&" + fd });
-        i = j - 1;
-        continue;
-      }
-      // Pure-number word directly before a redirect is a fd, not an argument.
-      if ((ch === ">" || ch === "<") && /^[0-9]+$/.test(word)) {
-        word = "";
-        hasWord = false;
-      }
-
-      const three = raw.slice(i, i + 3);
-      const two = raw.slice(i, i + 2);
-      let op = ch;
-      if (["&>>"].includes(three)) op = three;
-      else if ([">>", "&&", "||", "&>", ">|", "<<", "2>", "1>", "0<"].includes(two)) op = two;
-      pushOp(op);
-      i += op.length - 1;
-      continue;
-    }
-
-    word += ch;
-    hasWord = true;
-  }
-  flush();
-
-  return { tokens, has_substitution: hasSubstitution };
-}
-
-/** Commands that take a subcommand we care about in policy rules. */
-const RUNNERS = new Set([
-  "git",
-  "npm",
-  "npx",
-  "pnpm",
-  "yarn",
-  "bun",
-  "node",
-  "cargo",
-  "go",
-  "python",
-  "python3",
-  "pip",
-  "pip3",
-  "dotnet",
-  "docker",
-  "podman",
-  "kubectl",
-  "gh",
-  "apt",
-  "apt-get",
-  "dnf",
-  "yum",
-  "pacman",
-  "brew",
-  "winget",
-  "choco",
-  "scoop",
-  "deno",
-  "ruby",
-  "gem",
-  "php",
-  "composer",
-  "mvn",
-  "gradle",
-]);
-
-const REDIRECT_NEEDS_TARGET = new Set([">", ">>", ">|", "<", "<<", "&>", "&>>"]);
-
-function makeSegment(argv: string[], raw: string): Segment {
-  const first = argv[0] ?? "";
-  const base = first.split(/[\\/]/).pop() ?? first;
-  const command = PLATFORM === "win32" ? base.replace(/\.(exe|cmd|bat|ps1)$/i, "").toLowerCase() : base;
-  let subcommand: string | null = null;
-  if (RUNNERS.has(command)) {
-    subcommand = argv.slice(1).find((arg) => !arg.startsWith("-")) ?? null;
-    if (subcommand) subcommand = subcommand.toLowerCase();
-  } else if (argv.length > 1 && !argv[1].startsWith("-")) {
-    subcommand = argv[1].toLowerCase();
-  }
-  return { raw, argv, command, subcommand };
-}
-
-export function parseShellCommand(raw: string): ParsedCommand {
-  const { tokens, has_substitution } = tokenize(raw);
-  const segments: Segment[] = [];
-  const operators: string[] = [];
-  const redirect_targets: string[] = [];
-
-  let argv: string[] = [];
-  let rawParts: string[] = [];
-  let expectTarget = false;
-
-  const flushSegment = (): void => {
-    if (argv.length > 0) segments.push(makeSegment(argv, rawParts.join(" ")));
-    argv = [];
-    rawParts = [];
-  };
-
-  for (const tok of tokens) {
-    if (tok.type === "word") {
-      if (expectTarget) {
-        redirect_targets.push(tok.value);
-        expectTarget = false;
-        rawParts.push(tok.value);
-        continue;
-      }
-      argv.push(tok.value);
-      rawParts.push(tok.value);
-      continue;
-    }
-    if (tok.type === "redirect") {
-      if (REDIRECT_NEEDS_TARGET.has(tok.value)) expectTarget = true;
-      rawParts.push(tok.value);
-      continue;
-    }
-    operators.push(tok.value);
-    flushSegment();
-  }
-  flushSegment();
-
-  const cd_targets: string[] = [];
-  for (const segment of segments) {
-    if (["cd", "chdir", "sl", "set-location"].includes(segment.command) && segment.argv[1]) {
-      cd_targets.push(segment.argv[1]);
-    }
-  }
-
-  return {
-    raw,
-    segments,
-    operators,
-    redirect_targets,
-    cd_targets,
-    has_operator: operators.length > 0,
-    has_pipe: operators.includes("|"),
-    has_redirect: redirect_targets.length > 0,
-    has_substitution,
-    has_background: operators.includes("&"),
-    empty: segments.length === 0,
-  };
-}
+export { parseShellCommand } from "./shell-parser.js";
 
 // ---------------------------------------------------------------------------
 // Path helpers
@@ -354,7 +104,10 @@ function expandHome(target: string): string {
 export function isOutsideWorkspace(target: string, cwd: string): boolean {
   if (UNRESTRICTED) return false;
   const raw = target.trim();
-  if (!raw || raw === "-" || raw.startsWith("$") || raw.startsWith("%")) return false;
+  if (!raw || raw === "-") return false;
+  // An unresolved environment-variable path cannot be proven workspace-local.
+  // Require approval rather than allowing `cat $HOME/...` or its Windows form.
+  if (/(^|[\\/])(?:\$(?:env:)?[A-Za-z_][A-Za-z0-9_]*|%[A-Za-z_][A-Za-z0-9_]*%?)/.test(raw)) return true;
   if (/^[|&<>]/.test(raw)) return false;
   const expanded = expandHome(raw);
   const abs = path.resolve(cwd, expanded);
@@ -382,6 +135,23 @@ const WRITE_COMMANDS = new Set([
   "xcopy",
   "ln",
   "mklink",
+  "remove-item",
+  "ri",
+  "rm",
+  "del",
+  "set-content",
+  "sc",
+  "add-content",
+  "ac",
+  "out-file",
+  "move-item",
+  "mi",
+  "copy-item",
+  "cpi",
+  "new-item",
+  "ni",
+  "rename-item",
+  "clear-content",
 ]);
 
 function writeTargetsOutside(parsed: ParsedCommand, cwd: string): string[] {
@@ -399,72 +169,21 @@ function writeTargetsOutside(parsed: ParsedCommand, cwd: string): string[] {
   return targets;
 }
 
-const NETWORK_COMMANDS = new Set([
-  "curl",
-  "curl.exe",
-  "wget",
-  "httpie",
-  "http",
-  "ssh",
-  "scp",
-  "sftp",
-  "rsync",
-  "telnet",
-  "nc",
-  "ncat",
-  "netcat",
-  "invoke-webrequest",
-  "invoke-restmethod",
-  "iwr",
-  "irm",
-]);
-
-const SHELL_COMMANDS = new Set(["sh", "bash", "zsh", "fish", "dash", "ksh", "node", "python", "python3", "perl", "ruby", "pwsh", "powershell"]);
-
-const PKG_MANAGERS = new Set(["npm", "pnpm", "yarn", "bun", "pip", "pip3", "cargo", "go", "gem", "composer", "dotnet", "winget", "choco", "scoop", "brew", "apt", "apt-get", "dnf", "yum", "pacman", "mvn", "gradle"]);
-
-/** Subcommands that fetch and install/uninstall software or publish artifacts. */
-const PKG_MUTATING = new Set([
-  "publish",
-  "upgrade",
-  "update",
-  "global",
-]);
-
-/**
- * Dev-workflow package mutations that are routine and low-risk:
- * they only touch the local workspace node_modules.  Kept out of
- * `PKG_MUTATING` so that `balanced` mode does not ask approval for
- * `npm install`, `npm ci`, `pnpm add`, `yarn add`, etc.
- */
-const PKG_SAFE = new Set([
-  "install",
-  "i",
-  "add",
-  "ci",
-  "uninstall",
-  "remove",
-  "rm",
-  "exec",
-  "create",
-  "dlx",
-]);
-
 // ---------------------------------------------------------------------------
 // Built-in rules
 // ---------------------------------------------------------------------------
 
 /** Unambiguous catastrophes: always denied, in every mode except `off`. */
-const HARD_DENY: Array<{ id: string; test: (parsed: ParsedCommand, raw: string, cwd: string) => boolean; reason: string }> = [
+const HARD_DENY: HardDenyRule[] = [
   {
     id: "disk_destroy",
     reason: "This command overwrites a disk or filesystem device.",
-    test: (_p, raw) => /\b(mkfs(\.[a-z0-9]+)?|mke2fs|fdisk|sfdisk|parted|diskpart|wipefs)\b/i.test(raw) || /\bdd\b[^\n]*\bof=\/dev\//i.test(raw) || /\bformat\s+[a-z]:/i.test(raw),
+    test: (parsed, raw) => parsed.segments.some((s) => /^(mkfs|mke2fs|fdisk|sfdisk|parted|diskpart|wipefs|format)$/.test(s.command)) || /\bdd\b[^\n]*\bof=\/dev\//i.test(raw),
   },
   {
     id: "filesystem_mount_overwrite",
     reason: "Mounting a filesystem over a path may replace the entire directory tree.",
-    test: (_p, raw) => /\bmount\b/i.test(raw),
+    test: (parsed) => parsed.segments.some((s) => s.command === "mount"),
   },
   {
     id: "power_state",
@@ -478,8 +197,8 @@ const HARD_DENY: Array<{ id: string; test: (parsed: ParsedCommand, raw: string, 
   },
   {
     id: "container_state",
-    reason: "Stopping or destroying containers or images on the host.",
-    test: (_p, raw) => /\b(docker|podman|nerdctl|kubernetes|kubectl)\b[^\n]*\b(destroy|rm|delete|stop|prune|system)\b/i.test(raw),
+    reason: "Destroying container state or pruning container resources on the host is irreversible.",
+    test: (_p, raw) => /\b(docker|podman|nerdctl|kubernetes|kubectl)\b[^\n]*\b(destroy|prune|system)\b/i.test(raw),
   },
   {
     id: "fork_bomb",
@@ -491,10 +210,12 @@ const HARD_DENY: Array<{ id: string; test: (parsed: ParsedCommand, raw: string, 
     reason: "Piping a download straight into a shell executes unverified remote code.",
     test: (parsed) => {
       if (!parsed.has_pipe) return false;
-      const first = parsed.segments[0];
-      const last = parsed.segments[parsed.segments.length - 1];
-      if (!first || !last) return false;
-      return NETWORK_COMMANDS.has(first.command) && SHELL_COMMANDS.has(last.command);
+      if (parsed.segments.length < 2) return false;
+      return parsed.segments.some(
+        (segment, index) =>
+          NETWORK_COMMANDS.has(segment.command) &&
+          SHELL_COMMANDS.has(parsed.segments[index + 1]?.command ?? ""),
+      );
     },
   },
   {
@@ -517,11 +238,82 @@ const HARD_DENY: Array<{ id: string; test: (parsed: ParsedCommand, raw: string, 
     reason: "This deletes a drive root on Windows.",
     test: (_p, raw) => /\b(rd|rmdir|del|erase)\b[^\n]*\/s[^\n]*\b[a-z]:\\?(\s|$|\*)/i.test(raw),
   },
+  {
+    id: "self_approval",
+    reason:
+      "Approvals must come from the human operator. Running the approve CLI, importing the approvals module " +
+      "or touching the approval store from the agent would let it approve its own request.",
+    test: (_p, raw) =>
+      (/--approve\b/i.test(raw) && /venira/i.test(raw)) ||
+      /scripts[\\/]+approve(\.[cm]?[jt]s)?\b/i.test(raw) ||
+      /lib[\\/]+approvals(\.[cm]?[jt]s)?\b/i.test(raw) ||
+      /approval\.key\b/i.test(raw) ||
+      /approvals[\\/]+[^\s"']*\.(granted|json)\b/i.test(raw),
+  },
+  {
+    id: "protected_file_access",
+    reason: "This reads or writes a protected secret store, audit database, or credential file.",
+    test: (parsed) => {
+      const protectedNames = new Set([
+        "secrets.json",
+        "secrets.key",
+        "venira.db",
+        "venira.db-wal",
+        "venira.db-shm",
+        ".env",
+        ".npmrc",
+        ".netrc",
+        ".pgpass",
+        ".git-credentials",
+        "credentials.json",
+        "id_rsa",
+        "id_dsa",
+        "id_ecdsa",
+        "id_ed25519",
+      ]);
+      const dataDir = activeDataDir().toLowerCase();
+      const collect = (tokens: string[]): boolean => {
+        for (const t of tokens) {
+          const base = path.basename(t.replace(/\\/g, "/")).toLowerCase();
+          if (protectedNames.has(base)) return true;
+          if (base.startsWith(".env")) return true;
+          if (
+            /\.(pem|key|p12|pfx|jks|keystore|crt|cer|der|asc|gpg)$/i.test(base)
+          )
+            return true;
+          if (dataDir && t.toLowerCase().replace(/\\/g, "/").includes(dataDir.replace(/\\/g, "/"))) return true;
+          if (/(^|[\\/])venira[\\/](approvals|approval\.key)/i.test(t)) return true;
+          if (/\.ssh[\\/]/i.test(t)) return true;
+        }
+        return false;
+      };
+      const all: string[] = [];
+      for (const seg of parsed.segments) {
+        all.push(...seg.argv);
+      }
+      // redirect targets
+      // parsed doesn't expose redirects easily; fall back to raw scanning of >> / < / >
+      return collect(all);
+    },
+  },
 ];
 
-type AskRule = { id: string; reason: string; test: (parsed: ParsedCommand, cwd: string) => boolean };
-
 const ASK_RULES: AskRule[] = [
+  {
+    id: "command_substitution",
+    reason: "This command embeds a substitution ($(..) or backticks) the policy cannot fully inspect.",
+    test: (parsed) => parsed.has_substitution,
+  },
+  {
+    id: "read_outside_workspace",
+    reason: "This command reads files outside the workspace.",
+    test: (parsed, cwd) =>
+      parsed.segments.some(
+        (segment) =>
+          READ_COMMANDS.has(segment.command) &&
+          segment.argv.some((arg) => !arg.startsWith("-") && isOutsideWorkspace(arg, cwd)),
+      ),
+  },
   {
     id: "writes_outside_workspace",
     reason: "This command writes or deletes outside the workspace.",
@@ -555,7 +347,7 @@ const ASK_RULES: AskRule[] = [
       parsed.segments.some((segment) => {
         if (segment.command !== "git" || !segment.subcommand) return false;
         const args = segment.argv.join(" ");
-        if (segment.subcommand === "push") return /\s(-f|--force|--force-with-lease)\b/.test(args) || /\+[^\s]+/.test(args);
+        if (segment.subcommand === "push") return true;
         if (segment.subcommand === "reset") return /--hard/.test(args);
         if (segment.subcommand === "clean") return /\s-[a-z]*[fx]/.test(args);
         if (segment.subcommand === "branch") return /\s-D\b/.test(args);
@@ -580,36 +372,59 @@ const ASK_RULES: AskRule[] = [
     test: (parsed) => parsed.segments.some((segment) => ["env", "printenv", "set", "export"].includes(segment.command) && segment.argv.length === 1),
   },
   {
+    id: "wrapper_command",
+    reason: "This wraps another command; the policy inspects the inner command only after stripping the wrapper.",
+    test: (parsed) => parsed.segments.some((s) => ["command", "builtin", "env", "nohup", "time", "nice", "xargs", "exec", "stdbuf", "setsid", "start", "call"].includes(s.command)),
+  },
+  {
     id: "dynamic_execution",
-    reason: "This evaluates a string as code, which the policy cannot inspect.",
+    reason: "This executes code that the policy cannot safely inspect.",
     test: (parsed) =>
       parsed.segments.some((segment) => {
         if (["eval", "exec", "source", ".", "invoke-expression", "iex"].includes(segment.command)) return true;
         const flags = segment.argv;
+        if (segment.command === "node" || segment.command === "nodejs") {
+          const informationalFlags = new Set(["--version", "-v", "--help", "-h"]);
+          return (
+            parsed.has_pipe ||
+            parsed.has_redirect ||
+            parsed.has_background ||
+            flags.length === 0 ||
+            !flags.every((flag) => informationalFlags.has(flag.toLowerCase()))
+          );
+        }
         const interpreters: Record<string, string[]> = {
-          node: ["-e", "--eval", "-p", "--print"],
-          nodejs: ["-e", "--eval", "-p", "--print"],
+          node: ["-e", "--eval", "-p", "--print", "-pe", "-pr"],
+          nodejs: ["-e", "--eval", "-p", "--print", "-pe", "-pr"],
           python: ["-c"],
           python3: ["-c"],
           deno: ["eval"],
-          bash: ["-c"],
-          sh: ["-c"],
-          zsh: ["-c"],
-          powershell: ["-command", "-encodedcommand"],
-          pwsh: ["-command", "-encodedcommand"],
+          bash: ["-c", "-lc", "-ec"],
+          sh: ["-c", "-ec"],
+          zsh: ["-c", "-lc"],
+          powershell: ["-command", "-encodedcommand", "-e", "-ec", "-enc", "-co", "-c"],
+          pwsh: ["-command", "-encodedcommand", "-e", "-ec", "-enc", "-co", "-c"],
           cmd: ["/c"],
           perl: ["-e"],
           ruby: ["-e"],
         };
         const expected = interpreters[segment.command];
         if (!expected) return false;
-        return flags.some((flag) => expected.includes(flag.toLowerCase()));
+        return flags.some((flag) => expected.some((exp) => {
+          const f = flag.toLowerCase();
+          const e = exp.toLowerCase();
+          if (f === e) return true;
+          if (f.startsWith("-") && e.startsWith("-") && f.length > 2 && e.length === 2) {
+            return f.includes(e.slice(1));
+          }
+          return false;
+        }));
       }),
   },
   {
-    id: "recursive_delete_glob",
-    reason: "This deletes recursively with a wildcard, which is easy to mis-scope.",
-    test: (parsed) => parsed.segments.some((segment) => /^(rm|rd|rmdir|del|erase)$/.test(segment.command) && segment.argv.some((arg) => /[rf]/i.test(arg.startsWith("-") || arg.startsWith("/") ? arg : "") && /[*?]/.test(segment.argv.join(" ")))),
+    id: "find_mutation",
+    reason: "find with -delete/-exec can mutate files outside a simple scope.",
+    test: (parsed) => parsed.segments.some((s) => s.command === "find" && s.argv.some((a) => a === "-delete" || a === "-exec" || a === "-execdir")),
   },
 ];
 
@@ -647,56 +462,6 @@ function isSafeSegment(segment: Segment): boolean {
   }
   return true;
 }
-
-/** Read-only / workspace-local commands allowed without approval in `strict`. */
-const STRICT_ALLOW: Array<{ command: string; subcommands?: string[] }> = [
-  { command: "ls" },
-  { command: "dir" },
-  { command: "pwd" },
-  { command: "echo" },
-  { command: "write-output" },
-  { command: "cat" },
-  { command: "type" },
-  { command: "get-content" },
-  { command: "head" },
-  { command: "tail" },
-  { command: "wc" },
-  { command: "which" },
-  { command: "where" },
-  { command: "whoami" },
-  { command: "date" },
-  { command: "stat" },
-  { command: "file" },
-  { command: "tree" },
-  { command: "du" },
-  { command: "df" },
-  { command: "sort" },
-  { command: "uniq" },
-  { command: "cut" },
-  { command: "grep" },
-  { command: "rg" },
-  { command: "select-string" },
-  { command: "find" },
-  { command: "test" },
-  { command: "true" },
-  { command: "false" },
-  { command: "mkdir" },
-  { command: "touch" },
-  { command: "cp" },
-  { command: "mv" },
-  { command: "rm" },
-  { command: "node" },
-  { command: "git", subcommands: ["status", "log", "diff", "show", "branch", "rev-parse", "remote", "describe", "blame", "ls-files", "shortlog", "tag", "config"] },
-  { command: "npm", subcommands: ["ls", "list", "view", "outdated", "config"] },
-  { command: "pnpm", subcommands: ["ls", "list", "why", "outdated"] },
-  { command: "yarn", subcommands: ["info", "why", "list", "outdated"] },
-  { command: "tsc", subcommands: [] },
-  { command: "python", subcommands: [] },
-  { command: "python3", subcommands: [] },
-  { command: "go", subcommands: ["version", "env", "list"] },
-  { command: "cargo", subcommands: ["version", "--version"] },
-  { command: "dotnet", subcommands: ["--info", "--version", "build", "test"] },
-];
 
 // ---------------------------------------------------------------------------
 // Policy loading
@@ -794,34 +559,6 @@ export function commandKey(parsed: ParsedCommand): string {
   return `${first.command}${first.subcommand ? " " + first.subcommand : ""}`;
 }
 
-function matchCustomRule(parsed: ParsedCommand, rule: ShellRule): boolean {
-  if (!rule.command) return false;
-  return parsed.segments.some((segment) => {
-    if (segment.command !== rule.command) return false;
-    if (rule.subcommand && segment.subcommand !== rule.subcommand) return false;
-    if (rule.args_regex) {
-      try {
-        if (!new RegExp(rule.args_regex, "i").test(segment.argv.slice(1).join(" "))) return false;
-      } catch {
-        return false;
-      }
-    }
-    return true;
-  });
-}
-
-function strictAllow(parsed: ParsedCommand): boolean {
-  return parsed.segments.every((segment) => {
-    const entry = STRICT_ALLOW.find((rule) => rule.command === segment.command);
-    if (!entry) return false;
-    if (!entry.subcommands) return true;
-    if (entry.subcommands.length === 0) return true;
-    // Flags like --version are not subcommands; accept a bare flag-only call.
-    if (!segment.subcommand) return true;
-    return entry.subcommands.includes(segment.subcommand);
-  });
-}
-
 export function evaluateShellCommand(
   command: string,
   cwd: string,
@@ -829,84 +566,18 @@ export function evaluateShellCommand(
 ): Decision {
   const policy = loadShellPolicy();
   const mode = options.mode ?? policy.mode;
-  const hash = commandHash(command);
   const parsed = parseShellCommand(command);
-
-  if (mode === "off") {
-    return { tier: "allow", rule: "policy_off", reason: "Policy disabled via VENIRA_SHELL_MODE=off.", mode, command_hash: hash };
-  }
-  if (parsed.empty) {
-    return { tier: "allow", rule: "empty", reason: "Nothing to execute.", mode, command_hash: hash };
-  }
-
-  // 1. Hard, non-negotiable denials.
-  for (const rule of HARD_DENY) {
-    if (rule.test(parsed, command, cwd)) {
-      return { tier: "deny", rule: `deny.${rule.id}`, reason: rule.reason, mode, command_hash: hash };
-    }
-  }
-  for (const rule of policy.deny) {
-    if (matchCustomRule(parsed, rule)) {
-      return { tier: "deny", rule: rule.id, reason: rule.reason ?? "Denied by policy file.", mode, command_hash: hash };
-    }
-  }
-
-  // 2. Explicit allow from the policy file beats the built-in ask heuristics.
-  for (const rule of policy.allow) {
-    if (matchCustomRule(parsed, rule)) {
-      return { tier: "allow", rule: rule.id, reason: rule.reason ?? "Allowed by policy file.", mode, command_hash: hash };
-    }
-  }
-
-  // 3. Risk heuristics that apply in balanced/strict. `permissive` keeps only
-  //    the hard denials above, so an existing workflow cannot start prompting.
-  if (mode !== "permissive") {
-    // Risk heuristics run first so a "safe command head" cannot bypass an ask
-    // rule (e.g. `git push --force`, `node -e ...`, `npx <pkg>`).
-    for (const rule of ASK_RULES) {
-      if (rule.test(parsed, cwd)) {
-        return { tier: "ask", rule: `ask.${rule.id}`, reason: rule.reason, mode, command_hash: hash };
-      }
-    }
-    // Safe dev-workspace commands are exempt from ask rules in balanced/strict.
-    // If the command contains shell operators (pipe, redirect, background)
-    // the exemption does not apply — those need human review.
-    const allSafe =
-      !parsed.has_pipe &&
-      !parsed.has_redirect &&
-      !parsed.has_background &&
-      parsed.segments.every((segment) => isSafeSegment(segment));
-    if (allSafe) {
-      return { tier: "allow", rule: "safe_command", reason: "Routine dev-workspace command.", mode, command_hash: hash };
-    }
-  }
-  for (const rule of policy.ask) {
-    if (matchCustomRule(parsed, rule)) {
-      return { tier: "ask", rule: rule.id, reason: rule.reason ?? "Requires approval (policy file).", mode, command_hash: hash };
-    }
-  }
-
-  // 4. Mode-dependent default.
-  if (mode === "strict") {
-    if (strictAllow(parsed)) {
-      return { tier: "allow", rule: "strict.allowlist", reason: "Read-only or workspace-local command.", mode, command_hash: hash };
-    }
-    return {
-      tier: "ask",
-      rule: "strict.default_ask",
-      reason: "Not on the strict allow list; approval required by VENIRA_SHELL_MODE=strict.",
-      mode,
-      command_hash: hash,
-    };
-  }
-
-  return {
-    tier: "allow",
-    rule: "default_allow",
-    reason: "No deny/ask rule matched.",
+  return evaluateParsedShellCommand(
+    command,
+    cwd,
+    parsed,
+    policy,
     mode,
-    command_hash: hash,
-  };
+    HARD_DENY,
+    ASK_RULES,
+    STRICT_ALLOW,
+    isSafeSegment,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -933,11 +604,12 @@ export function issueApprovalToken(
   sessionId: string,
   decision: Decision,
   ttlMs = TTL_MS,
+  binding = "",
 ): { token: string; expires_at: number } {
   const expiresAt = Date.now() + ttlMs;
   const mac = crypto
     .createHmac("sha256", APPROVAL_SECRET)
-    .update(`${sessionId}|${decision.rule}|${decision.command_hash}|${expiresAt}`)
+    .update(`${sessionId}|${decision.rule}|${decision.command_hash}|${binding}|${expiresAt}`)
     .digest("base64url");
   return { token: `v1.${expiresAt}.${mac}`, expires_at: expiresAt };
 }
@@ -946,6 +618,7 @@ export function verifyApprovalToken(
   token: string,
   sessionId: string,
   decision: Decision,
+  binding = "",
 ): { ok: boolean; reason?: string } {
   const match = /^v1\.(\d+)\.([A-Za-z0-9_-]+)$/.exec(token.trim());
   if (!match) return { ok: false, reason: "malformed" };
@@ -953,7 +626,7 @@ export function verifyApprovalToken(
   if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) return { ok: false, reason: "expired" };
   const expected = crypto
     .createHmac("sha256", APPROVAL_SECRET)
-    .update(`${sessionId}|${decision.rule}|${decision.command_hash}|${expiresAt}`)
+    .update(`${sessionId}|${decision.rule}|${decision.command_hash}|${binding}|${expiresAt}`)
     .digest("base64url");
   const a = Buffer.from(match[2]);
   const b = Buffer.from(expected);

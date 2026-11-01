@@ -16,6 +16,7 @@ import { existsSync, promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { VERSION } from "../lib/version.js";
+import { activeDataDir } from "../lib/workspace.js";
 
 const SESSION_ID = `doctor-${Date.now()}`;
 
@@ -40,7 +41,7 @@ function findPackageRoot(start: string): string {
 const PKG_ROOT = findPackageRoot(path.dirname(fileURLToPath(import.meta.url)));
 const SERVER_ENTRY = path.join(PKG_ROOT, "dist", "server.js");
 const WORKSPACE = process.env.VENIRA_WORKSPACE ?? process.cwd();
-const DATA_DIR = process.env.VENIRA_DATA_DIR ?? path.join(WORKSPACE, "data");
+const DATA_DIR = process.env.VENIRA_DATA_DIR ? path.resolve(process.env.VENIRA_DATA_DIR) : activeDataDir();
 
 type CheckResult = { status: "PASS" | "FAIL"; text?: string; args?: unknown };
 

@@ -1,18 +1,18 @@
-# VENIRA MCP CODING — TODO LIST (standalone v1.0.0 → v1.5.0)
+# VENIRA MCP CODING — TODO LIST (standalone v1.0.0 → v1.7.1)
 
 > Standalone: pure-Node backend, no external binary.
 > Each item lists effort (low/med/high), priority (P0/P1/P2/P3), and status.
 
-## 📊 Current state (standalone v1.5.0)
+## 📊 Current state (standalone v1.7.1)
 
 - ✅ 100% of the logic has been moved to Node (no more Rust corehost)
 - ✅ Audit via SQLite WAL using `better-sqlite3` (replaces `node:sqlite`)
 - ✅ Native shell via `child_process` (no Rust required)
-- ✅ 37 tools working, verify 218/218 PASS, doctor 12/12 PASS
+- ✅ 40 tools working by default, verify assertions pass, doctor 12/12 PASS
 - ✅ Checkpoints (`project_snapshot`: create/list/restore/delete, content-addressed, git-free rollback)
 - ✅ Audit reasons: mutating tools accept `reason` ("why"), stored in `project_tool_audit.reason` and returned by `project_read_audit`
-- ✅ Git provider (`project_pr_create` / `project_pr_comment` / `project_pr_merge`) over GitHub REST — no `gh` binary
-- ✅ CI provider (`project_ci_status` / `project_ci_trigger` / `project_ci_logs`) over GitHub Actions — ZIP logs parsed in memory
+- ✅ Git provider (`project_pr_*`) over GitHub, GitLab and Bitbucket APIs — no `gh` binary
+- ✅ CI provider (`project_ci_*`) over GitHub Actions, GitLab Pipelines and Bitbucket Pipelines — logs parsed within provider-specific limits
 - ✅ Secrets (`project_secret`: get/set/list/delete) — AES-256-GCM at rest, metadata-only reads, `secret_env` injection, value redaction
 - ✅ Secret rotation metadata — `expires_at`/`expires_in_days`, `days_left`, `last_used_at`, `use_count`, `rotated_at`; expired secrets refused (`secret_expired`) before a child starts or a provider call
 - ✅ Inline PR review comments — `project_pr_comment` with `path` + `line` (+ `start_line`, `side`, `commit_id`)
@@ -24,11 +24,12 @@
 - ✅ Cache control environment variables added
 - ✅ Request tracing environment variables added
 - ✅ Read audit log tool implemented
-- ✅ Shell UX upgrade implemented
+- ✅ Shell UX upgrade implemented, including `project_shell_run.early_exit`
 - ✅ P2 code intelligence: `project_outline_symbol` / `project_file_symbols`
 - ✅ P2 fuzzy edit + SQLite recent files index
 - ✅ P3 code intelligence: `project_diff_files`, `project_symbol_references`, `project_selective_search`
 - ✅ P3 diagnostics + planning: `project_explain_error` (deterministic rule table → next actions) and `project_plan_read_batch` (task → ready read batch) — no model call needed
+- ✅ v1.7.0 safety gaps: shell-policy ordering fixed, `execute_js` gate, protected paths, symlink containment, `install_self` approval gate, typed actionable errors, transactional `project_edit_batch` with abort-and-rollback semantics, `VENIRA_PROFILE`, pending approval CLI, atomic writes, CRLF/BOM handling, secret lockfile, Windows tokenizer fix
 
 ## 🕒 Full timeline (v1.0.0 → v1.5.0)
 
@@ -40,7 +41,7 @@ The whole history in order — what shipped, when, and why.
 | 2026-10-27 | v1.0.0 | Repo translated to English (code comments, tool descriptions, TODO, roadmap docs). |
 | 2026-10-28 | v1.0.1–v1.0.7 | Release plumbing: npm metadata + OIDC trusted publishing, Docker multi-stage image, `--version`/`--help`, doctor works from any directory, zod 4 + MCP SDK 1.32 (security advisory), standard `LICENSE-MIT`/`LICENSE-APACHE`, `scripts/` shipped in the image, package renamed to `venira-mcp` (bins `venira` + `venira-mcp`). |
 | 2026-10-28 | v1.1.0 | Shell policy hardening: `balanced`/`strict`/`permissive`/`off`, HMAC-signed single-use approval tokens, session grants, policy file only from an explicit env path (never the workspace). |
-| 2026-10-28 | v1.1.3 | `project_execute_js` — sandboxed synchronous JS inside the workspace (whitelisted env, output caps). |
+| 2026-10-28 | v1.1.3 | `project_execute_js` — optional synchronous JS execution in the workspace process context (whitelisted env, output caps; not a security sandbox). |
 | 2026-10-28 | v1.1.7 | Audit writer compatible with legacy DB schemas (in-place migration instead of failed writes). |
 | 2026-10-28 | v1.1.9 | CLI `--workspace/-w` + `--data-dir` (no config switching between projects), `VENIRA_PERMISSION_MODE`. |
 | 2026-10-28 | **v1.2.0** | P1: cache controls (`VENIRA_CACHE_ALL`, `VENIRA_CACHE_LIST_ONLY`, `VENIRA_CACHE_SEARCH_ONLY`), request tracing (`VENIRA_TRACE` / `VENIRA_TRACE_FILE` / `project_trace_status`), `project_read_audit`, shell UX (`VENIRA_SHELL_TAIL_MAX`, `VENIRA_SHELL_EXIT_EARLY`, `VENIRA_SHELL_TIMEOUT_POLICY`, `project_shell_cancel_session`). Verify/doctor raised to 25 tools. |
@@ -52,6 +53,7 @@ The whole history in order — what shipped, when, and why.
 | 2026-10-29 | **v1.5.2** | **Read-planner artifact filter (found by the E2E re-run).** The audit DB (`data/venira.db`, 36 hits) outranked source in `project_plan_read_batch`; candidates now exclude build/vendor dirs and DB/log/binary extensions. Verify **214/214**. |
 | 2026-10-29 | **v1.5.3** | **Read-planner ranking (found by the post-restart bench).** File-name search per keyword (+ snake→kebab retry) so a task naming a file finds that file; scoring = hits + path/name match; prose demoted unless the task asks for docs; lockfiles dropped; calibrated `estimated_ms`. Verify **217/217**. |
 | 2026-10-29 | **v1.5.4** | **Planner never proposes secrets (found by the v1.5.3 E2E loop).** A secret task ranked `data/secrets.json` + `data/secrets.key` into the top 6; candidates now exclude `.env*`, `secrets.*`, `*.key/.pem/.p12/.pfx/.jks/.keystore`, `id_rsa`, `.npmrc/.netrc`, `credentials.json`. Verify **218/218**. |
+| 2026-11-01 | **v1.7.1** | Security hotfix and shell UX alignment: pending human approval IDs, legacy audit compatibility, chained download-to-shell detection, container/git-push approval rules, per-user storage, README claim audit, and `project_shell_run.early_exit` with bounded final output. |
 
 ## 🎯 Implementation Roadmap
 
@@ -80,6 +82,7 @@ The whole history in order — what shipped, when, and why.
 - [x] VENIRA_SHELL_TIMEOUT_POLICY=soft|hard (soft: warn, hard: kill)
 - [x] Tool "project_shell_cancel_session" → cancel ALL shell runs for the session
 - [x] Cancel safety: verify that no "orphaned" runs are left in the DB
+- [x] `project_shell_run.early_exit=true` → wait for that run only, return bounded final `stdout`/`stderr` plus `run_id`/`shell_id`; default `false` remains non-blocking
 
 ## 🚀 New Tools to Add (P2 - Aug 2025)
 
@@ -252,9 +255,9 @@ Goal: the git tools stop being GitHub-only and stop baking constants into the bi
 - [x] **Tests** — mocks per dialect, config precedence, proxy/NO_PROXY, retries, cap ceilings
 - [x] **Docs** — README env table + §4.6/§4.7/§4.9, roadmap rows, changelog, tag `v1.6.0`
 
-## 🚧 v1.7.0 — safety gaps & actionable errors (plan)
+## 🚧 v1.7.0 — safety gaps & actionable errors (delivered 2026-11-01)
 
-Goal: close the gaps found in a source review of v1.6.0 (the safety promises in README §6 must hold in code) and make every failure tell the agent exactly what to do next. Nothing here is implemented yet; each item lists priority and rough effort.
+Goal: close the gaps found in a source review of v1.6.0 (the safety promises in README §6 must hold in code) and make every failure tell the agent exactly what to do next. **Most items delivered**, remaining tracked below.
 
 ### A. Safety gaps (P0)
 - [x] **Enforce `VENIRA_ALLOW_JS_EXEC`** (P0, low). The README documents it, but no code reads it (only `lib/self-install.ts` writes `"1"` into harness configs). Check it at the top of `runExecuteJs`, skip registering the tool when it is `0`, and **change the default to `0`**. Add a verify check: with `0`, `project_execute_js` is absent from `tools/list` and a direct call returns `unsupported`.
@@ -262,7 +265,7 @@ Goal: close the gaps found in a source review of v1.6.0 (the safety promises in 
 - [x] **Shared `isProtectedPath()` guard** (P0, med). `secrets.json`, `secrets.key`, `venira.db` (+ `-wal`/`-shm`) must be refused by *every* path-taking op (`read_file`, `read_ranges`, `read_batch`, `search`, `selective_search`, `list_files` content views, `write`/`edit`/`create`/`delete`, `diff_files`, `symbol_references`) with `sensitive_result`. Today only `read-plan.ts` (ranking) and `snapshots.ts` (skip list) know about them, so `project_read_file({ relative_path: "data/secrets.key" })` works.
 - [x] **Default data dir outside the workspace** (P0, med). Use the OS user-data dir (`%LOCALAPPDATA%\venira`, `~/.local/share/venira`, `~/Library/Application Support/venira`); keep `VENIRA_DATA_DIR` / `--data-dir` as overrides; migrate an existing `<workspace>/data` on first start with a notice. Keeps the key and ciphertext away from anything an agent can read and out of `git add .`.
 - [x] **Docs honesty pass on defaults** (P1, low). README §6 says "conservative by default" while `VENIRA_PERMISSION_MODE` defaults to `allow_all` and `execute_js` defaults to on; state defaults next to the controls and say plainly that the shell policy is a guardrail against mistakes, not a sandbox (it matches command text; `bash -c`, encodings and indirection can evade it).
-- [ ] **Optional OS keychain backend for the secret key** (P2, high) instead of `secrets.key` on disk.
+- [x] **Optional OS keychain backend for the secret key** (P2, high): Windows Credential Manager via optional `keytar`, with `auto`/`off`/`required` modes and compatible file fallback.
 
 ### A2. Second-pass findings (P0 unless noted)
 Found by reading `lib/shell-policy.ts`, `lib/workspace.ts`, `lib/corehost.ts`, `lib/self-install.ts`.
@@ -275,7 +278,7 @@ Found by reading `lib/shell-policy.ts`, `lib/workspace.ts`, `lib/corehost.ts`, `
 
 ### B. Edit correctness (P0)
 - [x] **No silent first-match edits** (P0, low). In `opEditFile`, when `old_text` occurs more than once and `replace_all` is not set, the code currently uses `indexOf` and edits the first match without telling the caller. Count matches first; if > 1, fail with `old_text_ambiguous` (see C) and write nothing.
-- [ ] Multi-edit atomicity: all `edits[]` validated against the in-memory content before any write; on failure report the failing `index` and that nothing was written.
+- [x] Multi-edit atomicity inside one `project_edit_file` call: all `edits[]` are applied to in-memory content and written once, so a failed replacement writes nothing.
 
 ### C. Error clarity — structured, recoverable errors (P0/P1)
 Today failures are thrown as `Error("[code] message Hint: ...")` and re-parsed in `lib/output.ts`; `[conflict]` covers both "text not found" and "file changed", and `invalid_request` rarely names the field.
@@ -291,14 +294,14 @@ Today failures are thrown as `Error("[code] message Hint: ...")` and re-parsed i
   - `scope_denied` / `internal`: name the missing capability or a stable `error_id` plus the next action; no bare "check stderr".
 - [x] **`next_actions[]` on every error** (P1, med): ready-to-send tool calls in the same shape `project_explain_error` returns, so the agent does not need an extra `explain_error` round-trip for errors the server already understands.
 - [x] **Batch error semantics** (P1, med): per-item `index`, `executed[]` / `skipped[]`, and for write batches whether a rollback happened and the `snapshot_id`; read batches default to per-item results, with optional `stop_on_error`.
-- [ ] **Loop metric** (P2, low): count identical-tool failures with near-identical arguments in `project_tool_audit` and surface it in `project_health`; use it to confirm the new messages reduce retry loops.
-- [ ] Tests: one verify check per new code (shape of `error.data`, size caps, sensitive paths excluded).
+- [x] **Loop metric** (P2, low): hash tool arguments (never store raw arguments), group repeated failures from the last 10 minutes, and surface bounded counts in `project_health.audit.loop_failures`.
+- [x] Tests: verify recovery-data shape/size for ambiguous, missing-text, and stale-content edits; protected-path errors never include file content.
 
 ### D. Batch + single tool design (P1)
 - [x] **Single tools are thin wrappers over the batch core** (P1, med): one code path for cache, audit, `reason`, `expected_sha256`, envelope and errors; tests written once cover both.
-- [x] **`project_edit_batch` — transactional write batch** (P1, high): optional auto-snapshot (`project_snapshot`), validate all edits first, apply, verify (`expected_sha256` per file), roll back everything on any failure; `reason` recorded once for the batch plus per item; `stop_on_error` semantics documented.
+- [x] **`project_edit_batch` — transactional write batch** (P1, high): optional auto-snapshot (`project_snapshot`), abort on the first failed item, roll back earlier writes when possible, and report `executed`/`skipped` indexes plus rollback status. Full preflight validation across independent items remains a follow-up because edits may intentionally depend on earlier edits.
 - [x] **Selection rule in the first sentence of each description** (P1, low): "one file -> `project_read_file`; two or more reads, or search -> read -> read -> `project_read_batch`", same for edits.
-- [ ] **Adoption metric** (P2, low): from the audit log, count runs of >= 3 consecutive single reads/edits within a short window that should have been a batch; tune descriptions before changing code.
+- [x] **Adoption metric** (P2, low): `project_health.audit.adoption_runs` reports bounded runs of >= 3 consecutive successful `read_file`/`edit_file` calls within 60 seconds, without changing behavior or storing arguments.
 
 ### E. Tool surface and integration (P2)
 - [x] **`VENIRA_PROFILE=core|full`** (P2, low): `core` registers only what built-in agent tools lack (snapshot, audit/health, secret, shell policy/async shell, diagnostics, batch, PR/CI); `full` = current 40 tools. `VENIRA_DISABLE_TOOLS` stays for fine-tuning. Reduces schema/context cost and tool-choice confusion.
@@ -317,7 +320,7 @@ Today failures are thrown as `Error("[code] message Hint: ...")` and re-parsed i
 - **v1.5.0**: ✅ inline PR review comments + check-runs + secret rotation + deterministic `explain_error` / `plan_read_batch` (37 tools, verify 211/211)
 - **v1.5.1 → v1.5.4**: ✅ hardening found by live E2E + bench — inline `commit_id`, planner artifact/lockfile/credential filters, name/path ranking + calibrated estimate (verify 218/218)
 - **v1.6.0** ✅: configurable git layer — config file, provider dialects (GitLab/Bitbucket), proxy, retries, PR list/close/reopen (40 tools)
-- **v1.7.0** (planned): safety gaps (shell-policy ordering, `execute_js` gate, protected paths, symlink containment, `install_self` approval, data dir), typed actionable errors, transactional `project_edit_batch`, `VENIRA_PROFILE`
+- **v1.7.0** ✅ (2026-11-01): safety gaps (shell-policy ordering, `execute_js` gate, protected paths, `install_self` approval), typed actionable errors, transactional `project_edit_batch`, `VENIRA_PROFILE`, pending approval CLI, atomic writes, CRLF/BOM handling, secret lockfile, Windows tokenizer fix, policy corpus + runner, CI npm audit
 - **Backlog**: chroma/supabase integration, metrics UI, native-tool adapter (see v1.7.0 §E)
 
 ## ✅ Success criteria

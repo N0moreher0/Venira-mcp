@@ -64,12 +64,15 @@ Usage:
   npx venira-mcp                 Start the MCP server (stdio transport)
   npx venira-mcp --doctor        Run the preflight diagnostics
   npx venira-mcp --verify        Run the behavioural test suite
+  npx venira-mcp --approve <id> [--session] [--yes]
+                                 Approve a pending shell command (interactive terminal only)
   npx venira-mcp --version, -v   Print the version
   npx venira-mcp --help, -h      Show this help
 
 Environment:
   VENIRA_WORKSPACE    Project root the tools are locked to (default: cwd)
-  VENIRA_DATA_DIR     Audit DB + runtime data (default: <workspace>/data)
+  VENIRA_DATA_DIR     Audit DB, approvals + keys (default: per-user data dir,
+                      e.g. ~/.local/share/venira; the server and --approve must agree)
   VENIRA_UNRESTRICTED 1 to allow paths outside the workspace (default: 0)
 
   --workspace, -w <path>  Project root instead of editing env
@@ -90,6 +93,11 @@ if (args[0] === "--help" || args[0] === "-h") {
 }
 
 const target = (() => {
+  if (args[0] === "--approve") {
+    const id = args[1];
+    if (!id) { console.error("missing approval_id"); process.exit(2); }
+    return { file: path.join(here, "..", "dist", "scripts", "approve.js"), rest: args.slice(1) };
+  }
   if (args[0] === "--doctor") return { file: path.join(here, "..", "dist", "scripts", "doctor.js"), rest: args.slice(1) };
   if (args[0] === "--verify") return { file: path.join(here, "..", "dist", "scripts", "verify.js"), rest: args.slice(1) };
   return { file: dist, rest: args };
