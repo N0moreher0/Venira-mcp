@@ -8,7 +8,7 @@
 - ✅ 100% of the logic has been moved to Node (no more Rust corehost)
 - ✅ Audit via SQLite WAL using `better-sqlite3` (replaces `node:sqlite`)
 - ✅ Native shell via `child_process` (no Rust required)
-- ✅ 40 tools working by default, verify assertions pass, doctor 12/12 PASS
+- ✅ 41 tools working by default, verify assertions pass, doctor 12/12 PASS
 - ✅ Checkpoints (`project_snapshot`: create/list/restore/delete, content-addressed, git-free rollback)
 - ✅ Audit reasons: mutating tools accept `reason` ("why"), stored in `project_tool_audit.reason` and returned by `project_read_audit`
 - ✅ Git provider (`project_pr_*`) over GitHub, GitLab and Bitbucket APIs — no `gh` binary
@@ -304,7 +304,7 @@ Today failures are thrown as `Error("[code] message Hint: ...")` and re-parsed i
 - [x] **Adoption metric** (P2, low): `project_health.audit.adoption_runs` reports bounded runs of >= 3 consecutive successful `read_file`/`edit_file` calls within 60 seconds, without changing behavior or storing arguments.
 
 ### E. Tool surface and integration (P2)
-- [x] **`VENIRA_PROFILE=core|full`** (P2, low): `core` registers only what built-in agent tools lack (snapshot, audit/health, secret, shell policy/async shell, diagnostics, batch, PR/CI); `full` = current 40 tools. `VENIRA_DISABLE_TOOLS` stays for fine-tuning. Reduces schema/context cost and tool-choice confusion.
+- [x] **`VENIRA_PROFILE=core|full`** (P2, low): `core` registers only what built-in agent tools lack (snapshot, audit/health, secret, shell policy/async shell, diagnostics, batch, PR/CI); `full` = current 41 tools. `VENIRA_DISABLE_TOOLS` stays for fine-tuning. Reduces schema/context cost and tool-choice confusion.
 - [x] **Keep `lib/corehost.ts` as a library with two thin adapters** (P2, med): MCP server (today) and a native tool adapter for a fork/embedded agent. A native integration lets Venira *replace* the host's own bash/edit/write tools, so shell policy and the workspace lock cannot be bypassed (with MCP alongside native tools they can). This supersedes the "do not natively integrate yet" note in `TOOL-ROADMAP.md`; revisit once A and C are done.
 - [x] **Docs consistency** (P1, low) — verified in README v1.6.0: tool count (37 in the intro/diagram vs 40 in §4 and the changelog), `verify` (~30 checks in the scripts list vs 218 in the architecture tree), `doctor` (7 vs 12), a reference to a non-existent "§3.4", the decision-tree anchor `#410-...` pointing at the shell section (the tree is §4.11), and the claim that Node >= 20 "ships `node:sqlite`" (it appeared later; audit uses `better-sqlite3` anyway). Add a CI check that fails when the tool count in README disagrees with `tools/list`.
 - [x] **Stop shipping build artifacts in the repo/package** (P2, low): `*.log`, `server.err`, `venira-mcp-*.tgz`, `check-*.js` / `poll-ci.js` / `create-pr.js` scratch scripts and `*-new.txt` / `section*.txt` drafts are in the project root; move to `scripts/dev/` or `.gitignore`, and keep `.npmignore` strict.
