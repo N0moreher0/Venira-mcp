@@ -1,4 +1,12 @@
 {
+  "inputs": [
+    {
+      "type": "promptString",
+      "id": "github-token",
+      "description": "GitHub token (optional; required for PR and CI tools)",
+      "password": true
+    }
+  ],
   "servers": {
     "venira": {
       "type": "stdio",
@@ -13,7 +21,8 @@
         "VENIRA_DEFAULT_SHELL": "powershell",
         "VENIRA_SHELL_MODE": "balanced",
         "VENIRA_PERMISSION_MODE": "allow_all",
-        "VENIRA_OUTPUT_MODE": "full"
+        "VENIRA_OUTPUT_MODE": "full",
+        "VENIRA_GIT_TOKEN": "${input:github-token}"
       }
     }
   }

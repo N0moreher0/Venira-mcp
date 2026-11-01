@@ -144,7 +144,15 @@ npm run bench:mcp# end-to-end MCP benchmark (first call, batch 8, search, health
 
 ## 3. MCP client configuration (JSON)
 
-### 3.1 OpenCode (`opencode.jsonc` or `.opencode/opencode.jsonc`)
+### 3.1 VS Code (`.vscode/mcp.json`)
+
+This repo includes a workspace MCP config. On startup, VS Code securely prompts for an optional
+GitHub token and passes it to Venira as `VENIRA_GIT_TOKEN`; the token is not stored in this file.
+Leave it blank if you do not use GitHub PR/CI tools. For a fine-grained token, grant only the
+repository permissions needed (typically Pull requests: read/write and Contents: read).
+After updating the config, restart the Venira MCP server from VS Code's MCP controls.
+
+### 3.2 OpenCode (`opencode.jsonc` or `.opencode/opencode.jsonc`)
 
 The simplest form (uses `npx`, no local install needed):
 
@@ -217,7 +225,7 @@ Or point at a local build (after `git clone` + `npm install` + `npm run build`):
 
 > This repo ships a ready-to-edit copy at [`opencode.example.json`](./opencode.example.json).
 
-### 3.2 Claude Desktop / any MCP client (`claude_desktop_config.json` or `.mcp.json`)
+### 3.3 Claude Desktop / any MCP client (`claude_desktop_config.json` or `.mcp.json`)
 
 ```jsonc
 {
@@ -244,7 +252,7 @@ Or point at a local build (after `git clone` + `npm install` + `npm run build`):
 `Please configure Venira MCP for this workspace using the safest available setup. Detect whether it is installed; if not, add the MCP server with workspace-scoped access, VENIRA_UNRESTRICTED=0, and the correct local/npm command, then verify the connection and report the exact config path and result.`
 `If a config already exists, preserve unrelated servers, merge Venira without overwriting them, and run one harmless read-only tool call to confirm it works.`
 
-### 3.3 Environment variables (full reference)
+### 3.4 Environment variables (full reference)
 
 | Variable | Default | Description |
 |---|---|---|
