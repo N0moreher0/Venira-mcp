@@ -9,6 +9,9 @@ poll-ci.js
 create-pr.js
 *-new.txt
 section*.txt/
+/TODO-changelog.txt
+/TODO-old.txt
+/roadmap.txt/
 
 # Build output
 dist/
