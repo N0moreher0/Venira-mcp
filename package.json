@@ -70,15 +70,20 @@
     "smoke": "tsx scripts/smoke.ts",
     "bench": "tsx scripts/bench.ts",
     "bench:mcp": "tsx scripts/bench-mcp.ts",
-    "verify": "tsx scripts/verify.ts",
+    "verify": "npm run test:provider-secret-guard && npm run test:github-device-flow && npm run test:shell-security && tsx scripts/verify.ts",
     "doctor": "tsx scripts/doctor.ts",
     "test:github-device-flow": "tsx scripts/test-github-device-flow.ts",
+    "test:provider-secret-guard": "tsx scripts/test-provider-secret-guard.ts",
+    "test:shell-security": "tsx scripts/test-shell-security-regressions.ts",
     "check:docs": "tsx scripts/check-docs.ts",
     "check:source-shape": "tsx scripts/check-source-shape.ts",
     "test:policy-corpus": "tsx scripts/policy-corpus-runner.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",
+    "@secretlint/core": "^11.7.1",
+    "@secretlint/secretlint-rule-gitlab": "^11.7.1",
+    "@secretlint/secretlint-rule-preset-recommend": "^11.7.1",
     "better-sqlite3": "^11.0.0",
     "jsonc-parser": "^3.3.1",
     "zod": "^4.6.7"

@@ -169,6 +169,65 @@ function writeTargetsOutside(parsed: ParsedCommand, cwd: string): string[] {
   return targets;
 }
 
+function globMatches(pattern: string, value: string): boolean {
+  let source = "^";
+  for (let i = 0; i < pattern.length; i += 1) {
+    const char = pattern[i];
+    if (char === "*") {
+      source += ".*";
+    } else if (char === "?") {
+      source += ".";
+    } else if (char === "[") {
+      const end = pattern.indexOf("]", i + 1);
+      if (end < 0) return false;
+      let characterClass = pattern.slice(i + 1, end);
+      if (!characterClass) return false;
+      if (characterClass[0] === "!") characterClass = `^${characterClass.slice(1)}`;
+      source += `[${characterClass.replace(/\\/g, "\\\\")}]`;
+      i = end;
+    } else {
+      source += char.replace(/[|\\{}()[\]^$+?.]/g, "\\$&");
+    }
+  }
+  try {
+    return new RegExp(`${source}$`, "i").test(value);
+  } catch {
+    return false;
+  }
+}
+
+function mayMatchProtectedBasename(token: string, protectedNames: Set<string>): boolean {
+  const base = path.basename(token.replace(/\\/g, "/")).toLowerCase();
+  if (protectedNames.has(base) || base.startsWith(".env")) return true;
+  if (/\.(pem|key|p12|pfx|jks|keystore|crt|cer|der|asc|gpg)$/i.test(base)) return true;
+  if (!/[*?[]/.test(base)) return false;
+
+  const protectedCandidates = [
+    ...protectedNames,
+    ".env",
+    ".env.local",
+    ".env.production",
+    ".env.development",
+    "venira.db-wal",
+    "venira.db-shm",
+    "credential.pem",
+    "credential.key",
+    "credential.p12",
+    "credential.pfx",
+    "credential.jks",
+    "credential.keystore",
+    "credential.crt",
+    "credential.cer",
+    "credential.der",
+    "credential.asc",
+    "credential.gpg",
+  ];
+  return protectedCandidates.some((candidate) => {
+    if (candidate.startsWith(".") && !base.startsWith(".")) return false;
+    return globMatches(base, candidate);
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Built-in rules
 // ---------------------------------------------------------------------------
@@ -275,12 +334,7 @@ const HARD_DENY: HardDenyRule[] = [
       const collect = (tokens: string[]): boolean => {
         for (const t of tokens) {
           const base = path.basename(t.replace(/\\/g, "/")).toLowerCase();
-          if (protectedNames.has(base)) return true;
-          if (base.startsWith(".env")) return true;
-          if (
-            /\.(pem|key|p12|pfx|jks|keystore|crt|cer|der|asc|gpg)$/i.test(base)
-          )
-            return true;
+          if (mayMatchProtectedBasename(t, protectedNames)) return true;
           if (dataDir && t.toLowerCase().replace(/\\/g, "/").includes(dataDir.replace(/\\/g, "/"))) return true;
           if (/(^|[\\/])venira[\\/](approvals|approval\.key)/i.test(t)) return true;
           if (/\.ssh[\\/]/i.test(t)) return true;
@@ -291,8 +345,7 @@ const HARD_DENY: HardDenyRule[] = [
       for (const seg of parsed.segments) {
         all.push(...seg.argv);
       }
-      // redirect targets
-      // parsed doesn't expose redirects easily; fall back to raw scanning of >> / < / >
+      all.push(...parsed.redirect_targets);
       return collect(all);
     },
   },
@@ -345,8 +398,11 @@ const ASK_RULES: AskRule[] = [
     reason: "This can overwrite commits or discard working-tree changes.",
     test: (parsed) =>
       parsed.segments.some((segment) => {
-        if (segment.command !== "git" || !segment.subcommand) return false;
-        const args = segment.argv.join(" ");
+      if (segment.command !== "git") return false;
+      if (!segment.subcommand) {
+        return segment.argv.length > 1 && !segment.argv.slice(1).every((arg) => ["--version", "--help", "-v", "-h"].includes(arg));
+      }
+      const args = segment.argv.join(" ");
         if (segment.subcommand === "push") return true;
         if (segment.subcommand === "reset") return /--hard/.test(args);
         if (segment.subcommand === "clean") return /\s-[a-z]*[fx]/.test(args);

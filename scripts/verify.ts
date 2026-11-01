@@ -8,10 +8,15 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { startGithubMock } from "./github-mock.js";
 import { startBitbucketMock, startGitlabMock } from "./git-mocks.js";
 
 const SESSION_ID = `verify-${Date.now()}`;
+const originalDataDir = process.env.VENIRA_DATA_DIR;
+const verifyDataDir = await fs.mkdtemp(path.join(os.tmpdir(), `venira-verify-${process.pid}-`));
+process.env.VENIRA_DATA_DIR = verifyDataDir;
 
 /**
  * Local GitHub API mock (no network, no real token). It also serves the log
@@ -29,6 +34,8 @@ function verifyEnv(extraEnv: Record<string, string> = {}, outputMode = "full") {
     VENIRA_UNRESTRICTED: "0",
     VENIRA_SESSION_ID: SESSION_ID,
     VENIRA_OUTPUT_MODE: outputMode,
+    VENIRA_SHELL_MODE: "balanced",
+    PATH: `${path.dirname(process.execPath)}${path.delimiter}${process.env.PATH ?? ""}`,
     // keytar/Node 24 can assert during native cleanup in MCP child processes;
     // the backend is covered separately by the Windows keychain integration check.
     VENIRA_SECRET_KEYCHAIN: "off",
@@ -71,6 +78,10 @@ const textOf = (result: unknown) => (result as { content?: { text?: string }[] }
 const call = (name: string, args: Record<string, unknown>) => client.callTool({ name, arguments: args });
 const check = (label: string, condition: boolean, extra?: unknown) => {
   results[label] = condition ? "PASS" : `FAIL ${JSON.stringify(extra ?? "")}`;
+  if (!condition) {
+    process.exitCode = 1;
+    console.error(`[verify] FAIL ${label}: ${JSON.stringify(extra ?? "")}`);
+  }
 };
 
 const isWin = process.platform === "win32";
@@ -619,7 +630,6 @@ check(
 await disabledClient.close();
 
 // 15. Audit (standalone: DB is in <workspace>/data or VENIRA_DATA_DIR)
-import path from "node:path";
 import Database from "better-sqlite3";
 function defaultDataDir(): string {
   const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
@@ -1991,6 +2001,18 @@ check(
 );
 
 check("policy_unit_git_push_ask", policyModule.evaluateShellCommand("git push --force origin main", ws, { mode: "balanced" }).tier === "ask", policyModule.evaluateShellCommand("git push --force origin main", ws, { mode: "balanced" }));
+const dotEnvDecision = policyModule.evaluateShellCommand("cat .env", ws, { mode: "balanced" });
+check("policy_unit_cat_dot_env_denied", dotEnvDecision.tier === "deny" && dotEnvDecision.rule === "deny.protected_file_access", dotEnvDecision);
+for (const command of ["cat < .env", "cat .e[n]v", "echo leaked > .env"]) {
+  const decision = policyModule.evaluateShellCommand(command, ws, { mode: "balanced" });
+  check(`policy_unit_protected_path_${command}`, decision.tier === "deny" && decision.rule === "deny.protected_file_access", decision);
+}
+const noVerifyPushDecision = policyModule.evaluateShellCommand("git push --no-verify origin main", ws, { mode: "balanced" });
+check("policy_unit_git_push_no_verify_ask", noVerifyPushDecision.tier === "ask" && noVerifyPushDecision.rule === "ask.git_history_rewrite", noVerifyPushDecision);
+for (const command of ["git -C . push --no-verify origin main", "git -c core.hooksPath=/dev/null push origin main"]) {
+  const decision = policyModule.evaluateShellCommand(command, ws, { mode: "balanced" });
+  check(`policy_unit_git_global_option_push_${command}`, decision.tier === "ask" && decision.rule === "ask.git_history_rewrite", decision);
+}
 check("policy_unit_node_eval_ask", policyModule.evaluateShellCommand('node -e "console.log(1)"', ws, { mode: "balanced" }).tier === "ask", policyModule.evaluateShellCommand('node -e "console.log(1)"', ws, { mode: "balanced" }));
 check("policy_unit_node_file_ask", policyModule.evaluateShellCommand("node scripts/untrusted.js", ws, { mode: "balanced" }).tier === "ask", policyModule.evaluateShellCommand("node scripts/untrusted.js", ws, { mode: "balanced" }));
 check("policy_unit_git_status_allow", policyModule.evaluateShellCommand("git status", ws, { mode: "balanced" }).tier === "allow", policyModule.evaluateShellCommand("git status", ws, { mode: "balanced" }));
@@ -2002,4 +2024,14 @@ await Promise.all([
   bitbucketMock.close(),
 ]);
 await fs.rm(dir, { recursive: true, force: true });
+await fs.rm(verifyDataDir, { recursive: true, force: true });
+if (originalDataDir === undefined) delete process.env.VENIRA_DATA_DIR;
+else process.env.VENIRA_DATA_DIR = originalDataDir;
 console.log(JSON.stringify(results, null, 2));
+const failedChecks = Object.entries(results).filter(([, result]) => typeof result === "string" && result.startsWith("FAIL "));
+if (failedChecks.length > 0) {
+  console.error(`[verify] ${failedChecks.length} check(s) failed.`);
+  process.exitCode = 1;
+} else {
+  console.log(`[verify] ${Object.values(results).filter((result) => result === "PASS").length} checks passed.`);
+}

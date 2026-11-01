@@ -17,6 +17,7 @@ import { gitlabDialect } from "./git-gitlab.js";
 import { bitbucketDialect } from "./git-bitbucket.js";
 import type { Resp } from "./git-common.js";
 import { refreshGithubAccessTokenIfNeeded } from "./github-device-flow.js";
+import { assertProviderPayloadSafe } from "./provider-secret-guard.js";
 
 const DIALECTS: Record<string, GitDialect> = {
   github: githubDialect,
@@ -24,7 +25,11 @@ const DIALECTS: Record<string, GitDialect> = {
   bitbucket: bitbucketDialect,
 };
 
-async function resolve(args: Record<string, unknown>): Promise<{ ctx: GitContext; dialect: GitDialect }> {
+async function resolve(
+  args: Record<string, unknown>,
+  operation: string,
+): Promise<{ ctx: GitContext; dialect: GitDialect }> {
+  await assertProviderPayloadSafe(args, { operation, direction: "request" });
   let ctx: GitContext;
   try {
     ctx = gitContext(args);
@@ -42,49 +47,51 @@ async function resolve(args: Record<string, unknown>): Promise<{ ctx: GitContext
   return { ctx, dialect };
 }
 
+async function runProvider(
+  args: Record<string, unknown>,
+  operation: string,
+  run: (ctx: GitContext, dialect: GitDialect) => Promise<Resp>,
+): Promise<Resp> {
+  const { ctx, dialect } = await resolve(args, operation);
+  const response = await run(ctx, dialect);
+  await assertProviderPayloadSafe(response, { operation, direction: "response" });
+  return response;
+}
+
 export async function opPrCreate(args: Record<string, unknown>): Promise<Resp> {
-  const { ctx, dialect } = await resolve(args);
-  return dialect.prCreate(ctx, args);
+  return runProvider(args, "pr_create", (ctx, dialect) => dialect.prCreate(ctx, args));
 }
 
 export async function opPrComment(args: Record<string, unknown>): Promise<Resp> {
-  const { ctx, dialect } = await resolve(args);
-  return dialect.prComment(ctx, args);
+  return runProvider(args, "pr_comment", (ctx, dialect) => dialect.prComment(ctx, args));
 }
 
 export async function opPrMerge(args: Record<string, unknown>): Promise<Resp> {
-  const { ctx, dialect } = await resolve(args);
-  return dialect.prMerge(ctx, args);
+  return runProvider(args, "pr_merge", (ctx, dialect) => dialect.prMerge(ctx, args));
 }
 
 export async function opPrList(args: Record<string, unknown>): Promise<Resp> {
-  const { ctx, dialect } = await resolve(args);
-  return dialect.prList(ctx, args);
+  return runProvider(args, "pr_list", (ctx, dialect) => dialect.prList(ctx, args));
 }
 
 export async function opPrClose(args: Record<string, unknown>): Promise<Resp> {
-  const { ctx, dialect } = await resolve(args);
-  return dialect.prClose(ctx, args);
+  return runProvider(args, "pr_close", (ctx, dialect) => dialect.prClose(ctx, args));
 }
 
 export async function opPrReopen(args: Record<string, unknown>): Promise<Resp> {
-  const { ctx, dialect } = await resolve(args);
-  return dialect.prReopen(ctx, args);
+  return runProvider(args, "pr_reopen", (ctx, dialect) => dialect.prReopen(ctx, args));
 }
 
 export async function opCiStatus(args: Record<string, unknown>): Promise<Resp> {
-  const { ctx, dialect } = await resolve(args);
-  return dialect.ciStatus(ctx, args);
+  return runProvider(args, "ci_status", (ctx, dialect) => dialect.ciStatus(ctx, args));
 }
 
 export async function opCiTrigger(args: Record<string, unknown>): Promise<Resp> {
-  const { ctx, dialect } = await resolve(args);
-  return dialect.ciTrigger(ctx, args);
+  return runProvider(args, "ci_trigger", (ctx, dialect) => dialect.ciTrigger(ctx, args));
 }
 
 export async function opCiLogs(args: Record<string, unknown>): Promise<Resp> {
-  const { ctx, dialect } = await resolve(args);
-  return dialect.ciLogs(ctx, args);
+  return runProvider(args, "ci_logs", (ctx, dialect) => dialect.ciLogs(ctx, args));
 }
 
 export { gitHealth, gitHealth as githubHealth };
