@@ -1,11 +1,11 @@
 # venira-mcp
 
-> Fast, workspace-scoped **MCP server for coding agents** (OpenCode, Claude Desktop, any MCP client). 40 tools by default, structured JSON envelopes, validated read caches, async shell, code-intelligence (outline/symbols/diff/references/selective search), fuzzy edit, SQLite recent-files index, **git-free checkpoints/rollback**, **audit reasons ("why")**, **pull requests + CI provider integrations**, **encrypted secrets with rotation metadata**, **deterministic error diagnosis + read planning**, and full SQLite audit trail — **pure Node, 1 native dependency (better-sqlite3), no GUI.**
+> Fast, workspace-scoped **MCP server for coding agents** (OpenCode, Claude Desktop, any MCP client). 41 tools by default, structured JSON envelopes, validated read caches, async shell, code-intelligence (outline/symbols/diff/references/selective search), fuzzy edit, SQLite recent-files index, **git-free checkpoints/rollback**, **audit reasons ("why")**, **pull requests + CI provider integrations**, **encrypted secrets with rotation metadata**, **deterministic error diagnosis + read planning**, and full SQLite audit trail — **pure Node, 1 native dependency (better-sqlite3), no GUI.**
 
 ```
 ┌──────────────┐   stdio (MCP)   ┌────────────────────────────────────────────┐
 │ MCP client    │ ◄──────────────► │  venira-mcp (Node, single process)        │
-│ (OpenCode,    │                  │  40 tools · read caches · async shell     │
+│ (OpenCode,    │                  │  41 tools · read caches · async shell     │
 │  Claude, ...) │                  │  SQLite audit (WAL) · p50/p95 metrics     │
 └──────────────┘                  └────────────────────────────────────────────┘
 ```
@@ -45,7 +45,7 @@
 
 - [Quick start](#2-quick-start)
 - [MCP client configuration (JSON)](#3-mcp-client-configuration-json)
-- [Tools](#4-tools-40)
+- [Tools](#4-tools-41)
 - [Architecture](#5-architecture)
 - [Security model](#6-security-model)
 - [Benchmark](#7-benchmark)
@@ -585,7 +585,7 @@ prompt-driven and tool-discovery-driven clients get the same signal.
 venira-mcp/
 ├── server.ts                 # MCP entry point: McpServer + StdioTransport, warm-up, shutdown
 ├── tools/
-│   └── project.ts            # 40 tool registrations by default, serial queue, caches, shell tracking,
+│   └── project.ts            # 41 tool registrations by default, serial queue, caches, shell tracking,
 │                             #   audit-DB inspection, project_health, code-intelligence,
 │                             #   diagnostics and read-planning handlers
 ├── lib/

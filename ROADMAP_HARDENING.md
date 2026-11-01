@@ -6,7 +6,7 @@
 
 ## 0. Đánh giá nhanh: project đã hợp lý chưa?
 
-**Hợp lý ở phần lõi.** `tsc` sạch, server khởi động và trả `initialize` đúng, 40 tool, kiến trúc tách lớp rõ (`workspace` / `shell-policy` / `snapshots` / `secrets` / `git-*`), có audit SQLite, có mock GitHub/GitLab/Bitbucket để test offline. Nhiều lỗ P0 của audit trước **đã được sửa** (xem bảng 1).
+**Hợp lý ở phần lõi.** `tsc` sạch, server khởi động và trả `initialize` đúng, 41 tool, kiến trúc tách lớp rõ (`workspace` / `shell-policy` / `snapshots` / `secrets` / `git-*`), có audit SQLite, có mock GitHub/GitLab/Bitbucket để test offline. Nhiều lỗ P0 của audit trước **đã được sửa** (xem bảng 1).
 
 **Còn lại 3 nhóm việc dài hạn:**
 1. **Policy theo nền tảng**: parser riêng cho POSIX/PowerShell/cmd vẫn chưa tách.
