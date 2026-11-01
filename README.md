@@ -146,12 +146,21 @@ npm run bench:mcp# end-to-end MCP benchmark (first call, batch 8, search, health
 
 ### 3.1 VS Code (`.vscode/mcp.json`)
 
-This repo includes a workspace MCP config that reads `VENIRA_GIT_TOKEN` from the environment of
-the VS Code process. Copilot does not support MCP `inputs` prompts, so do not put a token directly
-in this file or paste it into chat. On Windows, set the variable in the environment used to launch
-VS Code, then fully restart VS Code and restart the Venira MCP server. Leave it unset if you do
-not use GitHub PR/CI tools. For a fine-grained token, grant only the repository permissions needed
-(typically Pull requests: read/write and Contents: read).
+To connect without handling a token, ask the agent to **connect GitHub**. It calls
+`project_github_connect` and shows a GitHub verification link and short-lived code. Open the link,
+sign in to GitHub, enter the code, and authorize Venira; then tell the agent you finished so it can
+complete the connection. The access and refresh tokens are saved in the encrypted local Venira
+vault and are never returned to the agent or stored in MCP config. This uses the OAuth `repo` scope
+to support private repositories, which grants broad repository access to the authorized GitHub
+account. The `offline_access` scope enables refreshable tokens when supported by GitHub. Each user authorizes their own GitHub account. Local clients running as the same OS user
+share the default per-user vault; if a client uses a custom `VENIRA_DATA_DIR`, use that same data
+directory for the other clients.
+
+Copilot does not support MCP `inputs` prompts. The workspace config therefore does not request or
+store a token. If you prefer environment-based configuration, set `VENIRA_GIT_TOKEN` in the
+environment that launches the client, then fully restart that client. For a fine-grained token,
+grant only the repository permissions needed (typically Pull requests: read/write and Contents: read).
+For manual local setup, `npx venira-mcp --setup-github` securely prompts for a token in a terminal.
 
 ### 3.2 OpenCode (`opencode.jsonc` or `.opencode/opencode.jsonc`)
 
@@ -321,7 +330,7 @@ Or point at a local build (after `git clone` + `npm install` + `npm run build`):
 
 ---
 
-## 4. Tools (40)
+## 4. Tools (41)
 
 Every tool returns the standard envelope ([§8](#8-envelopes-hints--error-codes)):
 
@@ -443,6 +452,7 @@ project_ci_logs({ run_id: 77, tail_lines: 50 })   // or { job_id: 2 } / { run_id
 | Tool | Purpose | Notes |
 |---|---|---|
 | `project_secret` | Store / inspect / remove credentials by env-var name, with rotation metadata | `action: "set"` (`value` or **`value_env`** to read it from the host env; optional `expires_in_days` or `expires_at`) · `"get"` (metadata only: `length`, `sha256_12`, `updated_at`, `expires_at`, `expired`, `days_left`, `last_used_at`, `use_count`, `rotated_at`) · `"list"` (same metadata per name) · `"delete"`. `reveal: true` returns plaintext **only** when the host sets `VENIRA_SECRET_ALLOW_REVEAL=1`. |
+| `project_github_connect` | Connect or replace the local GitHub account without sending a token through chat | `action: "start"` returns GitHub verification URL/code · `action: "poll"` completes authorization using the opaque `pending_id`; access/refresh tokens are stored in the encrypted local vault and never returned. Uses OAuth `repo offline_access` scopes. |
 
 Rotation is tracked automatically: every successful injection (or provider token read) bumps
 `last_used_at` / `use_count`; a re-`set` is a rotation that overwrites the value, resets the

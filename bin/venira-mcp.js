@@ -5,6 +5,7 @@
  *   npx venira-mcp                 # run the MCP server in stdio mode
  *   npx venira-mcp --doctor        # run the doctor preflight
  *   npx venira-mcp --verify        # run the behavioural suite
+ *   npx venira-mcp --setup-github  # save a GitHub token in the shared user vault
  *   (also aliased as `venira` via the package.json `bin` entry)
  *
  * Resolves the compiled dist/ relative to this file so `npx` (which
@@ -64,6 +65,7 @@ Usage:
   npx venira-mcp                 Start the MCP server (stdio transport)
   npx venira-mcp --doctor        Run the preflight diagnostics
   npx venira-mcp --verify        Run the behavioural test suite
+  npx venira-mcp --setup-github  Store a GitHub token once for local Venira clients
   npx venira-mcp --approve <id> [--session] [--yes]
                                  Approve a pending shell command (interactive terminal only)
   npx venira-mcp --version, -v   Print the version
@@ -93,6 +95,13 @@ if (args[0] === "--help" || args[0] === "-h") {
 }
 
 const target = (() => {
+  if (args[0] === "--setup-github") {
+    if (args.length > 1) {
+      console.error("--setup-github does not accept a token argument; enter it at the hidden terminal prompt.");
+      process.exit(2);
+    }
+    return { file: path.join(here, "..", "dist", "scripts", "setup-github.js"), rest: [] };
+  }
   if (args[0] === "--approve") {
     const id = args[1];
     if (!id) { console.error("missing approval_id"); process.exit(2); }

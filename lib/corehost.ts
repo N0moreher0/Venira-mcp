@@ -78,6 +78,7 @@ import {
   redactSecretValues,
   setSecret,
 } from "./secrets.js";
+import { GithubDeviceFlow } from "./github-device-flow.js";
 
 // ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
@@ -1908,6 +1909,7 @@ function opShellCancel(args: Record<string, unknown>): RustResponse {
 // ---------------------------------------------------------------------------
 
 const MAX_REVEAL_VALUE_CHARS = 16 * 1024;
+const githubDeviceFlow = new GithubDeviceFlow();
 
 /**
  * Expiry arguments for `project_secret action=set`:
@@ -2092,6 +2094,36 @@ async function opSecret(args: Record<string, unknown>): Promise<RustResponse> {
   }
 }
 
+async function opGithubConnect(args: Record<string, unknown>): Promise<RustResponse> {
+  const action = String(args.action ?? "").trim().toLowerCase();
+  if (action === "start") {
+    const data = await githubDeviceFlow.start(args.replace_existing === true);
+    return {
+      status: "completed",
+      result: { kind: "github_connect", data },
+      hint:
+        `Open ${data.verification_uri}, sign in to GitHub, and enter code ${data.user_code}. ` +
+        `After approving, call project_github_connect action=poll with pending_id; wait at least ${data.poll_interval_seconds}s between polls. ` +
+        "Never ask the user to paste a token into chat.",
+    };
+  }
+  if (action === "poll") {
+    const pendingId = typeof args.pending_id === "string" ? args.pending_id.trim() : "";
+    if (!pendingId) {
+      throw new Error("[invalid_request] `pending_id` is required for action=poll.");
+    }
+    const data = await githubDeviceFlow.poll(pendingId);
+    return {
+      status: "completed",
+      result: { kind: "github_connect", data },
+      ...(data.status === "pending"
+        ? { hint: `Authorization is not complete. Wait ${String(data.wait_seconds)}s, then poll again.` }
+        : {}),
+    };
+  }
+  throw new Error('[invalid_request] action must be "start" or "poll".');
+}
+
 type OperationHandler = (args: Record<string, unknown>, root: string, sessionId: string) => Promise<RustResponse>;
 
 const operations: Record<string, OperationHandler> = {
@@ -2119,6 +2151,7 @@ const operations: Record<string, OperationHandler> = {
   ci_trigger: opCiTrigger,
   ci_logs: opCiLogs,
   secret: opSecret,
+  github_connect: opGithubConnect,
 };
 
 /**
@@ -2171,6 +2204,9 @@ function describeExternalOp(operation: string, args: Record<string, unknown>): s
       summary = `secret_${action || "?"} name=${name}${args.reveal === true ? " reveal=true" : ""}`;
       break;
     }
+    case "github_connect":
+      summary = `github_device_${String(args.action ?? "?").toLowerCase()}`;
+      break;
     default:
       return undefined;
   }

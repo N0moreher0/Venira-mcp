@@ -16,6 +16,7 @@ import { githubDialect } from "./git-github.js";
 import { gitlabDialect } from "./git-gitlab.js";
 import { bitbucketDialect } from "./git-bitbucket.js";
 import type { Resp } from "./git-common.js";
+import { refreshGithubAccessTokenIfNeeded } from "./github-device-flow.js";
 
 const DIALECTS: Record<string, GitDialect> = {
   github: githubDialect,
@@ -23,8 +24,17 @@ const DIALECTS: Record<string, GitDialect> = {
   bitbucket: bitbucketDialect,
 };
 
-function resolve(args: Record<string, unknown>): { ctx: GitContext; dialect: GitDialect } {
-  const ctx = gitContext(args);
+async function resolve(args: Record<string, unknown>): Promise<{ ctx: GitContext; dialect: GitDialect }> {
+  let ctx: GitContext;
+  try {
+    ctx = gitContext(args);
+  } catch (error) {
+    if (!(error instanceof Error) || !error.message.startsWith('[secret_expired] Secret "GITHUB_TOKEN"')) {
+      throw error;
+    }
+    await refreshGithubAccessTokenIfNeeded();
+    ctx = gitContext(args);
+  }
   const dialect = DIALECTS[ctx.provider];
   if (!dialect) {
     throw new Error(`[invalid_request] No dialect for provider "${ctx.provider}". Hint: use github | gitlab | bitbucket.`);
@@ -33,47 +43,47 @@ function resolve(args: Record<string, unknown>): { ctx: GitContext; dialect: Git
 }
 
 export async function opPrCreate(args: Record<string, unknown>): Promise<Resp> {
-  const { ctx, dialect } = resolve(args);
+  const { ctx, dialect } = await resolve(args);
   return dialect.prCreate(ctx, args);
 }
 
 export async function opPrComment(args: Record<string, unknown>): Promise<Resp> {
-  const { ctx, dialect } = resolve(args);
+  const { ctx, dialect } = await resolve(args);
   return dialect.prComment(ctx, args);
 }
 
 export async function opPrMerge(args: Record<string, unknown>): Promise<Resp> {
-  const { ctx, dialect } = resolve(args);
+  const { ctx, dialect } = await resolve(args);
   return dialect.prMerge(ctx, args);
 }
 
 export async function opPrList(args: Record<string, unknown>): Promise<Resp> {
-  const { ctx, dialect } = resolve(args);
+  const { ctx, dialect } = await resolve(args);
   return dialect.prList(ctx, args);
 }
 
 export async function opPrClose(args: Record<string, unknown>): Promise<Resp> {
-  const { ctx, dialect } = resolve(args);
+  const { ctx, dialect } = await resolve(args);
   return dialect.prClose(ctx, args);
 }
 
 export async function opPrReopen(args: Record<string, unknown>): Promise<Resp> {
-  const { ctx, dialect } = resolve(args);
+  const { ctx, dialect } = await resolve(args);
   return dialect.prReopen(ctx, args);
 }
 
 export async function opCiStatus(args: Record<string, unknown>): Promise<Resp> {
-  const { ctx, dialect } = resolve(args);
+  const { ctx, dialect } = await resolve(args);
   return dialect.ciStatus(ctx, args);
 }
 
 export async function opCiTrigger(args: Record<string, unknown>): Promise<Resp> {
-  const { ctx, dialect } = resolve(args);
+  const { ctx, dialect } = await resolve(args);
   return dialect.ciTrigger(ctx, args);
 }
 
 export async function opCiLogs(args: Record<string, unknown>): Promise<Resp> {
-  const { ctx, dialect } = resolve(args);
+  const { ctx, dialect } = await resolve(args);
   return dialect.ciLogs(ctx, args);
 }
 
