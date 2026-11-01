@@ -16,8 +16,8 @@ const MAX_BUFFER = 1_048_576; // 1 MiB
 /**
  * Workspace-scoped synchronous JS evaluation.
  * Runs `node` in the workspace, reading code from stdin, capturing stdout/stderr.
- * No imports beyond Node stdlib without the user's node_modules; code executes under
- * the Node security posture (inherits env whitelist from project-shell).
+ * Node's permission model limits filesystem access to the workspace and does not
+ * grant child-process or worker permissions. This is containment, not a sandbox.
  */
 export function executeJs(
   code: string,
@@ -25,8 +25,14 @@ export function executeJs(
 ): JsResult {
   const cwd = options.cwd ?? process.cwd();
   const timeout = Math.max(100, Math.min(options.timeout ?? DEFAULT_TIMEOUT, 600_000));
+  const nodeMajor = Number.parseInt(process.versions.node.split(".")[0] ?? "0", 10);
+  const permissionArgs = [
+    nodeMajor >= 23 ? "--permission" : "--experimental-permission",
+    `--allow-fs-read=${cwd}`,
+    `--allow-fs-write=${cwd}`,
+  ];
   try {
-    const r = spawnSync(process.execPath, ["-", ...((options.args ?? []) as string[])], {
+    const r = spawnSync(process.execPath, [...permissionArgs, "-", ...((options.args ?? []) as string[])], {
       input: code,
       encoding: "utf8",
       cwd,
@@ -35,8 +41,9 @@ export function executeJs(
       stdio: ["pipe", "pipe", "pipe"],
       env: {
         PATH: process.env.PATH,
-        HOME: process.env.HOME ?? process.env.USERPROFILE,
         TERM: process.env.TERM ?? "",
+        HOME: "",
+        USERPROFILE: "",
         NODE_PATH: path.join(cwd, "node_modules"),
       },
     });

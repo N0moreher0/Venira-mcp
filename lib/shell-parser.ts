@@ -1,0 +1,106 @@
+import { PLATFORM } from "./workspace.js";
+import { tokenize, type Token } from "./shell-tokenizer.js";
+
+export type Segment = {
+  raw: string;
+  argv: string[];
+  command: string;
+  subcommand: string | null;
+};
+
+export type ParsedCommand = {
+  raw: string;
+  segments: Segment[];
+  operators: string[];
+  redirect_targets: string[];
+  cd_targets: string[];
+  has_operator: boolean;
+  has_pipe: boolean;
+  has_redirect: boolean;
+  has_substitution: boolean;
+  has_background: boolean;
+  empty: boolean;
+};
+
+const RUNNERS = new Set([
+  "git", "npm", "npx", "pnpm", "yarn", "bun", "node", "cargo", "go",
+  "python", "python3", "pip", "pip3", "dotnet", "docker", "podman",
+  "kubectl", "gh", "apt", "apt-get", "dnf", "yum", "pacman", "brew",
+  "winget", "choco", "scoop", "deno", "ruby", "gem", "php", "composer",
+  "mvn", "gradle",
+]);
+
+const REDIRECT_NEEDS_TARGET = new Set([">", ">>", ">|", "<", "<<", "&>", "&>>"]);
+
+function makeSegment(argv: string[], raw: string): Segment {
+  const first = argv[0] ?? "";
+  const base = first.split(/[\\/]/).pop() ?? first;
+  const command = PLATFORM === "win32" ? base.replace(/\.(exe|cmd|bat|ps1)$/i, "").toLowerCase() : base;
+  let subcommand: string | null = null;
+  if (RUNNERS.has(command)) {
+    subcommand = argv.slice(1).find((arg) => !arg.startsWith("-")) ?? null;
+    if (subcommand) subcommand = subcommand.toLowerCase();
+  } else if (argv.length > 1 && !argv[1].startsWith("-")) {
+    subcommand = argv[1].toLowerCase();
+  }
+  return { raw, argv, command, subcommand };
+}
+
+export function parseShellCommand(raw: string): ParsedCommand {
+  const { tokens, has_substitution } = tokenize(raw);
+  const segments: Segment[] = [];
+  const operators: string[] = [];
+  const redirect_targets: string[] = [];
+  let argv: string[] = [];
+  let rawParts: string[] = [];
+  let expectTarget = false;
+
+  const flushSegment = (): void => {
+    if (argv.length > 0) segments.push(makeSegment(argv, rawParts.join(" ")));
+    argv = [];
+    rawParts = [];
+  };
+
+  for (const tok of tokens) {
+    if (tok.type === "word") {
+      if (expectTarget) {
+        redirect_targets.push(tok.value);
+        expectTarget = false;
+        rawParts.push(tok.value);
+        continue;
+      }
+      argv.push(tok.value);
+      rawParts.push(tok.value);
+      continue;
+    }
+    if (tok.type === "redirect") {
+      if (REDIRECT_NEEDS_TARGET.has(tok.value)) expectTarget = true;
+      rawParts.push(tok.value);
+      continue;
+    }
+    operators.push(tok.value);
+    flushSegment();
+  }
+  flushSegment();
+
+  const cd_targets: string[] = [];
+  for (const segment of segments) {
+    if (["cd", "chdir", "sl", "set-location"].includes(segment.command) && segment.argv[1]) {
+      cd_targets.push(segment.argv[1]);
+    }
+  }
+
+  return {
+    raw,
+    segments,
+    operators,
+    redirect_targets,
+    cd_targets,
+    has_operator: operators.length > 0,
+    has_pipe: operators.includes("|"),
+    has_redirect: redirect_targets.length > 0,
+    has_substitution,
+    has_background: operators.includes("&"),
+    empty: segments.length === 0,
+  };
+}

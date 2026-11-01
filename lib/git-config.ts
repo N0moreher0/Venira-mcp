@@ -10,6 +10,7 @@
  * which the HTTP layer turns into a header immediately.
  */
 import { existsSync, readFileSync, statSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { WORKSPACE } from "./workspace.js";
 import { getSecretMeta, getSecretValueSync, isValidSecretName, markSecretUsed } from "./secrets.js";
@@ -119,19 +120,39 @@ function envText(...names: string[]): string {
   return "";
 }
 
-/** Config file: explicit `VENIRA_CONFIG_FILE`, else `<workspace>/venira.config.json`. */
+export function userConfigPath(): string {
+  if (process.platform === "win32") {
+    const base = process.env.LOCALAPPDATA || process.env.APPDATA || path.join(os.homedir(), "AppData", "Local");
+    return path.join(base, "venira", "config.json");
+  }
+  if (process.platform === "darwin") {
+    return path.join(os.homedir(), "Library", "Application Support", "venira", "config.json");
+  }
+  return path.join(os.homedir(), ".local", "share", "venira", "config.json");
+}
+
+/** Config file: explicit `VENIRA_CONFIG_FILE`, else user-level, else `<workspace>/venira.config.json`. */
 export function configPath(): string | null {
   const explicit = (process.env.VENIRA_CONFIG_FILE ?? "").trim();
   if (explicit) return path.resolve(WORKSPACE, explicit);
+  const user = userConfigPath();
+  if (existsSync(user)) return user;
   const candidate = path.join(WORKSPACE, "venira.config.json");
   return existsSync(candidate) ? candidate : null;
 }
+
+let configTrusted = true;
+
+/** True when the loaded config comes from an explicit/user-level (trusted) source. */
+export function isTrustedConfig(): boolean { return configTrusted; }
 
 let configCache: { file: string; mtimeMs: number; data: GitFileConfig } | null = null;
 
 function loadConfigFile(): { data: GitFileConfig; file: string | null } {
   const file = configPath();
-  if (!file) return { data: {}, file: null };
+  if (!file) { configTrusted = true; return { data: {}, file: null }; }
+  const explicit = (process.env.VENIRA_CONFIG_FILE ?? "").trim();
+  configTrusted = !!explicit || file === userConfigPath();
   let mtimeMs = 0;
   try {
     mtimeMs = statSync(file).mtimeMs;
@@ -201,8 +222,23 @@ function allowHttp(): boolean {
   return (process.env.VENIRA_GIT_ALLOW_HTTP ?? process.env.VENIRA_GITHUB_ALLOW_HTTP ?? "") === "1";
 }
 
+const DEFAULT_ALLOWED_HOSTS = new Set(["api.github.com", "gitlab.com", "api.bitbucket.org"]);
+
 function isLocalHost(hostname: string): boolean {
   return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+}
+
+function allowedHosts(): Set<string> {
+  const set = new Set(DEFAULT_ALLOWED_HOSTS);
+  const extra = (process.env.VENIRA_GIT_ALLOWED_HOSTS ?? "").trim();
+  if (extra) for (const h of extra.split(/[,\s]+/)) if (h) set.add(h.toLowerCase());
+  return set;
+}
+
+function isAllowedApiHost(host: string): boolean {
+  const h = host.toLowerCase();
+  if (h === "localhost" || h === "127.0.0.1" || h === "::1") return true;
+  return allowedHosts().has(h);
 }
 
 /** Normalized API base: https (or localhost/allow-http), no trailing slash. */
@@ -223,6 +259,12 @@ export function normalizeApiBase(raw: string, source: string): string {
   }
   if (!url.hostname) {
     throw new Error(`[invalid_request] ${source} has no host: "${raw}".`);
+  }
+  if (!isAllowedApiHost(url.hostname)) {
+    throw new Error(
+      `[invalid_request] ${source} host "${url.hostname}" is not in the allowed list. ` +
+        `Hint: default allowed hosts are api.github.com, gitlab.com, api.bitbucket.org; add others via VENIRA_GIT_ALLOWED_HOSTS.`,
+    );
   }
   return `${url.protocol}//${url.host}${url.pathname.replace(/\/+$/, "")}`;
 }
@@ -335,11 +377,12 @@ export function resolveRepo(
 /** Resolve everything a provider call needs. Throws `[invalid_request]` on bad config. */
 export function gitContext(args: Record<string, unknown> = {}): GitContext {
   const { data: file, file: filePath } = loadConfigFile();
+  const trusted = isTrustedConfig();
   const repo = resolveRepo(args, file);
   const repoKey = `${repo.owner}/${repo.name}`.toLowerCase();
-  const repoOverride: RepoOverride | undefined = Object.entries(file.repos ?? {}).find(
-    ([key]) => key.trim().toLowerCase() === repoKey,
-  )?.[1];
+  const repoOverride: RepoOverride | undefined = trusted
+    ? Object.entries(file.repos ?? {}).find(([key]) => key.trim().toLowerCase() === repoKey)?.[1]
+    : undefined;
 
   const remote = repo.source === "git" ? readOriginUrl(WORKSPACE) : null;
   const argRepoHost = typeof args.repo === "string" ? hostOf(args.repo) : null;
@@ -358,7 +401,7 @@ export function gitContext(args: Record<string, unknown> = {}): GitContext {
   } else if (repoOverride?.provider) {
     provider = asProvider(repoOverride.provider, `venira.config.json repos["${repoKey}"].provider`);
     providerSource = "config:repo";
-  } else if (file.provider) {
+  } else if (trusted && file.provider) {
     provider = asProvider(file.provider, "venira.config.json git.provider");
     providerSource = "config";
   } else if (inferred) {
@@ -378,7 +421,7 @@ export function gitContext(args: Record<string, unknown> = {}): GitContext {
   } else if (repoOverride?.api_url) {
     apiBase = normalizeApiBase(repoOverride.api_url, `venira.config.json repos["${repoKey}"].api_url`);
     apiSource = "config:repo";
-  } else if (file.api_url) {
+  } else if (trusted && file.api_url) {
     apiBase = normalizeApiBase(file.api_url, "venira.config.json git.api_url");
     apiSource = "config";
   } else {
@@ -389,12 +432,12 @@ export function gitContext(args: Record<string, unknown> = {}): GitContext {
   const secretName =
     envText("VENIRA_GIT_SECRET_NAME") ||
     repoOverride?.secret ||
-    file.secret ||
+    (trusted ? file.secret : undefined) ||
     DEFAULTS[provider].secret ||
     ENV_SECRETS[provider];
-  const tokenEnv = envText("VENIRA_GIT_TOKEN_ENV") || repoOverride?.token_env || file.token_env || "";
+  const tokenEnv = envText("VENIRA_GIT_TOKEN_ENV") || (trusted ? (repoOverride?.token_env || file.token_env) : "") || "";
   const { token, origin: tokenOrigin } = tokenFor(provider, secretName, tokenEnv);
-  const username = envText("VENIRA_GIT_USERNAME") || repoOverride?.username || file.username || null;
+  const username = envText("VENIRA_GIT_USERNAME") || (trusted ? (repoOverride?.username || file.username) : null) || null;
 
   const timeout = intFrom("timeout_ms", ["VENIRA_GIT_TIMEOUT_MS"], file.timeout_ms);
   const logTimeout = intFrom("log_timeout_ms", ["VENIRA_GIT_LOG_TIMEOUT_MS"], file.log_timeout_ms);
@@ -405,7 +448,7 @@ export function gitContext(args: Record<string, unknown> = {}): GitContext {
   const logTextBytes = intFrom("log_text_bytes", ["VENIRA_GIT_LOG_TEXT_BYTES"], file.log_text_bytes);
   const redirects = intFrom("max_redirects", ["VENIRA_GIT_MAX_REDIRECTS"], file.max_redirects);
   const retries = intFrom("retries", ["VENIRA_GIT_RETRIES"], file.retries);
-  const { proxy, source: proxySource } = proxyFor(file.proxy);
+  const { proxy, source: proxySource } = proxyFor(trusted ? file.proxy : undefined);
 
   return {
     provider,

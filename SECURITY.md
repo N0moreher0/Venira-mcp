@@ -35,6 +35,7 @@ deploying:
 - **Cache correctness.** Read/info caches are validated by `mtime + size`,
   so an external edit or delete can never silently serve stale content.
 - **Audit integrity.** Every operation is written to a SQLite WAL table.
+  Legacy databases with a required `created_at` column are supported in place;
   `project_health` surfaces orphan `running` rows as a post-mortem signal.
 - **Native module supply chain.** `better-sqlite3` is the only native
   dependency; its build scripts are allowlisted via `npm approve-scripts`
@@ -102,5 +103,6 @@ directly affected:
 |---|---|---|
 | `VENIRA_UNRESTRICTED` | `"0"` | `"1"` removes the workspace lock. Highest-risk setting. |
 | `VENIRA_DEFAULT_SHELL` | platform default | Pick the least-capable shell that meets your needs. |
-| `VENIRA_DATA_DIR` | `<workspace>/data` | Must be writable by the server user; don't point it at a shared dir. |
+| `VENIRA_DATA_DIR` | Per-user OS data directory | Contains the audit DB, encrypted secrets, approval key and pending approvals. Keep it private and don't point it at a shared directory. |
+| `VENIRA_SESSION_GRANT_RULES` | `cd_outside_workspace` | Additional rules eligible for human-approved session grants. Do not include network or history-rewrite rules unless the environment is disposable. |
 | `VENIRA_SESSION_ID` | auto | Set it in tests so audit rows are separable. |

@@ -4,6 +4,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import { CoreHost, shellPolicySnapshot } from "../lib/corehost.js";
+import * as approvals from "../lib/approvals.js";
 import { evaluateToolPolicy } from "../lib/tool-policy.js";
 import { recordMetric, metricsSnapshot } from "../lib/metrics.js";
 import {
@@ -32,6 +33,7 @@ import {
   CACHE_SEARCH_ONLY_ENABLED,
   isProtectedPath,
   ALLOW_JS_EXEC,
+  activeDataDir,
 } from "../lib/workspace.js";
 import { addTrace, recentTraces, traceSnapshot } from "../lib/tracer.js";
 import {
@@ -693,6 +695,7 @@ const ELICIT_TIMEOUT_MS = 5 * 60 * 1000;
 
 type ShellApprovalData = {
   approval_token?: unknown;
+  approval_id?: unknown;
   command?: unknown;
   rule?: unknown;
   reason?: unknown;
@@ -707,11 +710,14 @@ function approvalFailure(
   elapsedMs: number,
 ): ToolResult {
   const token = typeof data.approval_token === "string" ? data.approval_token : "";
+  const approvalId = typeof data.approval_id === "string" ? data.approval_id : "";
   const reason = typeof data.reason === "string" ? data.reason : "This command requires approval.";
   const rule = typeof data.rule === "string" ? data.rule : "policy";
   const hint = token
-    ? `Ask the user to confirm "${String(data.command ?? "").slice(0, 200)}". If they approve, retry project_shell_run with approval_token="${token}"; add approval_scope="session" to approve this command group until the token TTL ends.`
-    : undefined;
+    ? `Ask the user to confirm "${String(data.command ?? "").slice(0, 200)}". If they approve, retry project_shell_run with approval_token="${token}".`
+    : approvalId
+      ? `Ask the user to run \`npx venira-mcp --approve ${approvalId}\` in an interactive terminal, then retry project_shell_run with approval_id="${approvalId}".`
+      : undefined;
   return toolResult(
     errorEnvelope(operation, new Error(`[approval_required] ${reason} (rule: ${rule})`), {
       requestId,
@@ -782,8 +788,23 @@ async function runShell(args: Args, server: McpServer): Promise<ToolResult> {
     if (response.result?.kind === "shell_approval" && SHELL_ELICIT) {
       const verdict = await elicitShellApproval(server, data ?? {});
       if (verdict.approved) {
-        const retry: Args = { ...args, approval_token: data?.approval_token };
-        if (verdict.remember) retry.approval_scope = "session";
+        // The person accepted in their own client UI: record the grant on their
+        // behalf, with the scope they chose (session only where it is allowed).
+        const pendingId = typeof data?.approval_id === "string" ? data.approval_id : "";
+        if (pendingId) {
+          try {
+            approvals.writeApprovalGrant(pendingId, "elicitation", verdict.remember ? "session" : "once");
+          } catch {
+            try {
+              approvals.writeApprovalGrant(pendingId, "elicitation", "once");
+            } catch (error) {
+              console.error(`[venira-coding] could not record approval: ${error instanceof Error ? error.message : String(error)}`);
+            }
+          }
+        }
+        const retry: Args = { ...args, approval_token: data?.approval_token, approval_id: data?.approval_id };
+        delete (retry as Record<string, unknown>).approval_scope;
+        if (verdict.remember && data?.approval_token) retry.approval_scope = "session";
         ({ response } = await executeCached("shell_run", retry));
         data = response.result?.data as ShellApprovalData | undefined;
         cached = false;
@@ -947,6 +968,10 @@ async function runEditBatch(args: Args): Promise<ToolResult> {
     }
   }
   let failed = false;
+  const executed: number[] = [];
+  const skipped: number[] = [];
+  let rollbackAttempted = false;
+  let rollbackSucceeded = false;
   for (const item of items) {
     const itemStarted = performance.now();
     try {
@@ -966,19 +991,47 @@ async function runEditBatch(args: Args): Promise<ToolResult> {
       totalBytes += size;
       recordMetric("edit_file", performance.now() - itemStarted, true);
       responses.push({ ok: true, response: envelope });
+      executed.push(responses.length - 1);
     } catch (error) {
       failed = true;
       recordMetric("edit_file", performance.now() - itemStarted, false);
       const failure = parseToolError(error);
       responses.push({ ok: false, error: { code: failure.code, message: failure.message, retryable: failure.retryable } });
       if (snapshotId) {
-        try { await executeCached("snapshot_restore", { action: "restore", id: snapshotId }); } catch { /* best-effort */ }
+        rollbackAttempted = true;
+        try {
+          await executeCached("snapshot_restore", { action: "restore", id: snapshotId });
+          rollbackSucceeded = true;
+        } catch (restoreError) {
+          console.error(`[venira-coding] edit_batch rollback failed: ${restoreError instanceof Error ? restoreError.message : String(restoreError)}`);
+        }
       }
+      for (let skippedIndex = responses.length; skippedIndex < items.length; skippedIndex += 1) {
+        skipped.push(skippedIndex);
+        responses.push({
+          ok: false,
+          error: {
+            code: "batch_aborted",
+            message: "Not executed because an earlier edit failed; the batch was rolled back when possible.",
+            retryable: true,
+          },
+        });
+      }
+      break;
     }
   }
   const elapsedMs = performance.now() - started;
-  recordMetric("edit_batch", elapsedMs, true);
-  return toolResult(batchEnvelope(requestId, responses, elapsedMs, { total_bytes_returned: totalBytes }));
+  recordMetric("edit_batch", elapsedMs, !failed || rollbackSucceeded);
+  return toolResult(batchEnvelope(requestId, responses, elapsedMs, {
+    total_bytes_returned: totalBytes,
+    atomic: true,
+    failed,
+    executed,
+    skipped,
+    rollback_attempted: rollbackAttempted,
+    rollback_succeeded: rollbackSucceeded,
+    ...(snapshotId ? { snapshot_id: snapshotId } : {}),
+  }));
 }
 
 async function runReadRanges(args: Args): Promise<ToolResult> {
@@ -1284,9 +1337,12 @@ async function runCreate(args: Args): Promise<ToolResult> {
 // project_health
 // ---------------------------------------------------------------------------
 function dataDirFor(exe: string | null): string {
-  if (process.env.VENIRA_DATA_DIR) return path.resolve(process.env.VENIRA_DATA_DIR);
-  if (exe) return path.join(path.dirname(exe), "data");
-  return path.join(WORKSPACE, "data");
+  // `exe` is always null in the standalone (pure-Node, no Rust binary) build — kept as a
+  // parameter for call-site compatibility. Must match corehost.ts's ensureAuditDb(), which
+  // resolves VENIRA_DATA_DIR else the per-user default (lib/workspace.ts#defaultDataDir);
+  // falling back to WORKSPACE/data here would silently point at a DB nothing ever writes to.
+  void exe;
+  return activeDataDir();
 }
 
 async function auditHealth(dbPath: string): Promise<Record<string, unknown>> {
@@ -1314,6 +1370,88 @@ async function auditHealth(dbPath: string): Promise<Record<string, unknown>> {
       const mine = db
         .prepare("SELECT outcome, count(*) AS n FROM project_tool_audit WHERE session_id = ? GROUP BY outcome")
         .all(SESSION_ID) as { outcome?: string; n?: unknown }[];
+      let loopFailures: Array<{ operation: string; reason_code: string; count: number }> = [];
+      let adoptionRuns: Array<{ operation: string; count: number; duration_ms: number }> = [];
+      try {
+        const loopRows = db
+          .prepare(
+            `SELECT operation, COALESCE(reason_code, 'operation_failed') AS reason_code, COUNT(*) AS n
+             FROM project_tool_audit
+             WHERE outcome = 'failed'
+               AND started_at >= ?
+               AND args_hash IS NOT NULL
+             GROUP BY operation, reason_code, args_hash
+             HAVING COUNT(*) >= 2
+             ORDER BY n DESC
+             LIMIT 20`,
+          )
+          .all(Date.now() - 10 * 60 * 1000) as Array<{ operation?: string; reason_code?: string; n?: number }>;
+        loopFailures = loopRows.map((row) => ({
+            operation: row.operation ?? "unknown",
+            reason_code: row.reason_code ?? "operation_failed",
+            count: Number(row.n ?? 0),
+          }));
+      } catch {
+        // Legacy databases without args_hash remain healthy; the migration may
+        // not have completed yet in a concurrently opened health reader.
+      }
+      try {
+        const adoptionRows = db
+          .prepare(
+            `SELECT id, session_id, operation, outcome, started_at, completed_at
+             FROM project_tool_audit
+             WHERE started_at >= ?
+             ORDER BY id ASC`,
+          )
+          .all(Date.now() - 10 * 60 * 1000) as Array<{
+          id: number;
+          session_id: string;
+          operation: string;
+          outcome: string;
+          started_at: number;
+          completed_at?: number | null;
+        }>;
+        const eligible = new Set(["read_file", "edit_file"]);
+        let current: { operation: string; session_id: string; count: number; started_at: number; ended_at: number } | null = null;
+        const flush = () => {
+          if (current && current.count >= 3) {
+            adoptionRuns.push({
+              operation: current.operation,
+              count: current.count,
+              duration_ms: Math.max(0, current.ended_at - current.started_at),
+            });
+          }
+          current = null;
+        };
+        for (const row of adoptionRows) {
+          const canJoin =
+            row.outcome === "succeeded" &&
+            eligible.has(row.operation) &&
+            current !== null &&
+            current.operation === row.operation &&
+            current.session_id === row.session_id &&
+            row.started_at - current.ended_at <= 60_000;
+          if (canJoin && current) {
+            current.count += 1;
+            current.ended_at = row.completed_at ?? row.started_at;
+          } else {
+            flush();
+            if (row.outcome === "succeeded" && eligible.has(row.operation)) {
+              current = {
+                operation: row.operation,
+                session_id: row.session_id,
+                count: 1,
+                started_at: row.started_at,
+                ended_at: row.completed_at ?? row.started_at,
+              };
+            }
+          }
+        }
+        flush();
+        adoptionRuns = adoptionRuns.sort((a, b) => b.count - a.count).slice(0, 20);
+      } catch {
+        // Legacy or concurrently migrated audit databases remain usable.
+      }
       return {
         path: dbPath,
         exists: true,
@@ -1322,6 +1460,8 @@ async function auditHealth(dbPath: string): Promise<Record<string, unknown>> {
         total_rows: Number(total?.n ?? 0),
         orphan_running: Number(orphan?.n ?? 0),
         session: Object.fromEntries(mine.map((row) => [row.outcome ?? "unknown", Number(row.n ?? 0)])),
+        loop_failures: loopFailures,
+        adoption_runs: adoptionRuns,
       };
     } finally {
       db.close();
@@ -1473,7 +1613,7 @@ const reason_ = z
     "Why this change is made (e.g. \"sua loi null pointer o dong 45\"). Recorded in the audit trail so later sessions know the intent. Single line, max 400 chars, secrets are redacted.",
   );
 const editOp = z.object({
-  old_text: z.string(),
+  old_text: z.string().min(1),
   new_text: z.string(),
   replace_all: z.boolean().optional(),
 });
@@ -1554,7 +1694,7 @@ async function runExecuteJs(args: Args): Promise<ToolResult> {
     : 30_000;
   try {
     const cliArgs = Array.isArray(args.argv) ? (args.argv as string[]).map(String) : undefined;
-    const r = executeJs(code, { timeout: timeoutMs, args: cliArgs });
+    const r = executeJs(code, { cwd: WORKSPACE, timeout: timeoutMs, args: cliArgs });
     const response: RustResponse = {
       status: "completed",
       result: {
@@ -1605,12 +1745,31 @@ async function runReadAudit(args: Args): Promise<ToolResult> {
       `FROM project_tool_audit ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ` +
       `ORDER BY started_at DESC LIMIT ?`;
     const rows = db.prepare(sql).all(...values, limit + 1) as unknown[];
-    db.close();
     const truncated = rows.length > limit;
+    let verified: boolean | null = null;
+    if (args.verify === true && columns.has("row_hash")) {
+      try {
+        const all = db.prepare("SELECT prev_hash, row_hash FROM project_tool_audit ORDER BY id ASC").all() as Array<{ prev_hash: string | null; row_hash: string | null }>;
+        let ok = true;
+        let prev = "";
+        let started = false;
+        for (const r of all) {
+          if (!r.row_hash) { ok = false; break; }
+          if (started && r.prev_hash !== prev) { ok = false; break; }
+          started = true;
+          prev = r.row_hash;
+        }
+        verified = ok;
+      } catch {
+        verified = false;
+      }
+    }
+    db.close();
     const data = {
       db_path: dbPath,
       count: truncated ? limit : rows.length,
       truncated,
+      ...(verified !== null ? { verified } : {}),
       rows: rows.slice(0, limit).map((r) => {
         const row = r as Record<string, unknown>;
         return {
@@ -2178,6 +2337,20 @@ async function runDetectHarnesses(args: Args): Promise<ToolResult> {
 async function runInstallSelf(args: Args): Promise<ToolResult> {
   const started = performance.now();
   const requestId = newRequestId();
+
+  if ((process.env.VENIRA_ALLOW_SELF_INSTALL ?? "").toLowerCase() !== "1") {
+    return toolResult(
+      errorEnvelope(
+        "install_self",
+        new Error(
+          "[approval_required] Self-install is disabled by default. Set VENIRA_ALLOW_SELF_INSTALL=1 and retry, or ask the user to run it manually. " +
+            "Hint: this writes to another client's config file outside the workspace.",
+        ),
+        { requestId, elapsedMs: 0 },
+      ),
+      true,
+    );
+  }
   const harness = String(args.harness ?? "") as HarnessName;
   const valid: HarnessName[] = [
     "opencode",
@@ -2461,7 +2634,7 @@ export function registerProjectTools(server: McpServer): void {
       ),
       inputSchema: {
         relative_path: path_,
-        old_text: z.string().optional(),
+        old_text: z.string().min(1).optional(),
         new_text: z.string().optional(),
         replace_all: z.boolean().optional(),
         edits: z.array(editOp).max(64).optional(),
@@ -2480,19 +2653,19 @@ export function registerProjectTools(server: McpServer): void {
     "project_edit_batch",
     {
       ...config(
-        "Apply multiple edit_file operations in one call; returns per-item results.",
+        "Apply multiple edit_file operations atomically in one call; aborts after the first failure and restores the pre-batch snapshot when possible.",
         "Edit batch",
         {
           use_when: "you have 2+ independent edits across one or more files.",
           avoid_when: "a single edit (project_edit_file) or a whole-file rewrite (project_write_file).",
           speed_profile: "depends on item count; each runs edit_file and clears caches.",
-          output_kind: "batch: responses[] {ok, response|error}, total_bytes_returned.",
+          output_kind: "batch: responses[] {ok, response|error}, atomic metadata with executed/skipped indexes and rollback status.",
           batch_safe: false,
         },
         { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
       ),
       inputSchema: {
-        edits: z.array(z.record(z.string(), z.any())).min(1).max(64).describe("Array of edit_file argument objects."),
+        edits: z.array(z.record(z.string(), z.any())).min(1).max(64).describe("Array of edit_file argument objects. The batch aborts on the first failure and rolls back earlier writes when possible."),
         max_response_bytes_per_item: z.number().int().min(256).max(1048576).optional(),
       },
     },
@@ -2542,18 +2715,19 @@ export function registerProjectTools(server: McpServer): void {
     {
       ...config(
         `Run a shell command (cwd defaults to ${WORKSPACE}). Returns run_id immediately; use project_shell_status to get the output. ` +
-          "Commands pass a policy gate: risky ones return an approval_required error with a single-use approval_token; " +
+          "Commands pass a policy gate: risky ones return an approval_required error with a pending approval_id; " +
           "catastrophic ones are denied outright.",
         "Shell run (async)",
         {
           use_when:
             "build/test/lint/long-running commands; returns run_id immediately so it never blocks other tools. " +
-            "After approval_required, ask the user and retry with the approval_token from data.",
+            "Set early_exit=true to wait for completion and return final output in this call; otherwise poll project_shell_status. " +
+            "After approval_required, ask the user to approve the approval_id in an interactive terminal, then retry.",
           avoid_when: "a very short command whose output you need right now (you can still run it and poll 0s).",
           speed_profile: "returns in ~5 ms; run time is up to the command (bounded by timeout_ms).",
           output_kind:
-            "shell_run: run_id, running, exit_code, stdout_tail/stderr_tail, timed_out, policy; " +
-            "approval_required: rule, reason, approval_token, retry_with.",
+            "shell_run: run_id/shell_id, running, exit_code, stdout_tail/stderr_tail, timed_out, policy; " +
+            "with early_exit=true also returns bounded stdout/stderr; approval_required: rule, reason, approval_id, retry_with.",
           batch_safe: false,
         },
         { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
@@ -2575,15 +2749,23 @@ export function registerProjectTools(server: McpServer): void {
           .int()
           .min(0)
           .optional()
-          .describe("Kill the whole process tree after this many milliseconds (0 = no timeout; capped by VENIRA_SHELL_MAX_TIMEOUT_MS)."),
+          .describe("Kill the whole process tree after this many milliseconds. Unset or 0 uses the default 10-minute timeout; capped by VENIRA_SHELL_MAX_TIMEOUT_MS."),
         approval_token: z
           .string()
           .optional()
           .describe("Single-use token from a previous approval_required envelope. Never invent or reuse one."),
+        approval_id: z
+          .string()
+          .optional()
+          .describe("Approval ID from npx venira-mcp --approve <id>. Use this instead of approval_token when auto-approval is disabled."),
+        early_exit: z
+          .union([z.boolean(), z.enum(["true", "false"])])
+          .optional()
+          .describe("When true, wait for the background shell to finish and return its final output in this call; default false returns immediately with run_id/shell_id."),
         approval_scope: z
           .enum(["once", "session"])
           .optional()
-          .describe("With approval_token: `once` (default) runs this command only; `session` also approves the same command group for the token TTL."),
+          .describe("Legacy token-only compatibility. With approval_id, scope is chosen by the human at approval time (`--approve <id> --session`) and this field is ignored."),
       },
     },
     (args) => runShell(args, server),
@@ -2768,6 +2950,7 @@ export function registerProjectTools(server: McpServer): void {
         outcome: z.enum(["success", "failure", "running"]).optional(),
         limit: z.number().int().min(1).max(200).optional(),
         since_unix: z.number().int().min(0).optional(),
+        verify: z.boolean().optional().describe("When true, verify the audit hash chain and return chain_ok."),
       },
     },
     (args) => runReadAudit(args as Args),
@@ -2965,7 +3148,7 @@ export function registerProjectTools(server: McpServer): void {
           output_kind: "install_self: {harness, config_path, status (installed|already_present|config_missing|error), needs_restart, error?}.",
           batch_safe: false,
         },
-        { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+        { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
       ),
       inputSchema: {
         harness: z.enum([
@@ -2978,7 +3161,7 @@ export function registerProjectTools(server: McpServer): void {
           "antigravity",
         ]),
         workspace: z.string().optional().describe("VENIRA_WORKSPACE value to write (default: process.cwd())."),
-        data_dir: z.string().optional().describe("VENIRA_DATA_DIR value to write (default: <workspace>/data)."),
+        data_dir: z.string().optional().describe("VENIRA_DATA_DIR value to write (default: the per-user Venira data directory)."),
         dry_run: z.boolean().optional().describe("When true, report what would happen without writing."),
       },
     },
@@ -3496,4 +3679,3 @@ export function registerProjectTools(server: McpServer): void {
     (args) => runSecret(args as Args),
   );
 }
-

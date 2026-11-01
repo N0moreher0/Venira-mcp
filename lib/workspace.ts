@@ -10,16 +10,41 @@ export const WORKSPACE = path.resolve(process.env.VENIRA_WORKSPACE ?? process.cw
 
 import os from "node:os";
 export function migrateLegacyDataDirIfNeeded(): void {
-  if (process.env.VENIRA_DATA_DIR) return;
+  if (process.env.VENIRA_DATA_DIR?.trim()) return;
+  const legacy = path.join(WORKSPACE, "data");
+  const modern = defaultDataDir();
+  if (!fs.existsSync(legacy)) return;
+  // Atomically claim `modern`: plain mkdirSync (no recursive) throws EEXIST
+  // if the directory is already there. Several server processes can start
+  // at once (verify spawns many), and the old existsSync-then-cpSync check
+  // was a TOCTOU race -- every process that saw "modern missing" would
+  // re-run cpSync, and a later copy could clobber a sibling process's
+  // venira.db mid-write, silently wiping out audit rows written moments
+  // earlier. Only the process that wins the exclusive mkdir migrates;
+  // everyone else (an already-migrated dir, or a sibling mid-migration)
+  // leaves it alone.
   try {
-    const legacy = path.join(WORKSPACE, "data");
-    const modern = defaultDataDir();
-    if (!fs.existsSync(legacy) || fs.existsSync(modern)) return;
     fs.mkdirSync(path.dirname(modern), { recursive: true });
+    fs.mkdirSync(modern);
+  } catch {
+    return; // modern already exists (real data or a concurrent migration)
+  }
+  try {
     fs.cpSync(legacy, modern, { recursive: true });
   } catch {
     // best-effort; fallback paths remain in place
   }
+}
+
+/** The data directory actually in use (env override, else the per-user default). */
+export function activeDataDir(): string {
+  const env = process.env.VENIRA_DATA_DIR?.trim();
+  return env ? path.resolve(env) : defaultDataDir();
+}
+
+function isInsideDir(child: string, parent: string): boolean {
+  const rel = path.relative(parent, child);
+  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
 }
 
 export function defaultDataDir(): string {
@@ -40,19 +65,49 @@ export const ALLOW_JS_EXEC = ["1", "true", "on", "yes"].includes(
 );
 
 export const PROTECTED_BASENAMES = new Set([
+  "approval.key",
   "secrets.json",
   "secrets.key",
   "venira.db",
   "venira.db-wal",
   "venira.db-shm",
   "venira.db-journal",
+  ".git-credentials",
+  ".netrc",
+  ".npmrc",
+  ".pgpass",
+  "credentials.json",
+]);
+
+const PROTECTED_EXTENSIONS = new Set([
+  ".asc",
+  ".cer",
+  ".crt",
+  ".der",
+  ".gpg",
+  ".jks",
+  ".keystore",
+  ".key",
+  ".p12",
+  ".pem",
+  ".pfx",
 ]);
 
 export function isProtectedPath(absPath: string): boolean {
-  const base = path.basename(absPath).toLowerCase();
+  const canonicalPath = realPathOrSelf(path.resolve(absPath));
+  const base = path.basename(canonicalPath).toLowerCase();
   if (PROTECTED_BASENAMES.has(base)) return true;
   if (base.startsWith("venira.db-")) return true;
   if (base === ".env" || base.startsWith(".env.")) return true;
+  if (PROTECTED_EXTENSIONS.has(path.extname(base))) return true;
+  if (/^id_(rsa|dsa|ecdsa|ed25519)(\.pub)?$/i.test(base)) return true;
+  // Everything under the data dir (approval store + key, audit DB, secrets) is
+  // off-limits to the file tools: the agent must not be able to forge a grant.
+  try {
+    if (isInsideDir(canonicalPath, realPathOrSelf(activeDataDir()))) return true;
+  } catch {
+    /* fall through */
+  }
   return false;
 }
 
