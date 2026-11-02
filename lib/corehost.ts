@@ -85,6 +85,8 @@ import {
 } from "./secrets.js";
 import { GithubDeviceFlow } from "./github-device-flow.js";
 import { envChoice, envFlag } from "./env.js";
+import { buildChangeImpact, buildDependencyGraph } from "./dependency-graph.js";
+import { opCiWait } from "./ci-wait.js";
 
 // ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
@@ -2154,6 +2156,32 @@ async function opGithubConnect(args: Record<string, unknown>): Promise<RustRespo
   throw new Error('[invalid_request] action must be "start" or "poll".');
 }
 
+async function opDependencyGraph(
+  args: Record<string, unknown>,
+  root: string,
+): Promise<RustResponse> {
+  const built = await buildDependencyGraph(args, root);
+  return {
+    status: "completed",
+    result: { kind: "dependency_graph", data: built.data },
+    ...(built.truncated ? { truncated: true } : {}),
+    ...(built.hint ? { hint: built.hint } : {}),
+  };
+}
+
+async function opChangeImpact(
+  args: Record<string, unknown>,
+  root: string,
+): Promise<RustResponse> {
+  const built = await buildChangeImpact(args, root);
+  return {
+    status: "completed",
+    result: { kind: "change_impact", data: built.data },
+    ...(built.truncated ? { truncated: true } : {}),
+    ...(built.hint ? { hint: built.hint } : {}),
+  };
+}
+
 type OperationHandler = (args: Record<string, unknown>, root: string, sessionId: string) => Promise<RustResponse>;
 
 const operations: Record<string, OperationHandler> = {
@@ -2180,6 +2208,9 @@ const operations: Record<string, OperationHandler> = {
   ci_status: opCiStatus,
   ci_trigger: opCiTrigger,
   ci_logs: opCiLogs,
+  ci_wait: opCiWait,
+  dependency_graph: opDependencyGraph,
+  change_impact: opChangeImpact,
   secret: opSecret,
   github_connect: opGithubConnect,
 };
@@ -2228,6 +2259,18 @@ function describeExternalOp(operation: string, args: Record<string, unknown>): s
     case "ci_logs":
       summary = `GET /actions/logs repo=${repo} run=${String(args.run_id ?? "-")} job=${String(args.job_id ?? "-")}`;
       break;
+    case "ci_wait": {
+      const selector =
+        args.run_id !== undefined
+          ? `run=${String(args.run_id)}`
+          : args.ref !== undefined
+            ? `ref=${str("ref")}`
+            : args.pr !== undefined
+              ? `pr=${String(args.pr)}`
+              : `branch=${str("branch")}`;
+      summary = `WAIT ci repo=${repo} ${selector} until=${str("until") || "terminal"} timeout=${String(args.timeout_ms ?? 45000)}`;
+      break;
+    }
     case "secret": {
       const action = String(args.action ?? "").toLowerCase();
       const name = typeof args.name === "string" ? args.name : "";

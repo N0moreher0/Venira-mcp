@@ -22,7 +22,7 @@ export type GithubMock = {
   requests: MockRequest[];
   /** Authorization header seen by the blob (log download) server. */
   blobAuth: Array<string | null>;
-  state: { dispatches: number; comments: number; merges: number; branchDeletes: number; pullsCreated: number; inlineComments: number; lastInline: any; closes: number; reopens: number; retryOnce: number };
+  state: { dispatches: number; comments: number; merges: number; branchDeletes: number; pullsCreated: number; inlineComments: number; lastInline: any; closes: number; reopens: number; retryOnce: number; waitPolls: Record<number, number> };
   close: () => Promise<void>;
 };
 
@@ -112,6 +112,28 @@ const RUN = {
   run_attempt: 1,
 };
 
+/** ci_wait fixtures: 100 flips in_progress -> success, 101 never finishes. */
+const WAIT_RUNS: Record<number, Record<string, unknown>> = {
+  100: {
+    ...RUN,
+    id: 100,
+    run_number: 13,
+    status: "in_progress",
+    conclusion: null,
+    head_branch: "wait-branch",
+    html_url: "https://github.com/acme/demo/actions/runs/100",
+  },
+  101: {
+    ...RUN,
+    id: 101,
+    run_number: 14,
+    status: "in_progress",
+    conclusion: null,
+    head_branch: "stuck-branch",
+    html_url: "https://github.com/acme/demo/actions/runs/101",
+  },
+};
+
 const RUNS = [
   RUN,
   {
@@ -168,7 +190,7 @@ function listen(server: http.Server): Promise<string> {
 export async function startGithubMock(): Promise<GithubMock> {
   const requests: MockRequest[] = [];
   const blobAuth: Array<string | null> = [];
-  const state = { dispatches: 0, comments: 0, merges: 0, branchDeletes: 0, pullsCreated: 0, inlineComments: 0, lastInline: null as any, closes: 0, reopens: 0, retryOnce: 0 };
+  const state = { dispatches: 0, comments: 0, merges: 0, branchDeletes: 0, pullsCreated: 0, inlineComments: 0, lastInline: null as any, closes: 0, reopens: 0, retryOnce: 0, waitPolls: {} as Record<number, number> };
 
   let blobUrl = "";
 
@@ -377,6 +399,57 @@ export async function startGithubMock(): Promise<GithubMock> {
 
       if (path === `${base}/actions/runs/99` && req.method === "GET") return json(200, RUN);
 
+      // ci_wait: run 100 reaches success on the second status poll; 101 never ends.
+      if (path === `${base}/actions/runs/100` && req.method === "GET") {
+        const polls = (state.waitPolls[100] = (state.waitPolls[100] ?? 0) + 1);
+        if (polls >= 2) {
+          return json(200, { ...WAIT_RUNS[100], status: "completed", conclusion: "success", updated_at: "2026-10-29T02:06:00Z" });
+        }
+        return json(200, WAIT_RUNS[100]);
+      }
+
+      if (path === `${base}/actions/runs/100/jobs` && req.method === "GET") {
+        const done = (state.waitPolls[100] ?? 0) >= 2;
+        return json(200, {
+          total_count: 1,
+          jobs: [
+            {
+              id: 10,
+              name: "build",
+              status: done ? "completed" : "in_progress",
+              conclusion: done ? "success" : null,
+              started_at: "2026-10-29T02:05:00Z",
+              completed_at: done ? "2026-10-29T02:06:00Z" : null,
+              html_url: "https://github.com/acme/demo/runs/10",
+              runner_name: "ubuntu-latest",
+            },
+          ],
+        });
+      }
+
+      if (path === `${base}/actions/runs/101` && req.method === "GET") {
+        state.waitPolls[101] = (state.waitPolls[101] ?? 0) + 1;
+        return json(200, WAIT_RUNS[101]);
+      }
+
+      if (path === `${base}/actions/runs/101/jobs` && req.method === "GET") {
+        return json(200, {
+          total_count: 1,
+          jobs: [
+            {
+              id: 11,
+              name: "build",
+              status: "in_progress",
+              conclusion: null,
+              started_at: "2026-10-29T02:05:00Z",
+              completed_at: null,
+              html_url: "https://github.com/acme/demo/runs/11",
+              runner_name: "ubuntu-latest",
+            },
+          ],
+        });
+      }
+
       if (path === `${base}/actions/runs/99/jobs` && req.method === "GET") {
         return json(200, { total_count: JOBS.length, jobs: JOBS });
       }
@@ -388,6 +461,13 @@ export async function startGithubMock(): Promise<GithubMock> {
       }
 
       if (path === `${base}/actions/jobs/1/logs` && req.method === "GET") {
+        res.writeHead(302, { location: `${blobUrl}/job.log` });
+        res.end();
+        return;
+      }
+
+      // ci_wait failure tail fetches the failing job (test, id 2), not build.
+      if (path === `${base}/actions/jobs/2/logs` && req.method === "GET") {
         res.writeHead(302, { location: `${blobUrl}/job.log` });
         res.end();
         return;

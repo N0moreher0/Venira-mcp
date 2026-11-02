@@ -1,6 +1,6 @@
 # venira-mcp
 
-> Fast, workspace-scoped **MCP server for coding agents** (OpenCode, Claude Desktop, any MCP client). 41 tools by default, structured JSON envelopes, validated read caches, async shell, code-intelligence (outline/symbols/diff/references/selective search), fuzzy edit, SQLite recent-files index, **git-free checkpoints/rollback**, **audit reasons ("why")**, **pull requests + CI provider integrations**, **encrypted secrets with rotation metadata**, **deterministic error diagnosis + read planning**, and full SQLite audit trail — **pure Node, 1 native dependency (better-sqlite3), no GUI.**
+> Fast, workspace-scoped **MCP server for coding agents** (OpenCode, Claude Desktop, any MCP client). 44 tools by default, structured JSON envelopes, validated read caches, async shell, code-intelligence (outline/symbols/diff/references/selective search), **dependency graph + change impact**, fuzzy edit, SQLite recent-files index, **git-free checkpoints/rollback**, **audit reasons ("why")**, **pull requests + CI provider integrations (including bounded CI waiting)**, **encrypted secrets with rotation metadata**, **deterministic error diagnosis + read planning**, and full SQLite audit trail — **pure Node, 1 native dependency (better-sqlite3), no GUI.**
 
 **Setup in one line** (run it in the project you want to work on, then restart your client):
 
@@ -13,7 +13,7 @@ Prefer your agent to do it? Paste the prompt from [§2.2](#22-fastest-path-paste
 ```
 ┌──────────────┐   stdio (MCP)   ┌────────────────────────────────────────────┐
 │ MCP client    │ ◄──────────────► │  venira-mcp (Node, single process)        │
-│ (OpenCode,    │                  │  41 tools · read caches · async shell     │
+│ (OpenCode,    │                  │  44 tools · read caches · async shell     │
 │  Claude, ...) │                  │  SQLite audit (WAL) · p50/p95 metrics     │
 └──────────────┘                  └────────────────────────────────────────────┘
 ```
@@ -41,9 +41,13 @@ Prefer your agent to do it? Paste the prompt from [§2.2](#22-fastest-path-paste
   workspace (deduplicated) and restores captured files atomically per file — roll back a risky
   refactor in one call.
 - **Pull requests and CI in the same loop.** `project_pr_create` / `project_pr_comment` /
-  `project_pr_merge` and `project_ci_status` / `project_ci_trigger` / `project_ci_logs`
-  drive the configured GitHub, GitLab or Bitbucket provider APIs without shelling out to
-  `gh`.
+  `project_pr_merge` and `project_ci_status` / `project_ci_trigger` / `project_ci_logs` /
+  `project_ci_wait` drive the configured GitHub, GitLab or Bitbucket provider APIs without
+  shelling out to `gh`.
+- **Dependency graph and impact analysis.** `project_dependency_graph` builds a
+  deterministic TS/JS + Python import/symbol graph (JSON, DOT or Mermaid), and
+  `project_change_impact` answers "what breaks if I edit this?" with a bounded reverse
+  closure, confidence per hit and a separate `tests_affected` count.
 - **Secrets are kept out of normal tool metadata.** `project_secret` keeps tokens encrypted
   (AES-256-GCM) at rest and `secret_env` avoids putting them in command arguments; stored
   values are scrubbed from shell tails/audit text on a best-effort basis. Explicit reveal is
@@ -53,7 +57,7 @@ Prefer your agent to do it? Paste the prompt from [§2.2](#22-fastest-path-paste
 
 - [Quick start](#2-quick-start)
 - [MCP client configuration (JSON)](#3-mcp-client-configuration-json)
-- [Tools](#4-tools-41)
+- [Tools](#4-tools-44)
 - [Architecture](#5-architecture)
 - [Security model](#6-security-model)
 - [Benchmark](#7-benchmark)
@@ -376,7 +380,7 @@ client listed above.
 
 ---
 
-## 4. Tools (41)
+## 4. Tools (44)
 
 Every tool returns the standard envelope ([§8](#8-envelopes-hints--error-codes)):
 
@@ -424,6 +428,11 @@ Every tool returns the standard envelope ([§8](#8-envelopes-hints--error-codes)
 | `project_diff_files` | Unified (git-style) diff between two workspace files | LCS-based; `lines_added`/`lines_removed`; `context_lines` + `max_lines` caps; `truncated` flag |
 | `project_symbol_references` | Find every occurrence of a named symbol | `scope: "file"` (fast, single file) or `scope: "workspace"` (bounded content search); `limit`/`max_references` caps |
 | `project_selective_search` | Smart multi-query search: combine patterns with AND/NOT + fuzzy scoring | Bounded to a file set (`files_hint` or shallow listing); scored hits sorted by relevance; `limit` cap |
+| `project_dependency_graph` | Deterministic **dependency graph** for TypeScript/JavaScript + Python: relative imports, `require()`, dynamic `import()`, `extends`/`implements` and cross-file symbol references | `kind: files \| symbols \| both` (default `files`) · `format: json \| dot \| mermaid` (`data.graph` for the last two) · `relative_path` scopes the walk · `depth` 1–10 directory cap (default 3) · `languages`, `include_external`, `include_tests`, `max_nodes` (500), `max_edges` (2000). Parser-lite, no new dependencies: bounded walk (≤5,000 files / 64 MB), symlinks and protected paths (`.env*`, keys, `secrets.*` data files) skipped, 5 s index cache invalidated by writes/snapshot restore. Node ids are workspace-relative. |
+| `project_change_impact` | Answer "if I edit this, what depends on it?" with a bounded reverse (or forward) closure | Seeds: `files[]` and/or `symbols[]` (a name, or `{name, file}` when ambiguous) · `direction: dependents \| dependencies \| both` · `depth` 1–10 BFS hop cap (default 5) · `include_tests` (default 1) · `max_nodes`, `format: json \| mermaid`. Each affected file carries `distance`, `path`, `reason` and `confidence` (`exact`/`likely`/`possible`); `summary` adds `affected_symbols` and a separate `tests_affected`. Ambiguous bare names seed every declaring file, are reported in `unresolved[]`, and downgrade the closure to `possible`. |
+
+Dependency graph and impact analysis are **disabled in `VENIRA_PROFILE=core`** (they walk the whole
+workspace); `project_ci_wait` stays available because it is a provider call.
 
 ### 4.4 Write family (mutating)
 
@@ -486,6 +495,13 @@ project_pr_merge({ pr: 7, method: "squash", delete_branch: 1 })
 | `project_ci_status` | Read the latest runs for a branch/workflow, one run **with its jobs**, or branch-protection **check-runs** (GitHub) | `branch`, `workflow` (file name or id), `limit` ≤ 50 → workflow runs / pipelines; `run_id` → run + `jobs[]`; `ref` (sha/branch) or `pr` (resolved to the head sha) → `check_runs[]` (GitHub) or newest pipeline (GitLab/Bitbucket). Returns `overall` (`success \| failure \| in_progress \| no_runs \| no_checks`), `source` (`actions` \| `pipelines` \| `check-runs`), `provider`. |
 | `project_ci_trigger` | Dispatch a workflow / pipeline | `workflow` (GitHub: file name or id; GitLab/Bitbucket: optional label/pattern) · `ref` defaults to current branch → default branch · `inputs`/`variables` (string/number/boolean), `reason`. |
 | `project_ci_logs` | Read the tail of a run's or job's logs | `run_id` (GitHub: ZIP; GitLab/Bitbucket: up to 3 failing jobs/steps) or `job_id` (GitHub/GitLab: job id; Bitbucket: step UUID or `pipeline:step`) · `tail_lines` (default 500) · `max_bytes` (default 512 KB, cap 4 MB). Archive cap 32 MB, per-entry cap 4 MB, unsupported/encrypted entries reported in `entries[].skipped`. |
+| `project_ci_wait` | **Long-poll** one run/ref/PR/branch until it finishes or changes | Exactly one selector: `run_id`, `ref`, `pr` or `branch` (optionally narrow a branch with `workflow`) · `until: terminal \| any_change` (default `terminal`) · `timeout_ms` 1–110 s (default 45 s) · `interval_ms` 2–15 s (default 5 s) · `include_failure_tail` + `tail_lines` return the same bounded log tail as `project_ci_logs` on failure. Returns `overall`, `previous`, `changed`, `terminal`, `waited_ms`, `polls`, `run`, `selector`, `ci_status`, `failure_tail?`. Unqueued (other tools keep working) and refused before a socket opens when `VENIRA_NETWORK=0`. |
+
+`project_ci_wait` is a bounded **long-poll**, not a background watcher: MCP over stdio cannot push a
+notification that wakes the model. A `terminal: false` result means "nothing changed before the
+timeout" — call it again with the same selector (keep `timeout_ms` below your client's request
+timeout, which is usually ~60 s). On failure, `failure_tail.text` is ready to feed to
+`project_explain_error` without a second log fetch.
 
 Logs are never extracted to disk (no zip-slip) and never fully returned: the response is the tail plus `entries[]`, `lines`, `truncated`, `dropped_lines` and `dropped_bytes`. The download redirects to a pre-signed storage URL, and the token is dropped on that hop by design.
 
@@ -594,7 +610,9 @@ At connect time the server advertises an `instructions` block (MCP SDK ≥ 1.32)
 4. Directory tree → project_list_files (depth 1..3, limit ≤200). "What changed lately?" → project_recent_files
 5. Understand a file's structure → project_outline_symbol / project_file_symbols;
    find every usage → project_symbol_references; compare two files → project_diff_files;
-   rank many files by several keywords → project_selective_search
+   rank many files by several keywords → project_selective_search;
+   file/symbol dependency graph → project_dependency_graph;
+   "what breaks if I edit this?" → project_change_impact (direction=dependents)
 6. Write whole file → project_write_file; small precise change → project_edit_file
    (fuzzy match via VENIRA_EDIT_FUZZY=1); delete → project_delete_path (destructive, not undoable)
    — always pass `reason` ("why") so the audit trail explains intent later
@@ -608,13 +626,17 @@ At connect time the server advertises an `instructions` block (MCP SDK ≥ 1.32)
 10. Open a PR → project_pr_create; discuss it → project_pr_comment (path+line for an inline note);
     land it → project_pr_merge
 11. Pipeline state → project_ci_status (pr/ref for check-runs); re-run → project_ci_trigger;
-    failure detail → project_ci_logs (pass job_id to isolate the failing job)
+    failure detail → project_ci_logs (pass job_id to isolate the failing job);
+    wait for a result → project_ci_wait (bounded long-poll; on failure it returns the log tail)
 12. Something failed and the cause is unclear → project_explain_error (error_text / log_tail),
     then follow its first diagnosis + next_actions
 13. Starting an unfamiliar task → project_plan_read_batch(task_description, files_hint?),
     then run steps[0] (a ready read_batch) instead of guessing files
 14. Debug latency/errors → project_health; inspect the audit trail → project_read_audit
 ```
+
+`project_dependency_graph` and `project_change_impact` are not registered under
+`VENIRA_PROFILE=core`. `project_ci_wait` stays available there because it is a provider call.
 
 Every tool also carries machine-readable metadata in its description (`Use when:` / `Avoid when:` /
 `Speed:` / `Output:` / `Batch-safe:`) and a `_meta.venira` object with the same fields, so both
@@ -628,7 +650,7 @@ prompt-driven and tool-discovery-driven clients get the same signal.
 venira-mcp/
 ├── server.ts                 # MCP entry point: McpServer + StdioTransport, warm-up, shutdown
 ├── tools/
-│   └── project.ts            # 41 tool registrations by default, serial queue, caches, shell tracking,
+│   └── project.ts            # 44 tool registrations by default, serial queue, caches, shell tracking,
 │                             #   audit-DB inspection, project_health, code-intelligence,
 │                             #   diagnostics and read-planning handlers
 ├── lib/
@@ -1111,6 +1133,8 @@ The full history, in order — from the standalone rewrite to the provider, secr
 
 | Date | Version | Milestone |
 |---|---|---|
+| 2026-11-02 | **v1.9.0** | **Dependency graph + change impact + CI waiting.** `project_dependency_graph` builds a deterministic TS/JS + Python import/symbol graph (JSON, DOT or Mermaid; relative imports, `require()`, dynamic `import()`, `extends`/`implements`, cross-file references; bounded walk, protected paths skipped, 5 s cache invalidated by writes). `project_change_impact` answers "what breaks if I edit this?" with a bounded reverse/forward closure, per-hit `confidence`, `affected_symbols` and a separate `tests_affected` count; ambiguous bare symbol names downgrade to `possible` and are listed in `unresolved[]`. `project_ci_wait` long-polls one run/ref/PR/branch until terminal, `any_change` or `timeout_ms` (default 45 s, max 110 s), returning the failure log tail in the same call; it is unqueued and documented as a long-poll because MCP stdio cannot wake the model. **44 tools**, verify **367/367**. |
+| 2026-11-02 | **v1.8.2** | **Audit/secret hardening.** Audit rows are keyed (HMAC chain) so an in-place edit is detected, and secret ciphertext is bound to its name so a renamed entry cannot decrypt another entry's value. |
 | 2026-11-02 | **v1.8.1** | **Docs-only release.** README now opens with the one-line install and a copy/paste agent prompt, followed by a short quick start and a command cheat sheet; per-client config paths, raw JSON/TOML, developer and Docker installs moved behind it. No code changes. |
 | 2026-11-02 | **v1.8.0** | **One-command client setup + GitHub authorization.** `--install [auto|client]` merges Venira into detected MCP configs (`vscode`, `opencode`, `claude_desktop`, `cursor`, `codex`, `kimi`, `deepseek`, `antigravity`) and creates a missing file when a client is named; `--print-config [client]` prints ready-to-paste JSON/TOML without writing; generated configs use `npx --yes --package=venira-mcp@latest` and omit platform-specific shell/data-dir defaults. `project_github_connect` adds GitHub Device Flow and keeps access/refresh tokens in the encrypted per-user vault (never returned to the agent); `--setup-github` is the hidden-terminal PAT fallback. GitHub/GitLab credentials and private keys are scanned locally on provider requests/responses with fail-closed blocking/withholding; `npm run verify` covers `.env` read denial, `git push --no-verify` approval, secret-guard and OAuth regressions. |
 | 2026-11-01 | **v1.7.1** | **Security hotfix + shell UX.** Legacy audit schemas with required `created_at` now receive compatible writes; download-to-shell detection covers chained commands; container stop/remove and all `git push` operations require approval; approval documentation now matches the pending CLI/HMAC flow and per-user data directory; `project_shell_run.early_exit` can wait for completion and return bounded final output with `run_id`/`shell_id`. |

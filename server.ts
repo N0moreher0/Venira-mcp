@@ -25,21 +25,24 @@ Decision tree
 2. One file -> project_read_file; large file -> start_line/end_line or project_read_ranges; follow next_start_line.
 3. Find code -> project_search (kind=literal_content or definition), then project_read_ranges around hits.
 4. Directory tree -> project_list_files (depth 1..3, limit <=200). "What changed lately?" -> project_recent_files.
-5. Write whole file -> project_write_file; small precise change -> project_edit_file; delete -> project_delete_path (destructive, not undoable).
-6. Before a large/multi-file change chain -> project_snapshot action=create (paths default ["."]); if it goes wrong -> action=restore id=<id> (dry_run first if unsure). No git needed.
-7. Build/test/long command -> project_shell_run (returns run_id immediately), then poll project_shell_status with wait_seconds 5..30 until running=false; project_shell_cancel to stop.
-8. GitHub connection -> project_github_connect action=start, show the user the GitHub verification link/code, and poll only after they authorize. Never ask for a token in chat. Other tokens -> project_secret (action=set|get|list|delete); never paste a key into a command.
-9. Pull requests -> project_pr_create (open), project_pr_comment (thread reply, or an inline note with path + line), project_pr_merge (land, optionally delete the branch).
-10. CI -> project_ci_status (runs + jobs; pr/ref for branch-protection check-runs), project_ci_trigger (workflow_dispatch), project_ci_logs (tail of a run or one job).
-11. Something failed and the cause is unclear -> project_explain_error with error_text or log_tail; then apply the first diagnosis (it returns ready next_actions).
-12. Starting an unfamiliar task -> project_plan_read_batch(task_description, files_hint?) and run steps[0] (a ready read_batch) instead of guessing files.
-13. Debug latency/errors or check host/audit DB -> project_health.
-14. Unsure which tool exists -> use the Code Mode tool-discovery helper (findTools; named search in older builds), not a Venira tool.
+5. Code structure -> project_outline_symbol / project_file_symbols; usages of one symbol -> project_symbol_references; whole-file dependencies -> project_dependency_graph; "what breaks if I edit this?" -> project_change_impact (files=[...] or symbols=[...], direction=dependents).
+6. Write whole file -> project_write_file; small precise change -> project_edit_file; delete -> project_delete_path (destructive, not undoable).
+7. Before a large/multi-file change chain -> project_snapshot action=create (paths default ["."]); if it goes wrong -> action=restore id=<id> (dry_run first if unsure). No git needed.
+8. Build/test/long command -> project_shell_run (returns run_id immediately), then poll project_shell_status with wait_seconds 5..30 until running=false; project_shell_cancel to stop.
+9. GitHub connection -> project_github_connect action=start, show the user the GitHub verification link/code, and poll only after they authorize. Never ask for a token in chat. Other tokens -> project_secret (action=set|get|list|delete); never paste a key into a command.
+10. Pull requests -> project_pr_create (open), project_pr_comment (thread reply, or an inline note with path + line), project_pr_merge (land, optionally delete the branch).
+11. CI -> project_ci_status (runs + jobs; pr/ref for branch-protection check-runs), project_ci_trigger (workflow_dispatch), project_ci_logs (tail of a run or one job), project_ci_wait (bounded long-poll until terminal or any_change; on failure it returns the log tail).
+12. Something failed and the cause is unclear -> project_explain_error with error_text or log_tail; then apply the first diagnosis (it returns ready next_actions).
+13. Starting an unfamiliar task -> project_plan_read_batch(task_description, files_hint?) and run steps[0] (a ready read_batch) instead of guessing files.
+14. Debug latency/errors or check host/audit DB -> project_health.
+15. Unsure which tool exists -> use the Code Mode tool-discovery helper (findTools; named search in older builds), not a Venira tool.
 
 Rules
 - Prefer Venira for read-heavy/batch work; single tiny native operations are fine either way.
 - Paths are workspace-relative (absolute inside the workspace also works). Never invent @grant paths unless list_files returned them.
 - project_read_batch and project_list_files/search results are cached briefly; mutations invalidate caches automatically.
+- project_dependency_graph and project_change_impact are disabled in VENIRA_PROFILE=core. Their node ids are workspace-relative; change_impact reports tests separately as tests_affected, and ambiguous bare symbol names downgrade affected entries to confidence=possible (pass {name, file} to pin one).
+- project_ci_wait is a bounded long-poll, not a push notification (MCP stdio cannot wake the model): terminal=false means "nothing changed before the timeout", so call it again with the same selector; keep timeout_ms below the client request timeout (~60s). It is unqueued, so other tools keep working, and VENIRA_NETWORK=0 refuses it before a socket opens.
 - Always pass \`reason\` ("why", e.g. "fix null pointer at line 45") on write/edit/delete/create/snapshot/pr/ci: it is stored in the audit trail (redacted, single line, <=400 chars), so future sessions know the intent. Read it back with project_read_audit.
 - Checkpoints are content-addressed and deduplicated: repeating action=create after a small edit costs only the changed bytes; restore is sha256-verified per file and only rewrites captured paths (delete_extra is opt-in and capped at 500).
 - Secrets are encrypted at rest and never logged: project_secret get returns metadata (length + sha256 prefix, expires_at/days_left, last_used_at/use_count), values reach processes only via secret_env, and shell output/audit text is scrubbed of stored values. Expired secrets fail with secret_expired before a child starts.

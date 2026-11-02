@@ -37,6 +37,7 @@ import {
   activeDataDir,
 } from "../lib/workspace.js";
 import { addTrace, recentTraces, traceSnapshot } from "../lib/tracer.js";
+import { invalidateDependencyGraphCache } from "../lib/dependency-graph.js";
 import { auditKeyPath, verifyAuditRows } from "../lib/audit-hash.js";
 import { readHexKey } from "../lib/keyfile.js";
 import {
@@ -220,6 +221,7 @@ const EXTERNAL_OPS = new Set([
   "ci_status",
   "ci_trigger",
   "ci_logs",
+  "ci_wait",
   "secret",
   "github_connect",
 ]);
@@ -242,6 +244,27 @@ function prepare(operation: string, args: Args): Args {
     if (Array.isArray(out.paths)) {
       out.paths = (out.paths as unknown[]).map((entry) => toHostPath(String(entry)));
     }
+  } else if (operation === "change_impact") {
+    // Impact seeds: file paths and the optional `{name, file}` symbol form.
+    if (Array.isArray(out.files)) {
+      out.files = (out.files as unknown[]).map((entry) => toHostPath(String(entry)));
+    }
+    if (Array.isArray(out.symbols)) {
+      out.symbols = (out.symbols as unknown[]).map((entry) => {
+        if (typeof entry === "string") return entry;
+        if (entry && typeof entry === "object") {
+          const record = entry as Record<string, unknown>;
+          const rawFile =
+            typeof record.relative_path === "string"
+              ? record.relative_path
+              : typeof record.file === "string"
+                ? record.file
+                : undefined;
+          return rawFile === undefined ? record : { ...record, relative_path: toHostPath(rawFile) };
+        }
+        return entry;
+      });
+    }
   } else if (operation !== "shell_status" && operation !== "cancel") {
     out.relative_path = toHostPath(out.relative_path as string | undefined);
   }
@@ -258,12 +281,19 @@ function timeoutFor(operation: string, args: Args): number {
   if (operation === "snapshot_restore") return 120_000;
   // Network calls: GitHub can be slow, and log archives are bigger.
   if (operation === "ci_logs") return 90_000;
+  // A long poll gets its own budget so the transport does not time out first.
+  if (operation === "ci_wait") {
+    const wait = Number(args.timeout_ms ?? 45_000);
+    const bounded = Math.min(110_000, Math.max(1_000, Number.isFinite(wait) ? wait : 45_000));
+    return bounded + 10_000;
+  }
+  if (operation === "dependency_graph" || operation === "change_impact") return 60_000;
   if (EXTERNAL_OPS.has(operation)) return 60_000;
   return 30_000;
 }
 
-/** shell_status/cancel are not queued: a long poll must never block other tools. */
-const UNQUEUED = new Set(["shell_status", "cancel"]);
+/** shell_status/cancel/ci_wait are not queued: a long poll must never block other tools. */
+const UNQUEUED = new Set(["shell_status", "cancel", "ci_wait"]);
 
 async function executeOnce(operation: string, args: Args): Promise<unknown> {
   const cap = await capabilityReady();
@@ -667,10 +697,12 @@ async function executeCached(operation: string, args: Args): Promise<Execution> 
           /* an invalid path already returned an error; no cache to clean */
         }
         invalidateListCaches();
+        invalidateDependencyGraphCache();
       }
       if (operation === "snapshot_restore" || operation === "snapshot_delete") {
         invalidateAllCaches();
         recentEdits.clear();
+        invalidateDependencyGraphCache();
       }
       if (operation.startsWith("shell_") || operation === "cancel") {
         trackShell(operation, response.result?.data);
@@ -858,7 +890,14 @@ async function runOne(operation: string, args: Args, options?: { line_numbers?: 
     }
     const elapsedMs = performance.now() - started;
     recordMetric(operation, elapsedMs, true);
-    return toolResult(buildEnvelope(operation, result, { requestId, elapsedMs, cached }));
+    return toolResult(
+      buildEnvelope(operation, result, {
+        requestId,
+        elapsedMs,
+        cached,
+        ...(result?.hint ? { hint: result.hint } : {}),
+      }),
+    );
   } catch (error) {
     const elapsedMs = performance.now() - started;
     recordMetric(operation, elapsedMs, false);
@@ -1671,6 +1710,8 @@ function applyDisabledTools(server: McpServer): void {
       "project_symbol_references",
       "project_selective_search",
       "project_recent_files",
+      "project_dependency_graph",
+      "project_change_impact",
     );
   }
   if (disabled.length === 0) return;
@@ -3146,6 +3187,85 @@ export function registerProjectTools(server: McpServer): void {
     (args) => runSelectiveSearch(args as Args),
   );
 
+  server.registerTool(
+    "project_dependency_graph",
+    {
+      ...config(
+        "Build a deterministic file/symbol dependency graph for TypeScript/JavaScript and Python (relative imports, require(), dynamic import(), extends/implements, cross-file symbol references). Renders as JSON, DOT or Mermaid.",
+        "Dependency graph",
+        {
+          use_when:
+            "you need the import graph, a module map to render, or the files/symbols a change can reach before refactoring.",
+          avoid_when:
+            "you only need usages of one symbol in one file (project_symbol_references) or a text search (project_search).",
+          speed_profile:
+            "medium; bounded walk (<=5000 files / 64 MB), parser-lite line scan, 5 s index cache invalidated on writes. No network.",
+          output_kind:
+            "dependency_graph: nodes[] {id, type, language, loc}, edges[] {from, to, type (import|extends|implements|references), confidence, line, via}, external[] {id, used_by}, unresolved[], stats, truncated; format=dot|mermaid returns data.graph.",
+          batch_safe: true,
+        },
+        { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+      ),
+      inputSchema: {
+        kind: z.enum(["files", "symbols", "both"]).optional().describe("files (imports), symbols (references/extends), or both (default files)."),
+        format: z.enum(["json", "dot", "mermaid"]).optional().describe("Output format (default json). dot/mermaid return data.graph."),
+        relative_path: path_.optional().describe("Limit the walk to this subtree (default: the workspace root)."),
+        depth: z.number().int().min(1).max(10).optional().describe("Directory recursion cap (default 3, max 10)."),
+        include_external: flag01.optional().describe("1 aggregates npm/pip/node package nodes in external[]. Default 0."),
+        include_tests: flag01.optional().describe("1 includes test files/edges (default); 0 hides them."),
+        languages: z.array(z.string().max(20)).max(6).optional().describe('Language filter, e.g. ["ts","py"] (default: all supported).'),
+        max_nodes: z.number().int().min(1).max(2000).optional().describe("Max file nodes (default 500)."),
+        max_edges: z.number().int().min(1).max(5000).optional().describe("Max edges (default 2000)."),
+      },
+    },
+    (args) => runOne("dependency_graph", args as Args),
+  );
+
+  server.registerTool(
+    "project_change_impact",
+    {
+      ...config(
+        "Answer \"if I change these files/symbols, what depends on them?\" with a bounded reverse (or forward) closure: affected files, distance, path, reason and confidence, plus affected symbols and a separate test count.",
+        "Change impact",
+        {
+          use_when:
+            "before renaming/changing a function or file, to list the dependents you should read/test (direction=dependents), or the dependencies a module relies on.",
+          avoid_when:
+            "you need the whole graph (project_dependency_graph) or exact textual usages in one file (project_symbol_references).",
+          speed_profile:
+            "medium; reuses the dependency index (5 s cache, invalidated on writes), BFS bounded by depth. No network.",
+          output_kind:
+            "change_impact: seed {files, symbols}, affected[] {id, distance, path, reason, confidence, symbols?}, unresolved[], summary {affected_files, affected_symbols, max_distance, tests_affected}, truncated; format=mermaid returns data.graph.",
+          batch_safe: true,
+        },
+        { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+      ),
+      inputSchema: {
+        files: z.array(z.string().max(500)).max(32).optional().describe("Workspace paths you plan to edit."),
+        symbols: z
+          .array(
+            z.union([
+              z.string().max(200),
+              z.object({
+                name: z.string().max(200),
+                file: z.string().max(500).optional(),
+                relative_path: z.string().max(500).optional(),
+              }),
+            ]),
+          )
+          .max(32)
+          .optional()
+          .describe('Symbols you plan to rename/change; pass a name, or {name, file} when the name is ambiguous.'),
+        direction: z.enum(["dependents", "dependencies", "both"]).optional().describe("Traversal direction (default dependents)."),
+        depth: z.number().int().min(1).max(10).optional().describe("BFS hop cap (default 5)."),
+        include_tests: flag01.optional().describe("1 includes test files (default) and counts them in tests_affected."),
+        max_nodes: z.number().int().min(1).max(2000).optional().describe("Max affected files (default 300)."),
+        format: z.enum(["json", "mermaid"]).optional().describe("Output format (default json)."),
+      },
+    },
+    (args) => runOne("change_impact", args as Args),
+  );
+
   // -------------------------------------------------------------------------
   // P2.5: Self-install (detect harnesses + install venira MCP config)
   // -------------------------------------------------------------------------
@@ -3642,6 +3762,46 @@ export function registerProjectTools(server: McpServer): void {
       },
     },
     (args) => runOne("ci_logs", args as Args),
+  );
+
+  server.registerTool(
+    "project_ci_wait",
+    {
+      ...config(
+        "Long-poll one CI run/ref/PR/branch until it reaches a terminal state (success|failure|cancelled|skipped), changes (until=any_change), or timeout_ms elapses. On failure it includes the same bounded log tail as project_ci_logs. This does not wake the model: it is one bounded call, not a push notification.",
+        "Wait for CI",
+        {
+          use_when:
+            "after project_ci_trigger or a push you want the result plus the failure tail in one call instead of a polling loop.",
+          avoid_when:
+            "you want a snapshot right now (project_ci_status) or the full log of a specific job (project_ci_logs with job_id).",
+          speed_profile:
+            "blocks up to timeout_ms (default 45 s, max 110 s) with 2–15 s backoff polling; unqueued, so other tools keep working. Respects VENIRA_NETWORK=0.",
+          output_kind:
+            "ci_wait: overall, previous, changed, terminal, waited_ms, polls, run, selector, ci_status, failure_tail? {text, lines, truncated}; terminal=false means chain another call.",
+          batch_safe: false,
+        },
+        { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
+      ),
+      inputSchema: {
+        run_id: z
+          .union([z.number().int().positive(), z.string().max(80)])
+          .optional()
+          .describe("Wait on one run: GitHub/GitLab numeric id, or a Bitbucket pipeline UUID."),
+        ref: z.string().max(200).optional().describe("Commit sha or branch: wait on check-runs (GitHub) or the newest pipeline."),
+        pr: z.union([z.number().int().positive(), z.string().max(300)]).optional().describe("PR number or URL: wait on its head-sha check-runs."),
+        branch: z.string().max(200).optional().describe("Wait on the newest run/pipeline for this branch (optionally narrow with workflow)."),
+        workflow: z.string().max(200).optional().describe("Workflow file name (ci.yml) or numeric id; narrows a branch selector."),
+        until: z.enum(["terminal", "any_change"]).optional().describe("Stop at a terminal state (default) or on the first state change."),
+        timeout_ms: z.number().int().min(1000).max(110_000).optional().describe("Max wait in ms (default 45_000, max 110_000). Values > ~55 s need a client request timeout > 60 s."),
+        interval_ms: z.number().int().min(2000).max(15_000).optional().describe("Poll interval in ms (default 5000; min 2000, max 15000)."),
+        include_failure_tail: flag01.optional().describe("1 fetches the failing job/run log tail on failure (default); 0 skips it."),
+        tail_lines: z.number().int().min(1).max(1000).optional().describe("Failure tail lines (default 80)."),
+        repo: repoArg,
+        provider: providerArg,
+      },
+    },
+    (args) => runOne("ci_wait", args as Args),
   );
 
   // -------------------------------------------------------------------------
