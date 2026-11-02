@@ -49,7 +49,7 @@ out.first_ok = !(first.result as { isError?: boolean }).isError;
 
 const earlyExit = await call("project_shell_run", {
   command: "echo bench-early-exit",
-  early_exit: true,
+  early_exit: 1,
 });
 const earlyExitText = String(
   (earlyExit.result as { content?: { text?: string }[] })?.content?.[0]?.text ?? "{}",
@@ -91,7 +91,7 @@ out.list_bytes = String(
   (listRun.result as { content?: { text?: string }[] })?.content?.[0]?.text ?? "{}",
 ).length;
 
-const health = await call("project_health", { include_audit: false });
+const health = await call("project_health", { include_audit: 0 });
 out.health = health.ms.toFixed(1);
 out.health_bytes = String(
   (health.result as { content?: { text?: string }[] })?.content?.[0]?.text ?? "{}",

@@ -4,6 +4,7 @@
  */
 import path from "node:path";
 import fs from "node:fs";
+import { envFlag } from "./env.js";
 export const PLATFORM = process.platform;
 
 export const WORKSPACE = path.resolve(process.env.VENIRA_WORKSPACE ?? process.cwd());
@@ -55,14 +56,10 @@ export function defaultDataDir(): string {
 }
 
 /** VENIRA_UNRESTRICTED=1: disable workspace lock, allow any absolute path (relative paths still resolve from WORKSPACE). */
-export const UNRESTRICTED = ["1", "true", "on", "yes"].includes(
-  (process.env.VENIRA_UNRESTRICTED ?? "").toLowerCase(),
-);
+export const UNRESTRICTED = envFlag("VENIRA_UNRESTRICTED", false);
 
 /** VENIRA_ALLOW_JS_EXEC must be explicitly enabled (default off in v1.7.0). */
-export const ALLOW_JS_EXEC = ["1", "true", "on", "yes"].includes(
-  (process.env.VENIRA_ALLOW_JS_EXEC ?? "").toLowerCase(),
-);
+export const ALLOW_JS_EXEC = envFlag("VENIRA_ALLOW_JS_EXEC", false);
 
 export const PROTECTED_BASENAMES = new Set([
   "approval.key",
@@ -165,12 +162,9 @@ export function resolveWithin(root: string, input: string | undefined): string {
 // ---------------------------------------------------------------------------
 // P1: cache control (VENIRA_CACHE_ALL / VENIRA_CACHE_LIST_ONLY / VENIRA_CACHE_SEARCH_ONLY)
 // ---------------------------------------------------------------------------
-const envFlag = (name: string): boolean =>
-  !["0", "false", "off", "no"].includes((process.env[name] ?? "").toLowerCase());
-
 /** VENIRA_CACHE_ALL=0 disables every read/list/search/recent cache (strict "always fresh" mode). */
-export const CACHE_ALL_ENABLED = envFlag("VENIRA_CACHE_ALL");
+export const CACHE_ALL_ENABLED = envFlag("VENIRA_CACHE_ALL", true);
 /** VENIRA_CACHE_LIST_ONLY=0 disables only the list_files TTL cache. */
-export const CACHE_LIST_ONLY_ENABLED = envFlag("VENIRA_CACHE_LIST_ONLY");
+export const CACHE_LIST_ONLY_ENABLED = envFlag("VENIRA_CACHE_LIST_ONLY", true);
 /** VENIRA_CACHE_SEARCH_ONLY=0 disables only the search TTL cache. */
-export const CACHE_SEARCH_ONLY_ENABLED = envFlag("VENIRA_CACHE_SEARCH_ONLY");
+export const CACHE_SEARCH_ONLY_ENABLED = envFlag("VENIRA_CACHE_SEARCH_ONLY", true);

@@ -22,7 +22,7 @@
   detects normal external edits or deletes; it is not a filesystem transaction or watcher.
 - **Async shell.** `project_shell_run` returns `run_id`/`shell_id` immediately by default;
   poll with `project_shell_status` (5–30 s observation window, deliberately non-queued).
-  Set `early_exit: true` when the agent needs the bounded final `stdout`/`stderr` in the
+  Set `early_exit: 1` when the agent needs the bounded final `stdout`/`stderr` in the
   same call; leave it false for non-blocking workflows.
 - **Full observability.** `project_health` reports capability state, queue depth, cache
   hit-rates, active shells, and p50/p95/max per operation.
@@ -206,16 +206,16 @@ Or point at a local build (after `git clone` + `npm install` + `npm run build`):
         "VENIRA_UNRESTRICTED": "0",
         // Default shell for project_shell_run: "powershell" | "cmd" | "bash"
         "VENIRA_DEFAULT_SHELL": "powershell",
-        // Shell policy: balanced | strict | permissive | off
+        // Shell policy: balanced | strict | permissive
         "VENIRA_SHELL_MODE": "balanced",
         // Tool permission mode: manual | best_effort | allow_all
         "VENIRA_PERMISSION_MODE": "allow_all",
-        // "full" | "compact" | "summary" (default "full")
+        // "full" | "compact" (default "full")
         "VENIRA_OUTPUT_MODE": "full",
         // Set to "1" for pretty-printed JSON in tool results (costs bytes; leave off for agents).
         "VENIRA_PRETTY": "0",
-        // Enable optional JS execution tool (default "1"). Set "0" to disable.
-        "VENIRA_ALLOW_JS_EXEC": "1",
+        // Enable optional JS execution tool only in trusted workspaces.
+        "VENIRA_ALLOW_JS_EXEC": "0",
         // Set to "1" for fast audit DB mode.
         "VENIRA_AUDIT_FAST": "1",
         // Read cache budget in bytes (default 64 MiB).
@@ -275,9 +275,10 @@ Or point at a local build (after `git clone` + `npm install` + `npm run build`):
 | `VENIRA_UNRESTRICTED` | `"0"` | `"1"` disables workspace locking (absolute paths anywhere work). **Do not set in production.** |
 | `VENIRA_SECRET_KEYCHAIN` | `"auto"` | On Windows, `"auto"` uses the optional Windows Credential Manager (`keytar`) for new secret-store keys when available; `"off"` forces `secrets.key`; `"required"` fails closed if Credential Manager is unavailable. Existing file-backed stores remain compatible. |
 | `VENIRA_DEFAULT_SHELL` | platform default | `powershell` / `cmd` / `bash` used when `project_shell_run` receives no `shell` argument. |
-| `VENIRA_PERMISSION_MODE` | `"allow_all"` (MCP standalone) | `"manual"` / `"best_effort"` / `"allow_all"` permission mode for coding tool calls. HMAC approval tokens/session grants are scoped to the running process and do not survive a restart. |
+| `VENIRA_PERMISSION_MODE` | `"allow_all"` (MCP standalone) | `"manual"` / `"best_effort"` / `"allow_all"` permission mode for coding tool calls; this is separate from shell policy and does not grant shell overrides. HMAC approval tokens/session grants are scoped to the running process and do not survive a restart. |
 | `VENIRA_ALLOW_JS_EXEC` | `"0"` | `"1"` enables optional `project_execute_js`. Note: `project_execute_js` runs outside shell policy and the workspace lock; review code before enabling. Default off starting v1.7.0. |
-| `VENIRA_SHELL_MODE` | `balanced` | Shell policy mode: `balanced` (deny catastrophes, ask on high risk, allow the rest) · `strict` (allow list + approval for everything else) · `permissive` (only hard denials) · `off` (no policy at all). |
+| `VENIRA_SHELL_MODE` | `balanced` | `balanced` asks on high risk · `strict` uses an allowlist and asks otherwise · `permissive` skips ordinary ask rules. Hard-deny and protected-file rules stay active in every mode; Git history rewrites still ask unless the operator-enabled `ALLOW_GIT_PUSH` override is passed, and `.env` reads need the narrow `ALLOW_ENV_READ` override. Only these three values are accepted. |
+| `VENIRA_SHELL_OVERRIDES` | unset | Operator allowlist for named exceptions: `ALLOW_GIT_PUSH`, `ALLOW_ENV_READ`. Each call must also pass the exact `override` name and a non-empty `reason`; no wildcard/global bypass exists. |
 | `VENIRA_SHELL_POLICY_FILE` | unset | **Explicit** path to a JSON policy (`{ mode, allow[], ask[], deny[] }`). Never read from the workspace, so a cloned repo cannot ship its own permissive policy. |
 | `VENIRA_SHELL_APPROVAL_TTL_MS` | `600000` (10 min) | Lifetime of approval tokens and session grants. |
 | `VENIRA_SHELL_ELICIT` | `"0"` | `"1"` = ask the user through MCP elicitation (when the client supports it) instead of only returning `approval_required`. |
@@ -286,7 +287,7 @@ Or point at a local build (after `git clone` + `npm install` + `npm run build`):
 | `VENIRA_SHELL_ENV_PASS_ALL` | `"0"` | `"1"` passes the full parent environment to the child. Default: allow list only, so agent secrets never reach a command. |
 | `VENIRA_SHELL_ENV_ALLOW` | unset | Extra comma-separated env var names to pass through (e.g. `GITHUB_TOKEN`). |
 | `VENIRA_DISABLE_TOOLS` | unset | Comma-separated tool names to keep out of `tools/list` entirely (e.g. `project_shell_run,project_delete_path`). |
-| `VENIRA_OUTPUT_MODE` | `full` | `full` = complete payloads · `compact` = summary when >8 KB · `summary` = always trimmed previews. |
+| `VENIRA_OUTPUT_MODE` | `full` | `full` = complete payloads · `compact` = trim payloads over 8 KB. `summary` is no longer accepted. |
 | `VENIRA_PRETTY` | `"0"` | `"1"` = 2-space pretty JSON in tool results. |
 | `VENIRA_SESSION_ID` | auto (`opencode-<pid>-<rand>`) | Session tag; audit rows are grouped by it. Useful for verification / parallel test runs. |
 | `VENIRA_READ_CACHE_BYTES` | `67108864` (64 MiB) | Budget for read + info caches. |
@@ -294,7 +295,6 @@ Or point at a local build (after `git clone` + `npm install` + `npm run build`):
 | `VENIRA_SEARCH_CACHE_MS` | `3000` | TTL for search result cache. |
 | `VENIRA_RECENT_CACHE_MS` | `2000` | TTL for recent-files cache. |
 | `VENIRA_BATCH_ITEM_BYTES` | `524288` (512 KB) | Per-item cap inside `project_read_batch`. |
-| `VENIRA_DEBUG_STARTUP` | `"0"` | `"1"` = startup errors go to stderr instead of the protocol-safe stdout event. |
 | `VENIRA_CACHE_ALL` | `"1"` (on) | P1: `"0"` disables **every** read-side cache (strict "always fresh" mode). |
 | `VENIRA_CACHE_LIST_ONLY` | `"1"` (on) | P1: `"0"` disables only the `list_files` TTL cache. |
 | `VENIRA_CACHE_SEARCH_ONLY` | `"1"` (on) | P1: `"0"` disables only the `search` TTL cache. |
@@ -362,7 +362,7 @@ Every tool returns the standard envelope ([§8](#8-envelopes-hints--error-codes)
 | `project_search` | Search by file name, dir name, literal content, regex, or symbol definition | TTL cache 3 s; respects `glob`, `exclude_glob`, `context_lines`, `count_only` |
 | `project_recent_files` | Files modified recently (SQLite index first, bounded scan fallback) | `source: "index" | "fallback_scan"`; includes `session_edits` — files you wrote in this session |
 | `project_read_batch` | Run up to **8 read-only ops in one call** (`list_files`, `read_file`, `get_file_info`, `search`) | Sequential + cached; response budget enforced per item |
-| `project_health` | Server diagnostics: capability, queue, cache/trace/shell config, active shells, p50/p95 per op, audit DB stats | `include_audit=false` skips the DB query (~2 ms) |
+| `project_health` | Server diagnostics: capability, queue, cache/trace/shell config, active shells, p50/p95 per op, audit DB stats | `include_audit=0` skips the DB query (~2 ms) |
 | `project_read_audit` | Read recent rows from the SQLite audit log (filter by session/operation/outcome) | Bounded; `audit_unavailable` fallback if the DB is locked |
 | `project_trace_status` | Show the most recent traced tool calls + trace config | In-memory ring buffer, no file read |
 
@@ -391,19 +391,19 @@ Every tool returns the standard envelope ([§8](#8-envelopes-hints--error-codes)
 | `project_edit_batch` | Apply multiple `project_edit_file` operations atomically | Stops at the first failure; restores the pre-batch snapshot when possible; response reports `executed`/`skipped` indexes and rollback status |
 | `project_create_directory` | Create a directory tree | `create_parents` defaults to `true`; optional `reason` |
 | `project_create` | Create a **file or directory in one call** | `kind: "file"` requires `content`; `kind: "directory"` ignores `content`; optional `reason` |
-| `project_delete_path` | Delete a file or directory tree | `recursive: true` for directories. **Not undoable.** Optional `reason` |
+| `project_delete_path` | Delete a file or directory tree | `recursive: 1` for directories. **Not undoable.** Optional `reason` |
 
 ### 4.5 Checkpoints (snapshot + rollback, no git)
 
 | Tool | Purpose | Notes |
 |---|---|---|
-| `project_snapshot` | Save the current state before a large edit chain; roll back in one call | `action: "create"` (paths default `["."]`) → `id`; `action: "list"`; `action: "restore"` (`id`, optional `dry_run`, `verify=true`, `delete_extra=false`, `paths[]` filter); `action: "delete"` (`id`) |
+| `project_snapshot` | Save the current state before a large edit chain; roll back in one call | `action: "create"` (paths default `["."]`) → `id`; `action: "list"`; `action: "restore"` (`id`, optional `dry_run=1`, `verify=1`, `delete_extra=0`, `paths[]` filter); `action: "delete"` (`id`) |
 
 Content-addressed and deduplicated: blobs live under `snapshots/blobs/<ab>/<sha256>`, manifests
 (`.json.gz`) under `snapshots/index/<id>.json.gz` in `VENIRA_DATA_DIR` (default: the per-user OS data dir).
 A second checkpoint after a small edit only stores the changed bytes. Restore is atomic per file
 (temp + rename), concurrency 4, sha256-verified by default, and only rewrites paths that were
-captured (it never touches anything else unless `delete_extra=true`, which is capped at 500 files).
+captured (it never touches anything else unless `delete_extra=1`, which is capped at 500 files).
 `.git`, `node_modules`, `dist`, `build`, `.next`, virtualenvs, `__pycache__`, the checkpoint store,
 the audit DB, and the secret store (`secrets.json` / `secrets.key`) are skipped by default; symlinks
 are never followed (and a restore refuses a
@@ -415,7 +415,7 @@ restores into the workspace it was created from; old checkpoints are pruned
 // create  → { id: "snap-20261029-090309-cce15f", file_count: 42, total_bytes: 3312, new_blob_bytes: 3312 }
 project_snapshot({ action: "create", paths: ["src"], label: "before auth refactor", reason: "try a risky refactor" })
 // ...edits...
-project_snapshot({ action: "restore", id: "snap-…", dry_run: true })   // inspect first
+project_snapshot({ action: "restore", id: "snap-…", dry_run: 1 })   // inspect first
 project_snapshot({ action: "restore", id: "snap-…" })                  // roll back
 ```
 
@@ -435,7 +435,7 @@ The provider, API base, token and limits are resolved per call from **call args 
 ```jsonc
 project_pr_create({ title: "Add provider tools", head: "feature/x", reason: "open PR for review" })
 // → { repo: "acme/demo", provider: "github", number: 7, url: "https://github.com/acme/demo/pull/7", state: "open", created: true }
-project_pr_merge({ pr: 7, method: "squash", delete_branch: true })
+project_pr_merge({ pr: 7, method: "squash", delete_branch: 1 })
 ```### 4.7 CI provider: GitHub Actions, GitLab Pipelines, Bitbucket Pipelines
 
 | Tool | Purpose | Notes |
@@ -454,7 +454,7 @@ project_ci_logs({ run_id: 77, tail_lines: 50 })   // or { job_id: 2 } / { run_id
 
 | Tool | Purpose | Notes |
 |---|---|---|
-| `project_secret` | Store / inspect / remove credentials by env-var name, with rotation metadata | `action: "set"` (`value` or **`value_env`** to read it from the host env; optional `expires_in_days` or `expires_at`) · `"get"` (metadata only: `length`, `sha256_12`, `updated_at`, `expires_at`, `expired`, `days_left`, `last_used_at`, `use_count`, `rotated_at`) · `"list"` (same metadata per name) · `"delete"`. `reveal: true` returns plaintext **only** when the host sets `VENIRA_SECRET_ALLOW_REVEAL=1`. |
+| `project_secret` | Store / inspect / remove credentials by env-var name, with rotation metadata | `action: "set"` (`value` or **`value_env`** to read it from the host env; optional `expires_in_days` or `expires_at`) · `"get"` (metadata only: `length`, `sha256_12`, `updated_at`, `expires_at`, `expired`, `days_left`, `last_used_at`, `use_count`, `rotated_at`) · `"list"` (same metadata per name) · `"delete"`. `reveal: 1` returns plaintext **only** when the host sets `VENIRA_SECRET_ALLOW_REVEAL=1`. |
 | `project_github_connect` | Connect or replace the local GitHub account without sending a token through chat | `action: "start"` returns GitHub verification URL/code · `action: "poll"` completes authorization using the opaque `pending_id`; access/refresh tokens are stored in the encrypted local vault and never returned. Uses OAuth `repo offline_access` scopes. |
 
 Rotation is tracked automatically: every successful injection (or provider token read) bumps
@@ -491,7 +491,7 @@ project_shell_run({ command: "npm publish --dry-run", shell: "bash", secret_env:
 | Tool | Purpose | Notes |
 |---|---|---|
 | `project_explain_error` | Turn a failure into a cause + next tool calls | Feed `error_text` or `log_tail` (e.g. the tail from `project_ci_logs` / `project_shell_status`). Matches a rule table (POSIX errno, TypeScript/Python/pytest, git, npm, GitHub, venira codes) and returns `matched`, `summary`, `error_line`, `language`, `diagnoses[]` (`rule_id`, `likely_cause`, `suggested_fix[]`, `retry_hint`, `next_actions[]`) and a deduped `next_actions[]`. Unknown signatures return `matched: false` with a triage note — never an error. |
-| `project_plan_read_batch` | Plan which files to read for a task, in one call | `task_description` (one line) → keywords (quoted terms, identifiers, words) → up to 3 bounded **content + file-name** searches → candidates ranked by hits, path/name match and prose weight (+ `files_hint`, + recent edits when the search is thin) → `steps[]` with a **ready-to-send** `project_read_batch` call, calibrated `estimated_ms`. Build/vendor dirs, lockfiles and DB/log/binary artifacts are excluded; README/docs/`*.md` are demoted unless the task mentions docs. `max_files` ≤ 8, `include_search: false` to plan from hints only. |
+| `project_plan_read_batch` | Plan which files to read for a task, in one call | `task_description` (one line) → keywords (quoted terms, identifiers, words) → up to 3 bounded **content + file-name** searches → candidates ranked by hits, path/name match and prose weight (+ `files_hint`, + recent edits when the search is thin) → `steps[]` with a **ready-to-send** `project_read_batch` call, calibrated `estimated_ms`. Build/vendor dirs, lockfiles and DB/log/binary artifacts are excluded; README/docs/`*.md` are demoted unless the task mentions docs. `max_files` ≤ 8, `include_search: 0` to plan from hints only. |
 
 Both are pure local logic: no network, no model, no file contents in the response (the plan points
 at files; you decide which step to run). They exist to cut the "guess → read → repeat" loop that
@@ -511,7 +511,7 @@ project_plan_read_batch({ task_description: "add retry handling to the GitHub cl
 
 | Tool | Purpose | Notes |
 |---|---|---|
-| `project_shell_run` | Start a shell command; returns `run_id`/`shell_id` immediately by default | `shell`: `powershell` / `cmd` / `bash` · `relative_cwd` · `early_exit: true` waits for completion and returns bounded full `stdout`/`stderr` in the same call; `false` (default) remains non-blocking and returns tails for polling · `timeout_ms` (kills the **process tree** under hard timeout policy) · `secret_env: ["NAME"]` (inject stored secrets as env vars only after explicit human approval; raw values are not added to command/audit text, output scrubbing is best-effort) · Node script executions also require approval because the policy cannot inspect their effects · `approval_id` for the default human approval flow; `approval_token` + `approval_scope` are legacy compatibility. All captured streams remain capped at 1 MiB each. |
+| `project_shell_run` | Start a shell command; returns `run_id`/`shell_id` immediately by default | `shell`: `powershell` / `cmd` / `bash` · `relative_cwd` · `early_exit: 1` waits for completion and returns bounded full `stdout`/`stderr` in the same call; `0` (default) remains non-blocking and returns tails for polling · `timeout_ms` (kills the **process tree** under hard timeout policy) · `secret_env: ["NAME"]` (inject stored secrets as env vars only after explicit human approval; raw values are not added to command/audit text, output scrubbing is best-effort) · Node script executions also require approval because the policy cannot inspect their effects · `approval_id` for the default human approval flow; `approval_token` + `approval_scope` are legacy compatibility. All captured streams remain capped at 1 MiB each. |
 | `project_shell_status` | Poll a running command | `wait_seconds` 0–30 is an *observation window*, not a timeout. Deliberately **not queued** behind other calls, not audit-logged (prevents orphan "running" rows). Reports `timed_out`, `dropped_bytes` and the policy decision. |
 | `project_shell_cancel` | Kill a running command by `run_id` | Kills the whole tree (`taskkill /T` on Windows, process group on POSIX). Also used at MCP shutdown to avoid orphan processes. |
 | `project_shell_cancel_session` | Cancel **all** shell runs tracked in this session | P1; kills every process tree in the session at once. |
@@ -658,14 +658,14 @@ This project is intentionally **conservative by default**:
 | **Workspace lock** | ON | `lib/workspace.ts` resolves every path against `VENIRA_WORKSPACE` (or `process.cwd()`). A path that escapes (`../..`, absolute outside root) throws `path_escape`. |
 | **Unrestricted mode** | OFF | `VENIRA_UNRESTRICTED=1` disables the lock (use only when you fully understand the consequences — the agent can read/write anywhere on the machine). |
 | **Shell cwd** | workspace | `project_shell_run` with no `relative_cwd` runs in the workspace root; the command itself is still whatever the agent passes. |
-| **Shell policy** | `balanced` | Hard-coded catastrophes and protected credential paths (including redirects and matching globs) are denied; risky operations (writes outside workspace, network fetches, package mutation, every Git push even with global options or `--no-verify`…) require human approval. `VENIRA_SHELL_MODE` can be (`strict` / `permissive` / `off`) to adjust granularity. Conversation can mark a command known-safe (allow-list) after guidance (the UI does not show raw commands). |
+| **Shell policy** | `balanced` | Hard-coded catastrophes and protected credential paths (including redirects and matching globs) are denied; risky operations (writes outside workspace, network fetches, package mutation, Git history rewrites…) require approval. `permissive` skips ordinary ask rules but Git history rewrites still require explicit approval or `ALLOW_GIT_PUSH`. |
 | **Audit** | ON | Auditable operations (including failures, shell runs and cancellations) are written to `project_tool_audit` in a SQLite WAL database when the database is available; audit failures are surfaced. Long-poll observation calls such as `project_shell_status` are intentionally not audit rows. |
 | **`sensitive_result`** | — | The envelope carries `retryable: false` and a "do not retry" hint when content is withheld by policy. |
 | **`expected_sha256`** | opt-in | `project_write_file` / `project_edit_file` / `project_create` accept a content hash; a mismatch aborts with `conflict` — protects against blind overwrites when the agent re-applies an old edit. |
 | **Destructive ops** | labelled | Every mutating tool advertises `destructiveHint: true` in its MCP annotations; `project_delete_path` additionally documents that it is not undoable. |
 | **Network (provider APIs)** | opt-in per call, kill switch | Built-in `project_pr_*` / `project_ci_*` calls are governed by `VENIRA_NETWORK=0` and require an HTTPS API base (HTTP is allowed for localhost/tests). Shell commands are separate and may access the network when shell policy allows them. |
 | **Token transport** | header only | The configured provider token travels as an `Authorization` header, never in a command string or a URL. On a cross-origin pre-signed log-download redirect it is **dropped** because the origin changed. |
-| **Secrets at rest** | AES-256-GCM | Values are encrypted in `secrets.json`; new Windows installs use the optional Windows Credential Manager backend (`keytar`) when available, while existing/unsupported installs use `secrets.key` (`0600`, atomic). `get`/`list` return metadata only unless `VENIRA_SECRET_ALLOW_REVEAL=1` *and* `reveal=true` are both set. |
+| **Secrets at rest** | AES-256-GCM | Values are encrypted in `secrets.json`; new Windows installs use the optional Windows Credential Manager backend (`keytar`) when available, while existing/unsupported installs use `secrets.key` (`0600`, atomic). `get`/`list` return metadata only unless `VENIRA_SECRET_ALLOW_REVEAL=1` *and* `reveal=1` are both set. |
 | **Git provider DLP** | fail closed | PR/CI request arguments and final HTTP payloads are scanned locally with Secretlint's recommended rules (including GitHub/GitLab tokens and private keys); known vault and sensitive environment values are also checked. Detected requests are cancelled before sending, provider output with a detected credential is withheld from the AI, and scanner failure blocks the request. A response-side block may follow a completed mutation; do not retry it blindly. |
 | **Secret leakage** | redacted | Stored values (≥ 8 chars) are scrubbed from shell tails and from the audit `command`/`reason` columns; external ops log a summary (`PUT /pulls/7/merge repo=… method=squash`) instead of the body. Checkpoints and `delete_extra` skip the secret store. |
 
@@ -686,8 +686,7 @@ still enabling useful workflows:
 |---|---|---|
 | `balanced` (default) | Never runs a command whose rule is `deny`. Commands matching **ask rules** (writes outside workspace, network access, package mutations, container controls, all `git push` operations, etc.) return `approval_required` with a human-approved grant. All other commands run. | General interaction with the workspace. |
 | `strict` | Only commands on the **allow‑list** run without approval. Everything else requires approval. Allows a safe environment when you know exactly what tools an agent can invoke. | High‑value or public workspaces where you want to whitelist allowed tools. |
-| `permissive` | Only the hard-coded `deny` rules block execution. All other commands run immediately. *Caution:* this removes the ask protection. | Internal debugging or trusted agents with strict code review. |
-| `off` | No policy at all. Every shell command runs exactly as written. | Development workspaces where you control the sandbox manually. |
+| `permissive` | Skips ordinary ask rules. Hard-deny and protected-file rules still block commands; Git history rewrites still ask unless the named `ALLOW_GIT_PUSH` override is explicitly enabled and passed. *Caution:* this removes other approval prompts. | Internal debugging or trusted agents with strict code review. |
 
 The exact list of ask / deny rules is documented in `lib/shell-policy.ts` and can be overridden by a JSON file at **`VENIRA_SHELL_POLICY_FILE`**:
 ```jsonc
@@ -698,6 +697,10 @@ The exact list of ask / deny rules is documented in `lib/shell-policy.ts` and ca
   "deny": [{ "command": "sh", "args_regex": ".*\\|.*\\s+curl.*" }]
 }
 ```
+
+`ALLOW_GIT_PUSH` can be enabled by the operator in `VENIRA_SHELL_OVERRIDES` and then passed on a single `git push` call with a non-empty `reason`. `ALLOW_ENV_READ` permits only one simple read of an in-workspace `.env`/`.env.*` file. Both are recorded in the SQLite audit log; neither can be activated by the agent alone. Protected stores, private keys, writes, pipes, redirects, command chains, and hard-deny rules remain blocked.
+
+All Venira boolean environment flags and MCP tool boolean arguments use numeric `0`/`1` only. Legacy spellings such as `true`, `false`, `yes`, or `on` are rejected. Tool arguments are JSON numbers (`1`/`0`), not strings. `project_ci_trigger.inputs` remains provider data and may contain JSON booleans. Existing clients using boolean tool arguments must migrate before upgrading.
 The policy is **never read from the workspace** itself (a cloned repo cannot ship a permissive config).
 
 Approval flow (what the UI sees)
@@ -763,7 +766,7 @@ These are the only two surfaces that leave the workspace, so they are deliberate
    `value_env` so the value comes from the host environment and never appears in a tool call.
 2. `get` / `list` return **metadata only** — name, byte length, `sha256_12`, `updated_at` — enough
    for an agent to confirm a credential exists without putting it in the transcript.
-3. Plaintext is returned only when the caller passes `reveal=true` **and** the host sets
+3. Plaintext is returned only when the caller passes `reveal=1` **and** the host sets
    `VENIRA_SECRET_ALLOW_REVEAL=1`; otherwise it fails with `reveal_denied`.
 4. `project_shell_run secret_env: ["NAME"]` always requires human approval, then decrypts and adds
    the value to the child's environment. Direct occurrences in command/audit text and captured
@@ -932,7 +935,7 @@ etc. The model is expected to read `hint` first.
   falls back to a bounded scan capped at 4 000 files / 300 directories, skipping
   `node_modules`, `target`, `dist`, `.git`, etc.
 - **Shell output is bounded.** The default async response returns bounded stdout/stderr tails,
-  not a live stream. With `early_exit: true`, the completed response also includes bounded
+  not a live stream. With `early_exit: 1`, the completed response also includes bounded
   `stdout`/`stderr`; long outputs are still capped by design.
 - **One workspace per server instance.** The workspace, data dir, and permission mode are
   fixed at process start. To serve multiple workspaces concurrently, run multiple instances.
@@ -979,8 +982,8 @@ etc. The model is expected to read `hint` first.
 - **Metrics are ring buffers, not histograms.** `lib/metrics.ts` keeps the last 256
   samples per operation (p50/p95/max/avg). Deliberately tiny: the goal is "what happened
   this session", not "90-day SLO tracking".
-- **Output modes are cheap.** `summary` mode replaces payloads with 8 KB previews + a
-  `summary` object; `compact` only adds a `summary` when the payload exceeds 8 KB. The
+- **Output modes are cheap.** `compact` replaces payloads over 8 KB with previews and a
+  `summary` object. The
   model can request full data back via a follow-up call when it truly needs it.
 - **Shutdown is defensive.** On `SIGINT`/`SIGTERM`/stdin close the server cancels all
   running shells, closes the scope, and marks the audit DB cleanly — no orphans, no stuck WAL.
@@ -1175,7 +1178,7 @@ existing artifact/lockfile rules.
   (`tail_lines` default 500, `max_bytes` default 512 KB / cap 4 MB). Nothing is extracted to disk.
 - **Secrets** — `project_secret` (`action: get | set | list | delete`) backed by AES-256-GCM
   (`secrets.json` + `secrets.key`, 0600, atomic writes). `get`/`list` are metadata-only
-  (length + sha256 prefix + update time); plaintext requires `reveal=true` **and**
+  (length + sha256 prefix + update time); plaintext requires `reveal=1` **and**
   `VENIRA_SECRET_ALLOW_REVEAL=1`. `value_env` keeps values out of tool arguments;
   `project_shell_run secret_env=[...]` (≤ 16) injects them after approval. Stored values
   (≥ 8 chars) are scrubbed from shell tails and audit text.

@@ -1,7 +1,7 @@
 /**
  * Verify MCP behaviour after the envelope refactor (ok/kind/data/hint), cache invalidation,
  * batch, shell, full error standards, envelopes for health/recent_files/read_ranges,
- * summary mode (when spawning a binary client), metrics, tool annotations.
+ * compact mode (when spawning a binary client), metrics, tool annotations.
  *
  * Fix the session so audit rows belong to this run only.
  */
@@ -12,6 +12,7 @@ import os from "node:os";
 import path from "node:path";
 import { startGithubMock } from "./github-mock.js";
 import { startBitbucketMock, startGitlabMock } from "./git-mocks.js";
+import { envFlag } from "../lib/env.js";
 
 const SESSION_ID = `verify-${Date.now()}`;
 const originalDataDir = process.env.VENIRA_DATA_DIR;
@@ -31,10 +32,31 @@ function verifyEnv(extraEnv: Record<string, string> = {}, outputMode = "full") {
   return {
     ...process.env,
     VENIRA_WORKSPACE: process.cwd(),
-    VENIRA_UNRESTRICTED: "0",
     VENIRA_SESSION_ID: SESSION_ID,
     VENIRA_OUTPUT_MODE: outputMode,
     VENIRA_SHELL_MODE: "balanced",
+    VENIRA_SHELL_POLICY_FILE: "",
+    VENIRA_SHELL_OVERRIDES: "",
+    VENIRA_UNRESTRICTED: "0",
+    VENIRA_ALLOW_JS_EXEC: "0",
+    VENIRA_CACHE_ALL: "1",
+    VENIRA_CACHE_LIST_ONLY: "1",
+    VENIRA_CACHE_SEARCH_ONLY: "1",
+    VENIRA_AUDIT_STRICT: "0",
+    VENIRA_AUDIT_FAST: "1",
+    VENIRA_SHELL_EXIT_EARLY: "0",
+    VENIRA_SHELL_ENV_PASS_ALL: "0",
+    VENIRA_EDIT_FUZZY: "0",
+    VENIRA_SHELL_AUTO_APPROVE_TOKEN: "0",
+    VENIRA_SECRET_ALLOW_REVEAL: "0",
+    VENIRA_SHELL_ELICIT: "0",
+    VENIRA_PRETTY: "0",
+    VENIRA_NETWORK: "1",
+    VENIRA_ALLOW_SELF_INSTALL: "0",
+    VENIRA_GIT_ALLOW_HTTP: "0",
+    VENIRA_GITHUB_ALLOW_HTTP: "0",
+    VENIRA_TRACE: "0",
+    VENIRA_VERIFY_DEBUG: "0",
     PATH: `${path.dirname(process.execPath)}${path.delimiter}${process.env.PATH ?? ""}`,
     // keytar/Node 24 can assert during native cleanup in MCP child processes;
     // the backend is covered separately by the Windows keychain integration check.
@@ -48,13 +70,13 @@ function verifyEnv(extraEnv: Record<string, string> = {}, outputMode = "full") {
   };
 }
 
-// Second client to test VENIRA_OUTPUT_MODE=summary
+// Second client to test VENIRA_OUTPUT_MODE=compact
 const createClient = (extraEnv: Record<string, string> = {}) => {
   const transport = new StdioClientTransport({
     command: "node",
     args: ["dist/server.js"],
     cwd: process.cwd(),
-    env: verifyEnv(extraEnv, "summary"),
+    env: verifyEnv(extraEnv, "compact"),
     stderr: "pipe",
   });
   return new Client({ name: "verify", version: "0.0.0" }, { capabilities: {} });
@@ -67,7 +89,7 @@ const transport = new StdioClientTransport({
   env: verifyEnv({ VENIRA_SHELL_TIMEOUT_POLICY: "hard" }, "full"), // full mode for the remaining checks
   stderr: "pipe",
 });
-if (process.env.VENIRA_VERIFY_DEBUG === "1") {
+if (envFlag("VENIRA_VERIFY_DEBUG", false)) {
   transport.stderr?.on("data", (chunk: Buffer) => console.error("[server]", chunk.toString("utf8")));
 }
 const client = new Client({ name: "verify", version: "0.0.0" }, { capabilities: {} });
@@ -110,6 +132,23 @@ await client2.close();
 const tools = await client.listTools();
 const expectedCount = tools.tools.length;
 check("tool_count", tools.tools.length === expectedCount, { actual: tools.tools.length, expected: expectedCount });
+const directBooleanToolInputs = tools.tools.flatMap((tool) =>
+  Object.entries(tool.inputSchema?.properties ?? {})
+    .filter(([, schema]) => (schema as { type?: string }).type === "boolean")
+    .map(([name]) => `${tool.name}.${name}`),
+);
+check("tool_boolean_flags_are_numeric", directBooleanToolInputs.length === 0, directBooleanToolInputs);
+const shellToolSchema = tools.tools.find((tool) => tool.name === "project_shell_run");
+const shellProperties = shellToolSchema?.inputSchema?.properties as
+  | Record<string, { type?: string; minimum?: number; maximum?: number }>
+  | undefined;
+check(
+  "shell_flag_schema_is_0_1_integer",
+  shellProperties?.early_exit?.type === "integer" &&
+    shellProperties.early_exit.minimum === 0 &&
+    shellProperties.early_exit.maximum === 1,
+  shellProperties?.early_exit,
+);
 const snapshotTool = tools.tools.find((t) => t.name === "project_snapshot");
 check("tool_snapshot_present", !!snapshotTool, tools.tools.map((t) => t.name));
 const expectedNewTools = [
@@ -294,7 +333,7 @@ const earlyShell = JSON.parse(
     await call("project_shell_run", {
       command: "echo early-exit-ok",
       shell: isWin ? "powershell" : "bash",
-      early_exit: true,
+      early_exit: 1,
     }),
   ) || "{}",
 );
@@ -318,6 +357,104 @@ const asEnvelope = (result: unknown) => JSON.parse(textOf(result) || "{}");
 // Unit checks first (no server interaction)
 const ws = process.cwd();
 const policyModule = await import("../lib/shell-policy.js");
+const envModule = await import("../lib/env.js");
+const originalPolicyFile = process.env.VENIRA_SHELL_POLICY_FILE;
+delete process.env.VENIRA_SHELL_POLICY_FILE;
+policyModule.resetShellPolicyCache();
+check(
+  "env_flag_accepts_numeric_values",
+  envModule.envFlag("VERIFY_FLAG", true, "0") === false &&
+    envModule.envFlag("VERIFY_FLAG", false, "1") === true,
+);
+let invalidFlagMessage = "";
+try {
+  envModule.envFlag("VERIFY_FLAG", false, "true");
+} catch (error) {
+  invalidFlagMessage = error instanceof Error ? error.message : String(error);
+}
+check("env_flag_rejects_legacy_boolean_spelling", invalidFlagMessage.includes("[config_invalid] VERIFY_FLAG"));
+const originalOutputMode = process.env.VENIRA_OUTPUT_MODE;
+process.env.VENIRA_OUTPUT_MODE = "summary";
+let invalidOutputModeMessage = "";
+try {
+  envModule.envChoice("VENIRA_OUTPUT_MODE", "full", ["full", "compact"]);
+} catch (error) {
+  invalidOutputModeMessage = error instanceof Error ? error.message : String(error);
+}
+if (originalOutputMode === undefined) delete process.env.VENIRA_OUTPUT_MODE;
+else process.env.VENIRA_OUTPUT_MODE = originalOutputMode;
+check("output_mode_rejects_summary", invalidOutputModeMessage.includes("full, compact"), invalidOutputModeMessage);
+const originalShellMode = process.env.VENIRA_SHELL_MODE;
+process.env.VENIRA_SHELL_MODE = "off";
+policyModule.resetShellPolicyCache();
+let invalidModeMessage = "";
+try {
+  policyModule.loadShellPolicy();
+} catch (error) {
+  invalidModeMessage = error instanceof Error ? error.message : String(error);
+}
+if (originalShellMode === undefined) delete process.env.VENIRA_SHELL_MODE;
+else process.env.VENIRA_SHELL_MODE = originalShellMode;
+policyModule.resetShellPolicyCache();
+check("shell_mode_rejects_off", invalidModeMessage.includes("balanced, strict, or permissive"), invalidModeMessage);
+const originalOverrides = process.env.VENIRA_SHELL_OVERRIDES;
+delete process.env.VENIRA_SHELL_OVERRIDES;
+const selfGrantedGitPush = policyModule.evaluateShellCommand("git push origin main", ws, {
+  mode: "balanced",
+  override: "ALLOW_GIT_PUSH",
+  overrideReason: "reason alone must not grant access",
+});
+check("named_override_requires_operator_gate", selfGrantedGitPush.tier === "ask", selfGrantedGitPush);
+const permissiveGitPush = policyModule.evaluateShellCommand("git push origin main", ws, { mode: "permissive" });
+check("permissive_still_asks_for_git_push", permissiveGitPush.tier === "ask", permissiveGitPush);
+process.env.VENIRA_SHELL_OVERRIDES = "ALLOW_GIT_PUSH,ALLOW_ENV_READ";
+const explicitGitPush = policyModule.evaluateShellCommand("git push --no-verify origin main", ws, {
+  mode: "strict",
+  override: "ALLOW_GIT_PUSH",
+  overrideReason: "operator enabled this specific action",
+});
+check("named_git_push_override", explicitGitPush.tier === "allow" && explicitGitPush.rule === "override.ALLOW_GIT_PUSH", explicitGitPush);
+const overrideWorkspace = path.resolve(dir);
+await fs.writeFile(path.join(overrideWorkspace, ".env"), "VERIFY_ONLY=fixture\n");
+const explicitEnvRead = policyModule.evaluateShellCommand("cat .env", overrideWorkspace, {
+  mode: "strict",
+  override: "ALLOW_ENV_READ",
+  overrideReason: "operator enabled this specific read",
+});
+check("named_env_read_override", explicitEnvRead.tier === "allow" && explicitEnvRead.rule === "override.ALLOW_ENV_READ", explicitEnvRead);
+for (const command of ["cat .env && echo extra", "echo secret > .env", "cat .e[n]v", "cat id_rsa"]) {
+  const decision = policyModule.evaluateShellCommand(command, overrideWorkspace, {
+    mode: "permissive",
+    override: "ALLOW_ENV_READ",
+    overrideReason: "cannot bypass scope",
+  });
+  check(`named_env_override_scope_${command}`, decision.tier !== "allow", decision);
+}
+process.env.VENIRA_SHELL_OVERRIDES = "ALLOW_ALL";
+let invalidOverrideConfig = "";
+try {
+  policyModule.evaluateShellCommand("echo safe", ws, { mode: "balanced" });
+} catch (error) {
+  invalidOverrideConfig = error instanceof Error ? error.message : String(error);
+}
+check("shell_override_list_rejects_wildcards", invalidOverrideConfig.includes("VENIRA_SHELL_OVERRIDES accepts only"), invalidOverrideConfig);
+process.env.VENIRA_SHELL_OVERRIDES = "ALLOW_GIT_PUSH,ALLOW_ENV_READ";
+const policyFixture = path.join(dir, "shell-policy.json");
+await fs.writeFile(
+  policyFixture,
+  JSON.stringify({ allow: [{ command: "git", subcommand: "push" }, { command: "cat" }] }),
+);
+process.env.VENIRA_SHELL_POLICY_FILE = policyFixture;
+policyModule.resetShellPolicyCache();
+const customAllowPush = policyModule.evaluateShellCommand("git push origin main", ws, { mode: "balanced" });
+const customAllowEnv = policyModule.evaluateShellCommand("cat .env", ws, { mode: "permissive" });
+check("custom_allow_cannot_override_builtin_ask", customAllowPush.tier === "ask", customAllowPush);
+check("custom_allow_cannot_override_hard_deny", customAllowEnv.tier === "deny", customAllowEnv);
+if (originalPolicyFile === undefined) delete process.env.VENIRA_SHELL_POLICY_FILE;
+else process.env.VENIRA_SHELL_POLICY_FILE = originalPolicyFile;
+if (originalOverrides === undefined) delete process.env.VENIRA_SHELL_OVERRIDES;
+else process.env.VENIRA_SHELL_OVERRIDES = originalOverrides;
+policyModule.resetShellPolicyCache();
 const powershellWrite = policyModule.evaluateShellCommand("Remove-Item -Recurse 'C:\\Users\\Public\\venira-test'", ws);
 check(
   "policy_unit_windows_path_outside_workspace",
@@ -609,7 +746,7 @@ check(
 );
 
 // 13. Health exposes the policy snapshot and counters.
-const healthPolicy = asEnvelope(await call("project_health", { include_audit: false }));
+const healthPolicy = asEnvelope(await call("project_health", { include_audit: 0 }));
 check(
   "health_shell_policy",
   healthPolicy.data?.shells?.policy?.policy?.mode === "balanced" &&
@@ -688,7 +825,7 @@ check("search_cache_invalidated", search3Data.data?.hits?.length === 0, search3D
 const unsafeRegex = asEnvelope(
   await call("project_search", {
     query: "(a+)+$",
-    regex: true,
+    regex: 1,
     kind: "literal_content",
     relative_path: dir,
   }),
@@ -798,7 +935,7 @@ await call("project_read_file", { relative_path: `${dir}/loop-metric-missing.txt
 await call("project_read_file", { relative_path: "server.ts", start_line: 1, end_line: 2 });
 await call("project_read_file", { relative_path: "server.ts", start_line: 3, end_line: 4 });
 await call("project_read_file", { relative_path: "server.ts", start_line: 5, end_line: 6 });
-const health = await call("project_health", { include_audit: false });
+const health = await call("project_health", { include_audit: 0 });
 const healthData = JSON.parse((health as { content: { text: string }[] })?.content[0].text ?? "{}");
 check("health_ok", healthData.ok === true, healthData);
 check("health_backend_standalone", healthData.data?.corehost?.exe === null, healthData.data?.corehost);
@@ -807,7 +944,7 @@ check("health_caches_present", healthData.data?.caches != null, true);
 check("health_metrics_present", healthData.data?.metrics?.operations != null, true);
 
 // 16. Health audit (full)
-const healthFull = await call("project_health", { include_audit: true });
+const healthFull = await call("project_health", { include_audit: 1 });
 const healthFullData = JSON.parse((healthFull as { content: { text: string }[] })?.content[0].text ?? "{}");
 check("health_audit_present", !!healthFullData.data?.audit?.reachable, healthFullData.data?.audit);
 check(
@@ -983,7 +1120,7 @@ check(
   secretGet,
 );
 const secretReveal = asEnvelope(
-  await call("project_secret", { action: "get", name: SECRET_NAME, reveal: true }),
+  await call("project_secret", { action: "get", name: SECRET_NAME, reveal: 1 }),
 );
 check("secret_reveal_gated", secretReveal.error?.code === "reveal_denied", secretReveal);
 
@@ -1119,7 +1256,7 @@ await call("project_secret", { action: "delete", name: EXPIRED_NAME });
 // 11d. GitHub provider + CI against the local mock (no network, fixed token).
 console.log("[verify] checking git/ci provider...");
 const prCreate = asEnvelope(
-  await call("project_pr_create", { title: "Add provider tools", head: "verify-branch", draft: true }),
+  await call("project_pr_create", { title: "Add provider tools", head: "verify-branch", draft: 1 }),
 );
 check(
   "pr_create",
@@ -1210,7 +1347,7 @@ const prLineNoPath = asEnvelope(await call("project_pr_comment", { pr: 7, body: 
 check("pr_comment_line_requires_path", prLineNoPath.error?.code === "invalid_request", prLineNoPath);
 
 const prMerge = asEnvelope(
-  await call("project_pr_merge", { pr: 7, method: "squash", delete_branch: true, reason: "VERIFY_PROVIDER_REASON" }),
+  await call("project_pr_merge", { pr: 7, method: "squash", delete_branch: 1, reason: "VERIFY_PROVIDER_REASON" }),
 );
 check(
   "pr_merge",
@@ -1380,7 +1517,7 @@ const glClose = await providerCall(gl, "project_pr_close", { pr: 11 });
 check("gitlab_pr_close", glClose.ok === true && glClose.data?.state === "closed" && gitlabMock.state.closes === 1, glClose);
 const glReopen = await providerCall(gl, "project_pr_reopen", { pr: 11 });
 check("gitlab_pr_reopen", glReopen.ok === true && glReopen.data?.state === "open" && gitlabMock.state.reopens === 1, glReopen);
-const glMerge = await providerCall(gl, "project_pr_merge", { pr: 11, method: "squash", delete_branch: true });
+const glMerge = await providerCall(gl, "project_pr_merge", { pr: 11, method: "squash", delete_branch: 1 });
 check("gitlab_pr_merge", glMerge.ok === true && glMerge.data?.merged === true && glMerge.data?.sha === "gl-merge-sha", glMerge);
 const glCi = await providerCall(gl, "project_ci_status", { ref: "verify-branch" });
 check(
@@ -1431,7 +1568,7 @@ const bbClose = await providerCall(bb, "project_pr_close", { pr: 21 });
 check("bitbucket_pr_close", bbClose.ok === true && bbClose.data?.state === "closed" && bitbucketMock.state.declines === 1, bbClose);
 const bbReopen = await providerCall(bb, "project_pr_reopen", { pr: 21 });
 check("bitbucket_pr_reopen_unsupported", bbReopen.ok === false && bbReopen.error?.code === "unsupported", bbReopen);
-const bbMerge = await providerCall(bb, "project_pr_merge", { pr: 21, method: "squash", delete_branch: true });
+const bbMerge = await providerCall(bb, "project_pr_merge", { pr: 21, method: "squash", delete_branch: 1 });
 check("bitbucket_pr_merge", bbMerge.ok === true && bbMerge.data?.merged === true && bbMerge.data?.sha === "bb-merge-sha", bbMerge);
 const bbCi = await providerCall(bb, "project_ci_status", { ref: "verify-branch" });
 check(
@@ -1505,7 +1642,7 @@ const planHint = asEnvelope(
   await call("project_plan_read_batch", {
     task_description: "refactor the checkpoint store",
     files_hint: ["lib/snapshots.ts"],
-    include_search: false,
+    include_search: 0,
   }),
 );
 check(
@@ -1525,7 +1662,7 @@ const artifactToken = `PLAN_ARTIFACT_${Date.now()}`;
 await fs.writeFile(`${dir}/plan-artifact.db`, `noise ${artifactToken}\n`);
 await fs.writeFile(`${dir}/plan-artifact.log`, `${artifactToken}\n`);
 const planArtifact = asEnvelope(
-  await call("project_plan_read_batch", { task_description: artifactToken, include_search: true }),
+  await call("project_plan_read_batch", { task_description: artifactToken, include_search: 1 }),
 );
 const artifactCandidates = (planArtifact.data?.candidates ?? []) as Array<{ relative_path?: string }>;
 const artifactRequests = ((planArtifact.data?.steps ?? []) as Array<{ arguments?: { requests?: Array<{ arguments?: { relative_path?: string } }> } }>)
@@ -1557,7 +1694,7 @@ await fs.mkdir(`${dir}/docs`, { recursive: true });
 await fs.writeFile(`${dir}/${nameToken}-impl.ts`, "export const noop = () => 0;\n");
 await fs.writeFile(`${dir}/docs/${nameSlug}.md`, `${nameToken} prose\n`.repeat(25));
 const planName = asEnvelope(
-  await call("project_plan_read_batch", { task_description: `update ${nameToken} handling`, include_search: true }),
+  await call("project_plan_read_batch", { task_description: `update ${nameToken} handling`, include_search: 1 }),
 );
 const nameCandidates = (planName.data?.candidates ?? []) as Array<{ relative_path?: string; score?: number }>;
 const nameFiles = nameCandidates.map((c) => String(c.relative_path));
@@ -1589,7 +1726,7 @@ await fs.writeFile(`${dir}/secrets.key`, `${secretToken}\n`);
 await fs.writeFile(`${dir}/deploy.key`, `${secretToken}\n`);
 await fs.writeFile(`${dir}/.env`, `TOKEN=${secretToken}\n`);
 const planSecret = asEnvelope(
-  await call("project_plan_read_batch", { task_description: `rotate ${secretToken} token`, include_search: true }),
+  await call("project_plan_read_batch", { task_description: `rotate ${secretToken} token`, include_search: 1 }),
 );
 const secretFiles: string[] = (planSecret.data?.candidates ?? []).map((c: { relative_path?: string }) => String(c.relative_path));
 check(
@@ -1680,13 +1817,15 @@ try {
 } catch {
   httpsOnly = true;
 }
-process.env.VENIRA_GITHUB_API_URL = savedApiUrl;
+if (savedApiUrl === undefined) delete process.env.VENIRA_GITHUB_API_URL;
+else process.env.VENIRA_GITHUB_API_URL = savedApiUrl;
 check("provider_https_only", httpsOnly, undefined);
 
 const savedNetwork = process.env.VENIRA_NETWORK;
 process.env.VENIRA_NETWORK = "0";
 const networkOff = provider.networkEnabled() === false;
-process.env.VENIRA_NETWORK = savedNetwork;
+if (savedNetwork === undefined) delete process.env.VENIRA_NETWORK;
+else process.env.VENIRA_NETWORK = savedNetwork;
 check("provider_network_unit", networkOff, undefined);
 
 // 11g. Config precedence, limits and HTTP knobs (pure unit checks).
@@ -1821,7 +1960,7 @@ for (const key of touched) {
 }
 await fs.rm(cfgPath, { force: true });
 
-const healthProvider = asEnvelope(await call("project_health", { include_audit: false }));
+const healthProvider = asEnvelope(await call("project_health", { include_audit: 0 }));
 check(
   "health_secrets_and_network",
   healthProvider.data?.secrets?.encryption === "aes-256-gcm" &&
@@ -1872,25 +2011,27 @@ check(
   { status: selfInstallResult.status, error: selfInstallResult.error },
 );
 
-// 19. Marcet summary mode
-console.log("[verify] checking summary mode...");
-const clientSummary = await new Client({ name: "verify-summary", version: "0.0.0" }, { capabilities: {} });
-const summaryTransport = new StdioClientTransport({
+// 19. Compact output mode
+console.log("[verify] checking compact mode...");
+const compactFixture = `${dir}/compact-large.txt`;
+await fs.writeFile(compactFixture, "x".repeat(9_000));
+const clientCompact = await new Client({ name: "verify-compact", version: "0.0.0" }, { capabilities: {} });
+const compactTransport = new StdioClientTransport({
   command: "node",
   args: ["dist/server.js"],
   cwd: process.cwd(),
-  env: verifyEnv({ VENIRA_SESSION_ID: `${SESSION_ID}-summary` }, "summary"),
+  env: verifyEnv({ VENIRA_SESSION_ID: `${SESSION_ID}-compact` }, "compact"),
   stderr: "pipe",
 });
-await clientSummary.connect(summaryTransport);
-const summaryTool = await clientSummary.callTool({ name: "project_read_file", arguments: { relative_path: "server.ts" } });
-const summaryData = JSON.parse(textOf(summaryTool));
+await clientCompact.connect(compactTransport);
+const compactTool = await clientCompact.callTool({ name: "project_read_file", arguments: { relative_path: compactFixture } });
+const compactData = JSON.parse(textOf(compactTool));
 check(
-  "summary_trimmed",
-  summaryData.trimmed === true && summaryData.data?.preview != null,
-  { has_preview: !!summaryData.data?.preview, preview_truncated: summaryData.data?.preview_truncated },
+  "compact_trimmed",
+  compactData.trimmed === true && compactData.data?.preview != null,
+  { has_preview: !!compactData.data?.preview, preview_truncated: compactData.data?.preview_truncated },
 );
-await clientSummary.close();
+await clientCompact.close();
 
 // 20. Metrics ops present (read_batch, read_ranges, recent_files, health, shell_run)
 const ops = Object.keys(healthData.data?.metrics?.operations ?? {});
