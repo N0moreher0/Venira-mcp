@@ -38,12 +38,6 @@ try {
     return { result, envelope: JSON.parse(text) as { error?: { code?: string }; data?: Record<string, unknown> } };
   };
 
-  const legacyBoolean = await client.callTool({
-    name: "project_shell_run",
-    arguments: { command: "echo should-not-run", shell, early_exit: true },
-  });
-  assert.equal((legacyBoolean as { isError?: boolean }).isError, true);
-
   const envRead = await callShell("cat .env");
   assert.equal((envRead.result as { isError?: boolean }).isError, true);
   assert.equal(envRead.envelope.error?.code, "command_denied");
@@ -115,7 +109,7 @@ try {
       arguments: {
         command: process.platform === "win32" ? "Get-Content .env" : "cat .env",
         shell,
-        early_exit: 1,
+        background: 0,
         override: "ALLOW_ENV_READ",
         reason: "read local test configuration",
       },
@@ -188,7 +182,7 @@ try {
         command: "git push --dry-run origin HEAD:main",
         shell,
         relative_cwd: "repo",
-        early_exit: 1,
+        background: 0,
         override: "ALLOW_GIT_PUSH",
         reason: "verify local dry-run push authorization",
       },

@@ -144,10 +144,8 @@ const shellProperties = shellToolSchema?.inputSchema?.properties as
   | Record<string, { type?: string; minimum?: number; maximum?: number; anyOf?: { type?: string }[] }>
   | undefined;
 check(
-  "shell_flag_schema_is_0_1_integer",
-  shellProperties?.early_exit?.type === "integer" &&
-    shellProperties.early_exit.minimum === 0 &&
-    shellProperties.early_exit.maximum === 1,
+  "shell_early_exit_removed",
+  shellProperties?.early_exit === undefined,
   shellProperties?.early_exit,
 );
 const backgroundTypes = (shellProperties?.background?.anyOf ?? []).map((entry) => entry?.type);
@@ -337,25 +335,6 @@ for (let i = 0; i < 12; i++) {
   if (!status?.data?.running) break;
 }
 check("shell_output", String(status?.data?.stdout_tail ?? "").includes("verify-ok"), status?.data);
-
-const earlyShell = JSON.parse(
-  textOf(
-    await call("project_shell_run", {
-      command: "echo early-exit-ok",
-      shell: isWin ? "powershell" : "bash",
-      early_exit: 1,
-    }),
-  ) || "{}",
-);
-check(
-  "shell_early_exit",
-  earlyShell.ok === true &&
-    earlyShell.data?.running === false &&
-    earlyShell.data?.run_id === earlyShell.data?.shell_id &&
-    String(earlyShell.data?.stdout ?? "").includes("early-exit-ok") &&
-    typeof earlyShell.data?.exit_code === "number",
-  earlyShell.data,
-);
 
 // background=0 / "False" must block for the whole run and return final output.
 const sleepCommand = (ms: number) => (isWin ? `Start-Sleep -Milliseconds ${ms}; echo fg-done-${ms}` : `sleep ${ms / 1000}; echo fg-done-${ms}`);

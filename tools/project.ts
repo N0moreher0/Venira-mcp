@@ -3,8 +3,8 @@ import { randomBytes } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
-import { envChoice, envFlag } from "../lib/env.js";
-import { CoreHost, shellPolicySnapshot } from "../lib/corehost.js";
+import { envChoice, envFlag, parseBackgroundFlag } from "../lib/env.js";
+import { CoreHost, SHELL_MAX_TIMEOUT_MS, shellPolicySnapshot } from "../lib/corehost.js";
 import * as approvals from "../lib/approvals.js";
 import { evaluateToolPolicy } from "../lib/tool-policy.js";
 import { recordMetric, metricsSnapshot } from "../lib/metrics.js";
@@ -271,21 +271,8 @@ function prepare(operation: string, args: Args): Args {
   return out;
 }
 
-/** Foreground detection must mirror backgroundSetting() in lib/corehost.ts. */
 function isForegroundShell(args: Args): boolean {
-  const background = args.background;
-  if (typeof background === "boolean") return !background;
-  if (typeof background === "number") return Number.isFinite(background) ? background === 0 : false;
-  if (typeof background === "string") {
-    const normalized = background.trim().toLowerCase();
-    if (["0", "false", "no", "off", "foreground", "foreground_only", ""].includes(normalized)) return true;
-    if (["1", "true", "yes", "on", "background", "async"].includes(normalized)) return false;
-  }
-  const earlyExit = args.early_exit;
-  if (typeof earlyExit === "boolean") return earlyExit;
-  if (typeof earlyExit === "number") return earlyExit !== 0;
-  if (typeof earlyExit === "string") return ["1", "true", "yes", "on"].includes(earlyExit.trim().toLowerCase());
-  return false;
+  return !parseBackgroundFlag(args.background);
 }
 
 function timeoutFor(operation: string, args: Args): number {
@@ -299,7 +286,7 @@ function timeoutFor(operation: string, args: Args): number {
     if (isForegroundShell(args)) {
       const raw = Number(args.timeout_ms ?? 0);
       const requested = Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 600_000;
-      return Math.min(requested, 30 * 60 * 1000) + 15_000;
+      return Math.min(requested, SHELL_MAX_TIMEOUT_MS) + 15_000;
     }
     return 30_000;
   }
@@ -1677,13 +1664,7 @@ const flag01 = z.number().int().min(0).max(1).transform((value) => value === 1).
 /** `background` accepts 0/1, booleans and strings so `false`/`"False"` works. */
 const backgroundFlag = z
   .union([z.number().int().min(0).max(1), z.boolean(), z.string().max(20)])
-  .transform((value) => {
-    if (typeof value === "boolean") return value;
-    if (typeof value === "number") return value !== 0;
-    const normalized = value.trim().toLowerCase();
-    if (["0", "false", "no", "off", "foreground", "foreground_only", ""].includes(normalized)) return false;
-    return true; // 1/true/yes/on/background/async and unknown values keep the async default
-  })
+  .transform((value) => parseBackgroundFlag(value))
   .describe(
     "1/true = background (default): return immediately with run_id. " +
       "0/false = foreground: block until the command exits, then return the final stdout/stderr in this call.",
@@ -2832,7 +2813,6 @@ export function registerProjectTools(server: McpServer): void {
           use_when:
             "build/test/lint/long-running commands. Default (background=1) returns run_id immediately so it never blocks other tools; " +
             "set background=0 when you need the final output in this call — it blocks until the command exits, and you must not start other work while waiting. " +
-            "legacy early_exit=1 is an alias for background=0. " +
             "After approval_required, ask the user to approve the approval_id in an interactive terminal, then retry.",
           avoid_when: "a command that may never finish: use the async default plus project_shell_status/project_shell_cancel.",
           speed_profile:
@@ -2883,12 +2863,6 @@ export function registerProjectTools(server: McpServer): void {
           .max(400)
           .optional()
           .describe("Required with override; explain the specific intent in one line. Redacted and recorded in the SQLite audit trail."),
-        early_exit: flag01
-          .optional()
-          .describe(
-            "Legacy alias for background=0: 1 blocks until the shell finishes and returns final output; " +
-              "0 returns immediately with run_id/shell_id. Prefer `background`.",
-          ),
         approval_scope: z
           .enum(["once", "session"])
           .optional()

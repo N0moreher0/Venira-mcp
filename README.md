@@ -33,7 +33,7 @@ Prefer your agent to do it? Paste the prompt from [§2.2](#22-fastest-path-paste
   (5–30 s observation window, deliberately non-queued). Pass `background: 0` (or
   `false`) when the agent needs the complete final `stdout`/`stderr` in the same call:
   it blocks until the command exits and flushes, and the agent must not start other work
-  while waiting. `early_exit: 1` remains a backwards-compatible alias.
+  while waiting.
 - **Full observability.** `project_health` reports capability state, queue depth, cache
   hit-rates, active shells, and p50/p95/max per operation.
 - **Audit trail.** Operations (including failures, shell runs, and cancellations) are written
@@ -572,7 +572,7 @@ project_plan_read_batch({ task_description: "add retry handling to the GitHub cl
 
 | Tool | Purpose | Notes |
 |---|---|---|
-| `project_shell_run` | Start a shell command; returns `run_id`/`shell_id` immediately by default | `shell`: `powershell` / `cmd` / `bash` · `relative_cwd` · `background: 0` / `false` blocks until the command exits and returns bounded full `stdout`/`stderr` in the same call; `1` (default) stays non-blocking and returns tails for polling · `early_exit: 1` is the legacy alias for `background: 0` · `timeout_ms` (kills the **process tree** under hard timeout policy) · `secret_env: ["NAME"]` (inject stored secrets as env vars only after explicit human approval; raw values are not added to command/audit text, output scrubbing is best-effort) · Node script executions also require approval because the policy cannot inspect their effects · `approval_id` for the default human approval flow; `approval_token` + `approval_scope` are legacy compatibility. All captured streams remain capped at 1 MiB each. |
+| `project_shell_run` | Start a shell command; returns `run_id`/`shell_id` immediately by default | `shell`: `powershell` / `cmd` / `bash` · `relative_cwd` · `background: 0` / `false` blocks until the command exits and returns bounded full `stdout`/`stderr` in the same call; `1` (default) stays non-blocking and returns tails for polling · `timeout_ms` (kills the **process tree** under hard timeout policy) · `secret_env: ["NAME"]` (inject stored secrets as env vars only after explicit human approval; raw values are not added to command/audit text, output scrubbing is best-effort) · Node script executions also require approval because the policy cannot inspect their effects · `approval_id` for the default human approval flow; `approval_token` + `approval_scope` are legacy compatibility. All captured streams remain capped at 1 MiB each. |
 | `project_shell_status` | Poll a running command | `wait_seconds` 0–30 is an *observation window*, not a timeout. Deliberately **not queued** behind other calls, not audit-logged (prevents orphan "running" rows). Reports `timed_out`, `dropped_bytes` and the policy decision. |
 | `project_shell_cancel` | Kill a running command by `run_id` | Kills the whole tree (`taskkill /T` on Windows, process group on POSIX). Also used at MCP shutdown to avoid orphan processes. |
 | `project_shell_cancel_session` | Cancel **all** shell runs tracked in this session | P1; kills every process tree in the session at once. |
@@ -1005,7 +1005,7 @@ etc. The model is expected to read `hint` first.
   falls back to a bounded scan capped at 4 000 files / 300 directories, skipping
   `node_modules`, `target`, `dist`, `.git`, etc.
 - **Shell output is bounded.** The default async response returns bounded stdout/stderr tails,
-  not a live stream. With `background: 0` (or legacy `early_exit: 1`), the call blocks until
+  not a live stream. With `background: 0`, the call blocks until
   the process exits and its stdio flushes, then returns bounded `stdout`/`stderr`; long
   outputs are still capped by design. A foreground call is bounded by `timeout_ms`
   (default 10 minutes), but the MCP client may impose a shorter request timeout — use the
@@ -1141,6 +1141,7 @@ The full history, in order — from the standalone rewrite to the provider, secr
 
 | Date | Version | Milestone |
 |---|---|---|
+| 2026-11-02 | **v1.10.0** | **Shell surface cleanup (breaking).** The obsolete `early_exit` alias is removed from `project_shell_run`; use `background: 0` / `false` for foreground runs. Clients that still send `early_exit` should switch to `background`; the field is no longer advertised or read. `background` coercion is shared by the tool layer and the host so `0`, `false`, `"False"` and unknown values can no longer drift; foreground completion is event-driven (`close`/`error`) instead of a 25 ms poll, and the host-call budget now honours `VENIRA_SHELL_MAX_TIMEOUT_MS`. `VENIRA_SHELL_EXIT_EARLY` remains as the separate `project_shell_status` polling optimisation. **44 tools**, verify **369/369**. |
 | 2026-11-02 | **v1.9.1** | **True foreground shell runs.** `project_shell_run` gains `background` (number/boolean/string): `background: 0` / `false` / `"False"` blocks until the command exits and stdio flushes, then returns the complete bounded `stdout`/`stderr` in the same call; the async default is unchanged and `early_exit: 1` remains a backwards-compatible alias. The old 2-second "give up waiting" cap no longer applies to foreground calls, and the host-call budget now covers `timeout_ms` instead of 30 s. **44 tools**, verify **370/370**. |
 | 2026-11-02 | **v1.9.0** | **Dependency graph + change impact + CI waiting.** `project_dependency_graph` builds a deterministic TS/JS + Python import/symbol graph (JSON, DOT or Mermaid; relative imports, `require()`, dynamic `import()`, `extends`/`implements`, cross-file references; bounded walk, protected paths skipped, 5 s cache invalidated by writes). `project_change_impact` answers "what breaks if I edit this?" with a bounded reverse/forward closure, per-hit `confidence`, `affected_symbols` and a separate `tests_affected` count; ambiguous bare symbol names downgrade to `possible` and are listed in `unresolved[]`. `project_ci_wait` long-polls one run/ref/PR/branch until terminal, `any_change` or `timeout_ms` (default 45 s, max 110 s), returning the failure log tail in the same call; it is unqueued and documented as a long-poll because MCP stdio cannot wake the model. **44 tools**, verify **367/367**. |
 | 2026-11-02 | **v1.8.2** | **Audit/secret hardening.** Audit rows are keyed (HMAC chain) so an in-place edit is detected, and secret ciphertext is bound to its name so a renamed entry cannot decrypt another entry's value. |
