@@ -61,6 +61,13 @@ export const UNRESTRICTED = envFlag("VENIRA_UNRESTRICTED", false);
 /** VENIRA_ALLOW_JS_EXEC must be explicitly enabled (default off in v1.7.0). */
 export const ALLOW_JS_EXEC = envFlag("VENIRA_ALLOW_JS_EXEC", false);
 
+/**
+ * Even when enabled, `project_execute_js` runs arbitrary code outside the shell
+ * policy and the protected-path guard, so each call needs a human grant by
+ * default. Set `VENIRA_JS_EXEC_APPROVAL=0` only for trusted automation.
+ */
+export const JS_EXEC_APPROVAL = envFlag("VENIRA_JS_EXEC_APPROVAL", true);
+
 export const PROTECTED_BASENAMES = new Set([
   "approval.key",
   "secrets.json",
