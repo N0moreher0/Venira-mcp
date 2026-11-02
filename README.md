@@ -2,6 +2,14 @@
 
 > Fast, workspace-scoped **MCP server for coding agents** (OpenCode, Claude Desktop, any MCP client). 41 tools by default, structured JSON envelopes, validated read caches, async shell, code-intelligence (outline/symbols/diff/references/selective search), fuzzy edit, SQLite recent-files index, **git-free checkpoints/rollback**, **audit reasons ("why")**, **pull requests + CI provider integrations**, **encrypted secrets with rotation metadata**, **deterministic error diagnosis + read planning**, and full SQLite audit trail — **pure Node, 1 native dependency (better-sqlite3), no GUI.**
 
+**Setup in one line** (run it in the project you want to work on, then restart your client):
+
+```bash
+npx --yes venira-mcp@latest --install auto --workspace .
+```
+
+Prefer your agent to do it? Paste the prompt from [§2.2](#22-fastest-path-paste-this-prompt-into-your-agent). New here: read [§2 Quick start](#2-quick-start); everything after it is reference.
+
 ```
 ┌──────────────┐   stdio (MCP)   ┌────────────────────────────────────────────┐
 │ MCP client    │ ◄──────────────► │  venira-mcp (Node, single process)        │
@@ -63,122 +71,126 @@
 
 ## 2. Quick start
 
-### Prerequisites
+### 2.1 Prerequisites
 
 | Requirement | Version | Notes |
 |---|---|---|
-| Node.js | ≥ 20.0 | Required runtime; audit storage uses the `better-sqlite3` dependency |
+| Node.js | ≥ 20.0 | Runtime; audit storage uses `better-sqlite3` |
 | Git | any | — |
 
-That's it. There is no external binary to build or download.
+Nothing else: no clone, no build, no external binary. `npx` downloads the
+package on first run (10–25 s, mostly the SQLite native binding).
 
-### Run in 30 seconds (npm, recommended)
+### 2.2 Fastest path: paste this prompt into your agent
 
-```bash
-npm install -g venira-mcp             # or: npx --yes venira-mcp@latest (no install)
+Open your AI coding agent **in the project you want Venira to work on**, paste
+this, and let it wire things up:
+
+```text
+Set up Venira MCP for this workspace.
+
+1. Detect my MCP client and its exact config path. If you are not sure, ask me
+   instead of guessing.
+2. Run: npx --yes venira-mcp@latest --install auto --workspace .
+   If it reports that nothing was detected, run:
+   npx --yes venira-mcp@latest --print-config <my-client>
+   and merge the printed entry into the config path from step 1. Keep every
+   other server in that file untouched.
+3. Never put a token, key, or secret in the MCP config.
+4. Tell me to restart the client, then stop. Do not claim the connection is
+   verified before that restart.
 ```
 
-`npx` fetches the published tarball to a temp dir and runs it — no local clone or
-build needed. The first run downloads the package and the SQLite native binding,
-which usually takes 10–25 seconds:
+The prompt stops at the restart boundary on purpose: most clients only load MCP
+servers at startup, so nothing can be verified before the restart.
+
+### 2.3 Or run one command yourself
 
 ```bash
-npx --yes venira-mcp@latest --doctor  # preflight: workspace, data dir, tools, shell
+# Run from the project you want Venira to work on
 npx --yes venira-mcp@latest --install auto --workspace .
-                                       # merge Venira into detected client configs
-npx --yes venira-mcp@latest --print-config vscode
-                                       # print a ready-to-paste config (no writes)
-npx --yes venira-mcp@latest           # start the MCP server (stdio)
-npx --yes venira-mcp@latest --version # print the version (current release: 1.8.0)
-npx --yes venira-mcp@latest --verify  # run the behavioural regression suite
-npx --yes venira-mcp@latest --help    # list flags + environment variables
 ```
 
-The `bin` entry in `package.json` exposes both `venira` and `venira-mcp`.
-`npx` resolves packages by name, so the short form must name the package
-explicitly — `npx --yes -p venira-mcp venira` — or install it once globally with
-`npm i -g venira-mcp` and then call `venira`.
+`--install auto` merges Venira into every MCP client config it can find, backs
+up the original as `<file>.venira-bak`, and never removes other servers. Then
+restart the client.
 
-**First-time setup:** run `--doctor`, then `--install auto` (or
-`--print-config <client>`), restart the client, and ask the agent to call
-`project_health`. The agent cannot verify the connection before that restart.
+| Situation | Command |
+|---|---|
+| Nothing detected, or you want a specific client | `npx --yes venira-mcp@latest --install opencode` |
+| You prefer to paste the JSON yourself | `npx --yes venira-mcp@latest --print-config opencode` |
+| See what would change without writing | `npx --yes venira-mcp@latest --install auto --dry-run` |
 
-### Run from source (developers)
+Client names: `vscode`, `opencode`, `claude_desktop`, `cursor`, `codex`, `kimi`,
+`deepseek`, `antigravity`. Naming a client creates its config when missing;
+`auto` only touches configs that already exist.
+
+### 2.4 Restart, then verify
+
+Restart the client (VS Code: reload the window), then ask the agent:
+
+```text
+Call project_health and tell me whether Venira is connected.
+```
+
+A healthy connection returns `ok: true` plus the workspace path, data dir and
+tool counts. That is the only real proof — a config file on disk is not.
+
+### 2.5 Command cheat sheet
+
+| Command | When to use it |
+|---|---|
+| `npx --yes venira-mcp@latest --install auto --workspace .` | First-time setup; merges detected configs |
+| `npx --yes venira-mcp@latest --print-config <client>` | Print a config instead of writing it |
+| `npx --yes venira-mcp@latest --doctor` | Preflight: workspace, data dir, tools, shell |
+| `npx --yes venira-mcp@latest --setup-github` | Store a GitHub token once (interactive terminal) |
+| `npx --yes venira-mcp@latest --version` | Print the version (current release: 1.8.0) |
+| `npx --yes venira-mcp@latest --help` | All flags and environment variables |
+| `npx --yes venira-mcp@latest --verify` | Behavioural regression suite |
+
+A global install is optional: `npm i -g venira-mcp` exposes `venira` and
+`venira-mcp`, so `venira --install auto --workspace .` replaces the long form.
+Without it, name the package explicitly: `npx --yes -p venira-mcp venira`.
+
+### 2.6 Developers and containers
 
 ```bash
 git clone https://github.com/N0moreher0/Venira-mcp.git venira-mcp
 cd venira-mcp
 npm install
 npm run build          # tsc → dist/
-npm start              # stdio MCP server (attach via your MCP client, or pipe JSON manually)
+npm start              # stdio MCP server
 ```
 
-### Run in Docker (no Node on the host)
-
-```bash
-# Build locally
-docker build -t venira-mcp .
-
-# Run your project as the workspace
-docker run --rm -it \
-  -v /path/to/your/project:/workspace \
-  -e VENIRA_WORKSPACE=/workspace \
-  -e VENIRA_DATA_DIR=/workspace/data \
-  venira-mcp
-
-# Preflight inside the container (same flags as the npx CLI)
-docker run --rm -v /path/to/your/project:/workspace venira-mcp --doctor
-```
-
-Published images are also available from GitHub Container Registry:
+Docker (no Node on the host):
 
 ```bash
 docker run --rm -it -v "$PWD:/workspace" ghcr.io/n0moreher0/venira-mcp:latest
 ```
 
-See [`DOCKER.md`](./DOCKER.md) for multi-arch builds and MCP-client
-integration over Docker.
-
-### One-shot sanity checks (no MCP client required)
-
-```bash
-npm run smoke    # in-process: list a dir, read package.json, verify path-escape is blocked
-npm run doctor   # preflight checks: workspace, data dir, tool count, health, shell, version
-npm run verify   # behavioral + security regressions: MCP, shell policy, provider secret guard, GitHub OAuth
-npm run bench    # in-process corehost-tier benchmark (read throughput, batch, parallel)
-npm run bench:mcp# end-to-end MCP benchmark (first call, batch 8, search, health, …)
-```
+See [`DOCKER.md`](./DOCKER.md) for multi-arch builds and Docker wiring.
+After `npm install`, the local checks are `npm run smoke`, `npm run doctor`,
+`npm run verify`, `npm run bench:mcp`.
 
 ---
 
 ## 3. MCP client configuration (JSON)
 
-### 3.0 One-command setup (recommended)
+### 3.0 Supported clients
 
-Do not hand-edit JSON unless your client is not supported. The CLI can detect
-installed clients, merge Venira without removing other servers, and print a
-ready-to-paste config:
+Most users can stop after [§2.2](#22-fastest-path-paste-this-prompt-into-your-agent)–[§2.3](#23-or-run-one-command-yourself).
+This table is the reference for manual edits.
 
-```bash
-# Merge into every MCP client config that already exists
-npx --yes venira-mcp@latest --install auto --workspace .
-
-# Or create/merge one client (creates the file when missing)
-npx --yes venira-mcp@latest --install vscode --workspace .
-npx --yes venira-mcp@latest --install opencode --workspace .
-npx --yes venira-mcp@latest --install claude_desktop --workspace .
-
-# Read-only: print a config, write nothing
-npx --yes venira-mcp@latest --print-config vscode
-```
-
-Supported clients: `vscode`, `opencode`, `claude_desktop`, `cursor`, `codex`,
-`kimi`, `deepseek`, `antigravity`. Existing configs are backed up as
-`<file>.venira-bak` before a merge. `--install auto` only touches configs that
-already exist; naming a client explicitly creates its config when missing.
-
-After installing, **restart the client** and ask the agent to call
-`project_health`. The agent cannot verify the connection before that restart.
+| Client | Config file | Entry key |
+|---|---|---|
+| VS Code | `<workspace>/.vscode/mcp.json` | `servers` + `type: "stdio"` |
+| OpenCode | `~/.config/opencode/opencode.jsonc` or `.opencode/opencode.jsonc` | `mcp` + `type: "local"` |
+| Claude Desktop | `%APPDATA%\Claude\claude_desktop_config.json` (Windows) · `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) · `~/.config/Claude/claude_desktop_config.json` (Linux) | `mcpServers` |
+| Cursor | `%APPDATA%\Cursor\mcp.json` (Windows) · `~/Library/Application Support/Cursor/mcp.json` (macOS) · `~/.config/Cursor/mcp.json` (Linux) | `mcpServers` |
+| Codex CLI | `~/.codex/config.toml` | `[mcp_servers.venira]` (TOML) |
+| Kimi | `~/.kimi/mcp.json` | `mcpServers` |
+| DeepSeek | `~/.deepseek/mcp.json` | `mcpServers` |
+| Antigravity | `~/.antigravity/config.json` | `mcpServers` |
 
 ### 3.1 VS Code (`.vscode/mcp.json`)
 
@@ -262,19 +274,8 @@ the command with `["node", "/absolute/path/to/venira-mcp/dist/server.js"]`.
 
 ### 3.3 Claude Desktop / any MCP client (`claude_desktop_config.json` or `.mcp.json`)
 
-Common config locations:
-
-| Client | Config path |
-|---|---|
-| Claude Desktop (Windows) | `%APPDATA%\Claude\claude_desktop_config.json` |
-| Claude Desktop (macOS) | `~/Library/Application Support/Claude/claude_desktop_config.json` |
-| Claude Desktop (Linux) | `~/.config/Claude/claude_desktop_config.json` |
-| Cursor (Windows) | `%APPDATA%\Cursor\mcp.json` |
-| Cursor (macOS) | `~/Library/Application Support/Cursor/mcp.json` |
-| Cursor (Linux) | `~/.config/Cursor/mcp.json` |
-| Codex CLI | `~/.codex/config.toml` (TOML, not JSON) |
-| VS Code | `<workspace>/.vscode/mcp.json` |
-| OpenCode | `~/.config/opencode/opencode.jsonc` or `.opencode/opencode.jsonc` |
+Path per client: see [§3.0](#30-supported-clients). The same shape works for
+Claude Desktop, Cursor, Kimi, DeepSeek and Antigravity:
 
 ```json
 {
@@ -303,31 +304,9 @@ exact JSON/TOML for your OS. On Windows, JSON paths need escaped backslashes
 > `"command": "node", "args": ["/absolute/path/to/venira-mcp/dist/server.js"]`
 > instead of `npx`.
 
-**Copy/paste prompt for any MCP client:**
-
-```text
-Configure Venira MCP for this workspace.
-
-1. Detect my MCP client and its exact config path. If you are unsure, ask me
-   instead of guessing.
-2. Prefer running one of these commands instead of hand-editing JSON:
-   npx --yes venira-mcp@latest --install auto --workspace .
-   npx --yes venira-mcp@latest --print-config <client>
-   If you edit manually, merge into the existing config and preserve every
-   unrelated server.
-3. Use command "npx", args
-   ["--yes","--package=venira-mcp@latest","venira-mcp"], and env
-   VENIRA_WORKSPACE=<absolute workspace path>, VENIRA_UNRESTRICTED=0,
-   VENIRA_SHELL_MODE=balanced, VENIRA_PERMISSION_MODE=allow_all.
-4. Never put a token, key, or secret in the MCP config.
-5. Tell me to restart the client. After I restart, call project_health and
-   report the result. Do not claim the connection is verified before that
-   restart.
-```
-
-This prompt deliberately stops at the restart boundary: most clients only load
-MCP servers at startup, so an agent cannot verify a newly written config in the
-same session.
+For the agent-facing setup prompt, see
+[§2.2](#22-fastest-path-paste-this-prompt-into-your-agent). It applies to every
+client listed above.
 
 ### 3.4 Environment variables (full reference)
 
