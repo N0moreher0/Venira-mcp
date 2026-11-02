@@ -39,7 +39,7 @@ import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
-import { UNRESTRICTED, WORKSPACE, activeDataDir } from "./workspace.js";
+import { UNRESTRICTED, WORKSPACE, activeDataDir, resolveWithin } from "./workspace.js";
 import { parseShellCommand, type ParsedCommand, type Segment } from "./shell-parser.js";
 import {
   NETWORK_COMMANDS,
@@ -597,7 +597,8 @@ function matchesOverride(parsed: ParsedCommand, cwd: string, name: ShellOverride
     const absolute = path.resolve(cwd, target);
     const entry = lstatSync(absolute);
     if (!entry.isFile() || entry.isSymbolicLink()) return false;
-    return !isOutsideWorkspace(realpathSync(absolute), cwd);
+    resolveWithin(cwd, realpathSync(absolute));
+    return true;
   } catch {
     return false;
   }
