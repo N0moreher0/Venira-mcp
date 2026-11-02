@@ -47,6 +47,21 @@ out.first_call_ms = +first.ms.toFixed(1);
 out.first_bytes = text(first.result).length;
 out.first_ok = !(first.result as { isError?: boolean }).isError;
 
+const earlyExit = await call("project_shell_run", {
+  command: "echo bench-early-exit",
+  early_exit: 1,
+});
+const earlyExitText = String(
+  (earlyExit.result as { content?: { text?: string }[] })?.content?.[0]?.text ?? "{}",
+);
+const earlyExitData = JSON.parse(earlyExitText);
+out.shell_early_exit_ms = +earlyExit.ms.toFixed(1);
+out.shell_early_exit_ok =
+  earlyExitData.ok === true &&
+  earlyExitData.data?.running === false &&
+  earlyExitData.data?.run_id === earlyExitData.data?.shell_id &&
+  String(earlyExitData.data?.stdout ?? "").includes("bench-early-exit");
+
 const reads: number[] = [];
 for (let i = 0; i < 50; i++) reads.push((await call("project_read_file", { relative_path: "server.ts", max_bytes: 8192 })).ms);
 out.read_same_file_50 = stats(reads);
@@ -76,7 +91,7 @@ out.list_bytes = String(
   (listRun.result as { content?: { text?: string }[] })?.content?.[0]?.text ?? "{}",
 ).length;
 
-const health = await call("project_health", { include_audit: false });
+const health = await call("project_health", { include_audit: 0 });
 out.health = health.ms.toFixed(1);
 out.health_bytes = String(
   (health.result as { content?: { text?: string }[] })?.content?.[0]?.text ?? "{}",

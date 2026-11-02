@@ -47,7 +47,7 @@
    - Search limit too small
 3. Enable a more aggressive compact output mode:
    - Default is `VENIRA_PRETTY=0`
-   - Add `VENIRA_OUTPUT_MODE=full|compact|summary`
+   - Add `VENIRA_OUTPUT_MODE=full|compact`
 4. Add a `summary` for long results:
    - `matches_preview`
    - `files_scanned`

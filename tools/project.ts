@@ -3,7 +3,9 @@ import { randomBytes } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
+import { envChoice, envFlag } from "../lib/env.js";
 import { CoreHost, shellPolicySnapshot } from "../lib/corehost.js";
+import * as approvals from "../lib/approvals.js";
 import { evaluateToolPolicy } from "../lib/tool-policy.js";
 import { recordMetric, metricsSnapshot } from "../lib/metrics.js";
 import {
@@ -32,6 +34,7 @@ import {
   CACHE_SEARCH_ONLY_ENABLED,
   isProtectedPath,
   ALLOW_JS_EXEC,
+  activeDataDir,
 } from "../lib/workspace.js";
 import { addTrace, recentTraces, traceSnapshot } from "../lib/tracer.js";
 import {
@@ -216,6 +219,7 @@ const EXTERNAL_OPS = new Set([
   "ci_trigger",
   "ci_logs",
   "secret",
+  "github_connect",
 ]);
 
 /** Convert path fields to absolute workspace paths; drop undefined values. */
@@ -686,13 +690,12 @@ async function executeCached(operation: string, args: Args): Promise<Execution> 
 // Shell approval flow
 // ---------------------------------------------------------------------------
 
-const SHELL_ELICIT = ["1", "true", "on", "yes"].includes(
-  (process.env.VENIRA_SHELL_ELICIT ?? "").toLowerCase(),
-);
+const SHELL_ELICIT = envFlag("VENIRA_SHELL_ELICIT", false);
 const ELICIT_TIMEOUT_MS = 5 * 60 * 1000;
 
 type ShellApprovalData = {
   approval_token?: unknown;
+  approval_id?: unknown;
   command?: unknown;
   rule?: unknown;
   reason?: unknown;
@@ -707,11 +710,14 @@ function approvalFailure(
   elapsedMs: number,
 ): ToolResult {
   const token = typeof data.approval_token === "string" ? data.approval_token : "";
+  const approvalId = typeof data.approval_id === "string" ? data.approval_id : "";
   const reason = typeof data.reason === "string" ? data.reason : "This command requires approval.";
   const rule = typeof data.rule === "string" ? data.rule : "policy";
   const hint = token
-    ? `Ask the user to confirm "${String(data.command ?? "").slice(0, 200)}". If they approve, retry project_shell_run with approval_token="${token}"; add approval_scope="session" to approve this command group until the token TTL ends.`
-    : undefined;
+    ? `Ask the user to confirm "${String(data.command ?? "").slice(0, 200)}". If they approve, retry project_shell_run with approval_token="${token}".`
+    : approvalId
+      ? `Ask the user to run \`npx venira-mcp --approve ${approvalId}\` in an interactive terminal, then retry project_shell_run with approval_id="${approvalId}".`
+      : undefined;
   return toolResult(
     errorEnvelope(operation, new Error(`[approval_required] ${reason} (rule: ${rule})`), {
       requestId,
@@ -782,8 +788,23 @@ async function runShell(args: Args, server: McpServer): Promise<ToolResult> {
     if (response.result?.kind === "shell_approval" && SHELL_ELICIT) {
       const verdict = await elicitShellApproval(server, data ?? {});
       if (verdict.approved) {
-        const retry: Args = { ...args, approval_token: data?.approval_token };
-        if (verdict.remember) retry.approval_scope = "session";
+        // The person accepted in their own client UI: record the grant on their
+        // behalf, with the scope they chose (session only where it is allowed).
+        const pendingId = typeof data?.approval_id === "string" ? data.approval_id : "";
+        if (pendingId) {
+          try {
+            approvals.writeApprovalGrant(pendingId, "elicitation", verdict.remember ? "session" : "once");
+          } catch {
+            try {
+              approvals.writeApprovalGrant(pendingId, "elicitation", "once");
+            } catch (error) {
+              console.error(`[venira-coding] could not record approval: ${error instanceof Error ? error.message : String(error)}`);
+            }
+          }
+        }
+        const retry: Args = { ...args, approval_token: data?.approval_token, approval_id: data?.approval_id };
+        delete (retry as Record<string, unknown>).approval_scope;
+        if (verdict.remember && data?.approval_token) retry.approval_scope = "session";
         ({ response } = await executeCached("shell_run", retry));
         data = response.result?.data as ShellApprovalData | undefined;
         cached = false;
@@ -947,6 +968,10 @@ async function runEditBatch(args: Args): Promise<ToolResult> {
     }
   }
   let failed = false;
+  const executed: number[] = [];
+  const skipped: number[] = [];
+  let rollbackAttempted = false;
+  let rollbackSucceeded = false;
   for (const item of items) {
     const itemStarted = performance.now();
     try {
@@ -966,19 +991,47 @@ async function runEditBatch(args: Args): Promise<ToolResult> {
       totalBytes += size;
       recordMetric("edit_file", performance.now() - itemStarted, true);
       responses.push({ ok: true, response: envelope });
+      executed.push(responses.length - 1);
     } catch (error) {
       failed = true;
       recordMetric("edit_file", performance.now() - itemStarted, false);
       const failure = parseToolError(error);
       responses.push({ ok: false, error: { code: failure.code, message: failure.message, retryable: failure.retryable } });
       if (snapshotId) {
-        try { await executeCached("snapshot_restore", { action: "restore", id: snapshotId }); } catch { /* best-effort */ }
+        rollbackAttempted = true;
+        try {
+          await executeCached("snapshot_restore", { action: "restore", id: snapshotId });
+          rollbackSucceeded = true;
+        } catch (restoreError) {
+          console.error(`[venira-coding] edit_batch rollback failed: ${restoreError instanceof Error ? restoreError.message : String(restoreError)}`);
+        }
       }
+      for (let skippedIndex = responses.length; skippedIndex < items.length; skippedIndex += 1) {
+        skipped.push(skippedIndex);
+        responses.push({
+          ok: false,
+          error: {
+            code: "batch_aborted",
+            message: "Not executed because an earlier edit failed; the batch was rolled back when possible.",
+            retryable: true,
+          },
+        });
+      }
+      break;
     }
   }
   const elapsedMs = performance.now() - started;
-  recordMetric("edit_batch", elapsedMs, true);
-  return toolResult(batchEnvelope(requestId, responses, elapsedMs, { total_bytes_returned: totalBytes }));
+  recordMetric("edit_batch", elapsedMs, !failed || rollbackSucceeded);
+  return toolResult(batchEnvelope(requestId, responses, elapsedMs, {
+    total_bytes_returned: totalBytes,
+    atomic: true,
+    failed,
+    executed,
+    skipped,
+    rollback_attempted: rollbackAttempted,
+    rollback_succeeded: rollbackSucceeded,
+    ...(snapshotId ? { snapshot_id: snapshotId } : {}),
+  }));
 }
 
 async function runReadRanges(args: Args): Promise<ToolResult> {
@@ -1284,9 +1337,12 @@ async function runCreate(args: Args): Promise<ToolResult> {
 // project_health
 // ---------------------------------------------------------------------------
 function dataDirFor(exe: string | null): string {
-  if (process.env.VENIRA_DATA_DIR) return path.resolve(process.env.VENIRA_DATA_DIR);
-  if (exe) return path.join(path.dirname(exe), "data");
-  return path.join(WORKSPACE, "data");
+  // `exe` is always null in the standalone (pure-Node, no Rust binary) build — kept as a
+  // parameter for call-site compatibility. Must match corehost.ts's ensureAuditDb(), which
+  // resolves VENIRA_DATA_DIR else the per-user default (lib/workspace.ts#defaultDataDir);
+  // falling back to WORKSPACE/data here would silently point at a DB nothing ever writes to.
+  void exe;
+  return activeDataDir();
 }
 
 async function auditHealth(dbPath: string): Promise<Record<string, unknown>> {
@@ -1314,6 +1370,88 @@ async function auditHealth(dbPath: string): Promise<Record<string, unknown>> {
       const mine = db
         .prepare("SELECT outcome, count(*) AS n FROM project_tool_audit WHERE session_id = ? GROUP BY outcome")
         .all(SESSION_ID) as { outcome?: string; n?: unknown }[];
+      let loopFailures: Array<{ operation: string; reason_code: string; count: number }> = [];
+      let adoptionRuns: Array<{ operation: string; count: number; duration_ms: number }> = [];
+      try {
+        const loopRows = db
+          .prepare(
+            `SELECT operation, COALESCE(reason_code, 'operation_failed') AS reason_code, COUNT(*) AS n
+             FROM project_tool_audit
+             WHERE outcome = 'failed'
+               AND started_at >= ?
+               AND args_hash IS NOT NULL
+             GROUP BY operation, reason_code, args_hash
+             HAVING COUNT(*) >= 2
+             ORDER BY n DESC
+             LIMIT 20`,
+          )
+          .all(Date.now() - 10 * 60 * 1000) as Array<{ operation?: string; reason_code?: string; n?: number }>;
+        loopFailures = loopRows.map((row) => ({
+            operation: row.operation ?? "unknown",
+            reason_code: row.reason_code ?? "operation_failed",
+            count: Number(row.n ?? 0),
+          }));
+      } catch {
+        // Legacy databases without args_hash remain healthy; the migration may
+        // not have completed yet in a concurrently opened health reader.
+      }
+      try {
+        const adoptionRows = db
+          .prepare(
+            `SELECT id, session_id, operation, outcome, started_at, completed_at
+             FROM project_tool_audit
+             WHERE started_at >= ?
+             ORDER BY id ASC`,
+          )
+          .all(Date.now() - 10 * 60 * 1000) as Array<{
+          id: number;
+          session_id: string;
+          operation: string;
+          outcome: string;
+          started_at: number;
+          completed_at?: number | null;
+        }>;
+        const eligible = new Set(["read_file", "edit_file"]);
+        let current: { operation: string; session_id: string; count: number; started_at: number; ended_at: number } | null = null;
+        const flush = () => {
+          if (current && current.count >= 3) {
+            adoptionRuns.push({
+              operation: current.operation,
+              count: current.count,
+              duration_ms: Math.max(0, current.ended_at - current.started_at),
+            });
+          }
+          current = null;
+        };
+        for (const row of adoptionRows) {
+          const canJoin =
+            row.outcome === "succeeded" &&
+            eligible.has(row.operation) &&
+            current !== null &&
+            current.operation === row.operation &&
+            current.session_id === row.session_id &&
+            row.started_at - current.ended_at <= 60_000;
+          if (canJoin && current) {
+            current.count += 1;
+            current.ended_at = row.completed_at ?? row.started_at;
+          } else {
+            flush();
+            if (row.outcome === "succeeded" && eligible.has(row.operation)) {
+              current = {
+                operation: row.operation,
+                session_id: row.session_id,
+                count: 1,
+                started_at: row.started_at,
+                ended_at: row.completed_at ?? row.started_at,
+              };
+            }
+          }
+        }
+        flush();
+        adoptionRuns = adoptionRuns.sort((a, b) => b.count - a.count).slice(0, 20);
+      } catch {
+        // Legacy or concurrently migrated audit databases remain usable.
+      }
       return {
         path: dbPath,
         exists: true,
@@ -1322,6 +1460,8 @@ async function auditHealth(dbPath: string): Promise<Record<string, unknown>> {
         total_rows: Number(total?.n ?? 0),
         orphan_running: Number(orphan?.n ?? 0),
         session: Object.fromEntries(mine.map((row) => [row.outcome ?? "unknown", Number(row.n ?? 0)])),
+        loop_failures: loopFailures,
+        adoption_runs: adoptionRuns,
       };
     } finally {
       db.close();
@@ -1395,14 +1535,14 @@ async function runHealth(args: Args): Promise<ToolResult> {
         unrestricted: UNRESTRICTED,
         permission_mode: PERMISSION_MODE,
         output_mode: OUTPUT_MODE,
-        pretty: process.env.VENIRA_PRETTY === "1",
+        pretty: envFlag("VENIRA_PRETTY", false),
         node: process.version,
       },
       corehost: {
         ...hostInfo,
         exe: hostInfo.exe,
         data_dir: dataDir,
-        audit_fast: (process.env.VENIRA_AUDIT_FAST ?? "1") !== "0",
+        audit_fast: envFlag("VENIRA_AUDIT_FAST", true),
       },
       capability: capability
         ? {
@@ -1430,7 +1570,7 @@ async function runHealth(args: Args): Promise<ToolResult> {
       secrets: secretsHealth(),
       // GitHub/CI: repo detection, api base, auth presence (never the token).
       network: {
-        enabled: (process.env.VENIRA_NETWORK ?? "1") !== "0",
+        enabled: envFlag("VENIRA_NETWORK", true),
         github: githubHealth(),
       },
       metrics: metricsSnapshot(),
@@ -1443,8 +1583,8 @@ async function runHealth(args: Args): Promise<ToolResult> {
       trace: traceSnapshot(),
       shell: {
         tail_max: Number(process.env.VENIRA_SHELL_TAIL_MAX ?? 4096),
-        exit_early: process.env.VENIRA_SHELL_EXIT_EARLY === "1",
-        timeout_policy: process.env.VENIRA_SHELL_TIMEOUT_POLICY === "hard" ? "hard" : "soft",
+        exit_early: envFlag("VENIRA_SHELL_EXIT_EARLY", false),
+        timeout_policy: envChoice("VENIRA_SHELL_TIMEOUT_POLICY", "soft", ["soft", "hard"]),
       },
       audit: includeAudit ? await auditHealth(dbPath) : { skipped: true },
     };
@@ -1465,6 +1605,7 @@ async function runHealth(args: Args): Promise<ToolResult> {
 // Tool registration
 // ---------------------------------------------------------------------------
 const path_ = z.string().describe("Path inside the workspace (relative, or absolute inside the workspace)");
+const flag01 = z.number().int().min(0).max(1).transform((value) => value === 1).describe("Numeric flag: 1=enabled, 0=disabled.");
 const reason_ = z
   .string()
   .max(400)
@@ -1473,9 +1614,9 @@ const reason_ = z
     "Why this change is made (e.g. \"sua loi null pointer o dong 45\"). Recorded in the audit trail so later sessions know the intent. Single line, max 400 chars, secrets are redacted.",
   );
 const editOp = z.object({
-  old_text: z.string(),
+  old_text: z.string().min(1),
   new_text: z.string(),
-  replace_all: z.boolean().optional(),
+  replace_all: flag01.optional(),
 });
 
 type ToolMeta = {
@@ -1554,7 +1695,7 @@ async function runExecuteJs(args: Args): Promise<ToolResult> {
     : 30_000;
   try {
     const cliArgs = Array.isArray(args.argv) ? (args.argv as string[]).map(String) : undefined;
-    const r = executeJs(code, { timeout: timeoutMs, args: cliArgs });
+    const r = executeJs(code, { cwd: WORKSPACE, timeout: timeoutMs, args: cliArgs });
     const response: RustResponse = {
       status: "completed",
       result: {
@@ -1605,12 +1746,31 @@ async function runReadAudit(args: Args): Promise<ToolResult> {
       `FROM project_tool_audit ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ` +
       `ORDER BY started_at DESC LIMIT ?`;
     const rows = db.prepare(sql).all(...values, limit + 1) as unknown[];
-    db.close();
     const truncated = rows.length > limit;
+    let verified: boolean | null = null;
+    if (args.verify === true && columns.has("row_hash")) {
+      try {
+        const all = db.prepare("SELECT prev_hash, row_hash FROM project_tool_audit ORDER BY id ASC").all() as Array<{ prev_hash: string | null; row_hash: string | null }>;
+        let ok = true;
+        let prev = "";
+        let started = false;
+        for (const r of all) {
+          if (!r.row_hash) { ok = false; break; }
+          if (started && r.prev_hash !== prev) { ok = false; break; }
+          started = true;
+          prev = r.row_hash;
+        }
+        verified = ok;
+      } catch {
+        verified = false;
+      }
+    }
+    db.close();
     const data = {
       db_path: dbPath,
       count: truncated ? limit : rows.length,
       truncated,
+      ...(verified !== null ? { verified } : {}),
       rows: rows.slice(0, limit).map((r) => {
         const row = r as Record<string, unknown>;
         return {
@@ -2178,6 +2338,20 @@ async function runDetectHarnesses(args: Args): Promise<ToolResult> {
 async function runInstallSelf(args: Args): Promise<ToolResult> {
   const started = performance.now();
   const requestId = newRequestId();
+
+  if (!envFlag("VENIRA_ALLOW_SELF_INSTALL", false)) {
+    return toolResult(
+      errorEnvelope(
+        "install_self",
+        new Error(
+          "[approval_required] Self-install is disabled by default. Set VENIRA_ALLOW_SELF_INSTALL=1 and retry, or ask the user to run it manually. " +
+            "Hint: this writes to another client's config file outside the workspace.",
+        ),
+        { requestId, elapsedMs: 0 },
+      ),
+      true,
+    );
+  }
   const harness = String(args.harness ?? "") as HarnessName;
   const valid: HarnessName[] = [
     "opencode",
@@ -2238,7 +2412,7 @@ export function registerProjectTools(server: McpServer): void {
       ),
       inputSchema: {
         relative_path: path_.optional(),
-        include_ignored: z.boolean().optional(),
+        include_ignored: flag01.optional(),
         limit: z.number().int().min(1).max(200).optional(),
         depth: z.number().int().min(1).max(3).optional(),
       },
@@ -2265,7 +2439,7 @@ export function registerProjectTools(server: McpServer): void {
         relative_path: path_,
         start_line: z.number().int().min(0).optional(),
         end_line: z.number().int().min(0).optional(),
-        line_numbers: z.boolean().optional(),
+        line_numbers: flag01.optional(),
         max_bytes: z.number().int().min(1).max(1048576).optional(),
       },
     },
@@ -2331,7 +2505,7 @@ export function registerProjectTools(server: McpServer): void {
     "project_search",
     {
       ...config(
-        "Search by file name, directory name, content (literal or regex=true), or symbol declaration lines (definition).",
+        "Search by file name, directory name, content (literal or regex=1), or symbol declaration lines (definition).",
         "Search workspace",
         {
           use_when: "you need to find code/strings/symbols before reading; use kind=literal_content or definition.",
@@ -2348,12 +2522,12 @@ export function registerProjectTools(server: McpServer): void {
         relative_path: path_.optional(),
         glob: z.string().optional(),
         exclude_glob: z.string().optional(),
-        regex: z.boolean().optional(),
-        case_sensitive: z.boolean().optional(),
-        whole_word: z.boolean().optional(),
-        include_hidden: z.boolean().optional(),
+        regex: flag01.optional(),
+        case_sensitive: flag01.optional(),
+        whole_word: flag01.optional(),
+        include_hidden: flag01.optional(),
         context_lines: z.number().int().min(0).max(20).optional(),
-        count_only: z.boolean().optional(),
+        count_only: flag01.optional(),
         limit: z.number().int().min(1).max(200).optional(),
       },
     },
@@ -2379,7 +2553,7 @@ export function registerProjectTools(server: McpServer): void {
         relative_path: path_.optional(),
         limit: z.number().int().min(1).max(100).optional(),
         depth: z.number().int().min(1).max(6).optional(),
-        include_ignored: z.boolean().optional(),
+        include_ignored: flag01.optional(),
       },
     },
     (args) => runRecentFiles(args as Args),
@@ -2436,7 +2610,7 @@ export function registerProjectTools(server: McpServer): void {
         relative_path: path_,
         content: z.string(),
         mode: z.enum(["create", "overwrite", "append"]).optional(),
-        create_dirs: z.boolean().optional(),
+        create_dirs: flag01.optional(),
         expected_sha256: z.string().optional(),
         reason: reason_,
       },
@@ -2461,16 +2635,16 @@ export function registerProjectTools(server: McpServer): void {
       ),
       inputSchema: {
         relative_path: path_,
-        old_text: z.string().optional(),
+        old_text: z.string().min(1).optional(),
         new_text: z.string().optional(),
-        replace_all: z.boolean().optional(),
+        replace_all: flag01.optional(),
         edits: z.array(editOp).max(64).optional(),
         expected_sha256: z.string().optional(),
         // P2: Fuzzy edit args
         old_text_fuzzy: z.string().optional().describe("P2: Fuzzy-match fallback for old_text (used when exact match fails and VENIRA_EDIT_FUZZY=1)."),
         fuzzy_distance: z.number().int().min(0).max(10).optional().describe("P2: Max Levenshtein distance for fuzzy matching (default 3)."),
-        ignore_indentation: z.boolean().optional().describe("P2: Ignore leading whitespace differences in fuzzy matching."),
-        case_insensitive: z.boolean().optional().describe("P2: Case-insensitive fuzzy matching."),
+        ignore_indentation: flag01.optional().describe("P2: Ignore leading whitespace differences in fuzzy matching; 1=on, 0=off."),
+        case_insensitive: flag01.optional().describe("P2: Case-insensitive fuzzy matching; 1=on, 0=off."),
         reason: reason_,
       },
     },
@@ -2480,19 +2654,19 @@ export function registerProjectTools(server: McpServer): void {
     "project_edit_batch",
     {
       ...config(
-        "Apply multiple edit_file operations in one call; returns per-item results.",
+        "Apply multiple edit_file operations atomically in one call; aborts after the first failure and restores the pre-batch snapshot when possible.",
         "Edit batch",
         {
           use_when: "you have 2+ independent edits across one or more files.",
           avoid_when: "a single edit (project_edit_file) or a whole-file rewrite (project_write_file).",
           speed_profile: "depends on item count; each runs edit_file and clears caches.",
-          output_kind: "batch: responses[] {ok, response|error}, total_bytes_returned.",
+          output_kind: "batch: responses[] {ok, response|error}, atomic metadata with executed/skipped indexes and rollback status.",
           batch_safe: false,
         },
         { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
       ),
       inputSchema: {
-        edits: z.array(z.record(z.string(), z.any())).min(1).max(64).describe("Array of edit_file argument objects."),
+        edits: z.array(z.record(z.string(), z.any())).min(1).max(64).describe("Array of edit_file argument objects. The batch aborts on the first failure and rolls back earlier writes when possible."),
         max_response_bytes_per_item: z.number().int().min(256).max(1048576).optional(),
       },
     },
@@ -2504,14 +2678,14 @@ export function registerProjectTools(server: McpServer): void {
     {
       ...config("Create a directory (create_parents defaults to true).", "Create directory", {
         use_when: "a directory must exist before writing a file into a new path.",
-        avoid_when: "the directory already exists, or you only need to write a file with create_dirs=true.",
+        avoid_when: "the directory already exists, or you only need to write a file with create_dirs=1.",
         speed_profile: "fast; create_parents avoids a second call.",
         output_kind: "directory_created: relative_path.",
         batch_safe: false,
       }, { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false }),
       inputSchema: {
         relative_path: path_,
-        create_parents: z.boolean().optional(),
+        create_parents: flag01.optional(),
         reason: reason_,
       },
     },
@@ -2521,7 +2695,7 @@ export function registerProjectTools(server: McpServer): void {
   server.registerTool(
     "project_delete_path",
     {
-      ...config("Delete a file or directory (directories require recursive=true).", "Delete path", {
+      ...config("Delete a file or directory (directories require recursive=1).", "Delete path", {
         use_when: "a file/directory must be deleted entirely; the path is confirmed.",
         avoid_when: "you only need to change the content (write/edit). This op is not undoable.",
         speed_profile: "fast; clears the read/list/search cache.",
@@ -2530,7 +2704,7 @@ export function registerProjectTools(server: McpServer): void {
       }, { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false }),
       inputSchema: {
         relative_path: path_,
-        recursive: z.boolean().optional(),
+        recursive: flag01.optional(),
         reason: reason_,
       },
     },
@@ -2542,18 +2716,19 @@ export function registerProjectTools(server: McpServer): void {
     {
       ...config(
         `Run a shell command (cwd defaults to ${WORKSPACE}). Returns run_id immediately; use project_shell_status to get the output. ` +
-          "Commands pass a policy gate: risky ones return an approval_required error with a single-use approval_token; " +
-          "catastrophic ones are denied outright.",
+          "Commands pass a policy gate: risky ones return an approval_required error with a pending approval_id; " +
+          "catastrophic ones are denied outright. Named overrides require operator allowlisting and a per-call reason.",
         "Shell run (async)",
         {
           use_when:
             "build/test/lint/long-running commands; returns run_id immediately so it never blocks other tools. " +
-            "After approval_required, ask the user and retry with the approval_token from data.",
+            "Set early_exit=1 to wait for completion and return final output in this call; otherwise poll project_shell_status. " +
+            "After approval_required, ask the user to approve the approval_id in an interactive terminal, then retry.",
           avoid_when: "a very short command whose output you need right now (you can still run it and poll 0s).",
           speed_profile: "returns in ~5 ms; run time is up to the command (bounded by timeout_ms).",
           output_kind:
-            "shell_run: run_id, running, exit_code, stdout_tail/stderr_tail, timed_out, policy; " +
-            "approval_required: rule, reason, approval_token, retry_with.",
+            "shell_run: run_id/shell_id, running, exit_code, stdout_tail/stderr_tail, timed_out, policy; " +
+            "with early_exit=1 also returns bounded stdout/stderr; approval_required: rule, reason, approval_id, retry_with.",
           batch_safe: false,
         },
         { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
@@ -2575,15 +2750,32 @@ export function registerProjectTools(server: McpServer): void {
           .int()
           .min(0)
           .optional()
-          .describe("Kill the whole process tree after this many milliseconds (0 = no timeout; capped by VENIRA_SHELL_MAX_TIMEOUT_MS)."),
+          .describe("Kill the whole process tree after this many milliseconds. Unset or 0 uses the default 10-minute timeout; capped by VENIRA_SHELL_MAX_TIMEOUT_MS."),
         approval_token: z
           .string()
           .optional()
           .describe("Single-use token from a previous approval_required envelope. Never invent or reuse one."),
+        approval_id: z
+          .string()
+          .optional()
+          .describe("Approval ID from npx venira-mcp --approve <id>. Use this instead of approval_token when auto-approval is disabled."),
+        override: z
+          .enum(["ALLOW_GIT_PUSH", "ALLOW_ENV_READ"])
+          .optional()
+          .describe("Named exception; only works when the operator enabled this exact name in VENIRA_SHELL_OVERRIDES."),
+        reason: z
+          .string()
+          .min(1)
+          .max(400)
+          .optional()
+          .describe("Required with override; explain the specific intent in one line. Redacted and recorded in the SQLite audit trail."),
+        early_exit: flag01
+          .optional()
+          .describe("1 waits for the background shell to finish and return final output; 0 returns immediately with run_id/shell_id."),
         approval_scope: z
           .enum(["once", "session"])
           .optional()
-          .describe("With approval_token: `once` (default) runs this command only; `session` also approves the same command group for the token TTL."),
+          .describe("Legacy token-only compatibility. With approval_id, scope is chosen by the human at approval time (`--approve <id> --session`) and this field is ignored."),
       },
     },
     (args) => runShell(args, server),
@@ -2647,7 +2839,7 @@ export function registerProjectTools(server: McpServer): void {
         kind: z.enum(["file", "directory"]),
         content: z.string().optional(),
         mode: z.enum(["create", "overwrite", "append"]).optional(),
-        create_dirs: z.boolean().optional(),
+        create_dirs: flag01.optional(),
         expected_sha256: z.string().optional(),
         reason: reason_,
       },
@@ -2664,13 +2856,13 @@ export function registerProjectTools(server: McpServer): void {
         {
           use_when: "debugging slowness/errors, checking the backend/DB/audit before reporting, or inspecting this session's cache/metrics.",
           avoid_when: "you just need to read/write files normally.",
-          speed_profile: "fast (~a few ms + 1 audit DB query); set include_audit=false to skip the DB query.",
+          speed_profile: "fast (~a few ms + 1 audit DB query); set include_audit=0 to skip the DB query.",
           output_kind: "health: server, corehost, capability, queue, caches, shells, metrics, audit.",
           batch_safe: false,
         },
         { readOnlyHint: true, openWorldHint: false },
       ),
-      inputSchema: { include_audit: z.boolean().optional() },
+      inputSchema: { include_audit: flag01.optional() },
     },
     (args) => runHealth(args as Args),
 
@@ -2755,7 +2947,7 @@ export function registerProjectTools(server: McpServer): void {
         "Read audit log",
         {
           use_when: "you need to inspect what operations were recorded (audit trail) — e.g. compliance or debugging a prior action.",
-          avoid_when: "you only need the live cache/metric report (project_health include_audit=true) — that one is faster.",
+          avoid_when: "you only need the live cache/metric report (project_health include_audit=1) — that one is faster.",
           speed_profile: "fast; one bounded SQLite read (readonly, WAL-safe).",
           output_kind: "audit_read: rows[] (newest first), count, truncated, db_path.",
           batch_safe: true,
@@ -2768,6 +2960,7 @@ export function registerProjectTools(server: McpServer): void {
         outcome: z.enum(["success", "failure", "running"]).optional(),
         limit: z.number().int().min(1).max(200).optional(),
         since_unix: z.number().int().min(0).optional(),
+        verify: flag01.optional().describe("1 verifies the audit hash chain and returns chain_ok; 0 disables verification."),
       },
     },
     (args) => runReadAudit(args as Args),
@@ -2815,8 +3008,8 @@ export function registerProjectTools(server: McpServer): void {
       inputSchema: {
         relative_path: path_,
         language: z.string().optional(),
-        include_functions: z.boolean().optional(),
-        include_classes: z.boolean().optional(),
+        include_functions: flag01.optional(),
+        include_classes: flag01.optional(),
         max_symbols: z.number().int().min(1).max(500).optional(),
       },
     },
@@ -2841,8 +3034,8 @@ export function registerProjectTools(server: McpServer): void {
       inputSchema: {
         relative_path: path_,
         language: z.string().optional(),
-        include_functions: z.boolean().optional(),
-        include_classes: z.boolean().optional(),
+        include_functions: flag01.optional(),
+        include_classes: flag01.optional(),
       },
     },
     (args) => runFileSymbols(args as Args),
@@ -2917,7 +3110,7 @@ export function registerProjectTools(server: McpServer): void {
       inputSchema: {
         queries: z.array(z.object({
           pattern: z.string(),
-          must: z.boolean().optional(),
+          must: flag01.optional(),
           weight: z.number().int().optional(),
         })).min(1),
         files_hint: z.array(z.string()).optional(),
@@ -2960,12 +3153,12 @@ export function registerProjectTools(server: McpServer): void {
         "Self-install venira MCP",
         {
           use_when: "a user asks to 'install venira into <client>' — add the MCP server block to that client's config file.",
-          avoid_when: "the config path is unknown (run project_detect_harnesses first), or the user wants a dry-run (set dry_run=true).",
+          avoid_when: "the config path is unknown (run project_detect_harnesses first), or the user wants a dry-run (set dry_run=1).",
           speed_profile: "fast; one atomic write per config. Always backs up the original to <file>.venira-bak.",
           output_kind: "install_self: {harness, config_path, status (installed|already_present|config_missing|error), needs_restart, error?}.",
           batch_safe: false,
         },
-        { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+        { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
       ),
       inputSchema: {
         harness: z.enum([
@@ -2978,8 +3171,8 @@ export function registerProjectTools(server: McpServer): void {
           "antigravity",
         ]),
         workspace: z.string().optional().describe("VENIRA_WORKSPACE value to write (default: process.cwd())."),
-        data_dir: z.string().optional().describe("VENIRA_DATA_DIR value to write (default: <workspace>/data)."),
-        dry_run: z.boolean().optional().describe("When true, report what would happen without writing."),
+        data_dir: z.string().optional().describe("VENIRA_DATA_DIR value to write (default: the per-user Venira data directory)."),
+        dry_run: flag01.optional().describe("1 reports what would happen without writing; 0 performs the action."),
       },
     },
     (args) => runInstallSelf(args as Args),
@@ -3058,10 +3251,9 @@ export function registerProjectTools(server: McpServer): void {
           .optional()
           .describe("Files you already suspect (ranked first, no search needed for them)."),
         max_files: z.number().int().min(1).max(8).optional().describe("Max candidates to plan (default 6; batch accepts 8)."),
-        include_search: z
-          .boolean()
+        include_search: flag01
           .optional()
-          .describe("Run keyword searches to discover candidates (default true; false plans only from files_hint/recent files)."),
+          .describe("1 runs keyword searches (default); 0 plans only from files_hint/recent files."),
       },
     },
     (args) => runPlanReadBatch(args as Args),
@@ -3104,18 +3296,16 @@ export function registerProjectTools(server: McpServer): void {
           .optional()
           .describe("Paths to capture (default ['.']); restore accepts a subset to filter files."),
         exclude: z.array(z.string()).max(64).optional().describe("Extra directory/file names to skip."),
-        respect_default_excludes: z
-          .boolean()
+        respect_default_excludes: flag01
           .optional()
-          .describe("Default true: skip .git/node_modules/dist/build/.next/.venv/__pycache__ and the snapshot store itself."),
+          .describe("1 skips standard generated/cache directories (default); 0 disables those exclusions."),
         max_files: z.number().int().min(1).max(4000).optional(),
         max_total_bytes: z.number().int().min(1).max(512 * 1024 * 1024).optional(),
-        dry_run: z.boolean().optional().describe("restore only: report what would change without writing."),
-        verify: z.boolean().optional().describe("restore only: sha256-verify each blob before writing (default true)."),
-        delete_extra: z
-          .boolean()
+        dry_run: flag01.optional().describe("restore only: 1 reports changes without writing; 0 writes the restore."),
+        verify: flag01.optional().describe("restore only: 1 verifies each blob before writing (default); 0 disables verification."),
+        delete_extra: flag01
           .optional()
-          .describe("restore only: also delete files inside captured dirs that are not in the checkpoint (default false, capped at 500)."),
+          .describe("restore only: 1 also deletes files inside captured dirs not in the checkpoint (capped at 500); 0 keeps them."),
         limit: z.number().int().min(1).max(100).optional().describe("list only: max checkpoints to return (default 20)."),
         reason: reason_,
       },
@@ -3165,7 +3355,7 @@ export function registerProjectTools(server: McpServer): void {
         head: z.string().max(200).optional().describe("Source branch (default: the current branch)."),
         base: z.string().max(200).optional().describe("Target branch (default: the repository default branch)."),
         body: z.string().max(65_536).optional().describe("PR description (markdown); usually a summary + test plan."),
-        draft: z.boolean().optional().describe("Open as a draft PR."),
+        draft: flag01.optional().describe("1 opens as a draft PR; 0 opens as ready for review."),
         repo: repoArg,
         provider: providerArg,
         reason: reason_,
@@ -3231,7 +3421,7 @@ export function registerProjectTools(server: McpServer): void {
         method: z.enum(["merge", "squash", "rebase"]).optional().describe("Merge strategy (default: merge)."),
         commit_title: z.string().max(256).optional().describe("Title for the merge commit (squash/merge)."),
         commit_message: z.string().max(65_536).optional().describe("Body for the merge commit."),
-        delete_branch: z.boolean().optional().describe("Delete the head branch after a successful merge (same-repo branches only)."),
+        delete_branch: flag01.optional().describe("1 deletes the head branch after a successful merge (same-repo only); 0 keeps it."),
         repo: repoArg,
         provider: providerArg,
         reason: reason_,
@@ -3434,6 +3624,40 @@ export function registerProjectTools(server: McpServer): void {
   // -------------------------------------------------------------------------
 
   server.registerTool(
+    "project_github_connect",
+    {
+      ...config(
+        "Connect GitHub through its Device Flow. The user authorizes at github.com; access and refresh tokens are saved in the encrypted local vault and are never returned.",
+        "Connect GitHub",
+        {
+          use_when:
+            "the user wants to connect or replace the local GitHub credential without pasting a token into chat.",
+          avoid_when:
+            "the user only needs GitHub public read access or has already configured a token.",
+          speed_profile:
+            "start returns a short-lived verification code; poll only at the interval GitHub specifies.",
+          output_kind:
+            "github_connect: start returns verification_uri, user_code, pending_id and expiry; poll returns pending, denied, expired or connected (never a token).",
+          batch_safe: false,
+        },
+        { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+      ),
+      inputSchema: {
+        action: z.enum(["start", "poll"]),
+        replace_existing: flag01
+          .optional()
+          .describe("action=start: 1 explicitly authorizes replacing an existing GitHub credential; 0 does not."),
+        pending_id: z
+          .string()
+          .max(64)
+          .optional()
+          .describe("action=poll: opaque id returned by action=start; it does not contain the device code or token."),
+      },
+    },
+    (args) => runOne("github_connect", args as Args),
+  );
+
+  server.registerTool(
     "project_secret",
     {
       ...config(
@@ -3443,11 +3667,11 @@ export function registerProjectTools(server: McpServer): void {
         "Manage secrets",
         {
           use_when:
-            "storing a token (action=set), checking whether one exists or is due for rotation (action=get / action=list), " +
+            "storing a non-GitHub token (action=set), checking whether one exists or is due for rotation (action=get / action=list), " +
             "removing one (action=delete). Then use secret_env on project_shell_run or the built-in GitHub tools.",
           avoid_when:
             "the value is a normal, non-secret config (put it in .env or the config file); or you need the plaintext " +
-            "printed (only with reveal=true + VENIRA_SECRET_ALLOW_REVEAL=1).",
+            "printed (only with reveal=1 + VENIRA_SECRET_ALLOW_REVEAL=1).",
           speed_profile:
             "fast; encrypted AES-256-GCM store, atomic writes, values decrypted only when injected. Expiry/use fields are metadata only.",
           output_kind:
@@ -3486,14 +3710,12 @@ export function registerProjectTools(server: McpServer): void {
           .union([z.number().int(), z.string().max(60)])
           .optional()
           .describe("action=set: absolute expiry (epoch ms or ISO-8601), instead of expires_in_days."),
-        reveal: z
-          .boolean()
+        reveal: flag01
           .optional()
-          .describe("action=get: return the plaintext value. Requires VENIRA_SECRET_ALLOW_REVEAL=1 on the host; prefer secret_env injection."),
+          .describe("action=get: 1 returns the plaintext value and requires VENIRA_SECRET_ALLOW_REVEAL=1 on the host; prefer secret_env injection."),
         reason: reason_,
       },
     },
     (args) => runSecret(args as Args),
   );
 }
-

@@ -10,25 +10,91 @@
  *   secret_env: ["GITHUB_TOKEN"]` injects the decrypted value into the child
  *   process environment, so the command string (which *is* audited) never
  *   contains it.
- * - **Encrypted at rest.** AES-256-GCM with a random per-install key stored in
- *   `<data>/secrets.key` (mode 0600 next to `secrets.json`, mode 0600). This
- *   protects against copying/pasting the JSON by accident; it is not a
- *   substitute for OS-level disk encryption (a full data-dir read still gets
- *   the key).
+ * - **Encrypted at rest.** AES-256-GCM with a random per-install key. New
+ *   Windows installs use Credential Manager through the optional `keytar`
+ *   package; existing `secrets.key` stores and unsupported platforms use the
+ *   file fallback.
  * - **Atomic writes**, no partial files: temp file + rename in the data dir.
  *
- * The store lives in `VENIRA_DATA_DIR` (default `<workspace>/data`), never in
+ * The store lives in `VENIRA_DATA_DIR` (default: the per-user OS data dir), never in
  * the workspace tree, and is excluded from checkpoints/audit scans.
  */
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
-import { WORKSPACE } from "./workspace.js";
+import { activeDataDir } from "./workspace.js";
+
+async function renameWithRetry(from: string, to: string): Promise<void> {
+  if (process.platform !== "win32") {
+    await fs.rename(from, to);
+    return;
+  }
+  const delays = [20, 40, 80, 160, 200];
+  for (let attempt = 0; attempt < delays.length; attempt++) {
+    try {
+      await fs.rename(from, to);
+      return;
+    } catch (err) {
+      const code = (err as { code?: string })?.code;
+      if ((code === "EPERM" || code === "EBUSY" || code === "EACCES") && attempt < delays.length - 1) {
+        await new Promise((r) => setTimeout(r, delays[attempt]));
+        continue;
+      }
+      throw err;
+    }
+  }
+}
 
 const STORE_FILE = "secrets.json";
 const KEY_FILE = "secrets.key";
 const MAX_VALUE_BYTES = 16 * 1024;
+const KEYCHAIN_SERVICE = "venira-mcp";
+
+type KeytarApi = {
+  getPassword(service: string, account: string): Promise<string | null>;
+  setPassword(service: string, account: string, password: string): Promise<void>;
+};
+
+let keytar: KeytarApi | null = null;
+let keychainKey: Buffer | null = null;
+let keyStorage: "os_keychain" | "file" = "file";
+
+function keychainMode(): "auto" | "off" | "required" {
+  const value = (process.env.VENIRA_SECRET_KEYCHAIN ?? "auto").trim().toLowerCase();
+  if (value === "off" || value === "0" || value === "false") return "off";
+  if (value === "required" || value === "1" || value === "true") return "required";
+  return "auto";
+}
+
+function keychainAccount(): string {
+  return crypto.createHash("sha256").update(path.resolve(secretsDir())).digest("hex");
+}
+
+async function loadKeychain(): Promise<void> {
+  if (process.platform !== "win32" || keychainMode() === "off") return;
+  try {
+    const module = await import("keytar");
+    keytar = module.default;
+    const stored = await keytar.getPassword(KEYCHAIN_SERVICE, keychainAccount());
+    if (stored) {
+      const key = Buffer.from(stored, "base64");
+      if (key.length !== 32) throw new Error("stored Credential Manager key is not 32 bytes");
+      keychainKey = key;
+      keyStorage = "os_keychain";
+    }
+  } catch (error) {
+    keytar = null;
+    if (keychainMode() === "required") {
+      throw new Error(
+        `[secret_store_locked] Windows Credential Manager is required but unavailable: ${error instanceof Error ? error.message : String(error)}. Hint: install the optional keytar dependency or set VENIRA_SECRET_KEYCHAIN=auto.`,
+      );
+    }
+    console.error(`[venira-secrets] Credential Manager unavailable; using secrets.key fallback: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+await loadKeychain();
 
 /** Env-var compatible names only (injected into child processes). */
 const NAME_RE = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
@@ -99,9 +165,7 @@ type Cache = { stamp: string; store: StoreFile; values: Map<string, string> | nu
 let cache: Cache | null = null;
 
 export function secretsDir(): string {
-  return process.env.VENIRA_DATA_DIR
-    ? path.resolve(process.env.VENIRA_DATA_DIR)
-    : path.join(WORKSPACE, "data");
+  return activeDataDir();
 }
 
 function storePath(): string {
@@ -168,6 +232,7 @@ function readStoreSync(): StoreFile {
 }
 
 function readKeySync(): Buffer {
+  if (keychainKey) return keychainKey;
   const file = keyPath();
   let raw: string;
   try {
@@ -185,18 +250,35 @@ function readKeySync(): Buffer {
 }
 
 async function ensureKey(): Promise<Buffer> {
+  if (keychainKey) return keychainKey;
   const file = keyPath();
   if (existsSync(file)) {
     const key = Buffer.from(readFileSync(file, "utf8").trim(), "base64");
     if (key.length !== 32) throw new Error(`[secret_store_locked] ${file} is not a valid 32-byte key.`);
+    keyStorage = "file";
     return key;
   }
   const dir = path.dirname(file);
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
   const key = crypto.randomBytes(32);
+  if (keytar) {
+    try {
+      await keytar.setPassword(KEYCHAIN_SERVICE, keychainAccount(), key.toString("base64"));
+      keychainKey = key;
+      keyStorage = "os_keychain";
+      return key;
+    } catch (error) {
+      if (keychainMode() === "required") {
+        throw new Error(
+          `[secret_store_locked] Cannot store the encryption key in Windows Credential Manager: ${error instanceof Error ? error.message : String(error)}.`,
+        );
+      }
+      console.error(`[venira-secrets] Credential Manager write failed; using secrets.key fallback: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
   const tmp = `${file}.tmp-${crypto.randomBytes(3).toString("hex")}`;
   await fs.writeFile(tmp, key.toString("base64"), { mode: 0o600 });
-  await fs.rename(tmp, file);
+  await renameWithRetry(tmp, file);
   try {
     await fs.chmod(file, 0o600);
   } catch {
@@ -310,16 +392,46 @@ async function writeStore(store: StoreFile): Promise<void> {
   const dir = secretsDir();
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
   const file = storePath();
-  const payload = JSON.stringify({ version: 1, secrets: store.secrets });
-  const tmp = `${file}.tmp-${crypto.randomBytes(3).toString("hex")}`;
-  await fs.writeFile(tmp, payload, { mode: 0o600 });
-  await fs.rename(tmp, file);
-  try {
-    await fs.chmod(file, 0o600);
-  } catch {
-    /* Windows may ignore chmod */
+  const lock = `${file}.lock`;
+  // R3: lockfile (wx) with stale timeout.
+  const deadline = Date.now() + 5_000;
+  while (true) {
+    try {
+      await fs.writeFile(lock, String(process.pid), { flag: "wx", mode: 0o600 });
+      break;
+    } catch (e) {
+      const code = (e as { code?: string })?.code;
+      if (code === "EEXIST") {
+        try {
+          const stat = await fs.stat(lock);
+          if (Date.now() - stat.mtimeMs > 10_000) {
+            await fs.unlink(lock).catch(() => {});
+            continue;
+          }
+        } catch { /* ignore */ }
+        if (Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, 50));
+          continue;
+        }
+        throw new Error(`[lock_timeout] could not acquire secrets lock at ${lock}`);
+      }
+      throw e;
+    }
   }
-  cache = null;
+  try {
+    const payload = JSON.stringify({ version: 1, secrets: store.secrets });
+    const tmp = `${file}.tmp-${crypto.randomBytes(3).toString("hex")}`;
+    await fs.writeFile(tmp, payload, { mode: 0o600 });
+    await renameWithRetry(tmp, file);
+    try {
+      await fs.chmod(file, 0o600);
+    } catch {
+      /* Windows may ignore chmod */
+    }
+    cache = null;
+  } finally {
+    try { await fs.unlink(lock); } catch { /* ignore */ }
+  }
 }
 
 export async function setSecret(
@@ -425,14 +537,24 @@ export function redactSecretValues(text: string): string {
   if (!text) return text;
   let values: string[];
   try {
-    values = [...valuesSync().values()].filter((value) => value.length >= 8);
+    values = [...valuesSync().values()]; // include short secrets (redact_always not tracked; redact all present)
   } catch {
-    return text; // store locked/corrupt: never fail a shell call because of redaction
+    return text;
   }
   if (values.length === 0) return text;
-  values.sort((a, b) => b.length - a.length);
+  // sort by length desc, include variants
+  const variants: string[] = [];
+  for (const v of values) {
+    if (v.length < 4) continue; // skip trivial
+    variants.push(v);
+    try { variants.push(Buffer.from(v).toString("base64")); } catch {}
+    try { variants.push(encodeURIComponent(v)); } catch {}
+  }
+  variants.sort((a, b) => b.length - a.length);
   let out = text;
-  for (const value of values) out = out.split(value).join("[REDACTED]");
+  for (const value of variants) {
+    if (value && value.length >= 4) out = out.split(value).join("[REDACTED]");
+  }
   return out;
 }
 
@@ -440,6 +562,7 @@ export function secretsHealth(): {
   store: string;
   count: number;
   encryption: string;
+  key_storage: "os_keychain" | "file";
   expired: number;
   with_expiry: number;
 } {
@@ -454,5 +577,5 @@ export function secretsHealth(): {
   } catch {
     /* health must not fail because of a corrupt store */
   }
-  return { store: secretsDir(), count, encryption: "aes-256-gcm", expired, with_expiry: withExpiry };
+  return { store: secretsDir(), count, encryption: "aes-256-gcm", key_storage: keyStorage, expired, with_expiry: withExpiry };
 }

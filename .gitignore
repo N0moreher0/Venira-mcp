@@ -8,16 +8,19 @@ check-*.js
 poll-ci.js
 create-pr.js
 *-new.txt
-section*.txt/
+section*.txt
 /TODO-changelog.txt
 /TODO-old.txt
-/roadmap.txt/
+/roadmap.txt
+/hot-fix-upgrade.txt
+/mcp_test_demo.txt
 
 # Build output
 dist/
 
 # Test / debug fixtures
 .verify-tmp/
+.verify-*/
 .debug-search*/
 *.tmp
 *.bak
@@ -30,7 +33,8 @@ data/
 .env.*
 
 # Editor / OS
-.vscode/
+.vscode/*
+!.vscode/mcp.json
 .idea/
 Thumbs.db
 Desktop.ini

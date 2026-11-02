@@ -10,6 +10,11 @@ import {
 } from "./tools/project.js";
 import { VERSION } from "./lib/version.js";
 import { UNRESTRICTED, WORKSPACE, migrateLegacyDataDirIfNeeded } from "./lib/workspace.js";
+import { validateBooleanEnvironment } from "./lib/env.js";
+import { enabledShellOverrides, loadShellPolicy } from "./lib/shell-policy.js";
+validateBooleanEnvironment();
+loadShellPolicy();
+enabledShellOverrides();
 migrateLegacyDataDirIfNeeded();
 
 const INSTRUCTIONS = `Venira coding tools operate on the workspace ${WORKSPACE}.
@@ -23,7 +28,7 @@ Decision tree
 5. Write whole file -> project_write_file; small precise change -> project_edit_file; delete -> project_delete_path (destructive, not undoable).
 6. Before a large/multi-file change chain -> project_snapshot action=create (paths default ["."]); if it goes wrong -> action=restore id=<id> (dry_run first if unsure). No git needed.
 7. Build/test/long command -> project_shell_run (returns run_id immediately), then poll project_shell_status with wait_seconds 5..30 until running=false; project_shell_cancel to stop.
-8. Tokens/credentials -> project_secret (action=set|get|list|delete). Never paste a key into a command: store it once, then inject it with project_shell_run secret_env=["NAME"]. Set expires_in_days when the user knows the rotation window; expired secrets are refused (rotate with action=set).
+8. GitHub connection -> project_github_connect action=start, show the user the GitHub verification link/code, and poll only after they authorize. Never ask for a token in chat. Other tokens -> project_secret (action=set|get|list|delete); never paste a key into a command.
 9. Pull requests -> project_pr_create (open), project_pr_comment (thread reply, or an inline note with path + line), project_pr_merge (land, optionally delete the branch).
 10. CI -> project_ci_status (runs + jobs; pr/ref for branch-protection check-runs), project_ci_trigger (workflow_dispatch), project_ci_logs (tail of a run or one job).
 11. Something failed and the cause is unclear -> project_explain_error with error_text or log_tail; then apply the first diagnosis (it returns ready next_actions).
@@ -38,10 +43,14 @@ Rules
 - Always pass \`reason\` ("why", e.g. "fix null pointer at line 45") on write/edit/delete/create/snapshot/pr/ci: it is stored in the audit trail (redacted, single line, <=400 chars), so future sessions know the intent. Read it back with project_read_audit.
 - Checkpoints are content-addressed and deduplicated: repeating action=create after a small edit costs only the changed bytes; restore is sha256-verified per file and only rewrites captured paths (delete_extra is opt-in and capped at 500).
 - Secrets are encrypted at rest and never logged: project_secret get returns metadata (length + sha256 prefix, expires_at/days_left, last_used_at/use_count), values reach processes only via secret_env, and shell output/audit text is scrubbed of stored values. Expired secrets fail with secret_expired before a child starts.
+- Git provider payloads and responses are checked locally with Secretlint's recommended credential rules. A detected secret blocks the outbound request or withholds the provider response; scanner errors fail closed. A response-side block can happen after a mutation completed, so never retry solely because of that block. Never include a real credential in a PR, comment, or CI input.
 - GitHub tools resolve the repo from \`repo\` -> VENIRA_GITHUB_REPO -> .git/config origin; the token comes from secret GITHUB_TOKEN or VENIRA_GITHUB_TOKEN (expiry is enforced, use tracking is recorded). VENIRA_NETWORK=0 disables all outbound calls.
+- project_github_connect uses GitHub Device Flow and the \`repo offline_access\` OAuth scopes for private-repository support and refreshable access. The access/refresh tokens are stored encrypted locally and never returned to the agent; users authorize Venira at github.com.
 - project_explain_error and project_plan_read_batch are deterministic (no model call): explain_error maps signatures to next_actions, plan_read_batch returns a ready batch call.
 - Never loop on a non-retryable error (not_found, scope_denied, invalid_request, sensitive_result, audit_unavailable). Read the hint and change the request or tell the user.
-- Output modes: VENIRA_OUTPUT_MODE=full|compact|summary (default full). summary trims payloads; request full data when editing.`;
+- Output modes: VENIRA_OUTPUT_MODE=full|compact (default full). compact trims payloads over 8 KB; use full when you need complete data.
+- Shell modes: VENIRA_SHELL_MODE=balanced|strict|permissive (default balanced). Hard-deny rules remain active in every mode.
+- Named shell overrides require both an operator allowlist (VENIRA_SHELL_OVERRIDES) and a per-call override name plus non-empty reason; they are narrow and audited.`;
 
 const server = new McpServer(
   { name: "venira-coding", version: VERSION },

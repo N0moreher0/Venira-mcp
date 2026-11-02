@@ -1,6 +1,9 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 
 export type ToolTier = "allow" | "ask" | "deny";
+
+let cache: { key: string; rules: ToolRule[] } | null = null;
+function safeMtime(file: string): number { try { return statSync(file).mtimeMs; } catch { return 0; } }
 export type ToolRule = {
   tool: string;
   tier: ToolTier;
@@ -18,6 +21,9 @@ export function loadToolPolicy(): ToolRule[] {
   const inline = process.env.VENIRA_TOOL_POLICY_JSON;
   const file = process.env.VENIRA_TOOL_POLICY_FILE;
 
+  const key = inline ? `inline:${inline}` : file ? `file:${file}:${safeMtime(file)}` : "none";
+  if (cache && cache.key === key) return cache.rules;
+
   let raw = "";
   let source = "";
 
@@ -27,6 +33,7 @@ export function loadToolPolicy(): ToolRule[] {
   } else if (file) {
     if (!existsSync(file)) {
       console.error(`[tool-policy] file not found: ${file} (no tool policy applied)`);
+      cache = { key, rules: [] };
       return [];
     }
     try {
@@ -34,9 +41,11 @@ export function loadToolPolicy(): ToolRule[] {
       source = file;
     } catch (err) {
       console.error(`[tool-policy] invalid file ${file}: ${err}`);
+      cache = { key, rules: [] };
       return [];
     }
   } else {
+    cache = { key, rules: [] };
     return [];
   }
 
@@ -45,11 +54,12 @@ export function loadToolPolicy(): ToolRule[] {
     parsed = JSON.parse(raw);
   } catch (err) {
     console.error(`[tool-policy] invalid json source ${source}: ${err}`);
+    cache = { key, rules: [] };
     return [];
   }
 
   const rules: ToolRule[] = [];
-  if (!Array.isArray(parsed?.rules)) return rules;
+  if (!Array.isArray(parsed?.rules)) { cache = { key, rules }; return rules; }
 
   for (const entry of parsed.rules) {
     if (!entry || typeof entry !== "object") continue;
@@ -73,6 +83,7 @@ export function loadToolPolicy(): ToolRule[] {
   }
 
   console.error(`[tool-policy] loaded ${rules.length} rule(s) from ${source}`);
+  cache = { key, rules };
   return rules;
 }
 
