@@ -65,6 +65,11 @@ Usage:
   npx venira-mcp                 Start the MCP server (stdio transport)
   npx venira-mcp --doctor        Run the preflight diagnostics
   npx venira-mcp --verify        Run the behavioural test suite
+  npx venira-mcp --install [client]
+                                 Merge Venira into a client config (auto = detected clients).
+                                 Naming a client creates its config when missing.
+  npx venira-mcp --print-config [client]
+                                 Print a ready-to-paste config without writing anything.
   npx venira-mcp --setup-github  Store a GitHub token once for local Venira clients
   npx venira-mcp --approve <id> [--session] [--yes]
                                  Approve a pending shell command (interactive terminal only)
@@ -109,6 +114,11 @@ const target = (() => {
   }
   if (args[0] === "--doctor") return { file: path.join(here, "..", "dist", "scripts", "doctor.js"), rest: args.slice(1) };
   if (args[0] === "--verify") return { file: path.join(here, "..", "dist", "scripts", "verify.js"), rest: args.slice(1) };
+  if (args.length > 0 && (
+      args[0] === "--install" || args[0].startsWith("--install=") ||
+      args[0] === "--print-config" || args[0].startsWith("--print-config="))) {
+    return { file: path.join(here, "..", "dist", "scripts", "setup.js"), rest: args };
+  }
   return { file: dist, rest: args };
 })();
 
