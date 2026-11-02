@@ -1397,6 +1397,22 @@ async function opDeletePath(
   root: string,
 ): Promise<RustResponse> {
   const absPath = resolveInWorkspace(args.relative_path as string, root);
+  // Refuse to delete the workspace root (or an ancestor of it). One call with
+  // `relative_path: "."` and recursive=1 used to wipe the whole tree, and this
+  // op is explicitly not undoable.
+  const caseFold = (value: string) => (PLATFORM === "win32" ? value.toLowerCase() : value);
+  const rootTarget = caseFold(path.resolve(root));
+  const deleteTarget = caseFold(path.resolve(absPath));
+  const rootInsideTarget = path.relative(deleteTarget, rootTarget);
+  const targetCoversRoot =
+    rootInsideTarget === "" ||
+    (!rootInsideTarget.startsWith("..") && !path.isAbsolute(rootInsideTarget));
+  if (targetCoversRoot) {
+    throw new Error(
+      `[invalid_request] Refusing to delete the workspace root: ${args.relative_path}. ` +
+        "Hint: pass the path of a file or subdirectory inside the workspace.",
+    );
+  }
   if (isProtectedPath(absPath)) {
     throw new Error(`[sensitive_result] Path is protected by policy: ${args.relative_path}. Hint: do not delete protected files.`);
   }

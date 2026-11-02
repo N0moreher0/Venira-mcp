@@ -90,9 +90,26 @@ const PROTECTED_EXTENSIONS = new Set([
   ".pfx",
 ]);
 
+/**
+ * Reduce a filename to the name the OS actually resolves. Two spellings beat a
+ * naive basename check and must not slip through:
+ *   - NTFS alternate data streams: `.env::$DATA` opens the default stream of
+ *     `.env`. `fs.realpathSync` keeps the suffix (unlike `fs.promises.realpath`),
+ *     so stripping it here keeps every caller consistent.
+ *   - Win32 trims trailing dots/spaces from each path segment, so `.env.` is
+ *     the same file as `.env`.
+ */
+function normalizedProtectedBase(canonicalPath: string): string {
+  return path
+    .basename(canonicalPath)
+    .toLowerCase()
+    .replace(/:[^\\/]*$/, "")
+    .replace(/[. ]+$/, "");
+}
+
 export function isProtectedPath(absPath: string): boolean {
   const canonicalPath = realPathOrSelf(path.resolve(absPath));
-  const base = path.basename(canonicalPath).toLowerCase();
+  const base = normalizedProtectedBase(canonicalPath);
   if (PROTECTED_BASENAMES.has(base)) return true;
   if (base.startsWith("venira.db-")) return true;
   if (base === ".env" || base.startsWith(".env.")) return true;

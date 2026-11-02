@@ -1118,6 +1118,82 @@ try {
   check("error_data_sensitive_symlink_alias_excluded", false, error);
 }
 
+// 17b. Protected files stay protected through the code-intelligence readers and
+// through NTFS alternate-data-stream spellings. Both used to return plaintext.
+const symbolLeak = asEnvelope(
+  await call("project_symbol_references", { symbol_name: "TOKEN", scope: "file", relative_path: `${dir}/.env.local` }),
+);
+check(
+  "sensitive_symbol_references_excluded",
+  symbolLeak.error?.code === "sensitive_result" && !JSON.stringify(symbolLeak).includes(sensitiveMarker),
+  symbolLeak,
+);
+const selectiveLeak = asEnvelope(
+  await call("project_selective_search", { queries: [{ pattern: "TOKEN" }], files_hint: [`${dir}/.env.local`] }),
+);
+check(
+  "sensitive_selective_search_excluded",
+  selectiveLeak.error?.code === "sensitive_result" && !JSON.stringify(selectiveLeak).includes(sensitiveMarker),
+  selectiveLeak,
+);
+await fs.writeFile(`${dir}/.env::$DATA`, `TOKEN=${sensitiveMarker}\n`);
+const adsLeak = asEnvelope(
+  await call("project_symbol_references", { symbol_name: "TOKEN", scope: "file", relative_path: `${dir}/.env::$DATA` }),
+);
+check(
+  "sensitive_alternate_data_stream_excluded",
+  adsLeak.error?.code === "sensitive_result" && !JSON.stringify(adsLeak).includes(sensitiveMarker),
+  adsLeak,
+);
+
+// 17c. The workspace root itself cannot be deleted (there is no undo).
+const rootGuardDir = await fs.mkdtemp(path.join(os.tmpdir(), "venira-root-guard-"));
+await fs.writeFile(path.join(rootGuardDir, "keep.txt"), "keep\n");
+const rootGuardTransport = new StdioClientTransport({
+  command: "node",
+  args: ["dist/server.js"],
+  cwd: process.cwd(),
+  env: verifyEnv({ VENIRA_SESSION_ID: `${SESSION_ID}-root-guard`, VENIRA_WORKSPACE: rootGuardDir }, "full"),
+  stderr: "pipe",
+});
+const rootGuardClient = new Client({ name: "verify-root-guard", version: "0.0.0" }, { capabilities: {} });
+await rootGuardClient.connect(rootGuardTransport);
+const rootDelete = asEnvelope(
+  await rootGuardClient.callTool({ name: "project_delete_path", arguments: { relative_path: ".", recursive: 1 } }),
+);
+const rootSurvived = (await fs.readdir(rootGuardDir)).includes("keep.txt");
+check(
+  "delete_workspace_root_refused",
+  rootDelete.error?.code === "invalid_request" && rootSurvived,
+  { rootDelete, rootSurvived },
+);
+await rootGuardClient.close();
+await fs.rm(rootGuardDir, { recursive: true, force: true });
+
+// 17d. execute_js output is redacted and the network globals are removed.
+const jsTransport = new StdioClientTransport({
+  command: "node",
+  args: ["dist/server.js"],
+  cwd: process.cwd(),
+  env: verifyEnv({ VENIRA_SESSION_ID: `${SESSION_ID}-js-exec`, VENIRA_ALLOW_JS_EXEC: "1" }, "full"),
+  stderr: "pipe",
+});
+const jsClient = new Client({ name: "verify-js-exec", version: "0.0.0" }, { capabilities: {} });
+await jsClient.connect(jsTransport);
+const jsLeak = asEnvelope(
+  await jsClient.callTool({
+    name: "project_execute_js",
+    arguments: { code: 'console.log("TOP_SECRET=abc123"); console.log("fetch:" + typeof fetch);' },
+  }),
+);
+check(
+  "execute_js_output_redacted_and_network_off",
+  !JSON.stringify(jsLeak).includes("abc123") &&
+    String(jsLeak.data?.stdout_tail ?? "").includes("fetch:undefined"),
+  jsLeak,
+);
+await jsClient.close();
+
 // 18. batch per-item budget
 const batchBudget = await call("project_read_batch", {
   requests: [
