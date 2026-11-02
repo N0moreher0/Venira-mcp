@@ -14,10 +14,25 @@ const DEFAULT_TIMEOUT = 30_000;
 const MAX_BUFFER = 1_048_576; // 1 MiB
 
 /**
+ * Best-effort network guard prepended to the user's snippet (single line, so
+ * error line numbers stay aligned with the submitted code). Node's permission
+ * model has no network permission, so without this `fetch`/`require("node:http")`
+ * would give the snippet unrestricted egress. This is containment, not a
+ * sandbox: a determined snippet can still dynamic-import a net module.
+ */
+const NETWORK_GUARD =
+  'try{if(typeof require==="function"){const M=require("node:module");const L=M._load;' +
+  'const B=new Set(["node:net","net","node:tls","tls","node:http","http","node:https","https","node:http2","http2","node:dgram","dgram","node:dns","dns"]);' +
+  'M._load=function(r,...a){if(B.has(String(r))){const e=new Error("ERR_ACCESS_DENIED: network modules are blocked in project_execute_js");e.code="ERR_ACCESS_DENIED";throw e;}return L.call(this,r,...a);};}}catch{}' +
+  'for(const k of ["fetch","WebSocket","EventSource","XMLHttpRequest"]){try{delete globalThis[k];}catch{}}';
+
+/**
  * Workspace-scoped synchronous JS evaluation.
  * Runs `node` in the workspace, reading code from stdin, capturing stdout/stderr.
  * Node's permission model limits filesystem access to the workspace and does not
- * grant child-process or worker permissions. This is containment, not a sandbox.
+ * grant child-process or worker permissions. Protected files inside the workspace
+ * are still readable, and network blocking is best-effort: this is containment,
+ * not a sandbox.
  */
 export function executeJs(
   code: string,
@@ -33,7 +48,7 @@ export function executeJs(
   ];
   try {
     const r = spawnSync(process.execPath, [...permissionArgs, "-", ...((options.args ?? []) as string[])], {
-      input: code,
+      input: `${NETWORK_GUARD};${code}`,
       encoding: "utf8",
       cwd,
       timeout,

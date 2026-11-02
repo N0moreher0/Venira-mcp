@@ -107,9 +107,12 @@ export function isOutsideWorkspace(target: string, cwd: string): boolean {
   if (UNRESTRICTED) return false;
   const raw = target.trim();
   if (!raw || raw === "-") return false;
-  // An unresolved environment-variable path cannot be proven workspace-local.
-  // Require approval rather than allowing `cat $HOME/...` or its Windows form.
-  if (/(^|[\\/])(?:\$(?:env:)?[A-Za-z_][A-Za-z0-9_]*|%[A-Za-z_][A-Za-z0-9_]*%?)/.test(raw)) return true;
+  // An unresolved environment-variable / expression path cannot be proven
+  // workspace-local. Require approval rather than allowing `cat $HOME/...`,
+  // `${HOME}/...`, `${env:USERPROFILE}\...`, `%USERPROFILE%\...` or `$(...)`.
+  // The old pattern only knew the bare `$VAR` form, so `${VAR}` and `${env:VAR}`
+  // fell through to default_allow.
+  if (/\$\{|\$[A-Za-z_@*#?$!(]|%[A-Za-z_][A-Za-z0-9_]*%|`|\$\(/.test(raw)) return true;
   if (/^[|&<>]/.test(raw)) return false;
   const expanded = expandHome(raw);
   if (path.win32.isAbsolute(expanded) && !path.isAbsolute(expanded)) return true;
@@ -229,6 +232,58 @@ function mayMatchProtectedBasename(token: string, protectedNames: Set<string>): 
     if (candidate.startsWith(".") && !base.startsWith(".")) return false;
     return globMatches(base, candidate);
   });
+}
+
+/**
+ * A token whose final value is produced by the shell at run time cannot be
+ * checked statically. `cat ${HOME}/x`, `cp .e{nv} out`, and PowerShell
+ * `Copy-Item ('.e'+'nv') out` all name a path the policy never sees, so any
+ * file-reading or file-writing command that carries one needs approval.
+ */
+const UNRESOLVABLE_TOKEN_PATTERNS: RegExp[] = [
+  /\$\{/, // ${VAR}, ${env:VAR}
+  /\$[A-Za-z_@*#?$!(]/, // $VAR, $env:..., $(...)
+  /%[A-Za-z_][A-Za-z0-9_]*%/, // %VAR%
+  /`/, // backtick substitution
+  /[{}]/, // brace expansion / script block
+  /[()]/, // PowerShell sub-expression / grouping
+];
+
+/**
+ * Only arguments that can plausibly be a path are inspected, so a regular
+ * expression such as `foo(bar)` or `{print $1}` does not turn into an approval
+ * prompt for `grep`/`awk`.
+ */
+function looksLikePathExpression(token: string): boolean {
+  if (/[\\/]/.test(token)) return true;
+  return [".", "~", "$", "%", "(", "["].includes(token[0] ?? "");
+}
+
+function isUnresolvableToken(token: string): boolean {
+  return UNRESOLVABLE_TOKEN_PATTERNS.some((pattern) => pattern.test(token));
+}
+
+/** Commands that print file contents but are not part of READ_COMMANDS. */
+const FILE_INSPECT_COMMANDS = new Set(["select-string", "sls", "findstr"]);
+
+function hasUnresolvableFileArgument(parsed: ParsedCommand): boolean {
+  for (const target of parsed.redirect_targets) {
+    if (isUnresolvableToken(target)) return true;
+  }
+  for (const segment of parsed.segments) {
+    if (
+      !READ_COMMANDS.has(segment.command) &&
+      !WRITE_COMMANDS.has(segment.command) &&
+      !FILE_INSPECT_COMMANDS.has(segment.command)
+    ) {
+      continue;
+    }
+    for (const arg of segment.argv.slice(1)) {
+      if (arg.startsWith("-")) continue;
+      if (isUnresolvableToken(arg) && looksLikePathExpression(arg)) return true;
+    }
+  }
+  return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -484,6 +539,13 @@ const ASK_RULES: AskRule[] = [
     id: "find_mutation",
     reason: "find with -delete/-exec can mutate files outside a simple scope.",
     test: (parsed) => parsed.segments.some((s) => s.command === "find" && s.argv.some((a) => a === "-delete" || a === "-exec" || a === "-execdir")),
+  },
+  {
+    id: "unresolved_file_argument",
+    reason:
+      "This file command takes a path the policy cannot resolve statically (variable, brace expansion, or expression), " +
+      "so the protected-file guard cannot see what it will actually read or write.",
+    test: (parsed) => hasUnresolvableFileArgument(parsed),
   },
 ];
 

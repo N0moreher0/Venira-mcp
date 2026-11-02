@@ -21,6 +21,7 @@ import {
 import type { RustResponse, ToolResult } from "../lib/output.js";
 import { VERSION } from "../lib/version.js";
 import { executeJs } from "../lib/js-executor.js";
+import { redactSecrets } from "../lib/shell-policy.js";
 import { queryRecentFiles } from "../lib/corehost.js";
 import { snapshotHealth } from "../lib/snapshots.js";
 import { githubHealth } from "../lib/git-provider.js";
@@ -1767,11 +1768,13 @@ async function runExecuteJs(args: Args): Promise<ToolResult> {
         kind: "js_execute",
         data: {
           ok: r.ok,
-          stdout_tail: r.stdout_tail,
-          stderr_tail: r.stderr_tail,
+          // execute_js is not covered by the protected-path guard, so at least
+          // keep obvious secret assignments out of the transcript.
+          stdout_tail: redactSecrets(r.stdout_tail),
+          stderr_tail: redactSecrets(r.stderr_tail),
           exit_code: r.exit_code,
           timed_out: r.timed_out,
-          ...(r.error ? { error: r.error } : {}),
+          ...(r.error ? { error: redactSecrets(r.error) } : {}),
         },
       },
       truncated: false,
@@ -1987,10 +1990,13 @@ async function runCancelShellSession(): Promise<ToolResult> {
 // P2/P3: code intelligence + workflow tools
 // ---------------------------------------------------------------------------
 
-/** Read a workspace file's text, respecting max bytes; null when missing. */
+/** Read a workspace file's text, respecting max bytes; null when missing or protected. */
 async function readTextFile(relPath: string): Promise<string | null> {
   try {
     const abs = toHostPath(relPath);
+    // Every code-intelligence reader funnels through here, so this is the one
+    // place that must refuse secret stores (callers used to forget the check).
+    if (isProtectedPath(abs)) return null;
     const text = await fs.readFile(abs, "utf8");
     return text;
   } catch {
@@ -2127,6 +2133,12 @@ async function runSymbolReferences(args: Args): Promise<ToolResult> {
   let references: Array<{ relative_path: string; line_number: number; context: string }> = [];
   if (scope === "file") {
     const rel = String(args.relative_path ?? "");
+    if (isProtectedPath(toHostPath(rel))) {
+      return toolResult(
+        errorEnvelope("symbol_references", new Error(`[sensitive_result] Path is protected by policy: ${rel}.`), { requestId, elapsedMs: performance.now() - started }),
+        true,
+      );
+    }
     const text = await readTextFile(rel);
     if (text === null) {
       return toolResult(errorEnvelope("symbol_references", new Error(`[not_found] No such file: ${rel}.`), { requestId, elapsedMs: performance.now() - started }), true);
@@ -2186,9 +2198,28 @@ async function runSelectiveSearch(args: Args): Promise<ToolResult> {  const star
   const files = new Map<string, string>();
   const hint = Array.isArray(args.files_hint) ? (args.files_hint as string[]) : [];
   if (hint.length > 0) {
+    let usable = 0;
+    let blocked = 0;
     for (const rel of hint.slice(0, 20)) {
+      let protectedPath = false;
+      try {
+        protectedPath = isProtectedPath(toHostPath(rel));
+      } catch {
+        protectedPath = false;
+      }
+      if (protectedPath) {
+        blocked += 1;
+        continue;
+      }
+      usable += 1;
       const text = await readTextFile(rel);
       if (text !== null) files.set(toHostPath(rel), text);
+    }
+    if (usable === 0 && blocked > 0) {
+      return toolResult(
+        errorEnvelope("selective_search", new Error("[sensitive_result] Every files_hint path is protected by policy."), { requestId, elapsedMs: performance.now() - started }),
+        true,
+      );
     }
   } else {
     // Fallback: a shallow directory listing + read of the first N text files.

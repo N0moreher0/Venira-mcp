@@ -475,4 +475,38 @@ export const extraPolicyCorpus: PolicyCorpusCase[] = [
     "safe_command",
     "safe git diff variant",
   ),
+  ...make(
+    [
+      "Get-Content ('.e'+'nv')",
+      "Copy-Item ('.e'+'nv') leaked.txt",
+      "cp .e{nv} leaked.txt",
+      "Select-String -Path ('.e'+'nv') -Pattern TOKEN",
+      "cat .e{nv}",
+    ],
+    "powershell",
+    "ask",
+    "ask.unresolved_file_argument",
+    "path assembled at run time requires approval",
+  ),
+  ...make(
+    ["grep -n \"(foo)\" README.md", "Select-String -Pattern \"a(b)\" README.md"],
+    "powershell",
+    "allow",
+    "default_allow",
+    "regex-looking arguments are not treated as paths",
+  ),
+  ...make(
+    ["cat ${HOME}/.aws/credentials", "Get-Content ${env:USERPROFILE}\\.aws\\credentials"],
+    "bash",
+    "ask",
+    "ask.read_outside_workspace",
+    "${VAR} path form requires approval",
+  ),
+  ...make(
+    ["cat ${HOME}/.ssh/id_rsa"],
+    "bash",
+    "deny",
+    "deny.protected_file_access",
+    "${VAR} cannot bypass protected-file denial",
+  ),
 ];
