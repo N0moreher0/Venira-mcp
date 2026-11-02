@@ -21,6 +21,22 @@ export function envChoice<const T extends readonly string[]>(
   throw new Error(`[config_invalid] ${name} must be one of: ${choices.join(", ")}.`);
 }
 
+/**
+ * Normalise the `background` shell flag. Default is async (true); any explicit
+ * "foreground" spelling returns false. Accepts numbers, booleans and strings so
+ * a client that sends `false`, `0` or `"False"` never silently falls back to
+ * async. Unknown values keep the async default.
+ */
+export function parseBackgroundFlag(value: unknown): boolean {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return !Number.isFinite(value) || value !== 0;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["0", "false", "no", "off", "foreground", "foreground_only", ""].includes(normalized)) return false;
+  }
+  return true;
+}
+
 const BOOLEAN_ENV_NAMES = [
   "VENIRA_UNRESTRICTED",
   "VENIRA_ALLOW_JS_EXEC",

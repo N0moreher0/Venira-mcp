@@ -84,7 +84,7 @@ import {
   setSecret,
 } from "./secrets.js";
 import { GithubDeviceFlow } from "./github-device-flow.js";
-import { envChoice, envFlag } from "./env.js";
+import { envChoice, envFlag, parseBackgroundFlag } from "./env.js";
 import { buildChangeImpact, buildDependencyGraph } from "./dependency-graph.js";
 import { opCiWait } from "./ci-wait.js";
 
@@ -447,8 +447,8 @@ type ShellRun = {
   cancelled: boolean;
   started_at: number;
   finished_at?: number;
-  /** True once stdout/stderr are fully flushed ('close'), not just 'exit'. */
-  closed: boolean;
+  /** Resolves once stdout/stderr are fully flushed ('close' or 'error'). */
+  closedPromise: Promise<void>;
   /** Policy decision that authorised this run (audit + status output). */
   decision: { tier: string; rule: string; reason: string; approver: string | null };
   /** Requested timeout (0 = none). */
@@ -497,7 +497,7 @@ const MAX_OUTPUT_BYTES = (() => {
 })();
 
 /** Upper bound for a caller-supplied timeout_ms; shell runs default to 10 minutes. */
-const MAX_TIMEOUT_MS = (() => {
+export const SHELL_MAX_TIMEOUT_MS = (() => {
   const value = Number(process.env.VENIRA_SHELL_MAX_TIMEOUT_MS);
   return Number.isFinite(value) && value > 0 ? value : 30 * 60 * 1000;
 })();
@@ -505,30 +505,6 @@ const MAX_TIMEOUT_MS = (() => {
 function trimTail(buffer: string): string {
   if (buffer.length <= TAIL_LIMIT) return buffer;
   return buffer.slice(-TAIL_LIMIT);
-}
-
-function isEarlyExit(value: unknown): boolean {
-  if (typeof value === "boolean") return value;
-  if (typeof value === "string") return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
-  return false;
-}
-
-/**
- * `background` uses the opposite polarity to `early_exit`:
- *   1/true  -> return immediately with run_id (async, default)
- *   0/false -> foreground: wait for exit, then return final stdout/stderr
- * Accepts numbers, booleans and strings so a client that sends `false` or
- * `"False"` gets foreground semantics instead of silently falling back to async.
- */
-function backgroundSetting(value: unknown): boolean | undefined {
-  if (typeof value === "boolean") return value;
-  if (typeof value === "number") return Number.isFinite(value) ? value !== 0 : undefined;
-  if (typeof value === "string") {
-    const normalized = value.trim().toLowerCase();
-    if (["1", "true", "yes", "on", "background", "async"].includes(normalized)) return true;
-    if (["0", "false", "no", "off", "foreground", "foreground_only", ""].includes(normalized)) return false;
-  }
-  return undefined;
 }
 
 /** Append with a byte cap; returns true when bytes were dropped. */
@@ -625,7 +601,7 @@ export function shellPolicySnapshot() {
   return {
     policy: describeShellPolicy(),
     stats: shellStats(),
-    limits: { max_output_bytes: MAX_OUTPUT_BYTES, max_timeout_ms: MAX_TIMEOUT_MS, tail_chars: TAIL_LIMIT },
+    limits: { max_output_bytes: MAX_OUTPUT_BYTES, max_timeout_ms: SHELL_MAX_TIMEOUT_MS, tail_chars: TAIL_LIMIT },
     tracked_runs: shellRuns.size,
   };
 }
@@ -1526,7 +1502,7 @@ function shellCommandFor(shell: string, command: string): { file: string; args: 
 function clampTimeout(value: unknown): number {
   const raw = value === undefined || value === null || value === "" ? 600_000 : Number(value);
   if (!Number.isFinite(raw) || raw <= 0) return 600_000;
-  return Math.min(Math.floor(raw), MAX_TIMEOUT_MS);
+  return Math.min(Math.floor(raw), SHELL_MAX_TIMEOUT_MS);
 }
 
 async function opShellRun(
@@ -1704,9 +1680,7 @@ async function opShellRun(
   // 2. Execution with hardening: env scrub, output cap, timeout, tree kill.
   // -------------------------------------------------------------------------
   const timeoutMs = clampTimeout(args.timeout_ms);
-  const background = backgroundSetting(args.background);
-  // background=0 wins over the legacy early_exit alias. Both mean "foreground".
-  const foreground = background !== undefined ? !background : isEarlyExit(args.early_exit);
+  const foreground = !parseBackgroundFlag(args.background);
   const { file, args: spawnArgs } = shellCommandFor(shell, command);
 
   // Secrets are decrypted only now (post-approval) and handed to the child
@@ -1744,6 +1718,12 @@ async function opShellRun(
     throw new Error(`[io_error] Cannot start shell: ${error instanceof Error ? error.message : String(error)}`);
   }
 
+  // Resolved by 'close' (stdio flushed) or 'error'; a foreground caller awaits
+  // it so the final stdout/stderr chunk cannot be lost.
+  let resolveClosed!: () => void;
+  const closedPromise = new Promise<void>((resolve) => {
+    resolveClosed = resolve;
+  });
   const run: ShellRun = {
     run_id: runId,
     command,
@@ -1758,7 +1738,7 @@ async function opShellRun(
     exit_code: null,
     cancelled: false,
     started_at: Date.now(),
-    closed: false,
+    closedPromise,
     decision: { tier: decision.tier, rule: decision.rule, reason: decision.reason, approver },
     timeout_ms: timeoutMs,
     timed_out: false,
@@ -1802,12 +1782,12 @@ async function opShellRun(
   // 'close' fires after stdio has flushed; a foreground caller must wait for it
   // or the last stdout/stderr chunk can be lost.
   child.on("close", () => {
-    run.closed = true;
+    resolveClosed();
   });
   child.on("error", (error) => {
     run.running = false;
     run.finished_at = Date.now();
-    run.closed = true;
+    resolveClosed();
     run.exit_code = -1;
     run.process = null;
     run.stderr_tail = (run.stderr_tail + `\n[spawn error] ${error.message}`).slice(-TAIL_LIMIT);
@@ -1838,9 +1818,7 @@ async function opShellRun(
     // Foreground: block until the process has exited *and* stdout/stderr are
     // flushed, so the call returns the complete final output. There is no 2 s
     // cap here: the only bound is timeout_ms (plus the tool-call budget).
-    while (run.running || !run.closed) {
-      await new Promise((resolve) => setTimeout(resolve, 25));
-    }
+    await run.closedPromise;
   } else {
     // Async: wait briefly for the process to actually start (or fail
     // immediately), then return the run_id for polling.

@@ -47,20 +47,21 @@ out.first_call_ms = +first.ms.toFixed(1);
 out.first_bytes = text(first.result).length;
 out.first_ok = !(first.result as { isError?: boolean }).isError;
 
-const earlyExit = await call("project_shell_run", {
-  command: "echo bench-early-exit",
-  early_exit: 1,
+const foreground = await call("project_shell_run", {
+  command: "echo bench-foreground",
+  background: 0,
 });
-const earlyExitText = String(
-  (earlyExit.result as { content?: { text?: string }[] })?.content?.[0]?.text ?? "{}",
+const foregroundText = String(
+  (foreground.result as { content?: { text?: string }[] })?.content?.[0]?.text ?? "{}",
 );
-const earlyExitData = JSON.parse(earlyExitText);
-out.shell_early_exit_ms = +earlyExit.ms.toFixed(1);
-out.shell_early_exit_ok =
-  earlyExitData.ok === true &&
-  earlyExitData.data?.running === false &&
-  earlyExitData.data?.run_id === earlyExitData.data?.shell_id &&
-  String(earlyExitData.data?.stdout ?? "").includes("bench-early-exit");
+const foregroundData = JSON.parse(foregroundText);
+out.shell_foreground_ms = +foreground.ms.toFixed(1);
+out.shell_foreground_ok =
+  foregroundData.ok === true &&
+  foregroundData.data?.running === false &&
+  foregroundData.data?.foreground === true &&
+  foregroundData.data?.run_id === foregroundData.data?.shell_id &&
+  String(foregroundData.data?.stdout ?? "").includes("bench-foreground");
 
 const reads: number[] = [];
 for (let i = 0; i < 50; i++) reads.push((await call("project_read_file", { relative_path: "server.ts", max_bytes: 8192 })).ms);
