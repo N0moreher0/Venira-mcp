@@ -14,7 +14,8 @@
  *      history rewriting, privilege escalation).
  *   3. A strict ALLOW list (opt-in via VENIRA_SHELL_MODE=strict) for
  *      read-only / workspace-local commands, so "everything else" requires an
- *      explicit approval instead of being allowed by default.
+ *      explicit approval instead of being allowed by default. Git history
+ *      rewrites remain an approval gate even in permissive mode.
  *
  * Decisions are deterministic and auditable: every result carries the rule id
  * that produced it.
@@ -37,7 +38,7 @@
 import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
 import { UNRESTRICTED, WORKSPACE, activeDataDir } from "./workspace.js";
 import { parseShellCommand, type ParsedCommand, type Segment } from "./shell-parser.js";
 import {
@@ -57,7 +58,8 @@ export { tokenize } from "./shell-tokenizer.js";
 // Types
 // ---------------------------------------------------------------------------
 
-export type ShellMode = "strict" | "balanced" | "permissive" | "off";
+export type ShellMode = "strict" | "balanced" | "permissive";
+export type ShellOverride = "ALLOW_GIT_PUSH" | "ALLOW_ENV_READ";
 export type Tier = "allow" | "ask" | "deny";
 
 export type ShellRule = {
@@ -233,7 +235,7 @@ function mayMatchProtectedBasename(token: string, protectedNames: Set<string>): 
 // Built-in rules
 // ---------------------------------------------------------------------------
 
-/** Unambiguous catastrophes: always denied, in every mode except `off`. */
+/** Unambiguous catastrophes: always denied in every mode. */
 const HARD_DENY: HardDenyRule[] = [
   {
     id: "disk_destroy",
@@ -545,11 +547,64 @@ function readRules(value: unknown, tier: Tier): ShellRule[] {
 
 function normaliseMode(value: string | undefined): ShellMode | null {
   const v = (value ?? "").trim().toLowerCase();
-  if (v === "strict" || v === "balanced" || v === "permissive" || v === "off") return v;
-  if (v === "ask") return "strict";
-  if (v === "allow") return "permissive";
-  if (v === "disabled" || v === "none") return "off";
+  if (v === "strict" || v === "balanced" || v === "permissive") return v;
   return null;
+}
+
+const SHELL_OVERRIDE_NAMES = new Set<ShellOverride>(["ALLOW_GIT_PUSH", "ALLOW_ENV_READ"]);
+
+export function isShellOverride(value: unknown): value is ShellOverride {
+  return typeof value === "string" && SHELL_OVERRIDE_NAMES.has(value as ShellOverride);
+}
+
+export function enabledShellOverrides(): Set<ShellOverride> {
+  const raw = process.env.VENIRA_SHELL_OVERRIDES;
+  if (raw === undefined || raw.trim() === "") return new Set();
+  const enabled = new Set<ShellOverride>();
+  for (const token of raw.split(",")) {
+    const name = token.trim();
+    if (!isShellOverride(name)) {
+      throw new Error(
+        `[config_invalid] VENIRA_SHELL_OVERRIDES accepts only: ${[...SHELL_OVERRIDE_NAMES].join(", ")}.`,
+      );
+    }
+    enabled.add(name);
+  }
+  return enabled;
+}
+
+function matchesOverride(parsed: ParsedCommand, cwd: string, name: ShellOverride): boolean {
+  if (
+    parsed.segments.length !== 1 ||
+    parsed.has_pipe ||
+    parsed.has_redirect ||
+    parsed.has_background ||
+    parsed.has_substitution
+  ) {
+    return false;
+  }
+  const segment = parsed.segments[0];
+  if (name === "ALLOW_GIT_PUSH") {
+    return segment.command === "git" && segment.subcommand === "push" && segment.argv[1]?.toLowerCase() === "push";
+  }
+  if (!READ_COMMANDS.has(segment.command)) return false;
+  const paths = segment.argv.slice(1).filter((arg) => arg !== "--" && !arg.startsWith("-"));
+  if (paths.length !== 1) return false;
+  const target = paths[0];
+  if (!target || /[*?\[\]$%`]/.test(target) || isOutsideWorkspace(target, cwd)) return false;
+  if (!/^\.env(?:\.[a-z0-9._-]+)?$/i.test(path.basename(target.replace(/\\/g, "/")))) return false;
+  try {
+    const absolute = path.resolve(cwd, target);
+    const entry = lstatSync(absolute);
+    if (!entry.isFile() || entry.isSymbolicLink()) return false;
+    return !isOutsideWorkspace(realpathSync(absolute), cwd);
+  } catch {
+    return false;
+  }
+}
+
+export function shellOverrideMatches(name: ShellOverride, command: string, cwd: string): boolean {
+  return matchesOverride(parseShellCommand(command), cwd, name);
 }
 
 let cachedPolicy: ShellPolicy | null = null;
@@ -558,20 +613,29 @@ export function loadShellPolicy(): ShellPolicy {
   if (cachedPolicy) return cachedPolicy;
 
   const policy: ShellPolicy = { mode: "balanced", allow: [], ask: [], deny: [], source: "builtin" };
-  const envMode = normaliseMode(process.env.VENIRA_SHELL_MODE);
+  const rawEnvMode = process.env.VENIRA_SHELL_MODE;
+  const envMode = normaliseMode(rawEnvMode);
+  if (rawEnvMode !== undefined && !envMode) {
+    throw new Error("[config_invalid] VENIRA_SHELL_MODE must be balanced, strict, or permissive.");
+  }
   if (envMode) policy.mode = envMode;
 
   const file = process.env.VENIRA_SHELL_POLICY_FILE;
   if (file && existsSync(file)) {
     try {
       const parsed = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
-      const fileMode = normaliseMode(typeof parsed.mode === "string" ? parsed.mode : undefined);
+      const rawFileMode = typeof parsed.mode === "string" ? parsed.mode : undefined;
+      const fileMode = normaliseMode(rawFileMode);
+      if (rawFileMode !== undefined && !fileMode) {
+        throw new Error("[config_invalid] shell policy mode must be balanced, strict, or permissive.");
+      }
       if (fileMode && !envMode) policy.mode = fileMode;
       policy.allow = readRules(parsed.allow, "allow");
       policy.ask = readRules(parsed.ask, "ask");
       policy.deny = readRules(parsed.deny, "deny");
       policy.source = file;
     } catch (error) {
+      if (error instanceof Error && error.message.startsWith("[config_invalid]")) throw error;
       console.error(
         `[shell-policy] ignoring ${file}: ${error instanceof Error ? error.message : String(error)}`,
       );
@@ -619,11 +683,21 @@ export function commandKey(parsed: ParsedCommand): string {
 export function evaluateShellCommand(
   command: string,
   cwd: string,
-  options: { mode?: ShellMode } = {},
+  options: { mode?: ShellMode; override?: ShellOverride; overrideReason?: string } = {},
 ): Decision {
   const policy = loadShellPolicy();
   const mode = options.mode ?? policy.mode;
   const parsed = parseShellCommand(command);
+  const enabled = enabledShellOverrides();
+  const override = options.override
+    ? {
+        name: options.override,
+        reason: options.overrideReason ?? "",
+        enabled: enabled.has(options.override),
+        matches: (candidate: ParsedCommand, currentCwd: string) =>
+          matchesOverride(candidate, currentCwd, options.override!),
+      }
+    : undefined;
   return evaluateParsedShellCommand(
     command,
     cwd,
@@ -634,6 +708,7 @@ export function evaluateShellCommand(
     ASK_RULES,
     STRICT_ALLOW,
     isSafeSegment,
+    override,
   );
 }
 

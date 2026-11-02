@@ -82,7 +82,7 @@ The whole history in order — what shipped, when, and why.
 - [x] VENIRA_SHELL_TIMEOUT_POLICY=soft|hard (soft: warn, hard: kill)
 - [x] Tool "project_shell_cancel_session" → cancel ALL shell runs for the session
 - [x] Cancel safety: verify that no "orphaned" runs are left in the DB
-- [x] `project_shell_run.early_exit=true` → wait for that run only, return bounded final `stdout`/`stderr` plus `run_id`/`shell_id`; default `false` remains non-blocking
+- [x] `project_shell_run.early_exit=1` → wait for that run only, return bounded final `stdout`/`stderr` plus `run_id`/`shell_id`; default `0` remains non-blocking
 
 ## 🚀 New Tools to Add (P2 - Aug 2025)
 
@@ -186,7 +186,7 @@ The whole history in order — what shipped, when, and why.
 ### Secrets (`lib/secrets.ts`) ✅
 - [x] `project_secret` — one tool, `action: get|set|list|delete` (same action pattern as `project_snapshot`)
 - [x] AES-256-GCM at rest (`<data>/secrets.json` + `<data>/secrets.key`, 0600, atomic temp+rename)
-- [x] `get`/`list` metadata only (`length`, `sha256_12`, `updated_at`); plaintext requires `reveal=true` **and** `VENIRA_SECRET_ALLOW_REVEAL=1`
+- [x] `get`/`list` metadata only (`length`, `sha256_12`, `updated_at`); plaintext requires `reveal=1` **and** `VENIRA_SECRET_ALLOW_REVEAL=1`
 - [x] `value_env` alternative keeps the value out of tool arguments entirely
 - [x] `project_shell_run secret_env: string[]` (≤ 16) — decrypted **after** approval, injected into the child env
 - [x] Loader-hijack denylist (`NODE_OPTIONS`, `LD_PRELOAD`, `DYLD_*`, `PYTHONSTARTUP`, `PYTHONPATH`, `BASH_ENV`, `ENV`, `PROMPT_COMMAND`, `GIT_SSH_COMMAND`)
@@ -395,7 +395,7 @@ Today failures are thrown as `Error("[code] message Hint: ...")` and re-parsed i
 - Package renamed to `venira-mcp`, bins `venira` + `venira-mcp`
 
 ### v1.1.0 (2026-10-28) ✅
-- Shell policy levels `balanced` / `strict` / `permissive` / `off`
+- Shell policy levels `balanced` / `strict` / `permissive`
 - HMAC-signed single-use approval tokens + session grants
 - Policy file loaded only from an explicit env path (never from the workspace)
 

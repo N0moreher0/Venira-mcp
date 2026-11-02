@@ -96,7 +96,7 @@ async function main() {
       const expectedTools = 41;
       results.push(await check("tools_count", tools.tools.length === expectedTools, { actual: tools.tools.length, expected: expectedTools }));
 
-      const healthRes = await client.callTool({ name: "project_health", arguments: { include_audit: false } });
+      const healthRes = await client.callTool({ name: "project_health", arguments: { include_audit: 0 } });
       const healthData = JSON.parse(
         ((healthRes as { content?: { text?: string }[] })?.content?.[0]?.text ?? "{}"),
       );
@@ -160,7 +160,7 @@ async function main() {
     await client3.connect(transport3);
     await new Promise((r) => setTimeout(r, 300));
 
-    const healthRes3 = await client3.callTool({ name: "project_health", arguments: { include_audit: false } });
+    const healthRes3 = await client3.callTool({ name: "project_health", arguments: { include_audit: 0 } });
     const hData = JSON.parse(((healthRes3 as { content?: { text?: string }[] })?.content?.[0]?.text ?? "{}"));
     results.push(await check("config_cache_reported", hData.data?.cache !== undefined, hData.data?.cache));
     results.push(await check("config_trace_reported", hData.data?.trace !== undefined, hData.data?.trace));

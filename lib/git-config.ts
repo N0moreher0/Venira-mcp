@@ -12,6 +12,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { envFlagValue } from "./env.js";
 import { WORKSPACE } from "./workspace.js";
 import { getSecretMeta, getSecretValueSync, isValidSecretName, markSecretUsed } from "./secrets.js";
 import { currentBranch, parsePrOrRepo, parseRepoRef, readOriginUrl, type RepoRef } from "./git-repo.js";
@@ -219,7 +220,14 @@ function hostOf(raw: string): string | null {
 }
 
 function allowHttp(): boolean {
-  return (process.env.VENIRA_GIT_ALLOW_HTTP ?? process.env.VENIRA_GITHUB_ALLOW_HTTP ?? "") === "1";
+  const name = process.env.VENIRA_GIT_ALLOW_HTTP !== undefined
+    ? "VENIRA_GIT_ALLOW_HTTP"
+    : "VENIRA_GITHUB_ALLOW_HTTP";
+  return envFlagValue(
+    name,
+    process.env.VENIRA_GIT_ALLOW_HTTP ?? process.env.VENIRA_GITHUB_ALLOW_HTTP,
+    false,
+  );
 }
 
 const DEFAULT_ALLOWED_HOSTS = new Set(["api.github.com", "gitlab.com", "api.bitbucket.org"]);

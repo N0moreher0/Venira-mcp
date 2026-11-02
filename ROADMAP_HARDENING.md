@@ -44,7 +44,7 @@
 | R3 | Lockfile `secrets.json` (wx + stale-timeout) | 📖 `lib/secrets.ts` L309 |
 | R6 | Cache cột audit (`auditColumns`) | 📖 `lib/corehost.ts` L81 |
 | R7 | Cache tool-policy theo mtime/env/inline | 📖 `lib/tool-policy.ts` L22 |
-| R8 (một phần) | Hash-chain `prev_hash`/`row_hash`, `verify=true` | 📖 `lib/corehost.ts` L189, L196 |
+| R8 (một phần) | Hash-chain `prev_hash`/`row_hash`, `verify=1` | 📖 `lib/corehost.ts` L189, L196 |
 | R9 | `killTree` ghi thống kê đúng | 📖 `lib/corehost.ts` L512 |
 | R10 | Redact secret variants (base64/URL-encoded) | 📖 `lib/secrets.ts` L454 |
 | R11 | Recent-index cập nhật khi append | 📖 `lib/corehost.ts` L974 |
@@ -102,6 +102,52 @@
 
 **Xong khi:** các ca ở Phụ lục A cho đúng tier; `npm run verify` xanh trên Linux (< 2 phút); model không tự duyệt được ở cấu hình mặc định.
 
+### Phase 0.2 — Mode, cờ 0/1 và named override (P0 bảo mật)
+
+**Mục tiêu:** cấu hình dễ đọc và có thể kiểm toán mà không biến `permissive`, tool arguments hay policy file thành đường vòng qua hard-deny.
+
+#### Quy tắc cấu hình
+
+| Mặt cấu hình | Giá trị hợp lệ | Hành vi |
+|---|---|---|
+| `VENIRA_SHELL_MODE` | `balanced` (mặc định), `strict`, `permissive` | Chọn policy mặc định. Bỏ `off` và alias mơ hồ; giá trị sai phải báo lỗi cấu hình. |
+| `VENIRA_OUTPUT_MODE` | `full` (mặc định), `compact` | Chọn dạng output; bỏ `summary`. Giá trị sai phải báo lỗi, không tự rơi về `full`. |
+| Boolean env/config của Venira | `0` hoặc `1` | `0` tắt, `1` bật; thiếu biến dùng default đã công bố. `true/false`, `yes/no`, `on/off` và mọi giá trị khác phải báo lỗi. |
+| Boolean của MCP tools | số nguyên `0` hoặc `1` | JSON schema công khai nhận đúng hai giá trị; chuyển nội bộ thành boolean. Giữ boolean trong `project_ci_trigger.inputs` vì đó là dữ liệu tự do gửi tới provider, không phải cờ Venira. |
+
+#### Precedence bắt buộc
+
+1. **Validate request/config**: tên override, reason và mọi giá trị enum/flag phải hợp lệ; không âm thầm ép kiểu.
+2. **Hard-deny**: lệnh phá hoại bị chặn trong mọi mode. Duy nhất `ALLOW_ENV_READ` có thể bỏ qua protected-file rule cho đúng một lệnh đọc `.env` hẹp; không áp dụng cho private keys, data dir hay credential stores.
+3. **Built-in/custom deny và custom ask**: được xét trước override; policy file không thể mở khóa hard-deny hoặc xóa một custom deny/ask.
+4. **Named override**: chỉ hoạt động khi operator bật đúng tên trong `VENIRA_SHELL_OVERRIDES` **và** tool call truyền đúng tên cùng reason không rỗng. Chỉ bỏ qua ask/mode mặc định đúng phạm vi; ghi decision, tên rule, reason và approver vào SQLite audit.
+5. **Mode defaults**: `strict` yêu cầu approval cho lệnh ngoài allowlist; `balanced` giữ các ask thông thường; `permissive` chỉ nới các ask thông thường, không xóa guard bắt buộc. Custom allow không thể vượt ask rules hay strict mode.
+
+Không có `allow_all=1`, wildcards, regex override, hay tham số có thể bỏ qua toàn bộ policy.
+
+#### Danh sách override ban đầu, phạm vi và threat model
+
+| Tên | Điều kiện áp dụng | Không được phép |
+|---|---|---|
+| `ALLOW_GIT_PUSH` | Chỉ một thao tác `git push` độc lập trong mọi mode (kể cả `permissive`); cần `VENIRA_SHELL_OVERRIDES=ALLOW_GIT_PUSH` và `override="ALLOW_GIT_PUSH"` kèm reason trong chính call. | Không áp dụng cho chuỗi lệnh, pipe, redirect, substitution, background, git subcommand khác hay lệnh được bọc/chạy kèm. |
+| `ALLOW_ENV_READ` | Chỉ command đọc đơn giản, chỉ đọc `.env`/`.env.*`, không pipe/redirect/substitution/background; cần operator allowlist đúng tên và reason mỗi lần. | Không cho ghi/xóa `.env`, đọc private key, credential store, audit DB, `VENIRA_DATA_DIR`, hay thực thi nội dung file. |
+
+Agent-supplied reason là dữ liệu audit chứ không phải bằng chứng danh tính người duyệt. Quyền override cần operator cấu hình trước; lệnh không khớp chặt phạm vi tiếp tục đi qua policy bình thường hoặc bị hard-deny. Override không cấu hình sẵn không tự mở quyền. Mọi thay đổi trong danh sách phải có rule id ổn định, test positive và negative, cùng rà soát rò rỉ secret trong reason/audit.
+
+#### Kế hoạch triển khai và kiểm chứng
+
+- [x] Tạo parser env boolean dùng chung, báo lỗi tên biến + yêu cầu `0`/`1`; chuyển các cờ Venira hiện có sang parser này, giữ đúng default hiện hành.
+- [x] Thu hẹp enum shell/output mode, cập nhật server instructions, README, SECURITY và migration note. Cấu hình legacy `off`, `summary` hay boolean spellings phải hiện lỗi, không bị đổi ngầm.
+- [x] Chuyển tất cả boolean tool input thành số `0/1` trong JSON schema MCP; riêng map `inputs` của provider giữ kiểu dữ liệu gốc.
+- [x] Thêm registry override tĩnh, operator allowlist, xác thực reason (trim, giới hạn độ dài), và kiểm tra phạm vi trên parsed command; không cho custom policy đi vòng.
+- [x] Ghi override vào SQLite audit bằng `policy_rule`, `approver` và reason đã redact; không lưu secret raw từ reason/command.
+- [x] Regression: hard-deny vẫn thắng cả ba mode và policy file; không allow khi thiếu operator flag/name/reason; đúng override chỉ chạy trên phạm vi hẹp; `.env` ghi/pipe/glob, private key, chain command, `git push` ghép lệnh vẫn bị chặn/hỏi; audit row phải chứa rule + reason.
+- [x] Verify `tools/list` public schema chỉ nhận số 0/1; test từ chối boolean/string legacy; test env invalid fail rõ ràng; chạy policy corpus, shell security, `npm run build`, `npm run verify`, `npm run doctor`.
+
+**Trạng thái kiểm chứng:** local Windows/Node v24: build, docs/source-shape checks, shell-security regressions, doctor (12/12), policy corpus (260/260) và `npm run verify` đều qua. CI Windows/Linux vẫn là cổng phát hành cuối cùng.
+
+**Xong khi:** không còn shell `off` hoặc output `summary`; mọi cờ boolean do Venira sở hữu chỉ có `0/1`; named override không thể được agent tự bật nếu operator chưa allowlist; positive/negative policy và audit regressions xanh trên CI Windows/Linux.
+
 ### Phase 1 — Policy v2 + duyệt bởi người (v1.8.0)
 - [ ] Parser riêng theo shell (`posix`, `powershell`, `cmd`), giữ `\` trong đường dẫn Windows (**S13**). (L)
 - [x] **S12** — bind duyệt vào `hash(command + shell + cwd + sorted(secret_env))`; session grant TTL ngắn, không áp cho `network_access` / `git_history_rewrite`. (S)
@@ -109,7 +155,7 @@
 - [x] Thống nhất README ↔ code cho `docker rm/stop` và `git push`: `ask`. (S)
 
 ### Phase 2 — Toàn vẹn & độ tin cậy (v1.9.0)
-- [x] **R8** — `VENIRA_AUDIT_STRICT=1` → fail-closed; retention (`VENIRA_AUDIT_KEEP_DAYS`, mặc định 90) + `VACUUM` định kỳ; cột `prev_hash`/`row_hash` (hash-chain) để phát hiện sửa dữ liệu, thêm `project_read_audit verify=true`. (M)
+- [x] **R8** — `VENIRA_AUDIT_STRICT=1` → fail-closed; retention (`VENIRA_AUDIT_KEEP_DAYS`, mặc định 90) + `VACUUM` định kỳ; cột `prev_hash`/`row_hash` (hash-chain) để phát hiện sửa dữ liệu, thêm `project_read_audit verify=1`. (M)
 - [x] **R3** — khoá khi ghi `secrets.json` (lockfile `wx` + stale-timeout) + retry `rename` (EPERM/EBUSY trên Windows). (M)
 - [x] **R5–R11** — đã kiểm tra và triển khai các mục R4–R11. (M mỗi mục)
 - [x] Audit phần chưa xem: `opSearch` giới hạn glob/regex complexity; snapshot restore validates manifest header, paths, hashes and sizes before use. `project_execute_js` remains explicitly gated, uses Node filesystem permissions scoped to the workspace with child-process/worker permissions denied, and is documented as containment rather than a sandbox. (M)

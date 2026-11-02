@@ -12,6 +12,7 @@ import https from "node:https";
 import tls from "node:tls";
 import type { GitContext, ProviderId } from "./git-config.js";
 import { assertProviderPayloadSafe } from "./provider-secret-guard.js";
+import { envFlag } from "./env.js";
 
 export type RawHeaders = Record<string, string | string[] | undefined>;
 export type RawResult = { status: number; headers: RawHeaders; url: string; buffer: Buffer };
@@ -31,8 +32,7 @@ const USER_AGENT = "venira-mcp-coding (+https://github.com/N0moreher0/Venira-mcp
 const JSON_MAX_BYTES = 8 * 1024 * 1024;
 
 export function networkEnabled(): boolean {
-  const raw = (process.env.VENIRA_NETWORK ?? "1").trim().toLowerCase();
-  return !["0", "false", "off", "no"].includes(raw);
+  return envFlag("VENIRA_NETWORK", true);
 }
 
 function isLocalHost(hostname: string): boolean {

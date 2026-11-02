@@ -30,6 +30,7 @@ import {
   commandKey,
   commandHash,
   describeShellPolicy,
+  enabledShellOverrides,
   evaluateShellCommand,
   grantSessionApproval,
   hasSessionApproval,
@@ -39,8 +40,11 @@ import {
   recordDecision,
   redactSecrets,
   shellStats,
+  shellOverrideMatches,
   verifyApprovalToken,
+  isShellOverride,
   type Decision,
+  type ShellOverride,
 } from "./shell-policy.js";
 import {
   editMatchLocations,
@@ -79,6 +83,7 @@ import {
   setSecret,
 } from "./secrets.js";
 import { GithubDeviceFlow } from "./github-device-flow.js";
+import { envChoice, envFlag } from "./env.js";
 
 // ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
@@ -87,7 +92,7 @@ let auditDb: Database.Database | null = null;
 let auditColumns: Set<string> | null = null;
 
 function auditStrict(): boolean {
-  return (process.env.VENIRA_AUDIT_STRICT ?? "").toLowerCase() === "1";
+  return envFlag("VENIRA_AUDIT_STRICT", false);
 }
 
 function auditDbPath(): string {
@@ -476,13 +481,11 @@ const TAIL_LIMIT = (() => {
 })();
 /** VENIRA_SHELL_EXIT_EARLY=1: pollers return immediately when the exit code is
  * already known, without waiting out the full wait_seconds window. */
-export const SHELL_EXIT_EARLY = ["1", "true", "on", "yes"].includes(
-  (process.env.VENIRA_SHELL_EXIT_EARLY ?? "").toLowerCase(),
-);
+export const SHELL_EXIT_EARLY = envFlag("VENIRA_SHELL_EXIT_EARLY", false);
 /** VENIRA_SHELL_TIMEOUT_POLICY=soft (default): an expired command only warns and is
  * left to finish; =hard: kill the whole process tree at the timeout. */
 export const SHELL_TIMEOUT_POLICY: "soft" | "hard" =
-  process.env.VENIRA_SHELL_TIMEOUT_POLICY === "hard" ? "hard" : "soft";
+  envChoice("VENIRA_SHELL_TIMEOUT_POLICY", "soft", ["soft", "hard"]);
 
 /** Hard cap per stream; keeps a runaway build from exhausting server memory. */
 const MAX_OUTPUT_BYTES = (() => {
@@ -533,7 +536,7 @@ const BASE_ENV_ALLOW = [
 ];
 
 function buildShellEnv(overrides: Record<string, string> = {}): NodeJS.ProcessEnv {
-  if (process.env.VENIRA_SHELL_ENV_PASS_ALL === "1") {
+  if (envFlag("VENIRA_SHELL_ENV_PASS_ALL", false)) {
     return { ...process.env, ...overrides };
   }
   const extra = (process.env.VENIRA_SHELL_ENV_ALLOW ?? "")
@@ -1002,7 +1005,7 @@ async function opSearch(
         files_matched: filesMatched,
         hint:
           hits.length === 0
-            ? "No matches. Broaden the search: drop glob/relative_path, set regex=false, or use kind=file_name."
+            ? "No matches. Broaden the search: drop glob/relative_path, set regex=0, or use kind=file_name."
             : undefined,
       },
     },
@@ -1127,7 +1130,7 @@ async function opEditFile(
   const replaceAll = args.replace_all === true;
   
   // P2: Fuzzy edit support
-  const fuzzyEnabled = (process.env.VENIRA_EDIT_FUZZY ?? "") === "1";
+  const fuzzyEnabled = envFlag("VENIRA_EDIT_FUZZY", false);
   const fuzzyDistance = Number(args.fuzzy_distance ?? 3);
   const ignoreIndentation = args.ignore_indentation === true;
   const caseInsensitive = args.case_insensitive === true;
@@ -1413,7 +1416,7 @@ async function opDeletePath(
 
   if (stat.isDirectory() && !recursive) {
     throw new Error(
-      `[invalid_request] Directory requires recursive=true: ${args.relative_path}.`,
+      `[invalid_request] Directory requires recursive=1: ${args.relative_path}.`,
     );
   }
 
@@ -1518,11 +1521,36 @@ async function opShellRun(
   const cwd = resolveInWorkspace(args.relative_cwd as string | undefined, root);
   const runId = crypto.randomUUID().slice(0, 12);
   const secretNames = normalizeSecretEnv(args.secret_env);
+  let override: ShellOverride | undefined;
+  if (args.override !== undefined) {
+    if (!isShellOverride(args.override)) {
+      throw new Error("[invalid_request] override must be ALLOW_GIT_PUSH or ALLOW_ENV_READ.");
+    }
+    override = args.override;
+    const reason = typeof args.reason === "string" ? args.reason.trim() : "";
+    if (!reason || reason.length > 400) {
+      throw new Error("[invalid_request] A non-empty reason of at most 400 characters is required with override.");
+    }
+    if (!enabledShellOverrides().has(override)) {
+      throw new Error(
+        `[override_not_enabled] Override ${override} is not enabled by the operator (rule: override.${override}). ` +
+          `Set VENIRA_SHELL_OVERRIDES=${override} explicitly to enable it.`,
+      );
+    }
+    if (!shellOverrideMatches(override, command, cwd)) {
+      throw new Error(
+        `[override_scope_mismatch] Override ${override} does not cover this command (rule: override.${override}); ` +
+          `remove override or use a command within its documented scope.`,
+      );
+    }
+  }
 
   // -------------------------------------------------------------------------
   // 1. Policy gate: deny → throw, ask → approval flow, allow → continue.
   // -------------------------------------------------------------------------
-  const evaluatedDecision = evaluateShellCommand(command, cwd);
+  const evaluatedDecision = evaluateShellCommand(command, cwd, {
+    ...(override ? { override, overrideReason: String(args.reason).trim() } : {}),
+  });
   const decision: Decision =
     secretNames.length > 0 && evaluatedDecision.tier !== "deny"
       ? {
@@ -1543,7 +1571,9 @@ async function opShellRun(
     secret_env: secretNames,
     rule: decision.rule,
   });
-  let approver: string | null = null;
+  let approver: string | null = decision.rule.startsWith("override.")
+    ? `agent:${decision.rule.slice("override.".length)}`
+    : null;
 
   if (decision.tier === "deny") {
     throw new Error(
@@ -1591,7 +1621,7 @@ async function opShellRun(
     } else {
       const autoToken =
         decision.rule !== "ask.secret_env_injection" &&
-        (process.env.VENIRA_SHELL_AUTO_APPROVE_TOKEN ?? "0").toLowerCase() === "1";
+        envFlag("VENIRA_SHELL_AUTO_APPROVE_TOKEN", false);
       const issued = autoToken
         ? issueApprovalToken(sessionId, decision, undefined, `${shell}|${cwd}|${secretNames.slice().sort().join(",")}`)
         : null;
@@ -1756,7 +1786,7 @@ async function opShellRun(
   });
 
   if (timeoutMs > 0) {
-    const policy: "soft" | "hard" = process.env.VENIRA_SHELL_TIMEOUT_POLICY === "hard" ? "hard" : "soft";
+    const policy = SHELL_TIMEOUT_POLICY;
     run.timer = setTimeout(() => {
       if (!run.running) return;
       run.timed_out = true;
@@ -1831,7 +1861,7 @@ async function opShellStatus(
   if (waitSeconds > 0 && run.running) {
     // P1: VENIRA_SHELL_EXIT_EARLY=1 — return as soon as the exit code is known
     // instead of waiting out the entire window.
-    const pollEarly = process.env.VENIRA_SHELL_EXIT_EARLY === "1";
+    const pollEarly = SHELL_EXIT_EARLY;
     const deadline = Date.now() + waitSeconds * 1000;
     while (run.running && Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 250));
@@ -1903,7 +1933,7 @@ function opShellCancel(args: Record<string, unknown>): RustResponse {
 //
 // Values are never returned by default: `get`/`list` expose only metadata
 // (length + sha256 prefix + update time) so an agent can confirm a key exists
-// without ever putting it in a transcript. `reveal:true` is an explicit opt-in
+// without ever putting it in a transcript. `reveal=1` is an explicit opt-in
 // *and* needs VENIRA_SECRET_ALLOW_REVEAL=1 on the host, so a compromised agent
 // cannot exfiltrate keys from a normal install.
 // ---------------------------------------------------------------------------
@@ -2011,10 +2041,10 @@ async function opSecret(args: Record<string, unknown>): Promise<RustResponse> {
           hint:
             "Metadata only (the value stays out of the transcript). Hint: inject it with project_shell_run secret_env=[\"" +
             name +
-            '"], or set VENIRA_SECRET_ALLOW_REVEAL=1 and pass reveal=true.',
+            '"], or set VENIRA_SECRET_ALLOW_REVEAL=1 and pass reveal=1.',
         };
       }
-      if (process.env.VENIRA_SECRET_ALLOW_REVEAL !== "1") {
+      if (!envFlag("VENIRA_SECRET_ALLOW_REVEAL", false)) {
         throw new Error(
           "[reveal_denied] Plaintext reveal is disabled on this host. " +
             "Hint: inject the value via project_shell_run secret_env instead; set VENIRA_SECRET_ALLOW_REVEAL=1 only if the user explicitly wants the value printed.",
@@ -2036,7 +2066,7 @@ async function opSecret(args: Record<string, unknown>): Promise<RustResponse> {
             value: value.slice(0, MAX_REVEAL_VALUE_CHARS),
           },
         },
-        hint: "Revealed because reveal=true and VENIRA_SECRET_ALLOW_REVEAL=1. The value is now in this transcript.",
+        hint: "Revealed because reveal=1 and VENIRA_SECRET_ALLOW_REVEAL=1. The value is now in this transcript.",
       };
     }
 
@@ -2201,7 +2231,7 @@ function describeExternalOp(operation: string, args: Record<string, unknown>): s
     case "secret": {
       const action = String(args.action ?? "").toLowerCase();
       const name = typeof args.name === "string" ? args.name : "";
-      summary = `secret_${action || "?"} name=${name}${args.reveal === true ? " reveal=true" : ""}`;
+      summary = `secret_${action || "?"} name=${name}${args.reveal === true ? " reveal=1" : ""}`;
       break;
     }
     case "github_connect":
@@ -2360,7 +2390,9 @@ export class CoreHost {
           throw new Error("[capability_expired] Capability is expired or revoked. Hint: the scope re-opens automatically on the next call.");
         }
 
-        const reasonText = sanitizeReason(redactSecretValues(typeof p.reason === "string" ? p.reason : ""));
+        const reasonText = sanitizeReason(
+          redactSecretValues(redactSecrets(typeof p.reason === "string" ? p.reason : "")),
+        );
         const externalSummary = describeExternalOp(operation, args);
         const argsHash = crypto
           .createHash("sha256")
@@ -2413,6 +2445,8 @@ export class CoreHost {
               decision:
                 reasonCode === "command_denied"
                   ? "deny"
+                  : reasonCode.startsWith("override_")
+                    ? "deny"
                   : reasonCode === "approval_invalid" || reasonCode === "approval_required"
                     ? "ask"
                     : undefined,

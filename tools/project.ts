@@ -3,6 +3,7 @@ import { randomBytes } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
+import { envChoice, envFlag } from "../lib/env.js";
 import { CoreHost, shellPolicySnapshot } from "../lib/corehost.js";
 import * as approvals from "../lib/approvals.js";
 import { evaluateToolPolicy } from "../lib/tool-policy.js";
@@ -689,9 +690,7 @@ async function executeCached(operation: string, args: Args): Promise<Execution> 
 // Shell approval flow
 // ---------------------------------------------------------------------------
 
-const SHELL_ELICIT = ["1", "true", "on", "yes"].includes(
-  (process.env.VENIRA_SHELL_ELICIT ?? "").toLowerCase(),
-);
+const SHELL_ELICIT = envFlag("VENIRA_SHELL_ELICIT", false);
 const ELICIT_TIMEOUT_MS = 5 * 60 * 1000;
 
 type ShellApprovalData = {
@@ -1536,14 +1535,14 @@ async function runHealth(args: Args): Promise<ToolResult> {
         unrestricted: UNRESTRICTED,
         permission_mode: PERMISSION_MODE,
         output_mode: OUTPUT_MODE,
-        pretty: process.env.VENIRA_PRETTY === "1",
+        pretty: envFlag("VENIRA_PRETTY", false),
         node: process.version,
       },
       corehost: {
         ...hostInfo,
         exe: hostInfo.exe,
         data_dir: dataDir,
-        audit_fast: (process.env.VENIRA_AUDIT_FAST ?? "1") !== "0",
+        audit_fast: envFlag("VENIRA_AUDIT_FAST", true),
       },
       capability: capability
         ? {
@@ -1571,7 +1570,7 @@ async function runHealth(args: Args): Promise<ToolResult> {
       secrets: secretsHealth(),
       // GitHub/CI: repo detection, api base, auth presence (never the token).
       network: {
-        enabled: (process.env.VENIRA_NETWORK ?? "1") !== "0",
+        enabled: envFlag("VENIRA_NETWORK", true),
         github: githubHealth(),
       },
       metrics: metricsSnapshot(),
@@ -1584,8 +1583,8 @@ async function runHealth(args: Args): Promise<ToolResult> {
       trace: traceSnapshot(),
       shell: {
         tail_max: Number(process.env.VENIRA_SHELL_TAIL_MAX ?? 4096),
-        exit_early: process.env.VENIRA_SHELL_EXIT_EARLY === "1",
-        timeout_policy: process.env.VENIRA_SHELL_TIMEOUT_POLICY === "hard" ? "hard" : "soft",
+        exit_early: envFlag("VENIRA_SHELL_EXIT_EARLY", false),
+        timeout_policy: envChoice("VENIRA_SHELL_TIMEOUT_POLICY", "soft", ["soft", "hard"]),
       },
       audit: includeAudit ? await auditHealth(dbPath) : { skipped: true },
     };
@@ -1606,6 +1605,7 @@ async function runHealth(args: Args): Promise<ToolResult> {
 // Tool registration
 // ---------------------------------------------------------------------------
 const path_ = z.string().describe("Path inside the workspace (relative, or absolute inside the workspace)");
+const flag01 = z.number().int().min(0).max(1).transform((value) => value === 1).describe("Numeric flag: 1=enabled, 0=disabled.");
 const reason_ = z
   .string()
   .max(400)
@@ -1616,7 +1616,7 @@ const reason_ = z
 const editOp = z.object({
   old_text: z.string().min(1),
   new_text: z.string(),
-  replace_all: z.boolean().optional(),
+  replace_all: flag01.optional(),
 });
 
 type ToolMeta = {
@@ -2339,7 +2339,7 @@ async function runInstallSelf(args: Args): Promise<ToolResult> {
   const started = performance.now();
   const requestId = newRequestId();
 
-  if ((process.env.VENIRA_ALLOW_SELF_INSTALL ?? "").toLowerCase() !== "1") {
+  if (!envFlag("VENIRA_ALLOW_SELF_INSTALL", false)) {
     return toolResult(
       errorEnvelope(
         "install_self",
@@ -2412,7 +2412,7 @@ export function registerProjectTools(server: McpServer): void {
       ),
       inputSchema: {
         relative_path: path_.optional(),
-        include_ignored: z.boolean().optional(),
+        include_ignored: flag01.optional(),
         limit: z.number().int().min(1).max(200).optional(),
         depth: z.number().int().min(1).max(3).optional(),
       },
@@ -2439,7 +2439,7 @@ export function registerProjectTools(server: McpServer): void {
         relative_path: path_,
         start_line: z.number().int().min(0).optional(),
         end_line: z.number().int().min(0).optional(),
-        line_numbers: z.boolean().optional(),
+        line_numbers: flag01.optional(),
         max_bytes: z.number().int().min(1).max(1048576).optional(),
       },
     },
@@ -2505,7 +2505,7 @@ export function registerProjectTools(server: McpServer): void {
     "project_search",
     {
       ...config(
-        "Search by file name, directory name, content (literal or regex=true), or symbol declaration lines (definition).",
+        "Search by file name, directory name, content (literal or regex=1), or symbol declaration lines (definition).",
         "Search workspace",
         {
           use_when: "you need to find code/strings/symbols before reading; use kind=literal_content or definition.",
@@ -2522,12 +2522,12 @@ export function registerProjectTools(server: McpServer): void {
         relative_path: path_.optional(),
         glob: z.string().optional(),
         exclude_glob: z.string().optional(),
-        regex: z.boolean().optional(),
-        case_sensitive: z.boolean().optional(),
-        whole_word: z.boolean().optional(),
-        include_hidden: z.boolean().optional(),
+        regex: flag01.optional(),
+        case_sensitive: flag01.optional(),
+        whole_word: flag01.optional(),
+        include_hidden: flag01.optional(),
         context_lines: z.number().int().min(0).max(20).optional(),
-        count_only: z.boolean().optional(),
+        count_only: flag01.optional(),
         limit: z.number().int().min(1).max(200).optional(),
       },
     },
@@ -2553,7 +2553,7 @@ export function registerProjectTools(server: McpServer): void {
         relative_path: path_.optional(),
         limit: z.number().int().min(1).max(100).optional(),
         depth: z.number().int().min(1).max(6).optional(),
-        include_ignored: z.boolean().optional(),
+        include_ignored: flag01.optional(),
       },
     },
     (args) => runRecentFiles(args as Args),
@@ -2610,7 +2610,7 @@ export function registerProjectTools(server: McpServer): void {
         relative_path: path_,
         content: z.string(),
         mode: z.enum(["create", "overwrite", "append"]).optional(),
-        create_dirs: z.boolean().optional(),
+        create_dirs: flag01.optional(),
         expected_sha256: z.string().optional(),
         reason: reason_,
       },
@@ -2637,14 +2637,14 @@ export function registerProjectTools(server: McpServer): void {
         relative_path: path_,
         old_text: z.string().min(1).optional(),
         new_text: z.string().optional(),
-        replace_all: z.boolean().optional(),
+        replace_all: flag01.optional(),
         edits: z.array(editOp).max(64).optional(),
         expected_sha256: z.string().optional(),
         // P2: Fuzzy edit args
         old_text_fuzzy: z.string().optional().describe("P2: Fuzzy-match fallback for old_text (used when exact match fails and VENIRA_EDIT_FUZZY=1)."),
         fuzzy_distance: z.number().int().min(0).max(10).optional().describe("P2: Max Levenshtein distance for fuzzy matching (default 3)."),
-        ignore_indentation: z.boolean().optional().describe("P2: Ignore leading whitespace differences in fuzzy matching."),
-        case_insensitive: z.boolean().optional().describe("P2: Case-insensitive fuzzy matching."),
+        ignore_indentation: flag01.optional().describe("P2: Ignore leading whitespace differences in fuzzy matching; 1=on, 0=off."),
+        case_insensitive: flag01.optional().describe("P2: Case-insensitive fuzzy matching; 1=on, 0=off."),
         reason: reason_,
       },
     },
@@ -2678,14 +2678,14 @@ export function registerProjectTools(server: McpServer): void {
     {
       ...config("Create a directory (create_parents defaults to true).", "Create directory", {
         use_when: "a directory must exist before writing a file into a new path.",
-        avoid_when: "the directory already exists, or you only need to write a file with create_dirs=true.",
+        avoid_when: "the directory already exists, or you only need to write a file with create_dirs=1.",
         speed_profile: "fast; create_parents avoids a second call.",
         output_kind: "directory_created: relative_path.",
         batch_safe: false,
       }, { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false }),
       inputSchema: {
         relative_path: path_,
-        create_parents: z.boolean().optional(),
+        create_parents: flag01.optional(),
         reason: reason_,
       },
     },
@@ -2695,7 +2695,7 @@ export function registerProjectTools(server: McpServer): void {
   server.registerTool(
     "project_delete_path",
     {
-      ...config("Delete a file or directory (directories require recursive=true).", "Delete path", {
+      ...config("Delete a file or directory (directories require recursive=1).", "Delete path", {
         use_when: "a file/directory must be deleted entirely; the path is confirmed.",
         avoid_when: "you only need to change the content (write/edit). This op is not undoable.",
         speed_profile: "fast; clears the read/list/search cache.",
@@ -2704,7 +2704,7 @@ export function registerProjectTools(server: McpServer): void {
       }, { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false }),
       inputSchema: {
         relative_path: path_,
-        recursive: z.boolean().optional(),
+        recursive: flag01.optional(),
         reason: reason_,
       },
     },
@@ -2717,18 +2717,18 @@ export function registerProjectTools(server: McpServer): void {
       ...config(
         `Run a shell command (cwd defaults to ${WORKSPACE}). Returns run_id immediately; use project_shell_status to get the output. ` +
           "Commands pass a policy gate: risky ones return an approval_required error with a pending approval_id; " +
-          "catastrophic ones are denied outright.",
+          "catastrophic ones are denied outright. Named overrides require operator allowlisting and a per-call reason.",
         "Shell run (async)",
         {
           use_when:
             "build/test/lint/long-running commands; returns run_id immediately so it never blocks other tools. " +
-            "Set early_exit=true to wait for completion and return final output in this call; otherwise poll project_shell_status. " +
+            "Set early_exit=1 to wait for completion and return final output in this call; otherwise poll project_shell_status. " +
             "After approval_required, ask the user to approve the approval_id in an interactive terminal, then retry.",
           avoid_when: "a very short command whose output you need right now (you can still run it and poll 0s).",
           speed_profile: "returns in ~5 ms; run time is up to the command (bounded by timeout_ms).",
           output_kind:
             "shell_run: run_id/shell_id, running, exit_code, stdout_tail/stderr_tail, timed_out, policy; " +
-            "with early_exit=true also returns bounded stdout/stderr; approval_required: rule, reason, approval_id, retry_with.",
+            "with early_exit=1 also returns bounded stdout/stderr; approval_required: rule, reason, approval_id, retry_with.",
           batch_safe: false,
         },
         { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
@@ -2759,10 +2759,19 @@ export function registerProjectTools(server: McpServer): void {
           .string()
           .optional()
           .describe("Approval ID from npx venira-mcp --approve <id>. Use this instead of approval_token when auto-approval is disabled."),
-        early_exit: z
-          .union([z.boolean(), z.enum(["true", "false"])])
+        override: z
+          .enum(["ALLOW_GIT_PUSH", "ALLOW_ENV_READ"])
           .optional()
-          .describe("When true, wait for the background shell to finish and return its final output in this call; default false returns immediately with run_id/shell_id."),
+          .describe("Named exception; only works when the operator enabled this exact name in VENIRA_SHELL_OVERRIDES."),
+        reason: z
+          .string()
+          .min(1)
+          .max(400)
+          .optional()
+          .describe("Required with override; explain the specific intent in one line. Redacted and recorded in the SQLite audit trail."),
+        early_exit: flag01
+          .optional()
+          .describe("1 waits for the background shell to finish and return final output; 0 returns immediately with run_id/shell_id."),
         approval_scope: z
           .enum(["once", "session"])
           .optional()
@@ -2830,7 +2839,7 @@ export function registerProjectTools(server: McpServer): void {
         kind: z.enum(["file", "directory"]),
         content: z.string().optional(),
         mode: z.enum(["create", "overwrite", "append"]).optional(),
-        create_dirs: z.boolean().optional(),
+        create_dirs: flag01.optional(),
         expected_sha256: z.string().optional(),
         reason: reason_,
       },
@@ -2847,13 +2856,13 @@ export function registerProjectTools(server: McpServer): void {
         {
           use_when: "debugging slowness/errors, checking the backend/DB/audit before reporting, or inspecting this session's cache/metrics.",
           avoid_when: "you just need to read/write files normally.",
-          speed_profile: "fast (~a few ms + 1 audit DB query); set include_audit=false to skip the DB query.",
+          speed_profile: "fast (~a few ms + 1 audit DB query); set include_audit=0 to skip the DB query.",
           output_kind: "health: server, corehost, capability, queue, caches, shells, metrics, audit.",
           batch_safe: false,
         },
         { readOnlyHint: true, openWorldHint: false },
       ),
-      inputSchema: { include_audit: z.boolean().optional() },
+      inputSchema: { include_audit: flag01.optional() },
     },
     (args) => runHealth(args as Args),
 
@@ -2938,7 +2947,7 @@ export function registerProjectTools(server: McpServer): void {
         "Read audit log",
         {
           use_when: "you need to inspect what operations were recorded (audit trail) — e.g. compliance or debugging a prior action.",
-          avoid_when: "you only need the live cache/metric report (project_health include_audit=true) — that one is faster.",
+          avoid_when: "you only need the live cache/metric report (project_health include_audit=1) — that one is faster.",
           speed_profile: "fast; one bounded SQLite read (readonly, WAL-safe).",
           output_kind: "audit_read: rows[] (newest first), count, truncated, db_path.",
           batch_safe: true,
@@ -2951,7 +2960,7 @@ export function registerProjectTools(server: McpServer): void {
         outcome: z.enum(["success", "failure", "running"]).optional(),
         limit: z.number().int().min(1).max(200).optional(),
         since_unix: z.number().int().min(0).optional(),
-        verify: z.boolean().optional().describe("When true, verify the audit hash chain and return chain_ok."),
+        verify: flag01.optional().describe("1 verifies the audit hash chain and returns chain_ok; 0 disables verification."),
       },
     },
     (args) => runReadAudit(args as Args),
@@ -2999,8 +3008,8 @@ export function registerProjectTools(server: McpServer): void {
       inputSchema: {
         relative_path: path_,
         language: z.string().optional(),
-        include_functions: z.boolean().optional(),
-        include_classes: z.boolean().optional(),
+        include_functions: flag01.optional(),
+        include_classes: flag01.optional(),
         max_symbols: z.number().int().min(1).max(500).optional(),
       },
     },
@@ -3025,8 +3034,8 @@ export function registerProjectTools(server: McpServer): void {
       inputSchema: {
         relative_path: path_,
         language: z.string().optional(),
-        include_functions: z.boolean().optional(),
-        include_classes: z.boolean().optional(),
+        include_functions: flag01.optional(),
+        include_classes: flag01.optional(),
       },
     },
     (args) => runFileSymbols(args as Args),
@@ -3101,7 +3110,7 @@ export function registerProjectTools(server: McpServer): void {
       inputSchema: {
         queries: z.array(z.object({
           pattern: z.string(),
-          must: z.boolean().optional(),
+          must: flag01.optional(),
           weight: z.number().int().optional(),
         })).min(1),
         files_hint: z.array(z.string()).optional(),
@@ -3144,7 +3153,7 @@ export function registerProjectTools(server: McpServer): void {
         "Self-install venira MCP",
         {
           use_when: "a user asks to 'install venira into <client>' — add the MCP server block to that client's config file.",
-          avoid_when: "the config path is unknown (run project_detect_harnesses first), or the user wants a dry-run (set dry_run=true).",
+          avoid_when: "the config path is unknown (run project_detect_harnesses first), or the user wants a dry-run (set dry_run=1).",
           speed_profile: "fast; one atomic write per config. Always backs up the original to <file>.venira-bak.",
           output_kind: "install_self: {harness, config_path, status (installed|already_present|config_missing|error), needs_restart, error?}.",
           batch_safe: false,
@@ -3163,7 +3172,7 @@ export function registerProjectTools(server: McpServer): void {
         ]),
         workspace: z.string().optional().describe("VENIRA_WORKSPACE value to write (default: process.cwd())."),
         data_dir: z.string().optional().describe("VENIRA_DATA_DIR value to write (default: the per-user Venira data directory)."),
-        dry_run: z.boolean().optional().describe("When true, report what would happen without writing."),
+        dry_run: flag01.optional().describe("1 reports what would happen without writing; 0 performs the action."),
       },
     },
     (args) => runInstallSelf(args as Args),
@@ -3242,10 +3251,9 @@ export function registerProjectTools(server: McpServer): void {
           .optional()
           .describe("Files you already suspect (ranked first, no search needed for them)."),
         max_files: z.number().int().min(1).max(8).optional().describe("Max candidates to plan (default 6; batch accepts 8)."),
-        include_search: z
-          .boolean()
+        include_search: flag01
           .optional()
-          .describe("Run keyword searches to discover candidates (default true; false plans only from files_hint/recent files)."),
+          .describe("1 runs keyword searches (default); 0 plans only from files_hint/recent files."),
       },
     },
     (args) => runPlanReadBatch(args as Args),
@@ -3288,18 +3296,16 @@ export function registerProjectTools(server: McpServer): void {
           .optional()
           .describe("Paths to capture (default ['.']); restore accepts a subset to filter files."),
         exclude: z.array(z.string()).max(64).optional().describe("Extra directory/file names to skip."),
-        respect_default_excludes: z
-          .boolean()
+        respect_default_excludes: flag01
           .optional()
-          .describe("Default true: skip .git/node_modules/dist/build/.next/.venv/__pycache__ and the snapshot store itself."),
+          .describe("1 skips standard generated/cache directories (default); 0 disables those exclusions."),
         max_files: z.number().int().min(1).max(4000).optional(),
         max_total_bytes: z.number().int().min(1).max(512 * 1024 * 1024).optional(),
-        dry_run: z.boolean().optional().describe("restore only: report what would change without writing."),
-        verify: z.boolean().optional().describe("restore only: sha256-verify each blob before writing (default true)."),
-        delete_extra: z
-          .boolean()
+        dry_run: flag01.optional().describe("restore only: 1 reports changes without writing; 0 writes the restore."),
+        verify: flag01.optional().describe("restore only: 1 verifies each blob before writing (default); 0 disables verification."),
+        delete_extra: flag01
           .optional()
-          .describe("restore only: also delete files inside captured dirs that are not in the checkpoint (default false, capped at 500)."),
+          .describe("restore only: 1 also deletes files inside captured dirs not in the checkpoint (capped at 500); 0 keeps them."),
         limit: z.number().int().min(1).max(100).optional().describe("list only: max checkpoints to return (default 20)."),
         reason: reason_,
       },
@@ -3349,7 +3355,7 @@ export function registerProjectTools(server: McpServer): void {
         head: z.string().max(200).optional().describe("Source branch (default: the current branch)."),
         base: z.string().max(200).optional().describe("Target branch (default: the repository default branch)."),
         body: z.string().max(65_536).optional().describe("PR description (markdown); usually a summary + test plan."),
-        draft: z.boolean().optional().describe("Open as a draft PR."),
+        draft: flag01.optional().describe("1 opens as a draft PR; 0 opens as ready for review."),
         repo: repoArg,
         provider: providerArg,
         reason: reason_,
@@ -3415,7 +3421,7 @@ export function registerProjectTools(server: McpServer): void {
         method: z.enum(["merge", "squash", "rebase"]).optional().describe("Merge strategy (default: merge)."),
         commit_title: z.string().max(256).optional().describe("Title for the merge commit (squash/merge)."),
         commit_message: z.string().max(65_536).optional().describe("Body for the merge commit."),
-        delete_branch: z.boolean().optional().describe("Delete the head branch after a successful merge (same-repo branches only)."),
+        delete_branch: flag01.optional().describe("1 deletes the head branch after a successful merge (same-repo only); 0 keeps it."),
         repo: repoArg,
         provider: providerArg,
         reason: reason_,
@@ -3638,10 +3644,9 @@ export function registerProjectTools(server: McpServer): void {
       ),
       inputSchema: {
         action: z.enum(["start", "poll"]),
-        replace_existing: z
-          .boolean()
+        replace_existing: flag01
           .optional()
-          .describe("action=start: explicitly authorize replacing an existing GitHub credential."),
+          .describe("action=start: 1 explicitly authorizes replacing an existing GitHub credential; 0 does not."),
         pending_id: z
           .string()
           .max(64)
@@ -3666,7 +3671,7 @@ export function registerProjectTools(server: McpServer): void {
             "removing one (action=delete). Then use secret_env on project_shell_run or the built-in GitHub tools.",
           avoid_when:
             "the value is a normal, non-secret config (put it in .env or the config file); or you need the plaintext " +
-            "printed (only with reveal=true + VENIRA_SECRET_ALLOW_REVEAL=1).",
+            "printed (only with reveal=1 + VENIRA_SECRET_ALLOW_REVEAL=1).",
           speed_profile:
             "fast; encrypted AES-256-GCM store, atomic writes, values decrypted only when injected. Expiry/use fields are metadata only.",
           output_kind:
@@ -3705,10 +3710,9 @@ export function registerProjectTools(server: McpServer): void {
           .union([z.number().int(), z.string().max(60)])
           .optional()
           .describe("action=set: absolute expiry (epoch ms or ISO-8601), instead of expires_in_days."),
-        reveal: z
-          .boolean()
+        reveal: flag01
           .optional()
-          .describe("action=get: return the plaintext value. Requires VENIRA_SECRET_ALLOW_REVEAL=1 on the host; prefer secret_env injection."),
+          .describe("action=get: 1 returns the plaintext value and requires VENIRA_SECRET_ALLOW_REVEAL=1 on the host; prefer secret_env injection."),
         reason: reason_,
       },
     },

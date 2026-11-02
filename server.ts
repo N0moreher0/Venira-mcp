@@ -10,6 +10,11 @@ import {
 } from "./tools/project.js";
 import { VERSION } from "./lib/version.js";
 import { UNRESTRICTED, WORKSPACE, migrateLegacyDataDirIfNeeded } from "./lib/workspace.js";
+import { validateBooleanEnvironment } from "./lib/env.js";
+import { enabledShellOverrides, loadShellPolicy } from "./lib/shell-policy.js";
+validateBooleanEnvironment();
+loadShellPolicy();
+enabledShellOverrides();
 migrateLegacyDataDirIfNeeded();
 
 const INSTRUCTIONS = `Venira coding tools operate on the workspace ${WORKSPACE}.
@@ -43,7 +48,9 @@ Rules
 - project_github_connect uses GitHub Device Flow and the \`repo offline_access\` OAuth scopes for private-repository support and refreshable access. The access/refresh tokens are stored encrypted locally and never returned to the agent; users authorize Venira at github.com.
 - project_explain_error and project_plan_read_batch are deterministic (no model call): explain_error maps signatures to next_actions, plan_read_batch returns a ready batch call.
 - Never loop on a non-retryable error (not_found, scope_denied, invalid_request, sensitive_result, audit_unavailable). Read the hint and change the request or tell the user.
-- Output modes: VENIRA_OUTPUT_MODE=full|compact|summary (default full). summary trims payloads; request full data when editing.`;
+- Output modes: VENIRA_OUTPUT_MODE=full|compact (default full). compact trims payloads over 8 KB; use full when you need complete data.
+- Shell modes: VENIRA_SHELL_MODE=balanced|strict|permissive (default balanced). Hard-deny rules remain active in every mode.
+- Named shell overrides require both an operator allowlist (VENIRA_SHELL_OVERRIDES) and a per-call override name plus non-empty reason; they are narrow and audited.`;
 
 const server = new McpServer(
   { name: "venira-coding", version: VERSION },

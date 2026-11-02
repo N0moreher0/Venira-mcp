@@ -9,10 +9,9 @@
  */
 import { appendFileSync, existsSync, mkdirSync, renameSync, statSync } from "node:fs";
 import path from "node:path";
+import { envFlag } from "./env.js";
 
-const TRACE_ENABLED = ["1", "true", "on", "yes"].includes(
-  (process.env.VENIRA_TRACE ?? "").toLowerCase(),
-);
+const TRACE_ENABLED = envFlag("VENIRA_TRACE", false);
 const TRACE_FILE_PATH = (process.env.VENIRA_TRACE_FILE ?? "").trim();
 const TRACE_FILE_MAX_BYTES = 10 * 1024 * 1024;
 const MAX_TRACE_BUFFER = 100;
