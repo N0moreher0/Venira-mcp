@@ -11,13 +11,12 @@
  * - TOML: append a `[mcp_servers.venira]` section if not present
  */
 
-import { existsSync, readFileSync, writeFileSync, copyFileSync } from "node:fs";
+import { existsSync, readFileSync, copyFileSync, mkdirSync } from "node:fs";
 import * as fsSync from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { performance } from "node:perf_hooks";
 import { applyEdits, modify, parse as parseJsonc, printParseErrorCode } from "jsonc-parser";
-import { defaultDataDir } from "./workspace.js";
 
 type HarnessName =
   | "opencode"
@@ -28,8 +27,11 @@ type HarnessName =
   | "deepseek"
   | "antigravity";
 
+type PrintableClient = "vscode" | HarnessName;
+type InstallTarget = HarnessName | "vscode";
+
 type InstallResult = {
-  harness: HarnessName;
+  harness: InstallTarget;
   config_path: string;
   status: "installed" | "already_present" | "config_missing" | "error";
   needs_restart: boolean;
@@ -44,6 +46,21 @@ type DetectResult = {
   note?: string;
 };
 
+const HARNESS_NAMES: HarnessName[] = [
+  "opencode",
+  "claude_desktop",
+  "cursor",
+  "codex",
+  "kimi",
+  "deepseek",
+  "antigravity",
+];
+
+const PRINTABLE_CLIENTS: PrintableClient[] = ["vscode", ...HARNESS_NAMES];
+
+// `--package` avoids npx picking a different bin when a package exposes two.
+const NPX_ARGS = ["--yes", "--package=venira-mcp@latest", "venira-mcp"] as const;
+
 // ---------------------------------------------------------------------------
 // Config path detection (per-harness, cross-platform)
 // ---------------------------------------------------------------------------
@@ -54,7 +71,6 @@ function homeDir(): string {
 
 function platformSpecificPaths(harness: HarnessName): string[] {
   const home = homeDir();
-  const isWin = process.platform === "win32";
   const appdata = process.env.APPDATA ?? path.join(home, "AppData", "Roaming");
   const local = process.env.LOCALAPPDATA ?? path.join(home, "AppData", "Local");
 
@@ -143,36 +159,31 @@ function detectHarnessConfig(harness: HarnessName): DetectResult {
 
 /**
  * Build the venira MCP entry appropriate for the target format.
+ *
+ * Keep the defaults cross-platform: do not pin a shell or a data directory.
+ * The server resolves both from the host OS when they are unset, and the CLI
+ * and MCP client then share the same per-user vault.
  */
 function veniraMcpEntry(opts: { workspace?: string; dataDir?: string }): {
-  command: string[];
+  executable: string;
   args: string[];
+  command: string[];
   environment: Record<string, string>;
 } {
   const workspace = opts.workspace ?? process.cwd();
-  const dataDir = opts.dataDir ?? defaultDataDir();
+  const environment: Record<string, string> = {
+    VENIRA_WORKSPACE: workspace,
+    VENIRA_UNRESTRICTED: "0",
+    VENIRA_SHELL_MODE: "balanced",
+    VENIRA_PERMISSION_MODE: "allow_all",
+    VENIRA_OUTPUT_MODE: "full",
+  };
+  if (opts.dataDir) environment.VENIRA_DATA_DIR = opts.dataDir;
   return {
-    command: ["npx"],
-    args: ["venira-mcp"],
-    environment: {
-      VENIRA_WORKSPACE: workspace,
-      VENIRA_DATA_DIR: dataDir,
-      VENIRA_UNRESTRICTED: "0",
-      VENIRA_DEFAULT_SHELL: "powershell",
-      VENIRA_SHELL_MODE: "balanced",
-      VENIRA_PERMISSION_MODE: "manual",
-      VENIRA_OUTPUT_MODE: "full",
-      VENIRA_PRETTY: "0",
-      VENIRA_ALLOW_JS_EXEC: "0",
-      VENIRA_AUDIT_FAST: "1",
-      VENIRA_READ_CACHE_BYTES: "67108864",
-      VENIRA_CACHE_ALL: "1",
-      VENIRA_TRACE: "0",
-      VENIRA_SHELL_TAIL_MAX: "4000",
-      VENIRA_SHELL_EXIT_EARLY: "0",
-      VENIRA_SHELL_TIMEOUT_POLICY: "soft",
-      VENIRA_EDIT_FUZZY: "0",
-    },
+    executable: "npx",
+    args: [...NPX_ARGS],
+    command: ["npx", ...NPX_ARGS],
+    environment,
   };
 }
 
@@ -186,6 +197,7 @@ function backupFile(file: string): string {
 
 function writeAtomicFileSync(file: string, content: string): void {
   const dir = path.dirname(file);
+  mkdirSync(dir, { recursive: true });
   const tmp = path.join(dir, `.venira-tmp-${process.pid}-${Date.now()}`);
   const delays = [20, 40, 80, 160, 200];
   let attempt = 0;
@@ -213,24 +225,89 @@ function writeAtomicFileSync(file: string, content: string): void {
   }
 }
 
+/** True when the file already contains a Venira entry (never throws). */
+function veniraPresentInFile(
+  file: string,
+  format: "json" | "jsonc" | "toml" | "unknown",
+  mcpBlockName: JsonBlockName,
+): boolean {
+  let text = "";
+  try {
+    text = readFileSync(file, "utf8");
+  } catch {
+    return false;
+  }
+  if (format === "toml") return text.includes("[mcp_servers.venira]");
+  const errors: { error: number; offset: number; length: number }[] = [];
+  const parsed = parseJsonc(text, errors, { allowTrailingComma: true });
+  if (errors.length > 0 || !parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return false;
+  }
+  const section = (parsed as Record<string, unknown>)[mcpBlockName];
+  return Boolean(
+    section && typeof section === "object" && !Array.isArray(section) &&
+    Object.prototype.hasOwnProperty.call(section, "venira"),
+  );
+}
+
+type JsonBlockName = "mcp" | "mcpServers" | "servers";
+
+function newJsonConfig(mcpBlockName: JsonBlockName): string {
+  const base = mcpBlockName === "mcp"
+    ? { $schema: "https://opencode.ai/config.json", mcp: {} }
+    : mcpBlockName === "servers"
+      ? { servers: {} }
+      : { mcpServers: {} };
+  return `${JSON.stringify(base, null, 2)}\n`;
+}
+
 /** Parse and edit JSON/JSONC while preserving comments and existing formatting. */
 export async function installJsonLike(
   file: string,
-  mcpBlockName: "mcp" | "mcpServers",
-  config: { workspace?: string; dataDir?: string },
+  mcpBlockName: JsonBlockName,
+  config: {
+    workspace?: string;
+    workspaceOverride?: string;
+    dataDir?: string;
+    harness?: InstallTarget;
+    create?: boolean;
+  },
 ): Promise<InstallResult> {
-  const harness = "unknown" as HarnessName; // set by caller
+  const harness = config.harness ??
+    (mcpBlockName === "mcp" ? "opencode" : mcpBlockName === "servers" ? "vscode" : "claude_desktop");
   let existing = "";
+  let created = false;
   try {
     existing = readFileSync(file, "utf8");
   } catch {
-    return {
-      harness,
-      config_path: file,
-      status: "config_missing",
-      needs_restart: true,
-      error: "Could not read config file.",
-    };
+    // Never overwrite a file that exists but cannot be read (e.g. permissions).
+    if (!config.create || existsSync(file)) {
+      return {
+        harness,
+        config_path: file,
+        status: "config_missing",
+        needs_restart: true,
+        error: existsSync(file)
+          ? "Config file exists but could not be read; manual merge required."
+          : "Could not read config file. Re-run with --create to create it.",
+      };
+    }
+    existing = newJsonConfig(mcpBlockName);
+    created = true;
+  }
+
+  if (!existing.trim()) {
+    if (!config.create) {
+      return {
+        harness,
+        config_path: file,
+        status: "config_missing",
+        needs_restart: true,
+        error: "Config file is empty. Re-run with --create to initialize it.",
+      };
+    }
+    existing = newJsonConfig(mcpBlockName);
+    created = true;
   }
 
   const errors: { error: number; offset: number; length: number }[] = [];
@@ -248,14 +325,29 @@ export async function installJsonLike(
     };
   }
 
-  const block = veniraMcpEntry(config);
-  const entry = {
-    type: "local",
-    command: block.command,
-    args: block.args,
-    enabled: true,
-    environment: block.environment,
-  };
+  const block = veniraMcpEntry({
+    workspace: config.workspaceOverride ?? config.workspace,
+    dataDir: config.dataDir,
+  });
+  const entry = mcpBlockName === "mcp"
+    ? {
+        type: "local",
+        command: block.command,
+        enabled: true,
+        environment: block.environment,
+      }
+    : mcpBlockName === "servers"
+      ? {
+          type: "stdio",
+          command: block.executable,
+          args: block.args,
+          env: block.environment,
+        }
+      : {
+          command: block.executable,
+          args: block.args,
+          env: block.environment,
+        };
   const section = (parsed as Record<string, unknown>)[mcpBlockName];
   if (section && typeof section === "object" && !Array.isArray(section) &&
       Object.prototype.hasOwnProperty.call(section, "venira")) {
@@ -272,26 +364,51 @@ export async function installJsonLike(
   if (edits.length === 0) {
     return { harness, config_path: file, status: "already_present", needs_restart: false };
   }
-  backupFile(file);
+  if (!created) backupFile(file);
   writeAtomicFileSync(file, applyEdits(existing, edits));
   return { harness, config_path: file, status: "installed", needs_restart: true };
+}
+
+function tomlString(value: string): string {
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
+function tomlBlock(block: ReturnType<typeof veniraMcpEntry>): string {
+  const envSection = Object.entries(block.environment)
+    .map(([k, v]) => `${k} = ${tomlString(v)}`)
+    .join("\n");
+  return `[mcp_servers.venira]
+command = ${tomlString(block.executable)}
+args = [${block.args.map(tomlString).join(", ")}]
+startup_timeout_sec = 120
+
+[mcp_servers.venira.env]
+${envSection}
+`;
 }
 
 /**
  * For TOML files (Codex): append a [mcp_servers.venira] section.
  */
-async function installToml(file: string): Promise<InstallResult> {
+async function installToml(
+  file: string,
+  config: { workspace?: string; dataDir?: string; create?: boolean },
+): Promise<InstallResult> {
   let existing = "";
+  let created = false;
   try {
     existing = readFileSync(file, "utf8");
   } catch {
-    return {
-      harness: "codex",
-      config_path: file,
-      status: "config_missing",
-      needs_restart: true,
-      error: "Could not read config file.",
-    };
+    if (!config.create) {
+      return {
+        harness: "codex",
+        config_path: file,
+        status: "config_missing",
+        needs_restart: true,
+        error: "Could not read config file. Re-run with --create to create it.",
+      };
+    }
+    created = true;
   }
 
   if (existing.includes("[mcp_servers.venira]")) {
@@ -303,21 +420,10 @@ async function installToml(file: string): Promise<InstallResult> {
     };
   }
 
-  const block = veniraMcpEntry({});
-  const envSection = Object.entries(block.environment)
-    .map(([k, v]) => `${k} = "${v}"`)
-    .join("\n");
-  const tomlBlock = `[mcp_servers.venira]
-command = "${block.command[0]}"
-args = [${block.args.map((a) => `"${a}"`).join(", ")}]
-
-[mcp_servers.venira.env]
-${envSection}
-startup_timeout_sec = 120
-`;
-
-  backupFile(file);
-  writeAtomicFileSync(file, existing.trimEnd() + "\n\n" + tomlBlock);
+  const block = veniraMcpEntry(config);
+  const content = `${existing.trimEnd()}${existing.trim() ? "\n\n" : ""}${tomlBlock(block)}`;
+  if (!created) backupFile(file);
+  writeAtomicFileSync(file, content);
   return {
     harness: "codex",
     config_path: file,
@@ -331,16 +437,7 @@ startup_timeout_sec = 120
 // ---------------------------------------------------------------------------
 
 export function detectAllHarnesses(): DetectResult[] {
-  const harnesses: HarnessName[] = [
-    "opencode",
-    "claude_desktop",
-    "cursor",
-    "codex",
-    "kimi",
-    "deepseek",
-    "antigravity",
-  ];
-  return harnesses.map((h) => detectHarnessConfig(h));
+  return HARNESS_NAMES.map((h) => detectHarnessConfig(h));
 }
 
 export async function installSelf(opts: {
@@ -348,6 +445,7 @@ export async function installSelf(opts: {
   workspace?: string;
   dataDir?: string;
   dryRun?: boolean;
+  create?: boolean;
 }): Promise<InstallResult> {
   const started = performance.now();
   const det = detectHarnessConfig(opts.harness);
@@ -364,23 +462,29 @@ export async function installSelf(opts: {
 
   // For a dry run: report what would happen without writing
   if (opts.dryRun) {
-    const wouldBeExisting = existsSync(file) ? "exists" : "missing";
+    const present = veniraPresentInFile(file, det.format ?? "json",
+      opts.harness === "opencode" ? "mcp" : "mcpServers");
     return {
       harness: opts.harness,
       config_path: file,
-      status: wouldBeExisting === "exists" ? "already_present" : "config_missing",
+      status: present ? "already_present" : existsSync(file) ? "installed" : "config_missing",
       needs_restart: true,
-      error: `DRY RUN: ${file} ${wouldBeExisting}; no changes written.`,
+      error: `DRY RUN: ${present ? "Venira already present" : existsSync(file) ? "would merge" : "would create"} in ${file}; no changes written.`,
     };
   }
 
   const result =
     det.format === "toml"
-      ? await installToml(file)
+      ? await installToml(file, opts)
       : await installJsonLike(
           file,
           opts.harness === "opencode" ? "mcp" : "mcpServers",
-          { workspace: opts.workspace, dataDir: opts.dataDir },
+          {
+            workspace: opts.workspace,
+            dataDir: opts.dataDir,
+            harness: opts.harness,
+            create: opts.create,
+          },
         );
 
   result.harness = opts.harness;
@@ -388,4 +492,114 @@ export async function installSelf(opts: {
   return result;
 }
 
-export type { HarnessName, InstallResult, DetectResult };
+/** VS Code keeps its MCP config inside the workspace (`.vscode/mcp.json`). */
+export async function installVscodeConfig(opts: {
+  workspace?: string;
+  dataDir?: string;
+  dryRun?: boolean;
+  create?: boolean;
+}): Promise<InstallResult> {
+  const workspace = opts.workspace ?? process.cwd();
+  const file = path.join(workspace, ".vscode", "mcp.json");
+  if (opts.dryRun) {
+    const present = veniraPresentInFile(file, "json", "servers");
+    return {
+      harness: "vscode",
+      config_path: file,
+      status: present ? "already_present" : existsSync(file) ? "installed" : "config_missing",
+      needs_restart: true,
+      error: `DRY RUN: ${present ? "Venira already present" : existsSync(file) ? "would merge" : "would create"} in ${file}; no changes written.`,
+    };
+  }
+  return installJsonLike(file, "servers", {
+    workspace,
+    workspaceOverride: "${workspaceFolder}",
+    dataDir: opts.dataDir,
+    harness: "vscode",
+    create: opts.create ?? true,
+  });
+}
+
+export function normalizeClient(value: string): PrintableClient | undefined {
+  const key = value.trim().toLowerCase().replace(/[\s-]+/g, "_");
+  const aliases: Record<string, PrintableClient> = {
+    vscode: "vscode",
+    vs_code: "vscode",
+    code: "vscode",
+    opencode: "opencode",
+    open_code: "opencode",
+    claude: "claude_desktop",
+    claude_desktop: "claude_desktop",
+    cursor: "cursor",
+    codex: "codex",
+    kimi: "kimi",
+    deepseek: "deepseek",
+    antigravity: "antigravity",
+  };
+  return aliases[key];
+}
+
+export function clientConfigPath(client: PrintableClient, workspace = process.cwd()): string {
+  if (client === "vscode") return path.join(workspace, ".vscode", "mcp.json");
+  return detectHarnessConfig(client).config_path ?? "";
+}
+
+export function renderClientConfig(
+  client: PrintableClient,
+  opts: { workspace?: string; dataDir?: string } = {},
+): { client: PrintableClient; config_path: string; format: "json" | "toml"; content: string } {
+  const workspace = opts.workspace ?? process.cwd();
+  const configPath = clientConfigPath(client, workspace);
+  const block = veniraMcpEntry({ workspace, dataDir: opts.dataDir });
+
+  if (client === "vscode") {
+    const { VENIRA_WORKSPACE: _workspace, ...rest } = block.environment;
+    const content = `${JSON.stringify({
+      servers: {
+        venira: {
+          type: "stdio",
+          command: block.executable,
+          args: block.args,
+          env: {
+            VENIRA_WORKSPACE: "${workspaceFolder}",
+            ...rest,
+          },
+        },
+      },
+    }, null, 2)}\n`;
+    return { client, config_path: configPath, format: "json", content };
+  }
+
+  if (client === "opencode") {
+    const content = `${JSON.stringify({
+      $schema: "https://opencode.ai/config.json",
+      mcp: {
+        venira: {
+          type: "local",
+          command: block.command,
+          enabled: true,
+          environment: block.environment,
+        },
+      },
+    }, null, 2)}\n`;
+    return { client, config_path: configPath, format: "json", content };
+  }
+
+  if (client === "codex") {
+    return { client, config_path: configPath, format: "toml", content: tomlBlock(block) };
+  }
+
+  const content = `${JSON.stringify({
+    mcpServers: {
+      venira: {
+        command: block.executable,
+        args: block.args,
+        env: block.environment,
+      },
+    },
+  }, null, 2)}\n`;
+  return { client, config_path: configPath, format: "json", content };
+}
+
+export { HARNESS_NAMES, PRINTABLE_CLIENTS };
+export type { HarnessName, PrintableClient, InstallResult, DetectResult };

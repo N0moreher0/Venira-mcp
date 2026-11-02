@@ -30,6 +30,7 @@ dist/
 .debug-search*/
 *.tmp
 *.bak
+*.venira-bak
 .edit-test.txt
 
 # Runtime state & logs

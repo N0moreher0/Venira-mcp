@@ -17,6 +17,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { VERSION } from "../lib/version.js";
 import { activeDataDir } from "../lib/workspace.js";
+import { detectAllHarnesses } from "../lib/self-install.js";
 
 const SESSION_ID = `doctor-${Date.now()}`;
 
@@ -205,6 +206,23 @@ async function main() {
   if (failed.length > 0) {
     console.log("Failed checks:", JSON.stringify(failed, null, 2));
   }
+
+  // 6. client setup hints (does not affect the pass/fail result)
+  const detected = detectAllHarnesses().filter((entry) => entry.detected);
+  console.log("\n[doctor] MCP client configs:");
+  if (detected.length === 0) {
+    console.log("  (none detected)");
+  } else {
+    for (const entry of detected) {
+      console.log(`  - ${entry.harness}: ${entry.config_path}`);
+    }
+  }
+  if (existsSync(path.join(WORKSPACE, ".vscode", "mcp.json"))) {
+    console.log(`  - vscode: ${path.join(WORKSPACE, ".vscode", "mcp.json")}`);
+  }
+  console.log(`[doctor] install: npx --yes venira-mcp@latest --install auto --workspace "${WORKSPACE}"`);
+  console.log("[doctor] print a config instead: npx --yes venira-mcp@latest --print-config vscode");
+
   process.exit(passes === results.length ? 0 : 1);
 }
 
