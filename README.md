@@ -150,7 +150,7 @@ tool counts. That is the only real proof — a config file on disk is not.
 | `npx --yes venira-mcp@latest --print-config <client>` | Print a config instead of writing it |
 | `npx --yes venira-mcp@latest --doctor` | Preflight: workspace, data dir, tools, shell |
 | `npx --yes venira-mcp@latest --setup-github` | Store a GitHub token once (interactive terminal) |
-| `npx --yes venira-mcp@latest --version` | Print the version (current release: 1.8.1) |
+| `npx --yes venira-mcp@latest --version` | Print the version (current release: 1.12.0) |
 | `npx --yes venira-mcp@latest --help` | All flags and environment variables |
 | `npx --yes venira-mcp@latest --verify` | Behavioural regression suite |
 
@@ -185,7 +185,9 @@ After `npm install`, the local checks are `npm run smoke`, `npm run doctor`,
 ### 3.0 Supported clients
 
 Most users can stop after [§2.2](#22-fastest-path-paste-this-prompt-into-your-agent)–[§2.3](#23-or-run-one-command-yourself).
-This table is the reference for manual edits.
+This table is the reference for manual edits. For the values that keep the agent
+loop fast without giving up the guardrails, copy the profile in
+[§3.4](#34-recommended-setup-for-agents-copy-paste).
 
 | Client | Config file | Entry key |
 |---|---|---|
@@ -271,7 +273,7 @@ Generate it with
 `--print-config opencode`. On Windows the path needs escaped backslashes
 (`C:\\path\\to\\your-project`). Leave `VENIRA_DATA_DIR` and
 `VENIRA_DEFAULT_SHELL` unset to use OS defaults; see
-[§3.4](#34-environment-variables-full-reference) for every variable.
+[§3.5](#35-environment-variables-full-reference) for every variable.
 
 For a local build (after `git clone` + `npm install` + `npm run build`), replace
 the command with `["node", "/absolute/path/to/venira-mcp/dist/server.js"]`.
@@ -314,7 +316,167 @@ For the agent-facing setup prompt, see
 [§2.2](#22-fastest-path-paste-this-prompt-into-your-agent). It applies to every
 client listed above.
 
-### 3.4 Environment variables (full reference)
+### 3.4 Recommended setup for agents (copy-paste)
+
+The defaults already work. This profile is what the agent loop is tuned for: one
+shared vault, the workspace lock on, the shell policy in `balanced`, and human
+approval only where the blast radius is real. Copy the block for your client,
+restart it, then ask the agent to call `project_health`.
+
+**Why these values**
+
+| Variable | Value | Effect on the agent loop |
+|---|---|---|
+| `VENIRA_WORKSPACE` | absolute path | Every relative path and the shell cwd resolve from here, so the agent never has to guess a root. |
+| `VENIRA_UNRESTRICTED` | `"0"` | Escapes fail fast with `path_escape` plus a hint instead of silently reading outside the project. |
+| `VENIRA_SHELL_MODE` | `"balanced"` | Routine read-only commands run without a prompt; network, outside-workspace writes, `git push` and history rewrites stop for approval. `strict` adds prompts to almost everything; `permissive` removes the guardrail. |
+| `VENIRA_PERMISSION_MODE` | `"allow_all"` | Opens the session capability as `allow_all`. The enforced gates are the workspace lock, shell policy and approvals, not this label. |
+| `VENIRA_OUTPUT_MODE` | `"full"` | Complete envelopes, so an agent never re-reads a file because a payload was trimmed. Use `"compact"` only for small-context models. |
+| `VENIRA_SHELL_EXIT_EARLY` | `"1"` | `project_shell_status` returns the moment the exit code is known instead of sleeping out the full `wait_seconds` window. |
+| `VENIRA_ALLOW_JS_EXEC` | `"0"` | Keeps the arbitrary-code path off. Turn it on only for a task that genuinely needs it; `VENIRA_JS_EXEC_APPROVAL="1"` still makes every snippet wait for your grant. |
+| `VENIRA_JS_EXEC_APPROVAL` | `"1"` | Per-call human approval for `project_execute_js`, bound to the exact code + `argv` and single-use. |
+| `VENIRA_ALLOW_SELF_INSTALL` | `"0"` | An agent cannot rewrite MCP configs for other clients on its own. |
+| `VENIRA_DATA_DIR` | unset | The server, `npx venira-mcp --approve` and `--setup-github` must share one vault; override it only if you override it everywhere. |
+| `VENIRA_NETWORK` | `"1"` | GitHub/CI tools work. Use `"0"` for an offline repo: every outbound call is refused before a socket opens. |
+
+Leave the cache and audit flags alone: `VENIRA_CACHE_ALL`,
+`VENIRA_CACHE_LIST_ONLY`, `VENIRA_CACHE_SEARCH_ONLY` and `VENIRA_AUDIT_FAST`
+already default to `1`.
+
+**OpenCode** — `~/.config/opencode/opencode.jsonc` (absolute path; OpenCode does
+not expand `${workspaceFolder}`):
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "venira": {
+      "type": "local",
+      "command": ["npx", "--yes", "--package=venira-mcp@latest", "venira-mcp"],
+      "enabled": true,
+      "environment": {
+        "VENIRA_WORKSPACE": "/absolute/path/to/your-project",
+        "VENIRA_UNRESTRICTED": "0",
+        "VENIRA_SHELL_MODE": "balanced",
+        "VENIRA_PERMISSION_MODE": "allow_all",
+        "VENIRA_OUTPUT_MODE": "full",
+        "VENIRA_SHELL_EXIT_EARLY": "1",
+        "VENIRA_ALLOW_JS_EXEC": "0",
+        "VENIRA_JS_EXEC_APPROVAL": "1",
+        "VENIRA_ALLOW_SELF_INSTALL": "0",
+        "VENIRA_NETWORK": "1"
+      }
+    }
+  }
+}
+```
+
+**VS Code** — `<workspace>/.vscode/mcp.json`; `${workspaceFolder}` is expanded
+here, so no path edit is needed:
+
+```json
+{
+  "servers": {
+    "venira": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["--yes", "--package=venira-mcp@latest", "venira-mcp"],
+      "env": {
+        "VENIRA_WORKSPACE": "${workspaceFolder}",
+        "VENIRA_UNRESTRICTED": "0",
+        "VENIRA_SHELL_MODE": "balanced",
+        "VENIRA_PERMISSION_MODE": "allow_all",
+        "VENIRA_OUTPUT_MODE": "full",
+        "VENIRA_SHELL_EXIT_EARLY": "1",
+        "VENIRA_ALLOW_JS_EXEC": "0",
+        "VENIRA_JS_EXEC_APPROVAL": "1",
+        "VENIRA_ALLOW_SELF_INSTALL": "0",
+        "VENIRA_NETWORK": "1"
+      }
+    }
+  }
+}
+```
+
+**Claude Desktop, Cursor, Kimi, DeepSeek, Antigravity** — same `mcpServers`
+shape (config path per client: [§3.0](#30-supported-clients)):
+
+```json
+{
+  "mcpServers": {
+    "venira": {
+      "command": "npx",
+      "args": ["--yes", "--package=venira-mcp@latest", "venira-mcp"],
+      "env": {
+        "VENIRA_WORKSPACE": "/absolute/path/to/your-project",
+        "VENIRA_UNRESTRICTED": "0",
+        "VENIRA_SHELL_MODE": "balanced",
+        "VENIRA_PERMISSION_MODE": "allow_all",
+        "VENIRA_OUTPUT_MODE": "full",
+        "VENIRA_SHELL_EXIT_EARLY": "1",
+        "VENIRA_ALLOW_JS_EXEC": "0",
+        "VENIRA_JS_EXEC_APPROVAL": "1",
+        "VENIRA_ALLOW_SELF_INSTALL": "0",
+        "VENIRA_NETWORK": "1"
+      }
+    }
+  }
+}
+```
+
+**Codex CLI** — `~/.codex/config.toml` (TOML; escape Windows path backslashes):
+
+```toml
+[mcp_servers.venira]
+command = "npx"
+args = ["--yes", "--package=venira-mcp@latest", "venira-mcp"]
+startup_timeout_sec = 120
+
+[mcp_servers.venira.env]
+VENIRA_WORKSPACE = "C:\\path\\to\\your-project"
+VENIRA_UNRESTRICTED = "0"
+VENIRA_SHELL_MODE = "balanced"
+VENIRA_PERMISSION_MODE = "allow_all"
+VENIRA_OUTPUT_MODE = "full"
+VENIRA_SHELL_EXIT_EARLY = "1"
+VENIRA_ALLOW_JS_EXEC = "0"
+VENIRA_JS_EXEC_APPROVAL = "1"
+VENIRA_ALLOW_SELF_INSTALL = "0"
+VENIRA_NETWORK = "1"
+```
+
+`npx --yes venira-mcp@latest --print-config <client>` prints the minimal shape
+from §3.1–§3.3; add the extra variables above to its `environment`/`env` block
+(or merge them by hand). `--install <client>` writes the same minimal entry.
+This repo keeps a ready OpenCode copy at
+[`opencode.example.json`](./opencode.example.json).
+
+**Agent instructions**
+
+Config decides what the server *allows*; these rules decide how the model
+*spends* it. Paste them into `AGENTS.md`, `CLAUDE.md`, or the client's system
+prompt:
+
+```text
+Venira MCP rules:
+1. Unfamiliar task: call project_plan_read_batch, then run steps[0] before
+   reading anything else.
+2. Read with project_read_batch (up to 8 items) and project_read_ranges for big
+   files. Never re-read a file a tool already returned in this session.
+3. Prefer project_edit_file / project_edit_batch over project_write_file, and
+   pass `reason` on every mutation so the audit trail explains why.
+4. Snapshot before multi-file or destructive changes (project_snapshot create).
+5. Short commands: project_shell_run with background: 0. Long jobs: background: 1
+   then project_shell_status; stop polling once running is false.
+6. Do not call project_execute_js unless the user asked for JavaScript; it needs
+   a per-call approval.
+7. On failure, follow the envelope's hint instead of repeating the same call.
+   Treat ok:false with retryable:false as final and explain it to the user.
+8. Report only what the tool returned; never claim a change without a successful
+   envelope.
+```
+
+### 3.5 Environment variables (full reference)
 
 | Variable | Default | Description |
 |---|---|---|
@@ -485,7 +647,7 @@ project_snapshot({ action: "restore", id: "snap-…" })                  // roll
 | `project_pr_close` | Close/decline an open PR/MR | `pr` (number or URL) · `repo`, `provider`, `reason`. Idempotent (closing a closed PR is a no-op). Bitbucket calls this "decline". |
 | `project_pr_reopen` | Reopen a closed PR/MR | `pr` (number or URL) · `repo`, `provider`, `reason`. Idempotent. GitHub & GitLab supported; Bitbucket returns `unsupported` (open a new PR instead). |
 
-The provider, API base, token and limits are resolved per call from **call args → `venira.config.json` → environment → inferred remote → default** (see §3.4). The token comes from `project_secret` (`GITHUB_TOKEN`/`GITLAB_TOKEN`/`BITBUCKET_TOKEN` by provider), then provider-specific env vars (`VENIRA_GITHUB_TOKEN`/`GITHUB_TOKEN`/`GH_TOKEN`, `VENIRA_GITLAB_TOKEN`/`GITLAB_TOKEN`/`GL_TOKEN`, `VENIRA_BITBUCKET_TOKEN`/`BITBUCKET_TOKEN`/`BB_TOKEN`), then the generic `VENIRA_GIT_TOKEN`. Owner/name are validated against `[A-Za-z0-9._-]`. Requests go over `node:https` with configurable timeout, response-size cap, redirect limit and manual redirect handling: the auth header is only attached while the request still targets the API host. An optional CONNECT proxy (`VENIRA_GIT_PROXY` > `HTTPS_PROXY` > config) with `NO_PROXY` matching is supported.
+The provider, API base, token and limits are resolved per call from **call args → `venira.config.json` → environment → inferred remote → default** (see §3.5). The token comes from `project_secret` (`GITHUB_TOKEN`/`GITLAB_TOKEN`/`BITBUCKET_TOKEN` by provider), then provider-specific env vars (`VENIRA_GITHUB_TOKEN`/`GITHUB_TOKEN`/`GH_TOKEN`, `VENIRA_GITLAB_TOKEN`/`GITLAB_TOKEN`/`GL_TOKEN`, `VENIRA_BITBUCKET_TOKEN`/`BITBUCKET_TOKEN`/`BB_TOKEN`), then the generic `VENIRA_GIT_TOKEN`. Owner/name are validated against `[A-Za-z0-9._-]`. Requests go over `node:https` with configurable timeout, response-size cap, redirect limit and manual redirect handling: the auth header is only attached while the request still targets the API host. An optional CONNECT proxy (`VENIRA_GIT_PROXY` > `HTTPS_PROXY` > config) with `NO_PROXY` matching is supported.
 
 ```jsonc
 project_pr_create({ title: "Add provider tools", head: "feature/x", reason: "open PR for review" })
