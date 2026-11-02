@@ -89,7 +89,7 @@ npx --yes venira-mcp@latest --install auto --workspace .
 npx --yes venira-mcp@latest --print-config vscode
                                        # print a ready-to-paste config (no writes)
 npx --yes venira-mcp@latest           # start the MCP server (stdio)
-npx --yes venira-mcp@latest --version # print the version (current release: 1.7.1)
+npx --yes venira-mcp@latest --version # print the version (current release: 1.8.0)
 npx --yes venira-mcp@latest --verify  # run the behavioural regression suite
 npx --yes venira-mcp@latest --help    # list flags + environment variables
 ```
@@ -1132,8 +1132,7 @@ The full history, in order — from the standalone rewrite to the provider, secr
 
 | Date | Version | Milestone |
 |---|---|---|
-| 2026-11-02 | **Unreleased after v1.7.1** | **One-command client setup.** `--install [auto|client]` detects existing MCP configs and merges Venira (`vscode`, `opencode`, `claude_desktop`, `cursor`, `codex`, `kimi`, `deepseek`, `antigravity`), creating a missing file when a client is named; `--print-config [client]` prints a ready-to-paste JSON/TOML config without writing. Generated configs use `npx --yes --package=venira-mcp@latest`, omit platform-specific shell/data-dir defaults, and print the restart + `project_health` next step. |
-| 2026-11-02 | **Unreleased after v1.7.1** | **GitHub account authorization + provider secret guard.** `project_github_connect` uses GitHub Device Flow and stores access/refresh tokens in the encrypted per-user vault without returning them to the agent; `--setup-github` provides a hidden-terminal fallback for manual PAT entry. GitHub/GitLab credentials and private keys are scanned locally on provider requests/responses, with fail-closed blocking/withholding. `npm run verify` now includes `.env` read denial, `git push --no-verify` approval, secret-guard and OAuth regression tests. |
+| 2026-11-02 | **v1.8.0** | **One-command client setup + GitHub authorization.** `--install [auto|client]` merges Venira into detected MCP configs (`vscode`, `opencode`, `claude_desktop`, `cursor`, `codex`, `kimi`, `deepseek`, `antigravity`) and creates a missing file when a client is named; `--print-config [client]` prints ready-to-paste JSON/TOML without writing; generated configs use `npx --yes --package=venira-mcp@latest` and omit platform-specific shell/data-dir defaults. `project_github_connect` adds GitHub Device Flow and keeps access/refresh tokens in the encrypted per-user vault (never returned to the agent); `--setup-github` is the hidden-terminal PAT fallback. GitHub/GitLab credentials and private keys are scanned locally on provider requests/responses with fail-closed blocking/withholding; `npm run verify` covers `.env` read denial, `git push --no-verify` approval, secret-guard and OAuth regressions. |
 | 2026-11-01 | **v1.7.1** | **Security hotfix + shell UX.** Legacy audit schemas with required `created_at` now receive compatible writes; download-to-shell detection covers chained commands; container stop/remove and all `git push` operations require approval; approval documentation now matches the pending CLI/HMAC flow and per-user data directory; `project_shell_run.early_exit` can wait for completion and return bounded final output with `run_id`/`shell_id`. |
 | 2026-10-27 | **v1.0.0** | **Standalone rewrite.** The Rust `corehost` binary and JSON-Lines IPC were replaced by an in-process pure-Node backend (`lib/corehost.ts`). SQLite WAL audit via `better-sqlite3`, async shell with process-tree kill, long-lived capability scope, structured envelopes with hints, validated read caches, batch reads. Ships as `npm i venira-mcp` (no binary, no GUI). |
 | 2026-10-28 | v1.0.1–v1.0.7 | Release plumbing: npm metadata, OIDC trusted publishing, Docker multi-stage image, `--version` / `--help`, doctor works from any directory, zod 4 + MCP SDK 1.32 (security advisory fix), standard `LICENSE-MIT` / `LICENSE-APACHE` filenames, `scripts/` shipped in the image. |
@@ -1316,7 +1315,17 @@ constants into configuration and adds a second and third dialect.
 
 ---
 
-### 14.6 Unreleased after v1.7.1 — GitHub authorization and secret guard
+### 14.6 v1.8.0 — Client setup, GitHub authorization and secret guard
+
+- **One-command client setup** — `--install [auto|client]` merges Venira into every detected
+  MCP client config (`vscode`, `opencode`, `claude_desktop`, `cursor`, `codex`, `kimi`,
+  `deepseek`, `antigravity`) without removing other servers, backs up the original as
+  `<file>.venira-bak`, and creates a missing config when a client is named. `--print-config
+  [client]` prints a ready-to-paste JSON/TOML config and writes nothing, so it is safe before
+  Venira is connected. Generated entries use `npx --yes --package=venira-mcp@latest` and leave
+  the shell and data directory unset so the same config works on Windows, macOS and Linux.
+  The command prints the restart step and points at `project_health`; it deliberately does not
+  claim the connection works before the client restarts.
 
 - **GitHub Device Flow** — `project_github_connect` starts authorization and returns only a
   verification URL, short code, and opaque pending ID. The user authorizes Venira directly on

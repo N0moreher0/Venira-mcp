@@ -1,9 +1,9 @@
-# VENIRA MCP CODING — TODO LIST (standalone v1.0.0 → v1.7.1)
+# VENIRA MCP CODING — TODO LIST (standalone v1.0.0 → v1.8.0)
 
 > Standalone: pure-Node backend, no external binary.
 > Each item lists effort (low/med/high), priority (P0/P1/P2/P3), and status.
 
-## 📊 Current state (standalone v1.7.1)
+## 📊 Current state (standalone v1.8.0)
 
 - ✅ 100% of the logic has been moved to Node (no more Rust corehost)
 - ✅ Audit via SQLite WAL using `better-sqlite3` (replaces `node:sqlite`)
@@ -30,6 +30,8 @@
 - ✅ P3 code intelligence: `project_diff_files`, `project_symbol_references`, `project_selective_search`
 - ✅ P3 diagnostics + planning: `project_explain_error` (deterministic rule table → next actions) and `project_plan_read_batch` (task → ready read batch) — no model call needed
 - ✅ v1.7.0 safety gaps: shell-policy ordering fixed, `execute_js` gate, protected paths, symlink containment, `install_self` approval gate, typed actionable errors, transactional `project_edit_batch` with abort-and-rollback semantics, `VENIRA_PROFILE`, pending approval CLI, atomic writes, CRLF/BOM handling, secret lockfile, Windows tokenizer fix
+- ✅ v1.8.0 onboarding: `--install [auto|client]` / `--print-config [client]` merge Venira into detected client configs (vscode/opencode/claude_desktop/cursor/codex/kimi/deepseek/antigravity) with backups, correct per-client schemas and cross-platform entries
+- ✅ v1.8.0 auth: `project_github_connect` Device Flow with vault-only tokens, `--setup-github` hidden-terminal fallback, provider secret guard on requests/responses
 
 ## 🕒 Full timeline (v1.0.0 → v1.5.0)
 
@@ -53,6 +55,7 @@ The whole history in order — what shipped, when, and why.
 | 2026-10-29 | **v1.5.2** | **Read-planner artifact filter (found by the E2E re-run).** The audit DB (`data/venira.db`, 36 hits) outranked source in `project_plan_read_batch`; candidates now exclude build/vendor dirs and DB/log/binary extensions. Verify **214/214**. |
 | 2026-10-29 | **v1.5.3** | **Read-planner ranking (found by the post-restart bench).** File-name search per keyword (+ snake→kebab retry) so a task naming a file finds that file; scoring = hits + path/name match; prose demoted unless the task asks for docs; lockfiles dropped; calibrated `estimated_ms`. Verify **217/217**. |
 | 2026-10-29 | **v1.5.4** | **Planner never proposes secrets (found by the v1.5.3 E2E loop).** A secret task ranked `data/secrets.json` + `data/secrets.key` into the top 6; candidates now exclude `.env*`, `secrets.*`, `*.key/.pem/.p12/.pfx/.jks/.keystore`, `id_rsa`, `.npmrc/.netrc`, `credentials.json`. Verify **218/218**. |
+| 2026-11-02 | **v1.8.0** | **One-command client setup + GitHub authorization.** `--install [auto|client]` merges Venira into detected MCP configs with backups, creates a missing config when a client is named, and uses correct per-client schemas; `--print-config [client]` prints ready-to-paste JSON/TOML without writing. `project_github_connect` Device Flow keeps tokens in the vault, `--setup-github` is the hidden-terminal fallback, and the provider secret guard scans requests/responses with fail-closed blocking. |
 | 2026-11-01 | **v1.7.1** | Security hotfix and shell UX alignment: pending human approval IDs, legacy audit compatibility, chained download-to-shell detection, container/git-push approval rules, per-user storage, README claim audit, and `project_shell_run.early_exit` with bounded final output. |
 
 ## 🎯 Implementation Roadmap
