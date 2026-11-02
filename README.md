@@ -146,24 +146,16 @@ npm run bench:mcp# end-to-end MCP benchmark (first call, batch 8, search, health
 
 ### 3.1 VS Code (`.vscode/mcp.json`)
 
-To connect without handling a token, ask the agent to **connect GitHub**. It calls
-`project_github_connect` and shows a GitHub verification link and short-lived code. Open the link,
-sign in to GitHub, enter the code, and authorize Venira; then tell the agent you finished so it can
-complete the connection. The access and refresh tokens are saved in the encrypted local Venira
-vault and are never returned to the agent or stored in MCP config. This uses the OAuth `repo` scope
-to support private repositories, which grants broad repository access to the authorized GitHub
-account. The `offline_access` scope enables refreshable tokens when supported by GitHub. Each user authorizes their own GitHub account. Local clients running as the same OS user
-share the default per-user vault; if a client uses a custom `VENIRA_DATA_DIR`, use that same data
-directory for the other clients. For the simplest setup, leave `VENIRA_DATA_DIR` unset so the CLI
-and every client resolve the same OS-specific default (on Windows, `%LOCALAPPDATA%\venira`). If a
-custom directory is required, run `npx venira-mcp --data-dir "<same-path>" --setup-github` and set
-that identical path in every MCP client.
+```bash
+npx venira-mcp --setup-github
+```
 
-Copilot does not support MCP `inputs` prompts. The workspace config therefore does not request or
-store a token. If you prefer environment-based configuration, set `VENIRA_GIT_TOKEN` in the
-environment that launches the client, then fully restart that client. For a fine-grained token,
-grant only the repository permissions needed (typically Pull requests: read/write and Contents: read).
-For manual local setup, `npx venira-mcp --setup-github` securely prompts for a token in a terminal.
+This securely asks for a GitHub token in the terminal and saves it in your encrypted
+local vault.
+
+Or, in VS Code, ask the agent to **connect GitHub**. Approve the request using the
+GitHub link and code, then tell the agent when you're done. The token is never shown
+in chat or saved in MCP config.
 
 ### 3.2 OpenCode (`opencode.jsonc` or `.opencode/opencode.jsonc`)
 
