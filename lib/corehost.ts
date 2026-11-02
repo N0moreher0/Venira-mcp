@@ -447,6 +447,8 @@ type ShellRun = {
   cancelled: boolean;
   started_at: number;
   finished_at?: number;
+  /** True once stdout/stderr are fully flushed ('close'), not just 'exit'. */
+  closed: boolean;
   /** Policy decision that authorised this run (audit + status output). */
   decision: { tier: string; rule: string; reason: string; approver: string | null };
   /** Requested timeout (0 = none). */
@@ -509,6 +511,24 @@ function isEarlyExit(value: unknown): boolean {
   if (typeof value === "boolean") return value;
   if (typeof value === "string") return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
   return false;
+}
+
+/**
+ * `background` uses the opposite polarity to `early_exit`:
+ *   1/true  -> return immediately with run_id (async, default)
+ *   0/false -> foreground: wait for exit, then return final stdout/stderr
+ * Accepts numbers, booleans and strings so a client that sends `false` or
+ * `"False"` gets foreground semantics instead of silently falling back to async.
+ */
+function backgroundSetting(value: unknown): boolean | undefined {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return Number.isFinite(value) ? value !== 0 : undefined;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["1", "true", "yes", "on", "background", "async"].includes(normalized)) return true;
+    if (["0", "false", "no", "off", "foreground", "foreground_only", ""].includes(normalized)) return false;
+  }
+  return undefined;
 }
 
 /** Append with a byte cap; returns true when bytes were dropped. */
@@ -1684,7 +1704,9 @@ async function opShellRun(
   // 2. Execution with hardening: env scrub, output cap, timeout, tree kill.
   // -------------------------------------------------------------------------
   const timeoutMs = clampTimeout(args.timeout_ms);
-  const earlyExit = isEarlyExit(args.early_exit);
+  const background = backgroundSetting(args.background);
+  // background=0 wins over the legacy early_exit alias. Both mean "foreground".
+  const foreground = background !== undefined ? !background : isEarlyExit(args.early_exit);
   const { file, args: spawnArgs } = shellCommandFor(shell, command);
 
   // Secrets are decrypted only now (post-approval) and handed to the child
@@ -1736,6 +1758,7 @@ async function opShellRun(
     exit_code: null,
     cancelled: false,
     started_at: Date.now(),
+    closed: false,
     decision: { tier: decision.tier, rule: decision.rule, reason: decision.reason, approver },
     timeout_ms: timeoutMs,
     timed_out: false,
@@ -1767,6 +1790,7 @@ async function opShellRun(
   });
   child.on("exit", (code, signal) => {
     run.running = false;
+    run.finished_at = Date.now();
     run.cancelled = signal === "SIGTERM" || signal === "SIGKILL";
     run.exit_code = code ?? (signal ? -1 : 0);
     run.process = null;
@@ -1775,8 +1799,15 @@ async function opShellRun(
       run.timer = null;
     }
   });
+  // 'close' fires after stdio has flushed; a foreground caller must wait for it
+  // or the last stdout/stderr chunk can be lost.
+  child.on("close", () => {
+    run.closed = true;
+  });
   child.on("error", (error) => {
     run.running = false;
+    run.finished_at = Date.now();
+    run.closed = true;
     run.exit_code = -1;
     run.process = null;
     run.stderr_tail = (run.stderr_tail + `\n[spawn error] ${error.message}`).slice(-TAIL_LIMIT);
@@ -1803,21 +1834,24 @@ async function opShellRun(
     run.timer.unref?.();
   }
 
-  // Wait briefly for the process to actually start (or fail immediately).
-  await new Promise<void>((resolve) => {
-    const check = () => {
-      if (!run.running || run.exit_code !== null) resolve();
-      else setTimeout(check, 50);
-    };
-    setTimeout(check, 50);
-    // Give up waiting after 2s — the run is still tracked.
-    setTimeout(resolve, 2000);
-  });
-
-  if (isEarlyExit(args.early_exit)) {
-    while (run.running) {
-      await new Promise((resolve) => setTimeout(resolve, 50));
+  if (foreground) {
+    // Foreground: block until the process has exited *and* stdout/stderr are
+    // flushed, so the call returns the complete final output. There is no 2 s
+    // cap here: the only bound is timeout_ms (plus the tool-call budget).
+    while (run.running || !run.closed) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
     }
+  } else {
+    // Async: wait briefly for the process to actually start (or fail
+    // immediately), then return the run_id for polling.
+    await new Promise<void>((resolve) => {
+      const check = () => {
+        if (!run.running || run.exit_code !== null) resolve();
+        else setTimeout(check, 50);
+      };
+      setTimeout(check, 50);
+      setTimeout(resolve, 2000);
+    });
   }
 
   return {
@@ -1830,13 +1864,15 @@ async function opShellRun(
         shell,
         running: run.running,
         exit_code: run.exit_code,
+        background: !foreground,
+        foreground,
         stdout_tail: redactSecretValues(run.stdout_tail),
         stderr_tail: redactSecretValues(run.stderr_tail),
         truncated: run.stdout_full.length >= MAX_OUTPUT_BYTES || run.stderr_full.length >= MAX_OUTPUT_BYTES,
         dropped_bytes: run.dropped_bytes,
         timed_out: run.timed_out,
         timeout_ms: run.timeout_ms,
-        ...(earlyExit
+        ...(foreground
           ? {
               stdout: redactSecretValues(run.stdout_full),
               stderr: redactSecretValues(run.stderr_full),

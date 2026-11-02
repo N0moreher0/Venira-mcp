@@ -271,10 +271,37 @@ function prepare(operation: string, args: Args): Args {
   return out;
 }
 
+/** Foreground detection must mirror backgroundSetting() in lib/corehost.ts. */
+function isForegroundShell(args: Args): boolean {
+  const background = args.background;
+  if (typeof background === "boolean") return !background;
+  if (typeof background === "number") return Number.isFinite(background) ? background === 0 : false;
+  if (typeof background === "string") {
+    const normalized = background.trim().toLowerCase();
+    if (["0", "false", "no", "off", "foreground", "foreground_only", ""].includes(normalized)) return true;
+    if (["1", "true", "yes", "on", "background", "async"].includes(normalized)) return false;
+  }
+  const earlyExit = args.early_exit;
+  if (typeof earlyExit === "boolean") return earlyExit;
+  if (typeof earlyExit === "number") return earlyExit !== 0;
+  if (typeof earlyExit === "string") return ["1", "true", "yes", "on"].includes(earlyExit.trim().toLowerCase());
+  return false;
+}
+
 function timeoutFor(operation: string, args: Args): number {
   if (operation === "shell_status") {
     const wait = Number(args.wait_seconds ?? 0);
     return Math.min(30, Math.max(0, Number.isFinite(wait) ? wait : 0)) * 1000 + 15_000;
+  }
+  // A foreground shell_run blocks until the command exits, so the host-call
+  // budget must cover the shell timeout (not the 30 s default).
+  if (operation === "shell_run") {
+    if (isForegroundShell(args)) {
+      const raw = Number(args.timeout_ms ?? 0);
+      const requested = Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 600_000;
+      return Math.min(requested, 30 * 60 * 1000) + 15_000;
+    }
+    return 30_000;
   }
   // Checkpoints walk/hash/rewrite many files, so they get a larger budget.
   if (operation === "snapshot_create") return 120_000;
@@ -1647,6 +1674,20 @@ async function runHealth(args: Args): Promise<ToolResult> {
 // ---------------------------------------------------------------------------
 const path_ = z.string().describe("Path inside the workspace (relative, or absolute inside the workspace)");
 const flag01 = z.number().int().min(0).max(1).transform((value) => value === 1).describe("Numeric flag: 1=enabled, 0=disabled.");
+/** `background` accepts 0/1, booleans and strings so `false`/`"False"` works. */
+const backgroundFlag = z
+  .union([z.number().int().min(0).max(1), z.boolean(), z.string().max(20)])
+  .transform((value) => {
+    if (typeof value === "boolean") return value;
+    if (typeof value === "number") return value !== 0;
+    const normalized = value.trim().toLowerCase();
+    if (["0", "false", "no", "off", "foreground", "foreground_only", ""].includes(normalized)) return false;
+    return true; // 1/true/yes/on/background/async and unknown values keep the async default
+  })
+  .describe(
+    "1/true = background (default): return immediately with run_id. " +
+      "0/false = foreground: block until the command exits, then return the final stdout/stderr in this call.",
+  );
 const reason_ = z
   .string()
   .max(400)
@@ -2781,20 +2822,26 @@ export function registerProjectTools(server: McpServer): void {
     "project_shell_run",
     {
       ...config(
-        `Run a shell command (cwd defaults to ${WORKSPACE}). Returns run_id immediately; use project_shell_status to get the output. ` +
+        `Run a shell command (cwd defaults to ${WORKSPACE}). ` +
+          "Asynchronous by default: returns run_id immediately, so poll project_shell_status for the output. " +
+          "Pass background=0 (or false) for a foreground run: the call blocks until the command exits and returns the final stdout/stderr. " +
           "Commands pass a policy gate: risky ones return an approval_required error with a pending approval_id; " +
           "catastrophic ones are denied outright. Named overrides require operator allowlisting and a per-call reason.",
-        "Shell run (async)",
+        "Shell run",
         {
           use_when:
-            "build/test/lint/long-running commands; returns run_id immediately so it never blocks other tools. " +
-            "Set early_exit=1 to wait for completion and return final output in this call; otherwise poll project_shell_status. " +
+            "build/test/lint/long-running commands. Default (background=1) returns run_id immediately so it never blocks other tools; " +
+            "set background=0 when you need the final output in this call — it blocks until the command exits, and you must not start other work while waiting. " +
+            "legacy early_exit=1 is an alias for background=0. " +
             "After approval_required, ask the user to approve the approval_id in an interactive terminal, then retry.",
-          avoid_when: "a very short command whose output you need right now (you can still run it and poll 0s).",
-          speed_profile: "returns in ~5 ms; run time is up to the command (bounded by timeout_ms).",
+          avoid_when: "a command that may never finish: use the async default plus project_shell_status/project_shell_cancel.",
+          speed_profile:
+            "background=1 returns in ~5 ms, run time is up to the command; " +
+            "background=0 blocks for the whole run (bounded by timeout_ms, default 10 min).",
           output_kind:
-            "shell_run: run_id/shell_id, running, exit_code, stdout_tail/stderr_tail, timed_out, policy; " +
-            "with early_exit=1 also returns bounded stdout/stderr; approval_required: rule, reason, approval_id, retry_with.",
+            "shell_run: run_id/shell_id, running, exit_code, background/foreground, stdout_tail/stderr_tail, timed_out, policy; " +
+            "background=0 also returns bounded stdout/stderr. " +
+            "approval_required: rule, reason, approval_id, retry_with.",
           batch_safe: false,
         },
         { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
@@ -2803,6 +2850,7 @@ export function registerProjectTools(server: McpServer): void {
         shell: z.enum(["powershell", "cmd", "bash"]).optional(),
         command: z.string().describe("Command line to execute."),
         relative_cwd: z.string().optional().describe("Working directory inside the workspace (default: workspace root)."),
+        background: backgroundFlag.optional(),
         secret_env: z
           .array(z.string())
           .max(16)
@@ -2837,7 +2885,10 @@ export function registerProjectTools(server: McpServer): void {
           .describe("Required with override; explain the specific intent in one line. Redacted and recorded in the SQLite audit trail."),
         early_exit: flag01
           .optional()
-          .describe("1 waits for the background shell to finish and return final output; 0 returns immediately with run_id/shell_id."),
+          .describe(
+            "Legacy alias for background=0: 1 blocks until the shell finishes and returns final output; " +
+              "0 returns immediately with run_id/shell_id. Prefer `background`.",
+          ),
         approval_scope: z
           .enum(["once", "session"])
           .optional()
