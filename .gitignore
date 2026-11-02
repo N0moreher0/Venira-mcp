@@ -15,6 +15,12 @@ section*.txt
 /hot-fix-upgrade.txt
 /mcp_test_demo.txt
 
+# Owner-only notes and local dev helpers
+/PUSH-NOTES.md
+/set-secret.js
+/wait-ci.js
+/verify2.err
+
 # Build output
 dist/
 
