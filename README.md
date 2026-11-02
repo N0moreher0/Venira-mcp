@@ -144,7 +144,7 @@ tool counts. That is the only real proof — a config file on disk is not.
 | `npx --yes venira-mcp@latest --print-config <client>` | Print a config instead of writing it |
 | `npx --yes venira-mcp@latest --doctor` | Preflight: workspace, data dir, tools, shell |
 | `npx --yes venira-mcp@latest --setup-github` | Store a GitHub token once (interactive terminal) |
-| `npx --yes venira-mcp@latest --version` | Print the version (current release: 1.8.0) |
+| `npx --yes venira-mcp@latest --version` | Print the version (current release: 1.8.1) |
 | `npx --yes venira-mcp@latest --help` | All flags and environment variables |
 | `npx --yes venira-mcp@latest --verify` | Behavioural regression suite |
 
@@ -1111,6 +1111,7 @@ The full history, in order — from the standalone rewrite to the provider, secr
 
 | Date | Version | Milestone |
 |---|---|---|
+| 2026-11-02 | **v1.8.1** | **Docs-only release.** README now opens with the one-line install and a copy/paste agent prompt, followed by a short quick start and a command cheat sheet; per-client config paths, raw JSON/TOML, developer and Docker installs moved behind it. No code changes. |
 | 2026-11-02 | **v1.8.0** | **One-command client setup + GitHub authorization.** `--install [auto|client]` merges Venira into detected MCP configs (`vscode`, `opencode`, `claude_desktop`, `cursor`, `codex`, `kimi`, `deepseek`, `antigravity`) and creates a missing file when a client is named; `--print-config [client]` prints ready-to-paste JSON/TOML without writing; generated configs use `npx --yes --package=venira-mcp@latest` and omit platform-specific shell/data-dir defaults. `project_github_connect` adds GitHub Device Flow and keeps access/refresh tokens in the encrypted per-user vault (never returned to the agent); `--setup-github` is the hidden-terminal PAT fallback. GitHub/GitLab credentials and private keys are scanned locally on provider requests/responses with fail-closed blocking/withholding; `npm run verify` covers `.env` read denial, `git push --no-verify` approval, secret-guard and OAuth regressions. |
 | 2026-11-01 | **v1.7.1** | **Security hotfix + shell UX.** Legacy audit schemas with required `created_at` now receive compatible writes; download-to-shell detection covers chained commands; container stop/remove and all `git push` operations require approval; approval documentation now matches the pending CLI/HMAC flow and per-user data directory; `project_shell_run.early_exit` can wait for completion and return bounded final output with `run_id`/`shell_id`. |
 | 2026-10-27 | **v1.0.0** | **Standalone rewrite.** The Rust `corehost` binary and JSON-Lines IPC were replaced by an in-process pure-Node backend (`lib/corehost.ts`). SQLite WAL audit via `better-sqlite3`, async shell with process-tree kill, long-lived capability scope, structured envelopes with hints, validated read caches, batch reads. Ships as `npm i venira-mcp` (no binary, no GUI). |
