@@ -66,6 +66,7 @@ function verifyEnv(extraEnv: Record<string, string> = {}, outputMode = "full") {
     VENIRA_GITHUB_API_URL: githubMock.apiUrl,
     VENIRA_GITHUB_REPO: "acme/demo",
     VENIRA_GITHUB_TOKEN: "verify-github-token",
+    VENIRA_GIT_TOKEN: "",
     ...extraEnv,
   };
 }

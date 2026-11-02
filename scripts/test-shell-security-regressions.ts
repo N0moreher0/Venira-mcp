@@ -122,7 +122,7 @@ try {
     });
     const envReadText = (envReadOverride as { content?: Array<{ text?: string }> }).content?.[0]?.text ?? "{}";
     const envReadEnvelope = JSON.parse(envReadText);
-    assert.equal((envReadOverride as { isError?: boolean }).isError, undefined);
+    assert.equal((envReadOverride as { isError?: boolean }).isError, undefined, envReadText);
     assert.equal(envReadEnvelope.data?.policy?.decision, "allow");
     assert.equal(envReadEnvelope.data?.policy?.rule, "override.ALLOW_ENV_READ");
     assert.equal(envReadEnvelope.data?.policy?.approver, "agent:ALLOW_ENV_READ");
