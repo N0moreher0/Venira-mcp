@@ -1,7 +1,8 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync } from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { activeDataDir } from "./workspace.js";
+import { readOrCreateHexKey, writeFileAtomicSync } from "./keyfile.js";
 
 /**
  * Human-in-the-loop approvals for `ask`-tier shell commands.
@@ -50,13 +51,10 @@ function approvalsDir(): string {
 
 function sharedSecret(): Buffer {
   const f = path.join(dataDir(), "approval.key");
-  if (!existsSync(f)) {
-    const b = crypto.randomBytes(32);
-    mkdirSync(path.dirname(f), { recursive: true, mode: 0o700 });
-    writeFileSync(f, b.toString("hex"), { mode: 0o600 });
-    return b;
-  }
-  return Buffer.from(readFileSync(f, "utf8").trim(), "hex");
+  // 32-byte key stored as hex. Creation is atomic and the length is validated
+  // on every read: a truncated/empty key would still be a usable HMAC key, so
+  // silently accepting it would weaken every grant to "forgeable".
+  return readOrCreateHexKey(f, "approval");
 }
 
 function pendingPath(id: string): string {
@@ -104,16 +102,48 @@ export interface PendingApproval {
   approver?: string;
   scope?: ApprovalScope;
   created_at: number;
+  /** HMAC over the immutable fields (see pendingMac). */
+  mac?: string;
+}
+
+/**
+ * The pending record is the human's view of what they are approving. Sign the
+ * fields that decide the grant so a writer who can reach the approvals dir (but
+ * not the key) cannot swap the command before the human says yes.
+ */
+function pendingMac(p: PendingApproval): string {
+  return crypto
+    .createHmac("sha256", sharedSecret())
+    .update(
+      JSON.stringify([
+        "pending-v1",
+        p.approval_id,
+        p.session_id,
+        p.binding ?? "",
+        p.rule,
+        p.created_at,
+        p.expires_at,
+      ]),
+    )
+    .digest("hex");
+}
+
+function macMatches(expectedHex: string, actualHex: string): boolean {
+  const a = Buffer.from(expectedHex);
+  const b = Buffer.from(actualHex);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
 export function createPendingApproval(p: PendingApproval): void {
-  writeFileSync(pendingPath(p.approval_id), JSON.stringify(p, null, 2), { mode: 0o600 });
+  const record: PendingApproval = { ...p, mac: pendingMac(p) };
+  writeFileAtomicSync(pendingPath(p.approval_id), JSON.stringify(record, null, 2));
 }
 
 export function readPendingApproval(id: string): PendingApproval | null {
   try {
     const raw = readFileSync(pendingPath(id), "utf8");
     const p = JSON.parse(raw) as PendingApproval;
+    if (!p.mac || !macMatches(pendingMac(p), p.mac)) return null;
     if (p.expires_at <= Date.now()) {
       p.status = "expired";
     }
@@ -144,11 +174,11 @@ export function writeApprovalGrant(id: string, approver = "cli", scope: Approval
   }
   const ts = Date.now();
   const mac = grantMac(p.approval_id, p.session_id, p.binding, scope, ts);
-  writeFileSync(grantPath(id), `${ts}\n${approver}\n${scope}\n${mac}`, { mode: 0o600 });
+  writeFileAtomicSync(grantPath(id), `${ts}\n${approver}\n${scope}\n${mac}`);
   p.status = "granted";
   p.approver = approver;
   p.scope = scope;
-  writeFileSync(pendingPath(id), JSON.stringify(p, null, 2), { mode: 0o600 });
+  writeFileAtomicSync(pendingPath(id), JSON.stringify(p, null, 2));
 }
 
 /**
@@ -196,7 +226,7 @@ export function consumeApproval(id: string): void {
   const p = readPendingApproval(id);
   if (!p) return;
   p.status = "consumed";
-  try { writeFileSync(pendingPath(id), JSON.stringify(p, null, 2), { mode: 0o600 }); } catch { /* ignore */ }
+  try { writeFileAtomicSync(pendingPath(id), JSON.stringify(p, null, 2)); } catch { /* ignore */ }
   try { unlinkSync(grantPath(id)); } catch { /* ignore */ }
 }
 

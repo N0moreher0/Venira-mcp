@@ -533,6 +533,25 @@ check(
 const approvals = await import("../lib/approvals.js");
 const { writeApprovalGrant } = approvals;
 
+// Pending records are MAC'd: editing the command/binding behind the human's
+// back makes the record unreadable (and therefore un-grantable).
+const pendingFile = path.join(verifyDataDir, "approvals", `${askApprovalId}.json`);
+const pendingRaw = await fs.readFile(pendingFile, "utf8");
+const pendingTampered = JSON.parse(pendingRaw) as Record<string, unknown>;
+pendingTampered.binding = "forged-binding";
+await fs.writeFile(pendingFile, JSON.stringify(pendingTampered));
+check(
+  "policy_pending_record_tamper_rejected",
+  approvals.readPendingApproval(askApprovalId) === null,
+  pendingTampered.binding,
+);
+await fs.writeFile(pendingFile, pendingRaw);
+check(
+  "policy_pending_record_restored",
+  approvals.readPendingApproval(askApprovalId)?.approval_id === askApprovalId,
+  null,
+);
+
 // Approve using approval_id flow
 writeApprovalGrant(askApprovalId);
 const approved = await call("project_shell_run", {
@@ -1153,6 +1172,79 @@ check(
 const secretsModule = await import("../lib/secrets.js");
 const redactionUnit = secretsModule.redactSecretValues(`fallback ${SECRET_VALUE} fallback`);
 check("secret_redaction_unit", redactionUnit === "fallback [REDACTED] fallback", redactionUnit);
+
+// 11c-bis. Hash/crypto hardening: keyed fingerprint, AAD-bound ciphertext,
+// atomic+locked key creation, and read-modify-write safety.
+const keyfileModule = await import("../lib/keyfile.js");
+const approvalKeyFile = path.join(verifyDataDir, "approval.key");
+const approvalKeyRaw = await fs.readFile(approvalKeyFile, "utf8").catch(() => "");
+check(
+  "approval_key_is_32_byte_hex",
+  /^[0-9a-f]{64}$/.test(approvalKeyRaw.trim()),
+  approvalKeyRaw.trim().length,
+);
+const unitKeyFile = path.join(verifyDataDir, "unit-keyfile.key");
+const unitKey1 = keyfileModule.readOrCreateHexKey(unitKeyFile, "unit");
+await fs.writeFile(unitKeyFile, "abcd");
+let invalidKeyMessage = "";
+try {
+  keyfileModule.readHexKey(unitKeyFile, "unit");
+} catch (error) {
+  invalidKeyMessage = error instanceof Error ? error.message : String(error);
+}
+check("keyfile_rejects_short_key", invalidKeyMessage.includes("unit_key_invalid"), invalidKeyMessage);
+await fs.writeFile(unitKeyFile, unitKey1.toString("hex"));
+const unitKey2 = keyfileModule.readOrCreateHexKey(unitKeyFile, "unit");
+check("keyfile_is_stable", unitKey1.equals(unitKey2));
+
+const plainDigest = (await import("node:crypto")).createHash("sha256").update(SECRET_VALUE, "utf8").digest("hex");
+await call("project_secret", { action: "set", name: SECRET_NAME, value: SECRET_VALUE });
+const storeAfterSet = JSON.parse(await fs.readFile(secretFile, "utf8")) as {
+  secrets: Record<string, { v?: number; sha256?: string; fingerprint?: string; iv: string; tag: string; data: string }>;
+};
+check(
+  "secret_store_no_plaintext_digest",
+  !(await fs.readFile(secretFile, "utf8")).includes(plainDigest),
+  { digest: plainDigest.slice(0, 12) },
+);
+check(
+  "secret_store_hmac_fingerprint",
+  storeAfterSet.secrets[SECRET_NAME]?.v === 2 &&
+    typeof storeAfterSet.secrets[SECRET_NAME]?.fingerprint === "string" &&
+    storeAfterSet.secrets[SECRET_NAME]?.sha256 === undefined,
+  storeAfterSet.secrets[SECRET_NAME],
+);
+
+const SWAP_NAME = "VERIFY_TOKEN_SWAP";
+const SWAP_VALUE = "swap-secret-value-71bd";
+await secretsModule.setSecret(SWAP_NAME, SWAP_VALUE);
+const swappable = JSON.parse(await fs.readFile(secretFile, "utf8")) as {
+  secrets: Record<string, { iv: string; tag: string; data: string }>;
+};
+const target = swappable.secrets[SECRET_NAME];
+const source = swappable.secrets[SWAP_NAME];
+swappable.secrets[SECRET_NAME] = { ...target, iv: source.iv, tag: source.tag, data: source.data };
+swappable.secrets[SWAP_NAME] = { ...source, iv: target.iv, tag: target.tag, data: target.data };
+await fs.writeFile(secretFile, JSON.stringify(swappable));
+const swappedValue = secretsModule.getSecretValueSync(SECRET_NAME);
+check(
+  "secret_ciphertext_swap_detected",
+  swappedValue !== SWAP_VALUE && swappedValue !== SECRET_VALUE,
+  { got: swappedValue === undefined ? "undefined" : "other-secret" },
+);
+await secretsModule.setSecret(SECRET_NAME, SECRET_VALUE);
+await secretsModule.deleteSecret(SWAP_NAME);
+check("secret_ciphertext_restored", secretsModule.getSecretValueSync(SECRET_NAME) === SECRET_VALUE);
+
+const raceNames = Array.from({ length: 5 }, (_, i) => `VERIFY_RACE_${i}`);
+await Promise.all(raceNames.map((raceName, i) => secretsModule.setSecret(raceName, `race-value-${i}-xyz`)));
+const raceStored = secretsModule.listSecrets().map((entry) => entry.name);
+check(
+  "secret_concurrent_sets_keep_all_rows",
+  raceNames.every((raceName) => raceStored.includes(raceName)),
+  { expected: raceNames, stored: raceStored.filter((name) => name.startsWith("VERIFY_RACE_")) },
+);
+await Promise.all(raceNames.map((raceName) => secretsModule.deleteSecret(raceName)));
 
 // secret_env injects the value into the child, and every returned tail is scrubbed.
 const secretInjectionAsk = asEnvelope(
@@ -2153,6 +2245,50 @@ check(
   (auditRead.data?.rows ?? []).some((r: { reason?: string }) => r.reason === "VERIFY_REASON_EDIT"),
   auditRead.data?.rows,
 );
+
+// 16-bis. Audit hash chain: keyed, actually recomputed, and tamper-evident.
+const auditVerify = asEnvelope(await call("project_read_audit", { limit: 5, verify: 1 }));
+const auditVerifyDetail = (auditVerify.data?.verify_detail ?? {}) as {
+  ok?: boolean;
+  keyed?: boolean;
+  verified_rows?: number;
+  legacy_rows?: number;
+  reason?: string;
+};
+check(
+  "audit_chain_verified",
+  auditVerify.ok === true &&
+    auditVerify.data?.verified === true &&
+    auditVerifyDetail.keyed === true &&
+    (auditVerifyDetail.verified_rows ?? 0) > 0,
+  auditVerify.data?.verify_detail,
+);
+check(
+  "audit_shell_status_not_recorded",
+  (auditVerify.data?.rows ?? []).every((r: { operation?: string }) => r.operation !== "shell_status"),
+  (auditVerify.data?.rows ?? []).map((r: { operation?: string }) => r.operation),
+);
+
+const tamperDb = new Database(auditDbPath);
+const tamperTarget = tamperDb
+  .prepare("SELECT id, reason FROM project_tool_audit ORDER BY id DESC LIMIT 1")
+  .get() as { id: number; reason: string | null } | undefined;
+tamperDb.prepare("UPDATE project_tool_audit SET reason = ? WHERE id = ?").run("VERIFY_TAMPERED", tamperTarget?.id ?? -1);
+tamperDb.close();
+const tamperedAudit = asEnvelope(await call("project_read_audit", { limit: 1, verify: 1 }));
+check(
+  "audit_tamper_detected",
+  tamperedAudit.data?.verified === false &&
+    (tamperedAudit.data?.verify_detail as { reason?: string })?.reason === "hash_mismatch",
+  tamperedAudit.data?.verify_detail,
+);
+const restoreDb = new Database(auditDbPath);
+restoreDb
+  .prepare("UPDATE project_tool_audit SET reason = ? WHERE id = ?")
+  .run(tamperTarget?.reason ?? null, tamperTarget?.id ?? -1);
+restoreDb.close();
+const restoredAudit = asEnvelope(await call("project_read_audit", { limit: 1, verify: 1 }));
+check("audit_chain_recovers_after_restore", restoredAudit.data?.verified === true, restoredAudit.data?.verify_detail);
 
 check("policy_unit_git_push_ask", policyModule.evaluateShellCommand("git push --force origin main", ws, { mode: "balanced" }).tier === "ask", policyModule.evaluateShellCommand("git push --force origin main", ws, { mode: "balanced" }));
 const dotEnvDecision = policyModule.evaluateShellCommand("cat .env", ws, { mode: "balanced" });

@@ -34,9 +34,19 @@ deploying:
   with `path_escape`. This is a *first-line* guard, not a sandbox.
 - **Cache correctness.** Read/info caches are validated by `mtime + size`,
   so an external edit or delete can never silently serve stale content.
-- **Audit integrity.** Every operation is written to a SQLite WAL table.
-  Legacy databases with a required `created_at` column are supported in place;
-  `project_health` surfaces orphan `running` rows as a post-mortem signal.
+- **Audit integrity.** Every operation is written to a SQLite WAL table with a
+  keyed hash chain (`prev_hash`/`row_hash`, HMAC-SHA256 with `audit.key` in the
+  data dir). `project_read_audit verify=1` recomputes the digest of the fields
+  that are immutable after insert, so in-place edits or a rewritten chain fail
+  verification unless the attacker also has the key file. Legacy databases with
+  a required `created_at` column are supported in place; `project_health`
+  surfaces orphan `running` rows as a post-mortem signal.
+- **Secret store integrity.** Secret values are encrypted with AES-256-GCM and
+  the secret name is bound in as AAD (swapping ciphertext between two names
+  fails authentication). The metadata fingerprint is a keyed HMAC, not a plain
+  SHA-256, so a leaked `secrets.json` cannot be brute-forced offline for
+  low-entropy values. Read-modify-write operations run under a cross-process
+  lock, so concurrent `set` calls cannot silently drop each other.
 - **Native module supply chain.** `better-sqlite3` is the only native
   dependency; its build scripts are allowlisted via `npm approve-scripts`
   so an npm v12 install can't be tricked into running an unapproved script.
@@ -51,6 +61,11 @@ deploying:
 - **Running the server as root / in a shared environment.** If the MCP
   client (OpenCode, etc.) runs the server in a context that can reach other
   users' data, the workspace lock does not isolate you from them.
+- **A local attacker with access to `VENIRA_DATA_DIR`.** The audit chain and
+  approval grants are HMAC-signed with keys kept in that directory. This stops
+  DB-only or file-store-only tampering, but the same OS user (or root) can read
+  the keys and re-sign anything. Use a separate account/container if that
+  matters.
 - **The MCP transport itself.** stdio transport is local; if you ever proxy
   it over a network, that layer's authn/z is out of scope for this project.
 

@@ -37,6 +37,8 @@ import {
   activeDataDir,
 } from "../lib/workspace.js";
 import { addTrace, recentTraces, traceSnapshot } from "../lib/tracer.js";
+import { auditKeyPath, verifyAuditRows } from "../lib/audit-hash.js";
+import { readHexKey } from "../lib/keyfile.js";
 import {
   buildOutline,
   diffUnified,
@@ -1748,21 +1750,43 @@ async function runReadAudit(args: Args): Promise<ToolResult> {
     const rows = db.prepare(sql).all(...values, limit + 1) as unknown[];
     const truncated = rows.length > limit;
     let verified: boolean | null = null;
+    let verifyDetail: Record<string, unknown> | undefined;
     if (args.verify === true && columns.has("row_hash")) {
       try {
-        const all = db.prepare("SELECT prev_hash, row_hash FROM project_tool_audit ORDER BY id ASC").all() as Array<{ prev_hash: string | null; row_hash: string | null }>;
-        let ok = true;
-        let prev = "";
-        let started = false;
-        for (const r of all) {
-          if (!r.row_hash) { ok = false; break; }
-          if (started && r.prev_hash !== prev) { ok = false; break; }
-          started = true;
-          prev = r.row_hash;
+        // Recompute the digest, not just the links: a link-only check passes
+        // even when a row's operation/reason was edited in place.
+        const fields = ["session_id", "project_id", "operation", "request_id", "started_at", "prev_hash", "row_hash"];
+        if (columns.has("reason")) fields.push("reason");
+        if (columns.has("args_hash")) fields.push("args_hash");
+        const all = db
+          .prepare(`SELECT ${fields.join(", ")} FROM project_tool_audit ORDER BY id ASC`)
+          .all() as Array<Record<string, unknown>>;
+        let key: Buffer | null = null;
+        try {
+          key = readHexKey(auditKeyPath(path.dirname(dbPath)), "audit");
+        } catch {
+          key = null; // keyed rows cannot be verified without the key; reported below
         }
-        verified = ok;
-      } catch {
+        const window = all.length > 50_000 ? all.slice(-50_000) : all;
+        const result = verifyAuditRows(
+          window.map((r) => ({
+            session_id: String(r.session_id ?? ""),
+            project_id: String(r.project_id ?? ""),
+            operation: String(r.operation ?? ""),
+            request_id: (r.request_id as string | null | undefined) ?? null,
+            started_at: Number(r.started_at ?? 0),
+            reason: (r.reason as string | null | undefined) ?? null,
+            args_hash: (r.args_hash as string | null | undefined) ?? null,
+            prev_hash: (r.prev_hash as string | null | undefined) ?? null,
+            row_hash: (r.row_hash as string | null | undefined) ?? null,
+          })),
+          key,
+        );
+        verified = result.ok;
+        verifyDetail = { ...result, total_rows: all.length, checked_rows: window.length, keyed: Boolean(key) };
+      } catch (error) {
         verified = false;
+        verifyDetail = { ok: false, reason: "verify_failed", error: error instanceof Error ? error.message : String(error) };
       }
     }
     db.close();
@@ -1771,6 +1795,7 @@ async function runReadAudit(args: Args): Promise<ToolResult> {
       count: truncated ? limit : rows.length,
       truncated,
       ...(verified !== null ? { verified } : {}),
+      ...(verifyDetail ? { verify_detail: verifyDetail } : {}),
       rows: rows.slice(0, limit).map((r) => {
         const row = r as Record<string, unknown>;
         return {
