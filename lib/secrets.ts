@@ -121,7 +121,10 @@ const DENY_NAMES = new Set([
 export type SecretMeta = {
   name: string;
   length: number;
+  /** First 12 chars of the value fingerprint (keyed HMAC for new entries). */
   sha256_12: string;
+  /** "hmac-sha256" for entries written by 1.8.2+, "sha256-legacy" for older files. */
+  fingerprint_scheme: "hmac-sha256" | "sha256-legacy";
   updated_at: number;
   /** Absolute expiry (epoch ms), or null when the secret never expires. */
   expires_at: number | null;
@@ -138,11 +141,19 @@ export type SecretMeta = {
 };
 
 type StoredEntry = {
-  v: 1;
+  /** 1 = AES-GCM without AAD (legacy); 2 = AES-GCM with the secret name as AAD. */
+  v: 1 | 2;
   iv: string;
   tag: string;
   data: string;
-  sha256: string;
+  /**
+   * Keyed fingerprint: HMAC-SHA256(store key, "secret|<name>|<value>").
+   * `sha256` is the legacy unkeyed digest, read-only and removed on the next
+   * write; an unkeyed digest of a low-entropy password is offline-guessable by
+   * anyone who can read the store file.
+   */
+  fingerprint?: string;
+  sha256?: string;
   length: number;
   updated_at: number;
   /** Optional rotation metadata; absent in stores written before v1.5.0. */
@@ -287,15 +298,28 @@ async function ensureKey(): Promise<Buffer> {
   return key;
 }
 
-function decrypt(entry: StoredEntry, key: Buffer): string {
+const AAD_PREFIX = "venira-secret-v2:";
+
+function fingerprintFor(name: string, value: string, key: Buffer): string {
+  return crypto.createHmac("sha256", key).update(`secret|${name}|${value}`, "utf8").digest("hex");
+}
+
+function decrypt(name: string, entry: StoredEntry, key: Buffer): string {
   const decipher = crypto.createDecipheriv("aes-256-gcm", key, Buffer.from(entry.iv, "base64"));
+  if (entry.v === 2) {
+    // The name is authenticated but not stored in the ciphertext, so swapping
+    // two entries' iv/tag/data makes decryption fail instead of returning the
+    // other secret's value.
+    decipher.setAAD(Buffer.from(`${AAD_PREFIX}${name}`, "utf8"));
+  }
   decipher.setAuthTag(Buffer.from(entry.tag, "base64"));
   return Buffer.concat([decipher.update(Buffer.from(entry.data, "base64")), decipher.final()]).toString("utf8");
 }
 
-function encrypt(value: string, key: Buffer): Pick<StoredEntry, "iv" | "tag" | "data"> {
+function encrypt(name: string, value: string, key: Buffer): Pick<StoredEntry, "iv" | "tag" | "data"> {
   const iv = crypto.randomBytes(12);
   const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
+  cipher.setAAD(Buffer.from(`${AAD_PREFIX}${name}`, "utf8"));
   const enc = Buffer.concat([cipher.update(value, "utf8"), cipher.final()]);
   return {
     iv: iv.toString("base64"),
@@ -312,7 +336,7 @@ function valuesSync(): Map<string, string> {
   for (const [name, entry] of Object.entries(store.secrets)) {
     try {
       if (!entry || typeof entry !== "object" || typeof entry.data !== "string") continue;
-      map.set(name, decrypt(entry, key));
+      map.set(name, decrypt(name, entry, key));
     } catch {
       /* a single corrupted entry must not take down redaction/injection */
     }
@@ -329,10 +353,12 @@ export function listSecrets(): SecretMeta[] {
     .filter(([, entry]) => entry && typeof entry === "object")
     .map(([name, entry]) => {
       const expiresAt = typeof entry.expires_at === "number" ? entry.expires_at : null;
+      const legacy = !entry.fingerprint;
       return {
         name,
         length: typeof entry.length === "number" ? entry.length : 0,
-        sha256_12: typeof entry.sha256 === "string" ? entry.sha256.slice(0, 12) : "",
+        sha256_12: (entry.fingerprint ?? entry.sha256 ?? "").slice(0, 12),
+        fingerprint_scheme: legacy ? ("sha256-legacy" as const) : ("hmac-sha256" as const),
         updated_at: typeof entry.updated_at === "number" ? entry.updated_at : 0,
         expires_at: expiresAt,
         expired: expiresAt !== null && expiresAt <= now,
@@ -388,17 +414,16 @@ export function getSecretValueSync(name: string): string | undefined {
   return valuesSync().get(name);
 }
 
-async function writeStore(store: StoreFile): Promise<void> {
-  const dir = secretsDir();
-  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-  const file = storePath();
+async function acquireStoreLock(file: string): Promise<() => Promise<void>> {
   const lock = `${file}.lock`;
   // R3: lockfile (wx) with stale timeout.
   const deadline = Date.now() + 5_000;
   while (true) {
     try {
       await fs.writeFile(lock, String(process.pid), { flag: "wx", mode: 0o600 });
-      break;
+      return async () => {
+        try { await fs.unlink(lock); } catch { /* ignore */ }
+      };
     } catch (e) {
       const code = (e as { code?: string })?.code;
       if (code === "EEXIST") {
@@ -418,19 +443,59 @@ async function writeStore(store: StoreFile): Promise<void> {
       throw e;
     }
   }
+}
+
+/**
+ * Run a read-modify-write under the cross-process lock. Earlier versions only
+ * locked the write, so two concurrent `set` calls could both read the same
+ * snapshot and the second would silently drop the first one's secret.
+ */
+async function withStoreLock<T>(fn: (fresh: () => StoreFile) => Promise<T>): Promise<T> {
+  const release = await acquireStoreLock(storePath());
+  cache = null; // never modify a snapshot another process has already replaced
   try {
-    const payload = JSON.stringify({ version: 1, secrets: store.secrets });
-    const tmp = `${file}.tmp-${crypto.randomBytes(3).toString("hex")}`;
+    return await fn(readStoreSync);
+  } finally {
+    await release();
+  }
+}
+
+async function writeStoreUnlocked(store: StoreFile): Promise<void> {
+  const dir = secretsDir();
+  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+  const file = storePath();
+  const payload = JSON.stringify({ version: 1, secrets: store.secrets });
+  const tmp = `${file}.tmp-${crypto.randomBytes(3).toString("hex")}`;
+  try {
     await fs.writeFile(tmp, payload, { mode: 0o600 });
     await renameWithRetry(tmp, file);
+  } catch (error) {
+    await fs.unlink(tmp).catch(() => {});
+    throw error;
+  }
+  try {
+    await fs.chmod(file, 0o600);
+  } catch {
+    /* Windows may ignore chmod */
+  }
+  cache = null;
+}
+
+/**
+ * Replace legacy plaintext digests with keyed fingerprints. Called while the
+ * store lock is held and the key is available; a corrupt entry loses its
+ * (unusable) legacy digest rather than keeping an offline-guessable one.
+ */
+function migrateLegacyFingerprints(store: StoreFile, key: Buffer): void {
+  for (const [name, entry] of Object.entries(store.secrets)) {
+    if (!entry || typeof entry !== "object" || !entry.sha256) continue;
     try {
-      await fs.chmod(file, 0o600);
+      const value = decrypt(name, entry, key);
+      entry.fingerprint = fingerprintFor(name, value, key);
     } catch {
-      /* Windows may ignore chmod */
+      /* corrupted entry: drop the digest below */
     }
-    cache = null;
-  } finally {
-    try { await fs.unlink(lock); } catch { /* ignore */ }
+    delete entry.sha256;
   }
 }
 
@@ -463,42 +528,48 @@ export async function setSecret(
       );
     }
   }
-  const store = readStoreSync();
-  const key = await ensureKey();
-  const now = Date.now();
-  const previous = store.secrets[cleanName];
-  const created = !previous;
-  // A re-set is a rotation: keep the old expiry unless a new one is given, drop
-  // the use counter (it belongs to the previous value) and mark the write time.
-  const expiresAt =
-    options.expiresAt === undefined ? (previous?.expires_at ?? null) : options.expiresAt;
-  const sha256 = crypto.createHash("sha256").update(value, "utf8").digest("hex");
-  store.secrets[cleanName] = {
-    v: 1,
-    ...encrypt(value, key),
-    sha256,
-    length: bytes,
-    updated_at: now,
-    expires_at: expiresAt,
-    last_used_at: null,
-    use_count: 0,
-    rotated_at: now,
-  };
-  await writeStore(store);
-  return {
-    name: cleanName,
-    length: bytes,
-    sha256_12: sha256.slice(0, 12),
-    updated_at: now,
-    expires_at: expiresAt,
-    expired: expiresAt !== null && expiresAt <= now,
-    days_left: expiresAt === null ? null : Math.floor((expiresAt - now) / DAY_MS),
-    last_used_at: null,
-    use_count: 0,
-    rotated_at: now,
-    created,
-    rotated: !created,
-  };
+  // Read + encrypt + write under one lock: a concurrent writer must not be
+  // able to replace the file between our read and our write.
+  return withStoreLock(async (fresh) => {
+    const store = fresh();
+    const key = await ensureKey();
+    migrateLegacyFingerprints(store, key);
+    const now = Date.now();
+    const previous = store.secrets[cleanName];
+    const created = !previous;
+    // A re-set is a rotation: keep the old expiry unless a new one is given, drop
+    // the use counter (it belongs to the previous value) and mark the write time.
+    const expiresAt =
+      options.expiresAt === undefined ? (previous?.expires_at ?? null) : options.expiresAt;
+    const fingerprint = fingerprintFor(cleanName, value, key);
+    store.secrets[cleanName] = {
+      v: 2,
+      ...encrypt(cleanName, value, key),
+      fingerprint,
+      length: bytes,
+      updated_at: now,
+      expires_at: expiresAt,
+      last_used_at: null,
+      use_count: 0,
+      rotated_at: now,
+    };
+    await writeStoreUnlocked(store);
+    return {
+      name: cleanName,
+      length: bytes,
+      sha256_12: fingerprint.slice(0, 12),
+      fingerprint_scheme: "hmac-sha256" as const,
+      updated_at: now,
+      expires_at: expiresAt,
+      expired: expiresAt !== null && expiresAt <= now,
+      days_left: expiresAt === null ? null : Math.floor((expiresAt - now) / DAY_MS),
+      last_used_at: null,
+      use_count: 0,
+      rotated_at: now,
+      created,
+      rotated: !created,
+    };
+  });
 }
 
 /**
@@ -508,25 +579,33 @@ export async function setSecret(
  * per second per name to keep tight shell loops cheap.
  */
 export async function markSecretUsed(name: string, source: SetSecretOptions["source"] = "tool"): Promise<void> {
-  const store = readStoreSync();
-  const entry = store.secrets[name];
-  if (!entry || typeof entry !== "object") return;
-  const now = Date.now();
-  const last = typeof entry.last_used_at === "number" ? entry.last_used_at : 0;
-  if (now - last < 1_000) return; // debounce
-  entry.last_used_at = now;
-  entry.use_count = (typeof entry.use_count === "number" ? entry.use_count : 0) + 1;
   void source;
-  await writeStore(store);
+  try {
+    await withStoreLock(async (fresh) => {
+      const store = fresh();
+      const entry = store.secrets[name];
+      if (!entry || typeof entry !== "object") return;
+      const now = Date.now();
+      const last = typeof entry.last_used_at === "number" ? entry.last_used_at : 0;
+      if (now - last < 1_000) return; // debounce
+      entry.last_used_at = now;
+      entry.use_count = (typeof entry.use_count === "number" ? entry.use_count : 0) + 1;
+      await writeStoreUnlocked(store);
+    });
+  } catch {
+    /* best-effort */
+  }
 }
 
 export async function deleteSecret(name: string): Promise<{ name: string; deleted: boolean }> {
   const cleanName = assertSecretName(name);
-  const store = readStoreSync();
-  if (!store.secrets[cleanName]) return { name: cleanName, deleted: false };
-  delete store.secrets[cleanName];
-  await writeStore(store);
-  return { name: cleanName, deleted: true };
+  return withStoreLock(async (fresh) => {
+    const store = fresh();
+    if (!store.secrets[cleanName]) return { name: cleanName, deleted: false };
+    delete store.secrets[cleanName];
+    await writeStoreUnlocked(store);
+    return { name: cleanName, deleted: true };
+  });
 }
 
 /**

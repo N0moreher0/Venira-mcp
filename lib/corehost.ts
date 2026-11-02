@@ -26,6 +26,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import Database from "better-sqlite3";
 import type { HostSnapshot } from "./types.js";
+import { loadAuditKey, hashAuditRow } from "./audit-hash.js";
 import {
   commandKey,
   commandHash,
@@ -90,6 +91,16 @@ import { envChoice, envFlag } from "./env.js";
 
 let auditDb: Database.Database | null = null;
 let auditColumns: Set<string> | null = null;
+let auditKeyLoaded = false;
+let auditKey: Buffer | null = null;
+
+function auditSigningKey(): Buffer | null {
+  if (!auditKeyLoaded) {
+    auditKey = loadAuditKey(activeDataDir());
+    auditKeyLoaded = true;
+  }
+  return auditKey;
+}
 
 function auditStrict(): boolean {
   return envFlag("VENIRA_AUDIT_STRICT", false);
@@ -222,7 +233,7 @@ function auditInsert(row: AuditRow): void {
       } catch { /* ignore */ }
     }
     const rowHash = columns.has("row_hash")
-      ? crypto.createHash("sha256").update(prevHash + "|" + JSON.stringify(row)).digest("hex")
+      ? hashAuditRow(prevHash, row, auditSigningKey())
       : "";
     const entries: Array<[string, unknown]> = [
       ["session_id", row.session_id],
@@ -295,18 +306,6 @@ function auditStart(
     args_hash: extra.args_hash ?? null,
   });
   return startedAt;
-}
-
-function deleteAuditRow(sessionId: string, requestId: string): void {
-  const db = ensureAuditDb();
-  if (!db) return;
-  try {
-    db.prepare(
-      "DELETE FROM project_tool_audit WHERE request_id = @request_id AND session_id = @session_id AND outcome = 'running'",
-    ).run({ request_id: requestId, session_id: sessionId });
-  } catch {
-    /* audit DB may have been closed */
-  }
 }
 
 function auditFinish(
@@ -2016,6 +2015,7 @@ async function opSecret(args: Record<string, unknown>): Promise<RustResponse> {
         name: meta.name,
         length: meta.length,
         sha256_12: meta.sha256_12,
+        fingerprint_scheme: meta.fingerprint_scheme,
         updated_at: meta.updated_at,
         expires_at: meta.expires_at,
         expired: meta.expired,
@@ -2393,6 +2393,13 @@ export class CoreHost {
         const reasonText = sanitizeReason(
           redactSecretValues(redactSecrets(typeof p.reason === "string" ? p.reason : "")),
         );
+        // Read-only observation windows are not audited: creating a row and then
+        // deleting it would cut the hash chain (the next row's prev_hash would
+        // point at a row that no longer exists).
+        if (operation === "shell_status") {
+          const response = await opShellStatus(args);
+          return response as T;
+        }
         const externalSummary = describeExternalOp(operation, args);
         const argsHash = crypto
           .createHash("sha256")
@@ -2404,13 +2411,6 @@ export class CoreHost {
           ...(externalSummary ? { command: externalSummary } : {}),
         });
 
-        if (operation === "shell_status") {
-          // Read-only observation window — intentionally not audited,
-          // so a long poll never leaves an orphan "running" row.
-          deleteAuditRow(sessionId, requestId);
-          const response = await opShellStatus(args);
-          return response as T;
-        }
         if (operation === "shell_run") {
           const projectId = p.project_id ?? "chat-terminal";
           const commandText =
