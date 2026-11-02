@@ -1,9 +1,9 @@
-# VENIRA MCP CODING — TODO LIST (standalone v1.0.0 → v1.8.0)
+# VENIRA MCP CODING — TODO LIST (standalone v1.0.0 → v1.12.2)
 
 > Standalone: pure-Node backend, no external binary.
 > Each item lists effort (low/med/high), priority (P0/P1/P2/P3), and status.
 
-## 📊 Current state (standalone v1.8.0)
+## 📊 Current state (standalone v1.12.2)
 
 - ✅ 100% of the logic has been moved to Node (no more Rust corehost)
 - ✅ Audit via SQLite WAL using `better-sqlite3` (replaces `node:sqlite`)
@@ -29,9 +29,14 @@
 - ✅ P2 fuzzy edit + SQLite recent files index
 - ✅ P3 code intelligence: `project_diff_files`, `project_symbol_references`, `project_selective_search`
 - ✅ P3 diagnostics + planning: `project_explain_error` (deterministic rule table → next actions) and `project_plan_read_batch` (task → ready read batch) — no model call needed
-- ✅ v1.7.0 safety gaps: shell-policy ordering fixed, `execute_js` gate, protected paths, symlink containment, `install_self` approval gate, typed actionable errors, transactional `project_edit_batch` with abort-and-rollback semantics, `VENIRA_PROFILE`, pending approval CLI, atomic writes, CRLF/BOM handling, secret lockfile, Windows tokenizer fix
+- ✅ v1.7.0 safety gaps: shell-policy ordering fixed, `execute_js` gate, protected paths, symlink containment, `install_self` approval gate, typed actionable errors, transactional `project_edit_batch` with abort-and-rollbacks semantics, `VENIRA_PROFILE`, pending approval CLI, atomic writes, CRLF/BOM handling, secret lockfile, Windows tokenizer fix
 - ✅ v1.8.0 onboarding: `--install [auto|client]` / `--print-config [client]` merge Venira into detected client configs (vscode/opencode/claude_desktop/cursor/codex/kimi/deepseek/antigravity) with backups, correct per-client schemas and cross-platform entries
 - ✅ v1.8.0 auth: `project_github_connect` Device Flow with vault-only tokens, `--setup-github` hidden-terminal fallback, provider secret guard on requests/responses
+- ✅ v1.11.0 pentest hardening: protected-file read bypasses, shell-policy bypasses, delete-root guard, JS redaction + network guard
+- ✅ v1.12.0 per-call approval gate for `project_execute_js` (`VENIRA_JS_EXEC_APPROVAL`, `approval_id`, CLI `--approve`)
+- ✅ v1.12.1 agent setup profiles in README §3.4 (10 env vars × 4 clients + AGENTS.md block), `opencode.example.json` mirror
+- ✅ v1.12.2 Code Mode rules in Agent instructions (§3.4) for OpenCode `execute` tool: `search()` sync, `tools.*` async, fix-shape-once policy
+- ✅ **v1.12.2 Native Adapter** — `venira-mcp/native` / `venira-mcp/corehost` exports for embedding Venira corehost directly (TypeScript API, zero IPC, typed responses, zero bypass)
 
 ## 🕒 Full timeline (v1.0.0 → v1.5.0)
 
@@ -55,6 +60,10 @@ The whole history in order — what shipped, when, and why.
 | 2026-10-29 | **v1.5.2** | **Read-planner artifact filter (found by the E2E re-run).** The audit DB (`data/venira.db`, 36 hits) outranked source in `project_plan_read_batch`; candidates now exclude build/vendor dirs and DB/log/binary extensions. Verify **214/214**. |
 | 2026-10-29 | **v1.5.3** | **Read-planner ranking (found by the post-restart bench).** File-name search per keyword (+ snake→kebab retry) so a task naming a file finds that file; scoring = hits + path/name match; prose demoted unless the task asks for docs; lockfiles dropped; calibrated `estimated_ms`. Verify **217/217**. |
 | 2026-10-29 | **v1.5.4** | **Planner never proposes secrets (found by the v1.5.3 E2E loop).** A secret task ranked `data/secrets.json` + `data/secrets.key` into the top 6; candidates now exclude `.env*`, `secrets.*`, `*.key/.pem/.p12/.pfx/.jks/.keystore`, `id_rsa`, `.npmrc/.netrc`, `credentials.json`. Verify **218/218**. |
+| 2026-11-03 | **v1.12.2** | **Native Adapter + Code Mode rules.** `venira-mcp/native` & `venira-mcp/corehost` exports provide typed TypeScript API (`createCorehost`, `VeniraCorehost`) for embedding Venira corehost directly — zero IPC, typed responses, zero bypass. README §3.4 adds Code Mode rules for OpenCode `execute` tool: `search()` sync, `tools.*` async, fix-shape-once policy. **44 tools**, verify **378/378**. |
+| 2026-11-02 | **v1.12.1** | **Agent setup profiles.** New README [§3.4](#34-recommended-setup-for-agents-copy-paste): one recommended environment profile (workspace lock on, `balanced` shell policy, complete envelopes, exit-early status polling, JS execution off with per-call approval, self-install off, one shared vault) rendered for OpenCode, VS Code, Claude Desktop/Cursor/Kimi/DeepSeek/Antigravity and Codex TOML, plus a copy-paste `AGENTS.md` block that tunes tool selection (plan first, batch reads, edit over rewrite, snapshot before bulk changes, follow hints). `opencode.example.json` mirrors the profile. Documentation only; **44 tools**, verify **378/378**. |
+| 2026-11-02 | **v1.12.0** | **Per-call approval for `project_execute_js`.** Enabling the tool is no longer enough: with `VENIRA_JS_EXEC_APPROVAL=1` (the default) the first call returns `approval_required` with an `approval_id`, and a human grants that exact code + `argv` with `npx venira-mcp --approve <id>` before the agent retries. Grants are single-use and bound to the snippet, so an id cannot be replayed for different code; `VENIRA_JS_EXEC_APPROVAL=0` restores the previous behaviour for trusted automation. Pending approval records now record the retry tool, so the approver CLI tells the user to retry `project_execute_js` instead of `project_shell_run`. **44 tools**, verify **378/378**. |
+| 2026-11-02 | **v1.11.0** | **Pentest hardening.** Protected files can no longer be read through the code-intelligence readers: `readTextFile()` now runs the shared `isProtectedPath()` guard, so `project_symbol_references` (`scope: "file"`) etc. refuse `secrets.json`, `secrets.key`, `venira.db*`. Shell policy bypasses fixed: `${VAR}`/`%VAR%`/backtick/`$(...)` expansions and `FILE_INSPECT_COMMANDS` now blocked outside workspace. Delete-root guard in `opDeletePath` prevents `project_delete_path({ relative_path: "." })`. `project_execute_js` stdout/stderr redacted, global `fetch`/`WebSocket`/net modules blocked. **44 tools**, verify **374/374**. |
 | 2026-11-02 | **v1.8.0** | **One-command client setup + GitHub authorization.** `--install [auto|client]` merges Venira into detected MCP configs with backups, creates a missing config when a client is named, and uses correct per-client schemas; `--print-config [client]` prints ready-to-paste JSON/TOML without writing. `project_github_connect` Device Flow keeps tokens in the vault, `--setup-github` is the hidden-terminal fallback, and the provider secret guard scans requests/responses with fail-closed blocking. |
 | 2026-11-01 | **v1.7.1** | Security hotfix and shell UX alignment: pending human approval IDs, legacy audit compatibility, chained download-to-shell detection, container/git-push approval rules, per-user storage, README claim audit, and `project_shell_run.early_exit` with bounded final output. |
 
@@ -308,7 +317,7 @@ Today failures are thrown as `Error("[code] message Hint: ...")` and re-parsed i
 
 ### E. Tool surface and integration (P2)
 - [x] **`VENIRA_PROFILE=core|full`** (P2, low): `core` registers only what built-in agent tools lack (snapshot, audit/health, secret, shell policy/async shell, diagnostics, batch, PR/CI); `full` = current 44 tools. `VENIRA_DISABLE_TOOLS` stays for fine-tuning. Reduces schema/context cost and tool-choice confusion.
-- [x] **Keep `lib/corehost.ts` as a library with two thin adapters** (P2, med): MCP server (today) and a native tool adapter for a fork/embedded agent. A native integration lets Venira *replace* the host's own bash/edit/write tools, so shell policy and the workspace lock cannot be bypassed (with MCP alongside native tools they can). This supersedes the "do not natively integrate yet" note in `TOOL-ROADMAP.md`; revisit once A and C are done.
+- [x] **Keep `lib/corehost.ts` as a library with two thin adapters** (P2, med): MCP server (today) and a **native tool adapter** for a fork/embedded agent. A native integration lets Venira *replace* the host's own bash/edit/write tools, so shell policy and the workspace lock cannot be bypassed (with MCP alongside native tools they can). **Implemented in v1.12.2**: `venira-mcp/native` and `venira-mcp/corehost` exports provide typed TypeScript API (`createCorehost`, `VeniraCorehost` interface) with zero IPC overhead. This supersedes the "do not natively integrate yet" note in `TOOL-ROADMAP.md`.
 - [x] **Docs consistency** (P1, low) — verified in README v1.6.0: tool count (37 in the intro/diagram vs 40 in §4 and the changelog), `verify` (~30 checks in the scripts list vs 218 in the architecture tree), `doctor` (7 vs 12), a reference to a non-existent "§3.4", the decision-tree anchor `#410-...` pointing at the shell section (the tree is §4.11), and the claim that Node >= 20 "ships `node:sqlite`" (it appeared later; audit uses `better-sqlite3` anyway). Add a CI check that fails when the tool count in README disagrees with `tools/list`.
 - [x] **Stop shipping build artifacts in the repo/package** (P2, low): `*.log`, `server.err`, `venira-mcp-*.tgz`, `check-*.js` / `poll-ci.js` / `create-pr.js` scratch scripts and `*-new.txt` / `section*.txt` drafts are in the project root; move to `scripts/dev/` or `.gitignore`, and keep `.npmignore` strict.
 
@@ -324,7 +333,7 @@ Today failures are thrown as `Error("[code] message Hint: ...")` and re-parsed i
 - **v1.5.1 → v1.5.4**: ✅ hardening found by live E2E + bench — inline `commit_id`, planner artifact/lockfile/credential filters, name/path ranking + calibrated estimate (verify 218/218)
 - **v1.6.0** ✅: configurable git layer — config file, provider dialects (GitLab/Bitbucket), proxy, retries, PR list/close/reopen (40 tools)
 - **v1.7.0** ✅ (2026-11-01): safety gaps (shell-policy ordering, `execute_js` gate, protected paths, `install_self` approval), typed actionable errors, transactional `project_edit_batch`, `VENIRA_PROFILE`, pending approval CLI, atomic writes, CRLF/BOM handling, secret lockfile, Windows tokenizer fix, policy corpus + runner, CI npm audit
-- **Backlog**: chroma/supabase integration, metrics UI, native-tool adapter (see v1.7.0 §E)
+- **Backlog**: chroma/supabase integration, metrics UI
 
 ## ✅ Success criteria
 - [x] The model picks the right tool per the rules (each P0/P1 done)

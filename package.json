@@ -47,6 +47,12 @@
   "license": "MIT OR Apache-2.0",
   "type": "module",
   "main": "dist/server.js",
+  "exports": {
+    ".": "./dist/server.js",
+    "./native": "./dist/lib/native-adapter-index.js",
+    "./corehost": "./dist/lib/native-adapter-index.js",
+    "./package.json": "./package.json"
+  },
   "bin": {
     "venira": "bin/venira-mcp.js",
     "venira-mcp": "bin/venira-mcp.js"
