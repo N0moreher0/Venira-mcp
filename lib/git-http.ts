@@ -11,6 +11,8 @@ import http from "node:http";
 import https from "node:https";
 import tls from "node:tls";
 import type { GitContext, ProviderId } from "./git-config.js";
+import { assertProviderPayloadSafe } from "./provider-secret-guard.js";
+import { envFlag } from "./env.js";
 
 export type RawHeaders = Record<string, string | string[] | undefined>;
 export type RawResult = { status: number; headers: RawHeaders; url: string; buffer: Buffer };
@@ -30,8 +32,7 @@ const USER_AGENT = "venira-mcp-coding (+https://github.com/N0moreher0/Venira-mcp
 const JSON_MAX_BYTES = 8 * 1024 * 1024;
 
 export function networkEnabled(): boolean {
-  const raw = (process.env.VENIRA_NETWORK ?? "1").trim().toLowerCase();
-  return !["0", "false", "off", "no"].includes(raw);
+  return envFlag("VENIRA_NETWORK", true);
 }
 
 function isLocalHost(hostname: string): boolean {
@@ -339,12 +340,16 @@ export async function gitFetch(ctx: GitContext, apiPath: string, opts: FetchOpts
   if (!token && !opts.allowAnonymous) {
     throw new Error(
       `[auth_missing] No ${ctx.provider} token available (looked for secret "${ctx.secret_name}"). ` +
-        `Hint: run project_secret action=set name=${ctx.secret_name} value=<token>.`,
+        `Hint: for GitHub, use project_github_connect action=start; otherwise run project_secret action=set name=${ctx.secret_name} value=<token>.`,
     );
   }
 
   const method = opts.method ?? (opts.body !== undefined ? "POST" : "GET");
   const payload = opts.body !== undefined ? JSON.stringify(opts.body) : undefined;
+  await assertProviderPayloadSafe(
+    { path: apiPath, body: payload ?? "" },
+    { operation: `${method} provider request`, direction: "request" },
+  );
   const timeoutMs = opts.timeoutMs ?? ctx.timeout_ms;
   const maxBytes = opts.maxBytes ?? ctx.max_bytes;
   const canRetry = method === "GET";
@@ -410,6 +415,10 @@ async function sendWithRedirects(
     }
 
     if (res.status >= 400) {
+      await assertProviderPayloadSafe(
+        res.buffer.toString("utf8"),
+        { operation: "provider error response", direction: "response" },
+      );
       throw apiError(ctx, res.status, res.buffer.toString("utf8"), res.headers, `${method} ${url.pathname}`);
     }
     return res;

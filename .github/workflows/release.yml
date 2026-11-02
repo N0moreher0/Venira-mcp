@@ -235,7 +235,7 @@ jobs:
           echo "Publishing $TARBALL via OIDC trusted publishing..."
           # Verbose + capture full error output so the log is actionable.
           PUBLISH_LOG=/tmp/npm-publish.log
-          if npm publish "$TARBALL" --access public --loglevel verbose >"$PUBLISH_LOG" 2>&1; then
+          if npm publish "$TARBALL" --access public --provenance --loglevel verbose >"$PUBLISH_LOG" 2>&1; then
             cat "$PUBLISH_LOG"
             echo "npm publish succeeded"
           else

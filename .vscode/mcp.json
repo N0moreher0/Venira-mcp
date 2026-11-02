@@ -1,0 +1,19 @@
+{
+  "servers": {
+    "venira": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "${workspaceFolder}\\dist\\server.js"
+      ],
+      "env": {
+        "VENIRA_WORKSPACE": "${workspaceFolder}",
+        "VENIRA_UNRESTRICTED": "0",
+        "VENIRA_DEFAULT_SHELL": "powershell",
+        "VENIRA_SHELL_MODE": "balanced",
+        "VENIRA_PERMISSION_MODE": "allow_all",
+        "VENIRA_OUTPUT_MODE": "full"
+      }
+    }
+  }
+}

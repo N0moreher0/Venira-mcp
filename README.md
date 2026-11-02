@@ -1,46 +1,51 @@
 # venira-mcp
 
-> Fast, workspace-scoped **MCP server for coding agents** (OpenCode, Claude Desktop, any MCP client). 40 tools by default, structured JSON envelopes, validated read caches, async shell, code-intelligence (outline/symbols/diff/references/selective search), fuzzy edit, SQLite recent-files index, **git-free checkpoints/rollback**, **audit reasons ("why")**, **pull requests + GitHub Actions**, **encrypted secrets with rotation metadata**, **deterministic error diagnosis + read planning**, and full SQLite audit trail — **pure Node, no external binary, no GUI.**
+> Fast, workspace-scoped **MCP server for coding agents** (OpenCode, Claude Desktop, any MCP client). 41 tools by default, structured JSON envelopes, validated read caches, async shell, code-intelligence (outline/symbols/diff/references/selective search), fuzzy edit, SQLite recent-files index, **git-free checkpoints/rollback**, **audit reasons ("why")**, **pull requests + CI provider integrations**, **encrypted secrets with rotation metadata**, **deterministic error diagnosis + read planning**, and full SQLite audit trail — **pure Node, 1 native dependency (better-sqlite3), no GUI.**
 
 ```
 ┌──────────────┐   stdio (MCP)   ┌────────────────────────────────────────────┐
 │ MCP client    │ ◄──────────────► │  venira-mcp (Node, single process)        │
-│ (OpenCode,    │                  │  40 tools · read caches · async shell     │
+│ (OpenCode,    │                  │  41 tools · read caches · async shell     │
 │  Claude, ...) │                  │  SQLite audit (WAL) · p50/p95 metrics     │
 └──────────────┘                  └────────────────────────────────────────────┘
 ```
 
-- **Zero external dependencies.** Only Node ≥ 20 + `@modelcontextprotocol/sdk` + `zod` +
+- **1 native dependency.** Only Node ≥ 20 + `@modelcontextprotocol/sdk` + `zod` +
   `better-sqlite3`. No Rust binary, no database server, no `gh`/`git` binary for the
   API tools (`project_git` reads `.git/config` directly).
-- **Network is opt-in by policy, off by switch.** Filesystem/shell/checkpoint tools never
-  leave the machine. Only `project_pr_*` / `project_ci_*` talk to GitHub, and
-  `VENIRA_NETWORK=0` turns every outbound call into `network_disabled`.
+- **Network is opt-in by policy, off by switch.** File and checkpoint tools are local;
+  shell commands can access the network when allowed by shell policy. Only the built-in
+  `project_pr_*` / `project_ci_*` integrations are governed by `VENIRA_NETWORK=0`.
 - **Workspace-locked by default.** Every path is validated inside the workspace; `../` escape
   is rejected with `path_escape`.
-- **Validated read cache.** Reads are cached and re-validated by `mtime + size`, so external
-  edits or deletes never return stale content.
-- **Async shell.** `project_shell_run` returns a `run_id` in ~5 ms; poll with
-  `project_shell_status` (5–30 s observation window, deliberately non-queued).
+- **Validated read cache.** Reads are cached and re-validated by `mtime + size`, which
+  detects normal external edits or deletes; it is not a filesystem transaction or watcher.
+- **Async shell.** `project_shell_run` returns `run_id`/`shell_id` immediately by default;
+  poll with `project_shell_status` (5–30 s observation window, deliberately non-queued).
+  Set `early_exit: 1` when the agent needs the bounded final `stdout`/`stderr` in the
+  same call; leave it false for non-blocking workflows.
 - **Full observability.** `project_health` reports capability state, queue depth, cache
   hit-rates, active shells, and p50/p95/max per operation.
-- **Audit trail.** Every operation (including failures, shell runs, and cancellations) is
-  written to a SQLite WAL table (`project_tool_audit`). Mutations accept a `reason` ("why"),
-  stored in the same row so the intent survives later conversations.
+- **Audit trail.** Operations (including failures, shell runs, and cancellations) are written
+  to a SQLite WAL table (`project_tool_audit`) when the audit database is available; failures
+  are surfaced explicitly. Mutations accept a `reason` ("why"), stored in the same row.
 - **Checkpoints without git.** `project_snapshot` stores content-addressed copies of the
-  workspace (deduplicated) and restores them atomically — roll back a risky refactor in one call.
+  workspace (deduplicated) and restores captured files atomically per file — roll back a risky
+  refactor in one call.
 - **Pull requests and CI in the same loop.** `project_pr_create` / `project_pr_comment` /
   `project_pr_merge` and `project_ci_status` / `project_ci_trigger` / `project_ci_logs`
-  drive GitHub REST + Actions without shelling out to `gh`.
-- **Secrets that never appear in a transcript.** `project_secret` keeps tokens encrypted
-  (AES-256-GCM) at rest and injects them into commands via `secret_env`, so a token never
-  lands in a command string, the audit log or the model context.
+  drive the configured GitHub, GitLab or Bitbucket provider APIs without shelling out to
+  `gh`.
+- **Secrets are kept out of normal tool metadata.** `project_secret` keeps tokens encrypted
+  (AES-256-GCM) at rest and `secret_env` avoids putting them in command arguments; stored
+  values are scrubbed from shell tails/audit text on a best-effort basis. Explicit reveal is
+  opt-in, but code receiving a secret can transform or exfiltrate it; review before approval.
 
 ## 1. Table of contents
 
 - [Quick start](#2-quick-start)
 - [MCP client configuration (JSON)](#3-mcp-client-configuration-json)
-- [Tools](#4-tools-37)
+- [Tools](#4-tools-41)
 - [Architecture](#5-architecture)
 - [Security model](#6-security-model)
 - [Benchmark](#7-benchmark)
@@ -62,7 +67,7 @@
 
 | Requirement | Version | Notes |
 |---|---|---|
-| Node.js | ≥ 20.0 | Ships `node:sqlite` (audit inspection) and full ESM |
+| Node.js | ≥ 20.0 | Required runtime; audit storage uses the `better-sqlite3` dependency |
 | Git | any | — |
 
 That's it. There is no external binary to build or download.
@@ -78,7 +83,7 @@ build needed:
 
 ```bash
 npx venira-mcp                        # start the MCP server (stdio)
-npx venira-mcp --version              # print the version (current release: 1.5.4)
+npx venira-mcp --version              # print the version (current release: 1.7.1)
 npx venira-mcp --doctor               # run the preflight suite
 npx venira-mcp --verify               # run the behavioural regression suite
 npx venira-mcp --help                 # list flags + environment variables
@@ -129,8 +134,8 @@ integration over Docker.
 
 ```bash
 npm run smoke    # in-process: list a dir, read package.json, verify path-escape is blocked
-npm run doctor   # 7 preflight checks: workspace, data dir, tool count, health, shell, version
-npm run verify   # end-to-end MCP test suite (~30 checks: cache, batch, shell, audit, modes)
+npm run doctor   # preflight checks: workspace, data dir, tool count, health, shell, version
+npm run verify   # behavioral + security regressions: MCP, shell policy, provider secret guard, GitHub OAuth
 npm run bench    # in-process corehost-tier benchmark (read throughput, batch, parallel)
 npm run bench:mcp# end-to-end MCP benchmark (first call, batch 8, search, health, …)
 ```
@@ -139,7 +144,28 @@ npm run bench:mcp# end-to-end MCP benchmark (first call, batch 8, search, health
 
 ## 3. MCP client configuration (JSON)
 
-### 3.1 OpenCode (`opencode.jsonc` or `.opencode/opencode.jsonc`)
+### 3.1 VS Code (`.vscode/mcp.json`)
+
+To connect without handling a token, ask the agent to **connect GitHub**. It calls
+`project_github_connect` and shows a GitHub verification link and short-lived code. Open the link,
+sign in to GitHub, enter the code, and authorize Venira; then tell the agent you finished so it can
+complete the connection. The access and refresh tokens are saved in the encrypted local Venira
+vault and are never returned to the agent or stored in MCP config. This uses the OAuth `repo` scope
+to support private repositories, which grants broad repository access to the authorized GitHub
+account. The `offline_access` scope enables refreshable tokens when supported by GitHub. Each user authorizes their own GitHub account. Local clients running as the same OS user
+share the default per-user vault; if a client uses a custom `VENIRA_DATA_DIR`, use that same data
+directory for the other clients. For the simplest setup, leave `VENIRA_DATA_DIR` unset so the CLI
+and every client resolve the same OS-specific default (on Windows, `%LOCALAPPDATA%\venira`). If a
+custom directory is required, run `npx venira-mcp --data-dir "<same-path>" --setup-github` and set
+that identical path in every MCP client.
+
+Copilot does not support MCP `inputs` prompts. The workspace config therefore does not request or
+store a token. If you prefer environment-based configuration, set `VENIRA_GIT_TOKEN` in the
+environment that launches the client, then fully restart that client. For a fine-grained token,
+grant only the repository permissions needed (typically Pull requests: read/write and Contents: read).
+For manual local setup, `npx venira-mcp --setup-github` securely prompts for a token in a terminal.
+
+### 3.2 OpenCode (`opencode.jsonc` or `.opencode/opencode.jsonc`)
 
 The simplest form (uses `npx`, no local install needed):
 
@@ -174,22 +200,22 @@ Or point at a local build (after `git clone` + `npm install` + `npm run build`):
         // Root of the workspace. All relative paths resolve against this.
         // Defaults to the server's process.cwd() when unset.
         "VENIRA_WORKSPACE": "C:\\path\\to\\your-project",
-        // Where the audit DB (venira.db) lives. Defaults to <workspace>/data.
+        // Where the audit DB, secrets and approvals live. Defaults to the per-user OS data dir.
         "VENIRA_DATA_DIR": "C:/path/to/data",
         // Lock every path to the workspace. KEEP this unset (or "0") in normal use.
         "VENIRA_UNRESTRICTED": "0",
         // Default shell for project_shell_run: "powershell" | "cmd" | "bash"
         "VENIRA_DEFAULT_SHELL": "powershell",
-        // Shell policy: balanced | strict | permissive | off
+        // Shell policy: balanced | strict | permissive
         "VENIRA_SHELL_MODE": "balanced",
         // Tool permission mode: manual | best_effort | allow_all
         "VENIRA_PERMISSION_MODE": "allow_all",
-        // "full" | "compact" | "summary" (default "full")
+        // "full" | "compact" (default "full")
         "VENIRA_OUTPUT_MODE": "full",
         // Set to "1" for pretty-printed JSON in tool results (costs bytes; leave off for agents).
         "VENIRA_PRETTY": "0",
-        // Enable optional JS execution tool (default "1"). Set "0" to disable.
-        "VENIRA_ALLOW_JS_EXEC": "1",
+        // Enable optional JS execution tool only in trusted workspaces.
+        "VENIRA_ALLOW_JS_EXEC": "0",
         // Set to "1" for fast audit DB mode.
         "VENIRA_AUDIT_FAST": "1",
         // Read cache budget in bytes (default 64 MiB).
@@ -212,7 +238,7 @@ Or point at a local build (after `git clone` + `npm install` + `npm run build`):
 
 > This repo ships a ready-to-edit copy at [`opencode.example.json`](./opencode.example.json).
 
-### 3.2 Claude Desktop / any MCP client (`claude_desktop_config.json` or `.mcp.json`)
+### 3.3 Claude Desktop / any MCP client (`claude_desktop_config.json` or `.mcp.json`)
 
 ```jsonc
 {
@@ -235,26 +261,33 @@ Or point at a local build (after `git clone` + `npm install` + `npm run build`):
 > `"command": "node", "args": ["C:\\path\\to\\venira-mcp\\dist\\server.js"]`
 > instead of `npx`.
 
-### 3.3 Environment variables (full reference)
+**Copy/paste prompt for any MCP client:**
+`Please configure Venira MCP for this workspace using the safest available setup. Detect whether it is installed; if not, add the MCP server with workspace-scoped access, VENIRA_UNRESTRICTED=0, and the correct local/npm command, then verify the connection and report the exact config path and result.`
+`If a config already exists, preserve unrelated servers, merge Venira without overwriting them, and run one harmless read-only tool call to confirm it works.`
+
+### 3.4 Environment variables (full reference)
 
 | Variable | Default | Description |
 |---|---|---|
 | `VENIRA_WORKSPACE` | `process.cwd()` | Root of the workspace. All relative paths resolve against this; absolute paths outside it are rejected unless unrestricted. |
-| `VENIRA_DATA_DIR` | `<workspace>/data` | Where the audit DB (`venira.db`) is created/updated. |
+| `VENIRA_DATA_DIR` | Windows: `%LOCALAPPDATA%\\venira`; macOS: `~/Library/Application Support/venira`; Linux: `~/.local/share/venira` | Where the audit DB, encrypted secrets, approval key and pending approvals are stored. Set an explicit per-user directory when needed. |
+| `VENIRA_SESSION_GRANT_RULES` | `cd_outside_workspace` | Comma-separated additional policy rules that may receive a human-approved session grant. Use sparingly; session grants do not apply to `network_access` or `git_history_rewrite` by default. |
 | `VENIRA_UNRESTRICTED` | `"0"` | `"1"` disables workspace locking (absolute paths anywhere work). **Do not set in production.** |
+| `VENIRA_SECRET_KEYCHAIN` | `"auto"` | On Windows, `"auto"` uses the optional Windows Credential Manager (`keytar`) for new secret-store keys when available; `"off"` forces `secrets.key`; `"required"` fails closed if Credential Manager is unavailable. Existing file-backed stores remain compatible. |
 | `VENIRA_DEFAULT_SHELL` | platform default | `powershell` / `cmd` / `bash` used when `project_shell_run` receives no `shell` argument. |
-| `VENIRA_PERMISSION_MODE` | `"allow_all"` (MCP standalone) | `"manual"` / `"best_effort"` / `"allow_all"` permission mode for coding tool calls. HMAC approval tokens/session grants are scoped to the running process and do not survive a restart. |
+| `VENIRA_PERMISSION_MODE` | `"allow_all"` (MCP standalone) | `"manual"` / `"best_effort"` / `"allow_all"` permission mode for coding tool calls; this is separate from shell policy and does not grant shell overrides. HMAC approval tokens/session grants are scoped to the running process and do not survive a restart. |
 | `VENIRA_ALLOW_JS_EXEC` | `"0"` | `"1"` enables optional `project_execute_js`. Note: `project_execute_js` runs outside shell policy and the workspace lock; review code before enabling. Default off starting v1.7.0. |
-| `VENIRA_SHELL_MODE` | `balanced` | Shell policy mode: `balanced` (deny catastrophes, ask on high risk, allow the rest) · `strict` (allow list + approval for everything else) · `permissive` (only hard denials) · `off` (no policy at all). |
+| `VENIRA_SHELL_MODE` | `balanced` | `balanced` asks on high risk · `strict` uses an allowlist and asks otherwise · `permissive` skips ordinary ask rules. Hard-deny and protected-file rules stay active in every mode; Git history rewrites still ask unless the operator-enabled `ALLOW_GIT_PUSH` override is passed, and `.env` reads need the narrow `ALLOW_ENV_READ` override. Only these three values are accepted. |
+| `VENIRA_SHELL_OVERRIDES` | unset | Operator allowlist for named exceptions: `ALLOW_GIT_PUSH`, `ALLOW_ENV_READ`. Each call must also pass the exact `override` name and a non-empty `reason`; no wildcard/global bypass exists. |
 | `VENIRA_SHELL_POLICY_FILE` | unset | **Explicit** path to a JSON policy (`{ mode, allow[], ask[], deny[] }`). Never read from the workspace, so a cloned repo cannot ship its own permissive policy. |
 | `VENIRA_SHELL_APPROVAL_TTL_MS` | `600000` (10 min) | Lifetime of approval tokens and session grants. |
 | `VENIRA_SHELL_ELICIT` | `"0"` | `"1"` = ask the user through MCP elicitation (when the client supports it) instead of only returning `approval_required`. |
 | `VENIRA_SHELL_MAX_OUTPUT_BYTES` | `1048576` (1 MiB) | Per-stream cap; the excess is dropped and reported as `dropped_bytes`. |
-| `VENIRA_SHELL_MAX_TIMEOUT_MS` | `1800000` (30 min) | Upper bound for `timeout_ms` (0 = no timeout unless the caller asks for one). |
+| `VENIRA_SHELL_MAX_TIMEOUT_MS` | `1800000` (30 min) | Upper bound for `timeout_ms`; unset or `0` uses the default 10-minute shell timeout. |
 | `VENIRA_SHELL_ENV_PASS_ALL` | `"0"` | `"1"` passes the full parent environment to the child. Default: allow list only, so agent secrets never reach a command. |
 | `VENIRA_SHELL_ENV_ALLOW` | unset | Extra comma-separated env var names to pass through (e.g. `GITHUB_TOKEN`). |
 | `VENIRA_DISABLE_TOOLS` | unset | Comma-separated tool names to keep out of `tools/list` entirely (e.g. `project_shell_run,project_delete_path`). |
-| `VENIRA_OUTPUT_MODE` | `full` | `full` = complete payloads · `compact` = summary when >8 KB · `summary` = always trimmed previews. |
+| `VENIRA_OUTPUT_MODE` | `full` | `full` = complete payloads · `compact` = trim payloads over 8 KB. `summary` is no longer accepted. |
 | `VENIRA_PRETTY` | `"0"` | `"1"` = 2-space pretty JSON in tool results. |
 | `VENIRA_SESSION_ID` | auto (`opencode-<pid>-<rand>`) | Session tag; audit rows are grouped by it. Useful for verification / parallel test runs. |
 | `VENIRA_READ_CACHE_BYTES` | `67108864` (64 MiB) | Budget for read + info caches. |
@@ -262,7 +295,6 @@ Or point at a local build (after `git clone` + `npm install` + `npm run build`):
 | `VENIRA_SEARCH_CACHE_MS` | `3000` | TTL for search result cache. |
 | `VENIRA_RECENT_CACHE_MS` | `2000` | TTL for recent-files cache. |
 | `VENIRA_BATCH_ITEM_BYTES` | `524288` (512 KB) | Per-item cap inside `project_read_batch`. |
-| `VENIRA_DEBUG_STARTUP` | `"0"` | `"1"` = startup errors go to stderr instead of the protocol-safe stdout event. |
 | `VENIRA_CACHE_ALL` | `"1"` (on) | P1: `"0"` disables **every** read-side cache (strict "always fresh" mode). |
 | `VENIRA_CACHE_LIST_ONLY` | `"1"` (on) | P1: `"0"` disables only the `list_files` TTL cache. |
 | `VENIRA_CACHE_SEARCH_ONLY` | `"1"` (on) | P1: `"0"` disables only the `search` TTL cache. |
@@ -301,7 +333,7 @@ Or point at a local build (after `git clone` + `npm install` + `npm run build`):
 
 ---
 
-## 4. Tools (40)
+## 4. Tools (41)
 
 Every tool returns the standard envelope ([§8](#8-envelopes-hints--error-codes)):
 
@@ -330,15 +362,15 @@ Every tool returns the standard envelope ([§8](#8-envelopes-hints--error-codes)
 | `project_search` | Search by file name, dir name, literal content, regex, or symbol definition | TTL cache 3 s; respects `glob`, `exclude_glob`, `context_lines`, `count_only` |
 | `project_recent_files` | Files modified recently (SQLite index first, bounded scan fallback) | `source: "index" | "fallback_scan"`; includes `session_edits` — files you wrote in this session |
 | `project_read_batch` | Run up to **8 read-only ops in one call** (`list_files`, `read_file`, `get_file_info`, `search`) | Sequential + cached; response budget enforced per item |
-| `project_health` | Server diagnostics: capability, queue, cache/trace/shell config, active shells, p50/p95 per op, audit DB stats | `include_audit=false` skips the DB query (~2 ms) |
+| `project_health` | Server diagnostics: capability, queue, cache/trace/shell config, active shells, p50/p95 per op, audit DB stats | `include_audit=0` skips the DB query (~2 ms) |
 | `project_read_audit` | Read recent rows from the SQLite audit log (filter by session/operation/outcome) | Bounded; `audit_unavailable` fallback if the DB is locked |
 | `project_trace_status` | Show the most recent traced tool calls + trace config | In-memory ring buffer, no file read |
 
-### 4.2 JS Execution family (code execution, sandboxed by workspace)
+### 4.2 JS Execution family (optional code execution; not sandboxed)
 
 | Tool | Purpose | Notes |
 |---|---|---|
-| `project_execute_js` | Run synchronous JavaScript code; spawns `node` in the workspace with `require` support | `code`: the JS script string (required) · `timeout_ms`: 1–600_000 ms (default 30_000) · `argv`: additional arguments passed to `node` · stdout/stderr tails capped at 1 MiB. Inherits a whitelist env (PATH, HOME, TERM); NODE_PATH points to workspace's `node_modules`. Use for lightweight JS computation, file I/O via `fs`, or quick prototyping. Avoid when you need a shell pipeline or a long-running process (`project_shell_run` is the right tool). The tool has `destructiveHint: true` because code execution can have unexpected side effects. |
+| `project_execute_js` | Run synchronous JavaScript code with Node's permission model | `code`: the JS script string (required) · `timeout_ms`: 1–600_000 ms (default 30_000) · `argv`: additional arguments passed to `node` · stdout/stderr tails capped at 1 MiB. When enabled, filesystem read/write permissions are restricted to the workspace, child-process and worker permissions are not granted, and `HOME`/`USERPROFILE` are blanked; `NODE_PATH` points to the workspace's `node_modules`. This is containment, not a sandbox: review code before enabling and use a container/VM for hostile code. Use for lightweight JS computation or workspace file I/O, not shell pipelines or long-running processes (`project_shell_run` is the right tool). The tool has `destructiveHint: true` because code execution can have unexpected side effects. |
 
 ### 4.3 Code intelligence family (P2/P3, regex/LCS-based, no external indexer)
 
@@ -356,21 +388,22 @@ Every tool returns the standard envelope ([§8](#8-envelopes-hints--error-codes)
 |---|---|---|
 | `project_write_file` | Create / overwrite / append a file | `mode: "create"` errors if file exists; `expected_sha256` guards against blind overwrites; `reason` recorded in the audit log |
 | `project_edit_file` | Replace exact text: one `old_text`/`new_text` pair **or** up to 64 `edits[]` | `replace_all` supported; `expected_sha256` available; `reason` (e.g. "fix null pointer at line 45") recorded in the audit log; **P2 fuzzy edit** (`VENIRA_EDIT_FUZZY=1`): `old_text_fuzzy`, `fuzzy_distance`, `ignore_indentation`, `case_insensitive` args |
+| `project_edit_batch` | Apply multiple `project_edit_file` operations atomically | Stops at the first failure; restores the pre-batch snapshot when possible; response reports `executed`/`skipped` indexes and rollback status |
 | `project_create_directory` | Create a directory tree | `create_parents` defaults to `true`; optional `reason` |
 | `project_create` | Create a **file or directory in one call** | `kind: "file"` requires `content`; `kind: "directory"` ignores `content`; optional `reason` |
-| `project_delete_path` | Delete a file or directory tree | `recursive: true` for directories. **Not undoable.** Optional `reason` |
+| `project_delete_path` | Delete a file or directory tree | `recursive: 1` for directories. **Not undoable.** Optional `reason` |
 
 ### 4.5 Checkpoints (snapshot + rollback, no git)
 
 | Tool | Purpose | Notes |
 |---|---|---|
-| `project_snapshot` | Save the current state before a large edit chain; roll back in one call | `action: "create"` (paths default `["."]`) → `id`; `action: "list"`; `action: "restore"` (`id`, optional `dry_run`, `verify=true`, `delete_extra=false`, `paths[]` filter); `action: "delete"` (`id`) |
+| `project_snapshot` | Save the current state before a large edit chain; roll back in one call | `action: "create"` (paths default `["."]`) → `id`; `action: "list"`; `action: "restore"` (`id`, optional `dry_run=1`, `verify=1`, `delete_extra=0`, `paths[]` filter); `action: "delete"` (`id`) |
 
 Content-addressed and deduplicated: blobs live under `snapshots/blobs/<ab>/<sha256>`, manifests
-(`.json.gz`) under `snapshots/index/<id>.json.gz` in `VENIRA_DATA_DIR` (default `<workspace>/data`).
+(`.json.gz`) under `snapshots/index/<id>.json.gz` in `VENIRA_DATA_DIR` (default: the per-user OS data dir).
 A second checkpoint after a small edit only stores the changed bytes. Restore is atomic per file
 (temp + rename), concurrency 4, sha256-verified by default, and only rewrites paths that were
-captured (it never touches anything else unless `delete_extra=true`, which is capped at 500 files).
+captured (it never touches anything else unless `delete_extra=1`, which is capped at 500 files).
 `.git`, `node_modules`, `dist`, `build`, `.next`, virtualenvs, `__pycache__`, the checkpoint store,
 the audit DB, and the secret store (`secrets.json` / `secrets.key`) are skipped by default; symlinks
 are never followed (and a restore refuses a
@@ -382,7 +415,7 @@ restores into the workspace it was created from; old checkpoints are pruned
 // create  → { id: "snap-20261029-090309-cce15f", file_count: 42, total_bytes: 3312, new_blob_bytes: 3312 }
 project_snapshot({ action: "create", paths: ["src"], label: "before auth refactor", reason: "try a risky refactor" })
 // ...edits...
-project_snapshot({ action: "restore", id: "snap-…", dry_run: true })   // inspect first
+project_snapshot({ action: "restore", id: "snap-…", dry_run: 1 })   // inspect first
 project_snapshot({ action: "restore", id: "snap-…" })                  // roll back
 ```
 
@@ -402,7 +435,7 @@ The provider, API base, token and limits are resolved per call from **call args 
 ```jsonc
 project_pr_create({ title: "Add provider tools", head: "feature/x", reason: "open PR for review" })
 // → { repo: "acme/demo", provider: "github", number: 7, url: "https://github.com/acme/demo/pull/7", state: "open", created: true }
-project_pr_merge({ pr: 7, method: "squash", delete_branch: true })
+project_pr_merge({ pr: 7, method: "squash", delete_branch: 1 })
 ```### 4.7 CI provider: GitHub Actions, GitLab Pipelines, Bitbucket Pipelines
 
 | Tool | Purpose | Notes |
@@ -421,7 +454,8 @@ project_ci_logs({ run_id: 77, tail_lines: 50 })   // or { job_id: 2 } / { run_id
 
 | Tool | Purpose | Notes |
 |---|---|---|
-| `project_secret` | Store / inspect / remove credentials by env-var name, with rotation metadata | `action: "set"` (`value` or **`value_env`** to read it from the host env; optional `expires_in_days` or `expires_at`) · `"get"` (metadata only: `length`, `sha256_12`, `updated_at`, `expires_at`, `expired`, `days_left`, `last_used_at`, `use_count`, `rotated_at`) · `"list"` (same metadata per name) · `"delete"`. `reveal: true` returns plaintext **only** when the host sets `VENIRA_SECRET_ALLOW_REVEAL=1`. |
+| `project_secret` | Store / inspect / remove credentials by env-var name, with rotation metadata | `action: "set"` (`value` or **`value_env`** to read it from the host env; optional `expires_in_days` or `expires_at`) · `"get"` (metadata only: `length`, `sha256_12`, `updated_at`, `expires_at`, `expired`, `days_left`, `last_used_at`, `use_count`, `rotated_at`) · `"list"` (same metadata per name) · `"delete"`. `reveal: 1` returns plaintext **only** when the host sets `VENIRA_SECRET_ALLOW_REVEAL=1`. |
+| `project_github_connect` | Connect or replace the local GitHub account without sending a token through chat | `action: "start"` returns GitHub verification URL/code · `action: "poll"` completes authorization using the opaque `pending_id`; access/refresh tokens are stored in the encrypted local vault and never returned. Uses OAuth `repo offline_access` scopes. |
 
 Rotation is tracked automatically: every successful injection (or provider token read) bumps
 `last_used_at` / `use_count`; a re-`set` is a rotation that overwrites the value, resets the
@@ -437,24 +471,27 @@ is injection, not disclosure:
 project_secret({ action: "set", name: "NPM_TOKEN", value_env: "NPM_TOKEN" })  // value never in the call
 project_shell_run({ command: "npm publish --dry-run", shell: "bash", secret_env: ["NPM_TOKEN"] })
 // → the child gets NPM_TOKEN in its environment; the tool returns secret_env: ["NPM_TOKEN"],
-//   and every stored value is scrubbed from the output tails and the audit text ([REDACTED]).
+//   while direct secret occurrences are scrubbed from output tails/audit text when possible.
 ```
 
 - Names must match `[A-Za-z_][A-Za-z0-9_]{0,63}`; loader-hijacking names (`NODE_OPTIONS`,
   `LD_PRELOAD`, `DYLD_*`, `PYTHONSTARTUP`, `PYTHONPATH`, `BASH_ENV`, `ENV`, `PROMPT_COMMAND`,
   `GIT_SSH_COMMAND`) are rejected.
-- `secret_env` takes ≤ 16 names, is validated **before** the policy gate and decrypted only
-  **after** approval — so a denied command never sees a value.
+- `secret_env` takes ≤ 16 names, is validated **before** the policy gate and always requires
+  explicit human approval, even for an otherwise allowed command. The values are decrypted only
+  **after** approval, so an unreviewed command never receives them. Review any script contents
+  before approving secret injection.
 - Values ≥ 8 chars are redacted from `stdout_tail` / `stderr_tail` and from the audit
-  `command`/`reason` columns. The secret store itself is excluded from checkpoints and
-  `delete_extra`, so a rollback can never copy ciphertext (or the key) elsewhere.
+  `command`/`reason` columns on a best-effort basis. This is not a defense against scripts that
+  encode, transform, or exfiltrate a value; approval requires reviewing the command and script.
+  The secret store itself is excluded from checkpoints and `delete_extra`.
 
 ### 4.9 Diagnostics & read planning (deterministic, no model call)
 
 | Tool | Purpose | Notes |
 |---|---|---|
 | `project_explain_error` | Turn a failure into a cause + next tool calls | Feed `error_text` or `log_tail` (e.g. the tail from `project_ci_logs` / `project_shell_status`). Matches a rule table (POSIX errno, TypeScript/Python/pytest, git, npm, GitHub, venira codes) and returns `matched`, `summary`, `error_line`, `language`, `diagnoses[]` (`rule_id`, `likely_cause`, `suggested_fix[]`, `retry_hint`, `next_actions[]`) and a deduped `next_actions[]`. Unknown signatures return `matched: false` with a triage note — never an error. |
-| `project_plan_read_batch` | Plan which files to read for a task, in one call | `task_description` (one line) → keywords (quoted terms, identifiers, words) → up to 3 bounded **content + file-name** searches → candidates ranked by hits, path/name match and prose weight (+ `files_hint`, + recent edits when the search is thin) → `steps[]` with a **ready-to-send** `project_read_batch` call, calibrated `estimated_ms`. Build/vendor dirs, lockfiles and DB/log/binary artifacts are excluded; README/docs/`*.md` are demoted unless the task mentions docs. `max_files` ≤ 8, `include_search: false` to plan from hints only. |
+| `project_plan_read_batch` | Plan which files to read for a task, in one call | `task_description` (one line) → keywords (quoted terms, identifiers, words) → up to 3 bounded **content + file-name** searches → candidates ranked by hits, path/name match and prose weight (+ `files_hint`, + recent edits when the search is thin) → `steps[]` with a **ready-to-send** `project_read_batch` call, calibrated `estimated_ms`. Build/vendor dirs, lockfiles and DB/log/binary artifacts are excluded; README/docs/`*.md` are demoted unless the task mentions docs. `max_files` ≤ 8, `include_search: 0` to plan from hints only. |
 
 Both are pure local logic: no network, no model, no file contents in the response (the plan points
 at files; you decide which step to run). They exist to cut the "guess → read → repeat" loop that
@@ -474,7 +511,7 @@ project_plan_read_batch({ task_description: "add retry handling to the GitHub cl
 
 | Tool | Purpose | Notes |
 |---|---|---|
-| `project_shell_run` | Run a shell command; returns `run_id` in ~5 ms | `shell`: `powershell` / `cmd` / `bash` · `relative_cwd` · `timeout_ms` (kills the **process tree**) · `secret_env: ["NAME"]` (inject stored secrets as env vars; values never enter the command, audit log or output) · `approval_token` + `approval_scope` for the approval flow. stdout/stderr tails captured in-process with a 1 MiB per-stream cap. P1 UX: `VENIRA_SHELL_TAIL_MAX`, `VENIRA_SHELL_EXIT_EARLY`, `VENIRA_SHELL_TIMEOUT_POLICY` (soft/hard). |
+| `project_shell_run` | Start a shell command; returns `run_id`/`shell_id` immediately by default | `shell`: `powershell` / `cmd` / `bash` · `relative_cwd` · `early_exit: 1` waits for completion and returns bounded full `stdout`/`stderr` in the same call; `0` (default) remains non-blocking and returns tails for polling · `timeout_ms` (kills the **process tree** under hard timeout policy) · `secret_env: ["NAME"]` (inject stored secrets as env vars only after explicit human approval; raw values are not added to command/audit text, output scrubbing is best-effort) · Node script executions also require approval because the policy cannot inspect their effects · `approval_id` for the default human approval flow; `approval_token` + `approval_scope` are legacy compatibility. All captured streams remain capped at 1 MiB each. |
 | `project_shell_status` | Poll a running command | `wait_seconds` 0–30 is an *observation window*, not a timeout. Deliberately **not queued** behind other calls, not audit-logged (prevents orphan "running" rows). Reports `timed_out`, `dropped_bytes` and the policy decision. |
 | `project_shell_cancel` | Kill a running command by `run_id` | Kills the whole tree (`taskkill /T` on Windows, process group on POSIX). Also used at MCP shutdown to avoid orphan processes. |
 | `project_shell_cancel_session` | Cancel **all** shell runs tracked in this session | P1; kills every process tree in the session at once. |
@@ -482,22 +519,24 @@ project_plan_read_batch({ task_description: "add retry handling to the GitHub cl
 `project_shell_run` passes a policy gate before anything is spawned:
 
 ```jsonc
-// 1) The command needs approval: nothing ran, a token comes back.
+// 1) The command needs approval: nothing ran, a pending approval id comes back.
 { "ok": false, "error": { "code": "approval_required", "retryable": false },
   "data": { "rule": "ask.writes_outside_workspace", "reason": "This command writes or deletes outside the workspace.",
-            "approval_token": "v1.1793…​.9xQ…", "expires_at": 1793176040000,
+            "approval_id": "apr_1793176040000_…", "expires_at": 1793176040000,
             "retry_with": { "tool": "project_shell_run", "arguments": { … } } },
-  "hint": "Ask the user to confirm … retry project_shell_run with approval_token=…" }
+  "hint": "Ask the user to run npx venira-mcp --approve <approval_id> in an interactive terminal, then retry with approval_id=…" }
 
-// 2) The user approved: retry once with the token (optionally scope=session).
-project_shell_run({ command: "…", approval_token: "v1.…", approval_scope: "session" })
+// 2) The user approved in a separate terminal: retry once with the approval id.
+project_shell_run({ command: "…", approval_id: "apr_…" })
 ```
 
-Tokens are HMAC-signed, single-use, bound to the session **and** the exact command
-hash, and expire after `VENIRA_SHELL_APPROVAL_TTL_MS`. `approval_scope: "session"`
-additionally grants the same *rule + command head* (e.g. `git push`) for that TTL, so
-an agent is not blocked on every invocation. Catastrophic commands are refused with
-`command_denied` in every mode — no token can unlock them.
+The default flow is human-first: the server creates an approval record, and a human
+approves it with `npx venira-mcp --approve <id>` (add `--session` only when the rule
+allows a session grant). The resulting HMAC grant is single-use, bound to the session,
+exact command hash, shell, cwd, secret names and policy rule, and expires after
+`VENIRA_SHELL_APPROVAL_TTL_MS`. `VENIRA_SHELL_AUTO_APPROVE_TOKEN=1` enables the legacy
+token flow for controlled integrations. Catastrophic commands are refused with
+`command_denied` in every mode — no approval can unlock them.
 
 ### 4.11 How the model is told to pick the right tool
 
@@ -546,16 +585,16 @@ prompt-driven and tool-discovery-driven clients get the same signal.
 venira-mcp/
 ├── server.ts                 # MCP entry point: McpServer + StdioTransport, warm-up, shutdown
 ├── tools/
-│   └── project.ts            # 37 tool registrations, serial queue, caches, shell tracking,
+│   └── project.ts            # 41 tool registrations by default, serial queue, caches, shell tracking,
 │                             #   audit-DB inspection, project_health, code-intelligence,
 │                             #   diagnostics and read-planning handlers
 ├── lib/
 │   ├── corehost.ts           # In-process backend: file I/O, search, async shell,
 │   │                         #   scope capability, SQLite WAL audit (better-sqlite3),
 │   │                         #   fuzzy edit, recent-files index, secret_env injection
-│   ├── git-provider.ts       # GitHub REST + Actions: PR create/comment/merge,
-│   │                         #   CI status/dispatch/logs (in-memory ZIP), repo detection,
-│   │                         #   https-only client with redirect token hygiene
+│   ├── git-provider.ts       # Provider router for GitHub, GitLab and Bitbucket:
+│   │                         #   PR/MR and CI operations, repo detection, https-only client
+│   │                         #   with redirect token hygiene
 │   ├── secrets.ts            # Encrypted secret store (AES-256-GCM, atomic writes),
 │   │                         #   rotation metadata (expiry / last use / use count),
 │   │                         #   expired-secret guard, redaction of values in output/audit
@@ -577,7 +616,7 @@ venira-mcp/
 │   ├── smoke.ts              # In-process backend sanity check
 │   ├── bench.ts              # In-process backend benchmark
 │   ├── bench-mcp.ts          # End-to-end MCP benchmark
-│   ├── verify.ts             # 218 end-to-end checks (cache, batch, shell, audit, modes,
+│   ├── verify.ts             # end-to-end checks (cache, batch, shell, audit, modes,
 │   │                         #   snapshots, secrets/rotation, GitHub PR/CI/check-runs/inline
 │   │                         #   comments against a local mock, diagnostics + read planning)
 │   ├── github-mock.ts        # In-process GitHub API + pre-signed-blob mock (no network, no token)
@@ -619,14 +658,15 @@ This project is intentionally **conservative by default**:
 | **Workspace lock** | ON | `lib/workspace.ts` resolves every path against `VENIRA_WORKSPACE` (or `process.cwd()`). A path that escapes (`../..`, absolute outside root) throws `path_escape`. |
 | **Unrestricted mode** | OFF | `VENIRA_UNRESTRICTED=1` disables the lock (use only when you fully understand the consequences — the agent can read/write anywhere on the machine). |
 | **Shell cwd** | workspace | `project_shell_run` with no `relative_cwd` runs in the workspace root; the command itself is still whatever the agent passes. |
-| **Shell policy** | `balanced` | Hard-coded catastrophes are always denied; risky operations (writes outside workspace, network fetches, package mutation, history rewrite…) require `ask` and receive a single-use, HMAC-signed approval_token. `VENIRA_SHELL_MODE` can be (`strict` / `permissive` / `off`) to adjust granularity. conversation can mark a command known-safe (allow-list) after guidance (the UI does not show raw commands). |
-| **Audit** | ON | Every operation (including failures and cancellations) is written to `project_tool_audit` in a SQLite WAL database. |
+| **Shell policy** | `balanced` | Hard-coded catastrophes and protected credential paths (including redirects and matching globs) are denied; risky operations (writes outside workspace, network fetches, package mutation, Git history rewrites…) require approval. `permissive` skips ordinary ask rules but Git history rewrites still require explicit approval or `ALLOW_GIT_PUSH`. |
+| **Audit** | ON | Auditable operations (including failures, shell runs and cancellations) are written to `project_tool_audit` in a SQLite WAL database when the database is available; audit failures are surfaced. Long-poll observation calls such as `project_shell_status` are intentionally not audit rows. |
 | **`sensitive_result`** | — | The envelope carries `retryable: false` and a "do not retry" hint when content is withheld by policy. |
 | **`expected_sha256`** | opt-in | `project_write_file` / `project_edit_file` / `project_create` accept a content hash; a mismatch aborts with `conflict` — protects against blind overwrites when the agent re-applies an old edit. |
 | **Destructive ops** | labelled | Every mutating tool advertises `destructiveHint: true` in its MCP annotations; `project_delete_path` additionally documents that it is not undoable. |
-| **Network (GitHub/CI)** | opt-in per call, kill switch | Only `project_pr_*` / `project_ci_*` make outbound calls. `VENIRA_NETWORK=0` disables all of them; the API base must be **https** (http only for localhost/tests), so a token is never sent in plaintext. |
-| **Token transport** | header only | The GitHub token travels as an `Authorization` header, never in a command string or a URL. On the pre-signed log-download redirect it is **dropped** because the origin changed. |
-| **Secrets at rest** | AES-256-GCM | Values are encrypted in `secrets.json`; `secrets.key` is `0600` and written atomically. `get`/`list` return metadata only unless `VENIRA_SECRET_ALLOW_REVEAL=1` *and* `reveal=true` are both set. |
+| **Network (provider APIs)** | opt-in per call, kill switch | Built-in `project_pr_*` / `project_ci_*` calls are governed by `VENIRA_NETWORK=0` and require an HTTPS API base (HTTP is allowed for localhost/tests). Shell commands are separate and may access the network when shell policy allows them. |
+| **Token transport** | header only | The configured provider token travels as an `Authorization` header, never in a command string or a URL. On a cross-origin pre-signed log-download redirect it is **dropped** because the origin changed. |
+| **Secrets at rest** | AES-256-GCM | Values are encrypted in `secrets.json`; new Windows installs use the optional Windows Credential Manager backend (`keytar`) when available, while existing/unsupported installs use `secrets.key` (`0600`, atomic). `get`/`list` return metadata only unless `VENIRA_SECRET_ALLOW_REVEAL=1` *and* `reveal=1` are both set. |
+| **Git provider DLP** | fail closed | PR/CI request arguments and final HTTP payloads are scanned locally with Secretlint's recommended rules (including GitHub/GitLab tokens and private keys); known vault and sensitive environment values are also checked. Detected requests are cancelled before sending, provider output with a detected credential is withheld from the AI, and scanner failure blocks the request. A response-side block may follow a completed mutation; do not retry it blindly. |
 | **Secret leakage** | redacted | Stored values (≥ 8 chars) are scrubbed from shell tails and from the audit `command`/`reason` columns; external ops log a summary (`PUT /pulls/7/merge repo=… method=squash`) instead of the body. Checkpoints and `delete_extra` skip the secret store. |
 
 **Threats this does NOT protect against:** a malicious prompt can still instruct the agent to
@@ -644,10 +684,9 @@ still enabling useful workflows:
 
 | Level | What it does | When to use |
 |---|---|---|
-| `balanced` (default) | Never runs a command whose rule is `deny`. Commands matching **ask rules** (writes outside workspace, network access, package mutations, `git push --force`, etc.) return `approval_required` with a signed token. All other commands run. | General interaction with the workspace. |
+| `balanced` (default) | Never runs a command whose rule is `deny`. Commands matching **ask rules** (writes outside workspace, network access, package mutations, container controls, all `git push` operations, etc.) return `approval_required` with a human-approved grant. All other commands run. | General interaction with the workspace. |
 | `strict` | Only commands on the **allow‑list** run without approval. Everything else requires approval. Allows a safe environment when you know exactly what tools an agent can invoke. | High‑value or public workspaces where you want to whitelist allowed tools. |
-| `permissive` | Only the hard-coded `deny` rules block execution. All other commands run immediately. *Caution:* this removes the ask protection. | Internal debugging or trusted agents with strict code review. |
-| `off` | No policy at all. Every shell command runs exactly as written. | Development workspaces where you control the sandbox manually. |
+| `permissive` | Skips ordinary ask rules. Hard-deny and protected-file rules still block commands; Git history rewrites still ask unless the named `ALLOW_GIT_PUSH` override is explicitly enabled and passed. *Caution:* this removes other approval prompts. | Internal debugging or trusted agents with strict code review. |
 
 The exact list of ask / deny rules is documented in `lib/shell-policy.ts` and can be overridden by a JSON file at **`VENIRA_SHELL_POLICY_FILE`**:
 ```jsonc
@@ -658,6 +697,10 @@ The exact list of ask / deny rules is documented in `lib/shell-policy.ts` and ca
   "deny": [{ "command": "sh", "args_regex": ".*\\|.*\\s+curl.*" }]
 }
 ```
+
+`ALLOW_GIT_PUSH` can be enabled by the operator in `VENIRA_SHELL_OVERRIDES` and then passed on a single `git push` call with a non-empty `reason`. `ALLOW_ENV_READ` permits only one simple read of an in-workspace `.env`/`.env.*` file. Both are recorded in the SQLite audit log; neither can be activated by the agent alone. Protected stores, private keys, writes, pipes, redirects, command chains, and hard-deny rules remain blocked.
+
+All Venira boolean environment flags and MCP tool boolean arguments use numeric `0`/`1` only. Legacy spellings such as `true`, `false`, `yes`, or `on` are rejected. Tool arguments are JSON numbers (`1`/`0`), not strings. `project_ci_trigger.inputs` remains provider data and may contain JSON booleans. Existing clients using boolean tool arguments must migrate before upgrading.
 The policy is **never read from the workspace** itself (a cloned repo cannot ship a permissive config).
 
 Approval flow (what the UI sees)
@@ -666,15 +709,18 @@ Approval flow (what the UI sees)
 2. If the result is `deny` → an `approved: false` envelope with `code: "command_denied"` (non‑retryable).
 3. If the result is `ask` → an `approved: false` envelope with:
    - `code: "approval_required"`
-   - `data.approval_token`: HMAC‑signed, bound to the session + command + issue time (expires after `VENIRA_SHELL_APPROVAL_TTL_MS`)
-   - `data.rule` and `data.reason` (human‑readable)
-   - `data.retry_with.tool` and `arguments.approval_token`
-   - optional `data.retry_with.arguments.approval_scope`: `session` upgrades to a TTL grant for the same rule + command head (`git push` ≈ grant for push actions).
-4. The UI can elicit input directly (`VENIRA_SHELL_ELICIT=1` uses `elicitInput` on a client that advertises `elicitation`) or can present a summarized one‑time rule (e.g., "Run `git push`?").
-5. The user confirms. The UI retries `project_shell_run` with `approval_token` and optionally `approval_scope: "session"`.
+   - `data.approval_id`, stored in the per-user data directory
+   - `data.rule` and `data.reason` (human-readable)
+   - `data.retry_with.tool` and `arguments.approval_id`
+   - an HMAC grant bound to the exact command, shell, cwd, sorted `secret_env` and rule
+4. The user approves interactively with `npx venira-mcp --approve <id>` in a real terminal, optionally adding `--session` and `--yes`. `--approve` is deliberately not an agent/tool action.
+5. The UI retries `project_shell_run` with `approval_id`. Session grants are limited to `cd_outside_workspace` unless explicitly extended with `VENIRA_SESSION_GRANT_RULES`; they do not apply to `network_access` or `git_history_rewrite` by default.
+6. Clients advertising MCP elicitation may opt into an interactive prompt with `VENIRA_SHELL_ELICIT=1`. The legacy `VENIRA_SHELL_AUTO_APPROVE_TOKEN=1` mode returns a short-lived token to the model and should only be used in trusted, disposable environments.
 
-Approvals are per‑session, per‑rule, per‑command hash. A token cannot be transferred between sessions.
-`V1.<timestamp>.<HMAC>` format makes the token easy to parse but impossible to forge.
+Approvals are per-session, per-rule, and bound to the exact command, shell, cwd and secret names.
+The approval key and pending/granted files live under `VENIRA_DATA_DIR/approvals`, not under
+`<cwd>/data`. The HMAC prevents forged or cross-command grants; grants are single-use unless a
+human explicitly chooses the allowed session scope.
 
 Runtime hardening (all modes)
 
@@ -720,12 +766,12 @@ These are the only two surfaces that leave the workspace, so they are deliberate
    `value_env` so the value comes from the host environment and never appears in a tool call.
 2. `get` / `list` return **metadata only** — name, byte length, `sha256_12`, `updated_at` — enough
    for an agent to confirm a credential exists without putting it in the transcript.
-3. Plaintext is returned only when the caller passes `reveal=true` **and** the host sets
+3. Plaintext is returned only when the caller passes `reveal=1` **and** the host sets
    `VENIRA_SECRET_ALLOW_REVEAL=1`; otherwise it fails with `reveal_denied`.
-4. `project_shell_run secret_env: ["NAME"]` decrypts **after** the policy gate and adds the value
-   to the child's environment. The command string, the audit row, `stdout_tail`/`stderr_tail` and
-   `project_health` never contain the value; stored values (≥ 8 chars) are replaced with
-   `[REDACTED]`.
+4. `project_shell_run secret_env: ["NAME"]` always requires human approval, then decrypts and adds
+   the value to the child's environment. Direct occurrences in command/audit text and captured
+   output are scrubbed when possible; this cannot prevent a script from encoding or exfiltrating
+   a secret. Review the command and script before approving.
 5. Names are allow-listed (`[A-Za-z_][A-Za-z0-9_]{0,63}`) and loader-hijack names
    (`NODE_OPTIONS`, `LD_PRELOAD`, `DYLD_*`, `PYTHONSTARTUP`, `PYTHONPATH`, `BASH_ENV`, `ENV`,
    `PROMPT_COMMAND`, `GIT_SSH_COMMAND`) are refused. `secrets.json` / `secrets.key` are excluded
@@ -747,26 +793,30 @@ These are the only two surfaces that leave the workspace, so they are deliberate
 
 ## 7. Benchmark
 
-Numbers below are from a Windows 11 / NVMe / Node 20 machine, standalone build, 2026-10-27.
+Numbers below are from the current Windows workspace / Node 24.20.0 run, standalone build, 2026-11-01.
 See [`benchmarks.md`](./benchmarks.md) for the full table and historical comparison.
 
 ### 7.1 End-to-end MCP (`npm run bench:mcp`)
 
 | Scenario | avg | p50 | p95 | max |
 |---|---|---|---|---|
-| **First call** (post warm-up) | — | **2.5 ms** | — | — |
-| `project_read_file` ×50, same file (cached) | 1.93 ms | 1.01 ms | 2.65 ms | 3.07 ms |
-| `project_read_file` ×8, distinct files | 2.37 ms | 1.92 ms | 5.78 ms | 5.78 ms |
-| `project_read_batch` ×3 (8 items each) | **4.18 ms** | 3.71 ms | 6.08 ms | 6.08 ms |
-| `project_get_file_info` ×30 | 1.11 ms | 1.02 ms | 2.63 ms | 2.97 ms |
-| `project_search` ×10 (literal content) | 3.38 ms | 1.26 ms | 21.76 ms | 21.76 ms |
-| `project_read_ranges` (2 ranges) | 3.6 ms | — | — | — |
-| `project_recent_files` | 5.0 ms | — | — | — |
-| `project_health` (no DB query) | **1.8 ms** | — | — | — |
+| **First call** (post warm-up) | — | **113.7 ms** | — | — |
+| `project_read_file` ×50, same file (cached) | 13.14 ms | 8.00 ms | 53.59 ms | 74.48 ms |
+| `project_read_file` ×8, distinct files | 9.50 ms | 8.83 ms | 16.09 ms | 16.09 ms |
+| `project_read_batch` ×3 (8 items each) | **16.55 ms** | 12.83 ms | 26.72 ms | 26.72 ms |
+| `project_get_file_info` ×30 | 11.34 ms | 6.22 ms | 33.39 ms | 69.93 ms |
+| `project_search` ×10 (literal content) | 156.58 ms | 11.45 ms | 1347.66 ms | 1347.66 ms |
+| `project_read_ranges` (2 ranges) | 229.4 ms | — | — | — |
+| `project_recent_files` | 100.6 ms | — | — | — |
+| `project_health` (no DB query) | **28.5 ms** | — | — | — |
 
-> **Reading the batch row:** 8 distinct reads cost **4.2 ms total** as one batch call,
-> vs. ~8 × 2.4 ms ≈ 19 ms issued individually. That is the round-trip saving the decision
+> **Reading the batch row:** 8 distinct reads cost **16.6 ms total** as one batch call,
+> vs. ~8 × 9.5 ms ≈ 76 ms issued individually. That is the round-trip saving the decision
 > tree in [§4.10](#410-how-the-model-is-told-to-pick-the-right-tool) is designed to exploit.
+
+> These are one Windows/Node 24.20.0 observation, not a performance guarantee. Search and
+> process startup are sensitive to host load; use repeated runs on the target machine before
+> comparing releases.
 
 ### 7.2 In-process tier (`npm run bench`)
 
@@ -814,11 +864,25 @@ Every success and every failure is a single JSON object. On failure, the MCP res
 }
 ```
 
+Errors that can be recovered programmatically may also include bounded `data` and
+`next_actions`. For example, `old_text_ambiguous` returns up to five match locations
+with short context; `stale_content` returns the current SHA-256 and mtime. Protected
+path failures never include file contents. The regression suite checks these limits.
+`project_health` also reports repeated failed calls with the same argument fingerprint
+in `audit.loop_failures` (last 10 minutes, bounded to 20 groups); only SHA-256
+fingerprints are stored, never raw arguments.
+It also reports `audit.adoption_runs` when three or more successful single-file reads
+or edits occur consecutively within 60 seconds, suggesting `project_read_batch` or
+`project_edit_batch`; this is observational only and does not alter tool behavior.
+
 | `error.code` | `retryable` | What it means |
 |---|---|---|
 | `not_found` | ✗ | Path does not exist |
 | `invalid_request` | ✗ | Bad argument names/types |
-| `conflict` | ✓ | File changed since read, or edit ambiguous — re-read and retry |
+| `old_text_not_found` | ✗ | Exact edit text is absent — re-read and copy the current text |
+| `old_text_ambiguous` | ✗ | Edit text matches multiple locations — add context or set `replace_all` |
+| `stale_content` | ✗ | `expected_sha256` does not match the current file |
+| `conflict` | ✓ | Legacy conflict code retained for compatible operations |
 | `path_escape` | ✗ | Path outside the workspace (use `VENIRA_UNRESTRICTED=1` to opt out) |
 | `scope_denied` | ✗ | Capability / permission mismatch |
 | `resource_limit` | ✗ | Batch item too large or response budget exhausted — narrow the request |
@@ -846,8 +910,8 @@ etc. The model is expected to read `hint` first.
   that dominated the v0.3.0 (Rust) profile.
 - **Zero install friction.** `npm install && npm run build` is the entire setup. No Rust
   toolchain, no prebuilt binary, no database server.
-- **Correctness of reads.** mtime+size validation means the cache can never serve content
-  that no longer exists on disk (deleted, renamed, or edited externally).
+- **Correctness of reads.** mtime+size validation normally detects external edits or deletes
+  before cached content is returned; it is not a filesystem transaction or watcher.
 - **Self-diagnosis.** `project_health` + `doctor.ts` + `verify.ts` give three independent
   viewpoints: runtime state, preflight, and behavioural regression.
 - **Audit-grade traceability.** Every op, including failures and cancellations, lands in a
@@ -870,8 +934,9 @@ etc. The model is expected to read `hint` first.
   `project_file_index` (maintained on write/edit/delete); when the index is empty it
   falls back to a bounded scan capped at 4 000 files / 300 directories, skipping
   `node_modules`, `target`, `dist`, `.git`, etc.
-- **Shell is tail-only.** `project_shell_run` returns a bounded tail of stdout/stderr, not a
-  live stream. Long outputs are truncated by design.
+- **Shell output is bounded.** The default async response returns bounded stdout/stderr tails,
+  not a live stream. With `early_exit: 1`, the completed response also includes bounded
+  `stdout`/`stderr`; long outputs are still capped by design.
 - **One workspace per server instance.** The workspace, data dir, and permission mode are
   fixed at process start. To serve multiple workspaces concurrently, run multiple instances.
 - **`better-sqlite3` is a native module.** Prebuilt binaries cover the common Node ×
@@ -917,8 +982,8 @@ etc. The model is expected to read `hint` first.
 - **Metrics are ring buffers, not histograms.** `lib/metrics.ts` keeps the last 256
   samples per operation (p50/p95/max/avg). Deliberately tiny: the goal is "what happened
   this session", not "90-day SLO tracking".
-- **Output modes are cheap.** `summary` mode replaces payloads with 8 KB previews + a
-  `summary` object; `compact` only adds a `summary` when the payload exceeds 8 KB. The
+- **Output modes are cheap.** `compact` replaces payloads over 8 KB with previews and a
+  `summary` object. The
   model can request full data back via a follow-up call when it truly needs it.
 - **Shutdown is defensive.** On `SIGINT`/`SIGTERM`/stdin close the server cancels all
   running shells, closes the scope, and marks the audit DB cleanly — no orphans, no stuck WAL.
@@ -931,10 +996,15 @@ etc. The model is expected to read `hint` first.
 npm run build        # type-check + emit dist/
 npm run smoke        # in-process sanity (backend reachable, path lock works)
 npm run doctor       # preflight: 12 checks incl. audit DB, shell smoke, P1 config surface
-npm run verify       # behavioural regression suite (218 checks, ~90 s)
+npm run verify       # behavioral + security regressions: MCP, shell policy, provider-secret guard, GitHub OAuth
+npm run test:policy-corpus # 255 deterministic shell-policy cases
 npm run bench        # in-process numbers
 npm run bench:mcp    # end-to-end numbers
 ```
+
+`better-sqlite3` ships a Node-ABI-specific native addon. Run `npm ci` under each Node
+runtime you use; if you switch Node versions while keeping `node_modules`, rebuild it with
+`npm rebuild better-sqlite3` before testing. Do not copy the compiled addon between runtimes.
 
 **Adding a new tool**
 
@@ -998,10 +1068,12 @@ The full history, in order — from the standalone rewrite to the provider, secr
 
 | Date | Version | Milestone |
 |---|---|---|
+| 2026-11-02 | **Unreleased after v1.7.1** | **GitHub account authorization + provider secret guard.** `project_github_connect` uses GitHub Device Flow and stores access/refresh tokens in the encrypted per-user vault without returning them to the agent; `--setup-github` provides a hidden-terminal fallback for manual PAT entry. GitHub/GitLab credentials and private keys are scanned locally on provider requests/responses, with fail-closed blocking/withholding. `npm run verify` now includes `.env` read denial, `git push --no-verify` approval, secret-guard and OAuth regression tests. |
+| 2026-11-01 | **v1.7.1** | **Security hotfix + shell UX.** Legacy audit schemas with required `created_at` now receive compatible writes; download-to-shell detection covers chained commands; container stop/remove and all `git push` operations require approval; approval documentation now matches the pending CLI/HMAC flow and per-user data directory; `project_shell_run.early_exit` can wait for completion and return bounded final output with `run_id`/`shell_id`. |
 | 2026-10-27 | **v1.0.0** | **Standalone rewrite.** The Rust `corehost` binary and JSON-Lines IPC were replaced by an in-process pure-Node backend (`lib/corehost.ts`). SQLite WAL audit via `better-sqlite3`, async shell with process-tree kill, long-lived capability scope, structured envelopes with hints, validated read caches, batch reads. Ships as `npm i venira-mcp` (no binary, no GUI). |
 | 2026-10-28 | v1.0.1–v1.0.7 | Release plumbing: npm metadata, OIDC trusted publishing, Docker multi-stage image, `--version` / `--help`, doctor works from any directory, zod 4 + MCP SDK 1.32 (security advisory fix), standard `LICENSE-MIT` / `LICENSE-APACHE` filenames, `scripts/` shipped in the image. |
 | 2026-10-28 | v1.1.0 | Shell policy hardening: `balanced` / `strict` / `permissive` / `off`, HMAC-signed single-use approval tokens, session grants, policy file loaded from an explicit env path only (never from the workspace). |
-| 2026-10-28 | v1.1.3 | `project_execute_js` — sandboxed synchronous JS in the workspace (whitelist env, output caps). |
+| 2026-10-28 | v1.1.3 | `project_execute_js` — optional workspace-scoped synchronous JS with whitelist env and output caps. |
 | 2026-10-28 | v1.1.7 | Audit writer compatible with legacy DB schemas (in-place migration instead of failed writes). |
 | 2026-10-28 | v1.1.9 | CLI `--workspace/-w` and `--data-dir` (no config switching), `VENIRA_PERMISSION_MODE`. |
 | 2026-10-28 | **v1.2.0** | P1: cache controls (`VENIRA_CACHE_ALL`, `VENIRA_CACHE_LIST_ONLY`, `VENIRA_CACHE_SEARCH_ONLY`), request tracing (`VENIRA_TRACE` / `project_trace_status`), `project_read_audit`, shell UX (`VENIRA_SHELL_TAIL_MAX`, `VENIRA_SHELL_EXIT_EARLY`, `VENIRA_SHELL_TIMEOUT_POLICY`, `project_shell_cancel_session`). Verify/doctor raised to 25 tools. |
@@ -1106,7 +1178,7 @@ existing artifact/lockfile rules.
   (`tail_lines` default 500, `max_bytes` default 512 KB / cap 4 MB). Nothing is extracted to disk.
 - **Secrets** — `project_secret` (`action: get | set | list | delete`) backed by AES-256-GCM
   (`secrets.json` + `secrets.key`, 0600, atomic writes). `get`/`list` are metadata-only
-  (length + sha256 prefix + update time); plaintext requires `reveal=true` **and**
+  (length + sha256 prefix + update time); plaintext requires `reveal=1` **and**
   `VENIRA_SECRET_ALLOW_REVEAL=1`. `value_env` keeps values out of tool arguments;
   `project_shell_run secret_env=[...]` (≤ 16) injects them after approval. Stored values
   (≥ 8 chars) are scrubbed from shell tails and audit text.
@@ -1178,6 +1250,30 @@ constants into configuration and adds a second and third dialect.
 | 5. Docs + release | README env table + §4.6/§4.7, TODO roadmap, changelog, tag `v1.6.0`. | `build` / `verify` / `doctor` green; release workflow publishes via OIDC. |
 
 ---
+
+### 14.6 Unreleased after v1.7.1 — GitHub authorization and secret guard
+
+- **GitHub Device Flow** — `project_github_connect` starts authorization and returns only a
+  verification URL, short code, and opaque pending ID. The user authorizes Venira directly on
+  GitHub; access/refresh tokens are encrypted in the local per-user vault and never returned to
+  the model. The flow requests `repo offline_access` (broad repository access) and refreshes
+  expiring credentials when supported.
+- **Hidden-terminal token setup** — `npx venira-mcp --setup-github` asks for a PAT with hidden
+  input and confirmation, then stores it in the same encrypted vault. This is a manual fallback,
+  not a chat prompt; clients running as the same OS user can share the default vault.
+- **Provider secret guard** — Secretlint's recommended rules plus GitLab-token detection scan
+  provider arguments, the final HTTP path/body, provider error bodies, and returned tool data.
+  Known vault/sensitive-environment values and their encoded variants are checked too. Unsafe
+  outbound requests are blocked before network access; unsafe output is withheld. Scan failures
+  fail closed. A response-side block can occur after a mutation completed, so the caller must not
+  blindly retry it.
+- **Regression coverage** — `npm run verify` runs the MCP behavior suite, provider-secret-guard,
+  GitHub Device Flow, and isolated shell-security tests. The suite includes `cat .env` (deny) and
+  `git push --no-verify` (human approval required), plus local mock checks that blocked provider
+  content is not sent or returned. It uses a temporary data/vault directory rather than the
+  developer's real per-user vault. Any failed assertion makes the command exit nonzero.
+  These deterministic tests demonstrate the covered cases; they do not prove the shell policy is
+  a sandbox or protect against every encoding/indirection or a compromised host.
 
 > Note: shell policy matches command text; `bash -c`, encodings and indirection can evade it. It is a guardrail, not a sandbox. `VENIRA_PROFILE=core|full` (default full) reduces the registered tool set.
 

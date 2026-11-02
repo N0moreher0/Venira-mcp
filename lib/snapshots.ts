@@ -20,7 +20,7 @@ import { promises as fs, existsSync } from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { gunzipSync, gzipSync } from "node:zlib";
-import { resolveWithin, defaultDataDir } from "./workspace.js";
+import { resolveWithin, activeDataDir } from "./workspace.js";
 import { redactSecrets } from "./shell-policy.js";
 import type { RustResponse } from "./output.js";
 
@@ -54,10 +54,7 @@ const DEFAULT_EXCLUDES = new Set([
 ]);
 
 export function snapshotDataDir(): string {
-  const dataDir = process.env.VENIRA_DATA_DIR
-    ? path.resolve(process.env.VENIRA_DATA_DIR)
-    : defaultDataDir();
-  return path.join(dataDir, SNAPSHOT_DIR_NAME);
+  return path.join(activeDataDir(), SNAPSHOT_DIR_NAME);
 }
 
 function indexPath(id: string): string {
@@ -130,7 +127,30 @@ function validId(value: unknown): string {
       "[invalid_request] Invalid checkpoint id. Use the id returned by project_snapshot (action=create|list).",
     );
   }
+
   return id;
+}
+
+function validateManifest(value: unknown, expectedId: string): SnapshotManifest {
+  if (!value || typeof value !== "object") {
+    throw new Error("[snapshot_corrupt] Checkpoint manifest must be an object.");
+  }
+  const manifest = value as Partial<SnapshotManifest>;
+  if (manifest.version !== 1 || manifest.id !== expectedId || typeof manifest.workspace !== "string" ||
+      !Number.isFinite(manifest.created_at) || !Array.isArray(manifest.files) ||
+      !Array.isArray(manifest.roots) || !Array.isArray(manifest.dirs)) {
+    throw new Error("[snapshot_corrupt] Checkpoint manifest has an invalid header.");
+  }
+  for (const file of manifest.files) {
+    if (!file || typeof file !== "object" || typeof file.path !== "string" ||
+        path.isAbsolute(file.path) || file.path.split(/[\\/]/).includes("..") ||
+        !/^[a-f0-9]{64}$/i.test(file.sha256) ||
+        !Number.isSafeInteger(file.size) || file.size < 0 ||
+        !Number.isFinite(file.mtime_ms)) {
+      throw new Error("[snapshot_corrupt] Checkpoint manifest contains an invalid file entry.");
+    }
+  }
+  return manifest as SnapshotManifest;
 }
 
 /** Keep audit/label text short, single-line and free of secrets. */
@@ -177,7 +197,7 @@ async function readManifest(id: string): Promise<SnapshotManifest> {
   }
   try {
     const json = gunzipSync(raw, { maxOutputLength: 64 * 1024 * 1024 }).toString("utf8");
-    return JSON.parse(json) as SnapshotManifest;
+    return validateManifest(JSON.parse(json), id);
   } catch (error) {
     throw new Error(
       `[snapshot_corrupt] Cannot read checkpoint '${id}' manifest: ${error instanceof Error ? error.message : String(error)}`,

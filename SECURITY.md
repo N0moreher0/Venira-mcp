@@ -35,6 +35,7 @@ deploying:
 - **Cache correctness.** Read/info caches are validated by `mtime + size`,
   so an external edit or delete can never silently serve stale content.
 - **Audit integrity.** Every operation is written to a SQLite WAL table.
+  Legacy databases with a required `created_at` column are supported in place;
   `project_health` surfaces orphan `running` rows as a post-mortem signal.
 - **Native module supply chain.** `better-sqlite3` is the only native
   dependency; its build scripts are allowlisted via `npm approve-scripts`
@@ -85,14 +86,16 @@ directly affected:
 2. **Contain the shell.** If you don't need arbitrary commands, set
    `VENIRA_DEFAULT_SHELL` to a restricted shell, or run the server in a
    container and accept that shell commands execute *inside* it.
-3. **Review the audit trail.** Periodically query `project_tool_audit`
-   (or run `project_health` with `include_audit`) to confirm what the
+3. **Keep shell overrides off by default.** If one is necessary, enable only the named
+   exception and review its per-call reason and `policy_rule` in the audit trail.
+4. **Review the audit trail.** Periodically query `project_tool_audit`
+   (or run `project_health` with `include_audit=1`) to confirm what the
    agent actually did.
-4. **Least-privilege user.** Run the MCP client (and thus this server)
+5. **Least-privilege user.** Run the MCP client (and thus this server)
    as a regular user, not root.
-5. **Update dependencies.** Renovate auto-opens PRs for vulnerability
+6. **Update dependencies.** Renovate auto-opens PRs for vulnerability
    advisories; keep them green.
-6. **Verify checksums** when using the release bundles
+7. **Verify checksums** when using the release bundles
    (`.zip` / `.tgz` / Docker image) — SHA-256 values are published in
    every GitHub Release body.
 
@@ -102,5 +105,10 @@ directly affected:
 |---|---|---|
 | `VENIRA_UNRESTRICTED` | `"0"` | `"1"` removes the workspace lock. Highest-risk setting. |
 | `VENIRA_DEFAULT_SHELL` | platform default | Pick the least-capable shell that meets your needs. |
-| `VENIRA_DATA_DIR` | `<workspace>/data` | Must be writable by the server user; don't point it at a shared dir. |
+| `VENIRA_SHELL_MODE` | `balanced` | `balanced`, `strict`, or `permissive`; hard-deny rules are not disabled by a mode. |
+| `VENIRA_SHELL_OVERRIDES` | unset | Operator allowlist for specific named shell exceptions. Each tool call must pass the exact name and a reason; the reason is redacted and audited, but is not proof of human identity. |
+| `VENIRA_DATA_DIR` | Per-user OS data directory | Contains the audit DB, encrypted secrets, approval key and pending approvals. Keep it private and don't point it at a shared directory. |
+| `VENIRA_SESSION_GRANT_RULES` | `cd_outside_workspace` | Additional rules eligible for human-approved session grants. Do not include network or history-rewrite rules unless the environment is disposable. |
 | `VENIRA_SESSION_ID` | auto | Set it in tests so audit rows are separable. |
+
+Boolean environment flags and boolean-like MCP tool arguments accept only numeric `0` or `1`. Invalid legacy spellings fail explicitly; provider workflow input booleans are data and are not changed.

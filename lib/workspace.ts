@@ -4,22 +4,48 @@
  */
 import path from "node:path";
 import fs from "node:fs";
+import { envFlag } from "./env.js";
 export const PLATFORM = process.platform;
 
 export const WORKSPACE = path.resolve(process.env.VENIRA_WORKSPACE ?? process.cwd());
 
 import os from "node:os";
 export function migrateLegacyDataDirIfNeeded(): void {
-  if (process.env.VENIRA_DATA_DIR) return;
+  if (process.env.VENIRA_DATA_DIR?.trim()) return;
+  const legacy = path.join(WORKSPACE, "data");
+  const modern = defaultDataDir();
+  if (!fs.existsSync(legacy)) return;
+  // Atomically claim `modern`: plain mkdirSync (no recursive) throws EEXIST
+  // if the directory is already there. Several server processes can start
+  // at once (verify spawns many), and the old existsSync-then-cpSync check
+  // was a TOCTOU race -- every process that saw "modern missing" would
+  // re-run cpSync, and a later copy could clobber a sibling process's
+  // venira.db mid-write, silently wiping out audit rows written moments
+  // earlier. Only the process that wins the exclusive mkdir migrates;
+  // everyone else (an already-migrated dir, or a sibling mid-migration)
+  // leaves it alone.
   try {
-    const legacy = path.join(WORKSPACE, "data");
-    const modern = defaultDataDir();
-    if (!fs.existsSync(legacy) || fs.existsSync(modern)) return;
     fs.mkdirSync(path.dirname(modern), { recursive: true });
+    fs.mkdirSync(modern);
+  } catch {
+    return; // modern already exists (real data or a concurrent migration)
+  }
+  try {
     fs.cpSync(legacy, modern, { recursive: true });
   } catch {
     // best-effort; fallback paths remain in place
   }
+}
+
+/** The data directory actually in use (env override, else the per-user default). */
+export function activeDataDir(): string {
+  const env = process.env.VENIRA_DATA_DIR?.trim();
+  return env ? path.resolve(env) : defaultDataDir();
+}
+
+function isInsideDir(child: string, parent: string): boolean {
+  const rel = path.relative(parent, child);
+  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
 }
 
 export function defaultDataDir(): string {
@@ -30,29 +56,55 @@ export function defaultDataDir(): string {
 }
 
 /** VENIRA_UNRESTRICTED=1: disable workspace lock, allow any absolute path (relative paths still resolve from WORKSPACE). */
-export const UNRESTRICTED = ["1", "true", "on", "yes"].includes(
-  (process.env.VENIRA_UNRESTRICTED ?? "").toLowerCase(),
-);
+export const UNRESTRICTED = envFlag("VENIRA_UNRESTRICTED", false);
 
 /** VENIRA_ALLOW_JS_EXEC must be explicitly enabled (default off in v1.7.0). */
-export const ALLOW_JS_EXEC = ["1", "true", "on", "yes"].includes(
-  (process.env.VENIRA_ALLOW_JS_EXEC ?? "").toLowerCase(),
-);
+export const ALLOW_JS_EXEC = envFlag("VENIRA_ALLOW_JS_EXEC", false);
 
 export const PROTECTED_BASENAMES = new Set([
+  "approval.key",
   "secrets.json",
   "secrets.key",
   "venira.db",
   "venira.db-wal",
   "venira.db-shm",
   "venira.db-journal",
+  ".git-credentials",
+  ".netrc",
+  ".npmrc",
+  ".pgpass",
+  "credentials.json",
+]);
+
+const PROTECTED_EXTENSIONS = new Set([
+  ".asc",
+  ".cer",
+  ".crt",
+  ".der",
+  ".gpg",
+  ".jks",
+  ".keystore",
+  ".key",
+  ".p12",
+  ".pem",
+  ".pfx",
 ]);
 
 export function isProtectedPath(absPath: string): boolean {
-  const base = path.basename(absPath).toLowerCase();
+  const canonicalPath = realPathOrSelf(path.resolve(absPath));
+  const base = path.basename(canonicalPath).toLowerCase();
   if (PROTECTED_BASENAMES.has(base)) return true;
   if (base.startsWith("venira.db-")) return true;
   if (base === ".env" || base.startsWith(".env.")) return true;
+  if (PROTECTED_EXTENSIONS.has(path.extname(base))) return true;
+  if (/^id_(rsa|dsa|ecdsa|ed25519)(\.pub)?$/i.test(base)) return true;
+  // Everything under the data dir (approval store + key, audit DB, secrets) is
+  // off-limits to the file tools: the agent must not be able to forge a grant.
+  try {
+    if (isInsideDir(canonicalPath, realPathOrSelf(activeDataDir()))) return true;
+  } catch {
+    /* fall through */
+  }
   return false;
 }
 
@@ -110,12 +162,9 @@ export function resolveWithin(root: string, input: string | undefined): string {
 // ---------------------------------------------------------------------------
 // P1: cache control (VENIRA_CACHE_ALL / VENIRA_CACHE_LIST_ONLY / VENIRA_CACHE_SEARCH_ONLY)
 // ---------------------------------------------------------------------------
-const envFlag = (name: string): boolean =>
-  !["0", "false", "off", "no"].includes((process.env[name] ?? "").toLowerCase());
-
 /** VENIRA_CACHE_ALL=0 disables every read/list/search/recent cache (strict "always fresh" mode). */
-export const CACHE_ALL_ENABLED = envFlag("VENIRA_CACHE_ALL");
+export const CACHE_ALL_ENABLED = envFlag("VENIRA_CACHE_ALL", true);
 /** VENIRA_CACHE_LIST_ONLY=0 disables only the list_files TTL cache. */
-export const CACHE_LIST_ONLY_ENABLED = envFlag("VENIRA_CACHE_LIST_ONLY");
+export const CACHE_LIST_ONLY_ENABLED = envFlag("VENIRA_CACHE_LIST_ONLY", true);
 /** VENIRA_CACHE_SEARCH_ONLY=0 disables only the search TTL cache. */
-export const CACHE_SEARCH_ONLY_ENABLED = envFlag("VENIRA_CACHE_SEARCH_ONLY");
+export const CACHE_SEARCH_ONLY_ENABLED = envFlag("VENIRA_CACHE_SEARCH_ONLY", true);

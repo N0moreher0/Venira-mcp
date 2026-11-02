@@ -13,7 +13,7 @@
  *   - scope open/close (long-lived capability token, TTL 2h)
  *   - audit trail via SQLite (better-sqlite3, WAL mode)
  *
- * The audit DB defaults to `<workspace>/data/venira.db` unless
+ * The audit DB defaults to the per-user OS data directory unless
  * VENIRA_DATA_DIR is set.
  */
 import { spawn, type ChildProcess } from "node:child_process";
@@ -30,6 +30,7 @@ import {
   commandKey,
   commandHash,
   describeShellPolicy,
+  enabledShellOverrides,
   evaluateShellCommand,
   grantSessionApproval,
   hasSessionApproval,
@@ -39,10 +40,19 @@ import {
   recordDecision,
   redactSecrets,
   shellStats,
+  shellOverrideMatches,
   verifyApprovalToken,
+  isShellOverride,
   type Decision,
+  type ShellOverride,
 } from "./shell-policy.js";
-import { WORKSPACE, PLATFORM, resolveWithin, isProtectedPath, defaultDataDir } from "./workspace.js";
+import {
+  editMatchLocations,
+  levenshtein,
+  normalizeForFuzzy,
+} from "./file-ops-helpers.js";
+import * as approvals from "./approvals.js";
+import { WORKSPACE, PLATFORM, resolveWithin, isProtectedPath, activeDataDir } from "./workspace.js";
 import {
   opSnapshotCreate,
   opSnapshotDelete,
@@ -72,17 +82,21 @@ import {
   redactSecretValues,
   setSecret,
 } from "./secrets.js";
+import { GithubDeviceFlow } from "./github-device-flow.js";
+import { envChoice, envFlag } from "./env.js";
 
 // ---------------------------------------------------------------------------
-// Audit (SQLite WAL)
 // ---------------------------------------------------------------------------
 
 let auditDb: Database.Database | null = null;
+let auditColumns: Set<string> | null = null;
+
+function auditStrict(): boolean {
+  return envFlag("VENIRA_AUDIT_STRICT", false);
+}
 
 function auditDbPath(): string {
-  const dataDir =
-    process.env.VENIRA_DATA_DIR ?? defaultDataDir();
-  return path.join(dataDir, "venira.db");
+  return path.join(activeDataDir(), "venira.db");
 }
 
 function ensureAuditDb(): Database.Database | null {
@@ -122,6 +136,9 @@ function ensureAuditDb(): Database.Database | null {
       ["command", "TEXT"],
       ["approver", "TEXT"],
       ["reason", "TEXT"],
+      ["prev_hash", "TEXT"],
+      ["row_hash", "TEXT"],
+      ["args_hash", "TEXT"],
     ] as const) {
       if (!columns.has(name)) auditDb.exec(`ALTER TABLE project_tool_audit ADD COLUMN ${name} ${type}`);
     }
@@ -146,6 +163,16 @@ function ensureAuditDb(): Database.Database | null {
     ] as const) {
       if (!indexColumns.has(name)) auditDb.exec(`ALTER TABLE project_file_index ADD COLUMN ${name} ${type}`);
     }
+    // R8 retention + VACUUM (best-effort)
+    try {
+      const days = Number(process.env.VENIRA_AUDIT_KEEP_DAYS ?? 90);
+      if (Number.isFinite(days) && days > 0) {
+        const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+        auditDb.prepare("DELETE FROM project_tool_audit WHERE started_at < ?").run(cutoff);
+        auditDb.prepare("DELETE FROM project_file_index WHERE updated_at < ?").run(cutoff);
+        auditDb.exec("VACUUM;");
+      }
+    } catch { /* best-effort */ }
     return auditDb;
   } catch (error) {
     console.error(
@@ -171,15 +198,32 @@ type AuditRow = {
   approver?: string | null;
   /** Free-text "why" supplied by the caller (edit/write/delete/snapshot). */
   reason?: string | null;
+  args_hash?: string | null;
 };
 
 function auditInsert(row: AuditRow): void {
   const db = ensureAuditDb();
-  if (!db) return;
+  if (!db) {
+    if (auditStrict()) throw new Error("[audit_unavailable] audit database unavailable and VENIRA_AUDIT_STRICT=1");
+    return;
+  }
   try {
-    const columns = new Set(
-      (db.prepare("PRAGMA table_info(project_tool_audit)").all() as Array<{ name: string }>).map((c) => c.name),
-    );
+    if (!auditColumns) {
+      auditColumns = new Set(
+        (db.prepare("PRAGMA table_info(project_tool_audit)").all() as Array<{ name: string }>).map((c) => c.name),
+      );
+    }
+    const columns = auditColumns;
+    let prevHash = "";
+    if (columns.has("prev_hash") || columns.has("row_hash")) {
+      try {
+        const last = db.prepare("SELECT row_hash FROM project_tool_audit ORDER BY id DESC LIMIT 1").get() as { row_hash?: string } | undefined;
+        prevHash = last?.row_hash ?? "";
+      } catch { /* ignore */ }
+    }
+    const rowHash = columns.has("row_hash")
+      ? crypto.createHash("sha256").update(prevHash + "|" + JSON.stringify(row)).digest("hex")
+      : "";
     const entries: Array<[string, unknown]> = [
       ["session_id", row.session_id],
       ["project_id", row.project_id],
@@ -187,16 +231,27 @@ function auditInsert(row: AuditRow): void {
       ["outcome", row.outcome],
       ["reason_code", row.reason_code ?? "running"],
       ["request_id", row.request_id ?? null],
+      // started_at is NOT NULL in the schema; it was dropped from this list
+      // during the legacy-schema adaptation (9ff1d46), which made every
+      // audit INSERT fail with a NOT NULL constraint error -- silently
+      // swallowed outside VENIRA_AUDIT_STRICT=1, so the audit table stayed
+      // empty with no visible error.
+      ["started_at", row.started_at],
       ["completed_at", row.completed_at ?? null],
       ["decision", row.decision ?? null],
       ["policy_rule", row.policy_rule ?? null],
       ["command", row.command ?? null],
       ["approver", row.approver ?? null],
       ["reason", row.reason ?? null],
+      ["args_hash", row.args_hash ?? null],
     ];
-    if (columns.has("started_at")) entries.push(["started_at", row.started_at]);
+    // Older per-user databases used created_at as the required timestamp
+    // instead of started_at. Keep writing it when that legacy column exists;
+    // otherwise SQLite rejects the whole insert before the modern columns can
+    // be stored.
     if (columns.has("created_at")) entries.push(["created_at", row.started_at]);
-    if (columns.has("elapsed_ms")) entries.push(["elapsed_ms", row.elapsed_ms ?? null]);
+    if (columns.has("prev_hash")) entries.push(["prev_hash", prevHash || null]);
+    if (columns.has("row_hash")) entries.push(["row_hash", rowHash || null]);
     const colNames = entries.map(([c]) => c).join(", ");
     const placeholders = entries.map(([c]) => `@${c}`).join(", ");
     const params = Object.fromEntries(entries);
@@ -204,9 +259,9 @@ function auditInsert(row: AuditRow): void {
       `INSERT INTO project_tool_audit (${colNames}) VALUES (${placeholders})`,
     ).run(params);
   } catch (error) {
-    console.error(
-      `[corehost] audit write failed: ${error instanceof Error ? error.message : String(error)}`,
-    );
+    const msg = error instanceof Error ? error.message : String(error);
+    if (auditStrict()) throw new Error(`[audit_unavailable] audit write failed: ${msg}`);
+    console.error(`[corehost] audit write failed: ${msg}`);
   }
 }
 
@@ -221,6 +276,7 @@ function auditStart(
     command?: string;
     approver?: string;
     reason?: string;
+    args_hash?: string;
   } = {},
 ): number {
   const startedAt = Date.now();
@@ -236,6 +292,7 @@ function auditStart(
     command: extra.command ?? null,
     approver: extra.approver ?? null,
     reason: extra.reason ?? null,
+    args_hash: extra.args_hash ?? null,
   });
   return startedAt;
 }
@@ -263,7 +320,10 @@ function auditFinish(
 ): void {
   const completedAt = Date.now();
   const db = ensureAuditDb();
-  if (!db) return;
+  if (!db) {
+    if (auditStrict()) throw new Error("[audit_unavailable] audit database unavailable and VENIRA_AUDIT_STRICT=1");
+    return;
+  }
   try {
     db.prepare(
       `UPDATE project_tool_audit
@@ -277,7 +337,11 @@ function auditFinish(
       request_id: requestId,
       session_id: sessionId,
     });
-  } catch {
+  } catch (error) {
+    if (auditStrict()) {
+      const msg = error instanceof Error ? error.message : String(error);
+      throw new Error(`[audit_unavailable] audit finish failed: ${msg}`);
+    }
     /* audit DB may have been closed */
   }
 }
@@ -289,7 +353,10 @@ function auditDecision(
   extra: { decision?: string; policy_rule?: string; command?: string; approver?: string },
 ): void {
   const db = ensureAuditDb();
-  if (!db) return;
+  if (!db) {
+    if (auditStrict()) throw new Error("[audit_unavailable] audit database unavailable and VENIRA_AUDIT_STRICT=1");
+    return;
+  }
   try {
     db.prepare(
       `UPDATE project_tool_audit
@@ -303,7 +370,11 @@ function auditDecision(
       request_id: requestId,
       session_id: sessionId,
     });
-  } catch {
+  } catch (error) {
+    if (auditStrict()) {
+      const msg = error instanceof Error ? error.message : String(error);
+      throw new Error(`[audit_unavailable] audit decision update failed: ${msg}`);
+    }
     /* audit DB may have been closed */
   }
 }
@@ -374,6 +445,7 @@ type ShellRun = {
   exit_code: number | null;
   cancelled: boolean;
   started_at: number;
+  finished_at?: number;
   /** Policy decision that authorised this run (audit + status output). */
   decision: { tier: string; rule: string; reason: string; approver: string | null };
   /** Requested timeout (0 = none). */
@@ -385,6 +457,23 @@ type ShellRun = {
   timer: NodeJS.Timeout | null;
 };
 
+// R4: prune finished shellRuns older than 30 min, keep at most 64 finished.
+function pruneShellRuns(): void {
+  const cutoff = Date.now() - 30 * 60 * 1000;
+  const finished: string[] = [];
+  for (const [id, run] of shellRuns) {
+    if (!run.running && run.started_at < cutoff) finished.push(id);
+  }
+  for (const id of finished) shellRuns.delete(id);
+  // cap finished
+  const finishedAll = [...shellRuns.entries()].filter(([, r]) => !r.running);
+  if (finishedAll.length > 64) {
+    finishedAll.sort((a, b) => (a[1].finished_at ?? 0) - (b[1].finished_at ?? 0));
+    const excess = finishedAll.length - 64;
+    for (let i = 0; i < excess; i++) shellRuns.delete(finishedAll[i][0]);
+  }
+}
+
 const shellRuns = new Map<string, ShellRun>();
 const TAIL_LIMIT = (() => {
   const value = Number(process.env.VENIRA_SHELL_TAIL_MAX);
@@ -392,13 +481,11 @@ const TAIL_LIMIT = (() => {
 })();
 /** VENIRA_SHELL_EXIT_EARLY=1: pollers return immediately when the exit code is
  * already known, without waiting out the full wait_seconds window. */
-export const SHELL_EXIT_EARLY = ["1", "true", "on", "yes"].includes(
-  (process.env.VENIRA_SHELL_EXIT_EARLY ?? "").toLowerCase(),
-);
+export const SHELL_EXIT_EARLY = envFlag("VENIRA_SHELL_EXIT_EARLY", false);
 /** VENIRA_SHELL_TIMEOUT_POLICY=soft (default): an expired command only warns and is
  * left to finish; =hard: kill the whole process tree at the timeout. */
 export const SHELL_TIMEOUT_POLICY: "soft" | "hard" =
-  process.env.VENIRA_SHELL_TIMEOUT_POLICY === "hard" ? "hard" : "soft";
+  envChoice("VENIRA_SHELL_TIMEOUT_POLICY", "soft", ["soft", "hard"]);
 
 /** Hard cap per stream; keeps a runaway build from exhausting server memory. */
 const MAX_OUTPUT_BYTES = (() => {
@@ -406,7 +493,7 @@ const MAX_OUTPUT_BYTES = (() => {
   return Number.isFinite(value) && value > 0 ? value : 1024 * 1024;
 })();
 
-/** Upper bound for a caller-supplied timeout_ms (default: 30 minutes). */
+/** Upper bound for a caller-supplied timeout_ms; shell runs default to 10 minutes. */
 const MAX_TIMEOUT_MS = (() => {
   const value = Number(process.env.VENIRA_SHELL_MAX_TIMEOUT_MS);
   return Number.isFinite(value) && value > 0 ? value : 30 * 60 * 1000;
@@ -415,6 +502,12 @@ const MAX_TIMEOUT_MS = (() => {
 function trimTail(buffer: string): string {
   if (buffer.length <= TAIL_LIMIT) return buffer;
   return buffer.slice(-TAIL_LIMIT);
+}
+
+function isEarlyExit(value: unknown): boolean {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
+  return false;
 }
 
 /** Append with a byte cap; returns true when bytes were dropped. */
@@ -443,7 +536,7 @@ const BASE_ENV_ALLOW = [
 ];
 
 function buildShellEnv(overrides: Record<string, string> = {}): NodeJS.ProcessEnv {
-  if (process.env.VENIRA_SHELL_ENV_PASS_ALL === "1") {
+  if (envFlag("VENIRA_SHELL_ENV_PASS_ALL", false)) {
     return { ...process.env, ...overrides };
   }
   const extra = (process.env.VENIRA_SHELL_ENV_ALLOW ?? "")
@@ -489,28 +582,21 @@ function normalizeSecretEnv(value: unknown): string[] {
  */
 function killTree(child: ChildProcess | null): void {
   if (!child || child.pid === undefined) return;
+  recordApproval("killed_tree");
   if (PLATFORM === "win32") {
     try {
       spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
-      return;
     } catch {
       /* fall through to child.kill */
+      try { child.kill("SIGKILL"); } catch { /* already gone */ }
     }
   } else {
     try {
-      // The child was spawned detached, so it leads its own process group.
       process.kill(-child.pid, "SIGKILL");
-      return;
     } catch {
-      /* fall back */
+      try { child.kill("SIGKILL"); } catch { /* already gone */ }
     }
   }
-  try {
-    child.kill("SIGKILL");
-  } catch {
-    /* already gone */
-  }
-  recordApproval("killed_tree");
 }
 
 /** Snapshot of policy + runtime counters for project_health. */
@@ -538,19 +624,35 @@ function resolveInWorkspace(input: string | undefined, root: string): string {
   return resolveWithin(root, input);
 }
 
+type ErrorWithData = Error & { data?: unknown };
+
+function errorWithData(code: string, message: string, data: unknown): ErrorWithData {
+  const error = new Error(`[${code}] ${message}`) as ErrorWithData;
+  error.data = data;
+  return error;
+}
+
 async function opReadFile(
   args: Record<string, unknown>,
   root: string,
 ): Promise<RustResponse> {
   const absPath = resolveInWorkspace(args.relative_path as string, root);
-  if (isProtectedPath(absPath)) {
+  let canonicalPath: string;
+  try {
+    canonicalPath = await fs.realpath(absPath);
+  } catch {
+    throw new Error(
+      `[not_found] Path does not exist: ${args.relative_path}. Hint: check with project_list_files.`,
+    );
+  }
+  if (isProtectedPath(canonicalPath)) {
     throw new Error(
       `[sensitive_result] Path is protected by policy: ${args.relative_path}. Hint: this file contains secrets or the audit DB and cannot be read via path ops.`,
     );
   }
   let stat;
   try {
-    stat = await fs.stat(absPath);
+    stat = await fs.stat(canonicalPath);
   } catch {
     throw new Error(
       `[not_found] Path does not exist: ${args.relative_path}. Hint: check with project_list_files.`,
@@ -568,10 +670,10 @@ async function opReadFile(
 
   let content: string;
   try {
-    content = await fs.readFile(absPath, "utf8");
+    content = await fs.readFile(canonicalPath, "utf8");
   } catch (error) {
     throw new Error(
-      `[io_error] Cannot read ${absPath}: ${error instanceof Error ? error.message : String(error)}. Hint: file may be locked.`,
+      `[io_error] Cannot read ${canonicalPath}: ${error instanceof Error ? error.message : String(error)}. Hint: file may be locked.`,
     );
   }
 
@@ -747,6 +849,9 @@ async function opSearch(
 
   // Simple glob-to-regex (supports *, ?, [seq])
   function globToRegex(g: string): RegExp {
+    if (g.length > 256) {
+      throw new Error("[resource_limit] glob is too long; limit it to 256 characters.");
+    }
     let re = "";
     for (const ch of g) {
       if (ch === "*") re += ".*";
@@ -823,6 +928,11 @@ async function opSearch(
     const useRegex = args.regex === true;
     let contentRe: RegExp | null = null;
     if (useRegex) {
+      if (query.length > 512 || /(?:\([^)]*[+*][^)]*\)|\[[^\]]+\][+*])[+*{]/.test(query)) {
+        throw new Error(
+          "[resource_limit] Regex is too complex for bounded search. Hint: use a shorter, non-nested pattern or literal_content.",
+        );
+      }
       try {
         contentRe = new RegExp(query, caseSensitive ? "" : "i");
       } catch (error) {
@@ -895,7 +1005,7 @@ async function opSearch(
         files_matched: filesMatched,
         hint:
           hits.length === 0
-            ? "No matches. Broaden the search: drop glob/relative_path, set regex=false, or use kind=file_name."
+            ? "No matches. Broaden the search: drop glob/relative_path, set regex=0, or use kind=file_name."
             : undefined,
       },
     },
@@ -910,6 +1020,26 @@ async function opWriteFile(
   if (isProtectedPath(absPath)) {
     throw new Error(`[sensitive_result] Path is protected by policy: ${args.relative_path}. Hint: do not write protected files.`);
   }
+  // Enforce expected_sha256 (anti-overwrite guard): compare against current
+  // file content before mutating.
+  const expectedSha = args.expected_sha256;
+  if (typeof expectedSha === "string" && expectedSha) {
+    let current = "";
+    try {
+      const buf = await fs.readFile(absPath);
+      current = crypto.createHash("sha256").update(buf).digest("hex");
+    } catch {
+      /* file may not exist: treat as empty hash */
+    }
+    if (current !== String(expectedSha).toLowerCase()) {
+      throw errorWithData(
+        "stale_content",
+        `sha256 hiện tại (${current.slice(0, 12)}…) khác expected_sha256. Hint: đọc lại file rồi thử lại.`,
+        { sha256: current || null, expected_sha256: String(expectedSha).toLowerCase() },
+      );
+    }
+  }
+
   const content = args.content as string;
   const mode = (args.mode as string | undefined) ?? "overwrite";
   const createDirs = args.create_dirs === true;
@@ -933,19 +1063,32 @@ async function opWriteFile(
     } catch (error) {
       throw new Error(`[io_error] ${error instanceof Error ? error.message : String(error)}`);
     }
-  } else {
+    // R11: update recent-files index on append
+    recordRecentFile(absPath, root);
     try {
-      await fs.writeFile(absPath, content, "utf8");
+      await fs.stat(absPath).then((s) => recordRecentFileMeta(absPath, s));
+    } catch { /* best-effort */ }
+  } else {
+    // R1: atomic write (temp + fsync + rename); mode:"create" guarded by existsSync check above.
+    const dir = path.dirname(absPath);
+    const tmp = path.join(dir, `.venira-tmp-${process.pid}-${Date.now()}`);
+    try {
+      await fs.writeFile(tmp, content, "utf8");
+      try {
+        const fh = await fs.open(tmp, "r+");
+        await fh.sync();
+        await fh.close();
+      } catch { /* best-effort */ }
+      await fs.rename(tmp, absPath);
     } catch (error) {
+      try { await fs.unlink(tmp); } catch { /* ignore */ }
       throw new Error(`[io_error] ${error instanceof Error ? error.message : String(error)}`);
     }
-
     // P2: Update recent-files index
     recordRecentFile(absPath, root);
     try {
       await fs.stat(absPath).then((s) => recordRecentFileMeta(absPath, s));
     } catch { /* best-effort */ }
-
   }
 
   let sha256After = "";
@@ -987,7 +1130,7 @@ async function opEditFile(
   const replaceAll = args.replace_all === true;
   
   // P2: Fuzzy edit support
-  const fuzzyEnabled = (process.env.VENIRA_EDIT_FUZZY ?? "") === "1";
+  const fuzzyEnabled = envFlag("VENIRA_EDIT_FUZZY", false);
   const fuzzyDistance = Number(args.fuzzy_distance ?? 3);
   const ignoreIndentation = args.ignore_indentation === true;
   const caseInsensitive = args.case_insensitive === true;
@@ -1006,6 +1149,17 @@ async function opEditFile(
     throw new Error(`[not_found] File does not exist: ${args.relative_path}. Hint: create it with project_write_file first.`);
   }
 
+  // R2: detect BOM + EOL style of the file.
+  const hadBom = content.startsWith("\ufeff");
+  const body = hadBom ? content.slice(1) : content;
+  const eol = body.includes("\r\n") ? "\r\n" : "\n";
+  const eolLabel = eol === "\r\n" ? "crlf" : "lf";
+  // work on body without BOM; normalize line endings internally (keep original eol in body)
+  content = body;
+
+  // helper to normalize incoming text line endings to the file's EOL
+  const normalizeEol = (s: string) => s.replace(/\r\n|\r|\n/g, eol);
+
   let sha256Before = "";
   try {
     sha256Before = crypto.createHash("sha256").update(Buffer.from(content, "utf8")).digest("hex");
@@ -1013,16 +1167,43 @@ async function opEditFile(
     /* best-effort */
   }
 
+  // Enforce expected_sha256 (anti-overwrite guard).
+  const expectedSha2 = args.expected_sha256;
+  if (typeof expectedSha2 === "string" && expectedSha2) {
+    if (sha256Before !== String(expectedSha2).toLowerCase()) {
+      throw errorWithData(
+        "stale_content",
+        `sha256 hiện tại (${sha256Before.slice(0, 12)}…) khác expected_sha256. Hint: đọc lại file rồi thử lại.`,
+        {
+          sha256: sha256Before || null,
+          expected_sha256: String(expectedSha2).toLowerCase(),
+          mtime_ms: (await fs.stat(absPath)).mtimeMs,
+        },
+      );
+    }
+  }
+
   let replacements = 0;
   let usedFuzzy = false;
   for (const edit of editList) {
-    const { old_text, new_text, replace_all } = edit;
+    const old_text = normalizeEol(edit.old_text as string);
+    const new_text = normalizeEol((edit.new_text ?? "") as string);
+    const replace_all = edit.replace_all;
+    if (typeof old_text !== "string" || old_text.length === 0) {
+      throw new Error(`[invalid_request] old_text must be a non-empty string (field: ${args.relative_path}).`);
+    }
     if (old_text === new_text) continue;
     if (!(replace_all || replaceAll)) {
       const occurrences = (content.split(old_text).length - 1);
       if (occurrences > 1) {
-        throw new Error(
-          `[old_text_ambiguous] old_text matches ${occurrences} locations in ${args.relative_path}. Extend old_text to include more context or set replace_all=true.`,
+        throw errorWithData(
+          "old_text_ambiguous",
+          `old_text matches ${occurrences} locations in ${args.relative_path}. Extend old_text to include more context or set replace_all=true.`,
+          {
+            occurrences,
+            matches: editMatchLocations(content, old_text),
+            suggestion: "extend old_text with surrounding context or set replace_all=true",
+          },
         );
       }
     }
@@ -1039,11 +1220,11 @@ async function opEditFile(
     }
     
     if (idx === -1) {
-      const __err: any = new Error(
-        `[old_text_not_found] old_text not found in ${args.relative_path}. Hint: re-read the file to confirm the exact text.${fuzzyEnabled ? " (Fuzzy edit enabled with distance " + fuzzyDistance + ")" : ""}`,
+      throw errorWithData(
+        "old_text_not_found",
+        `old_text not found in ${args.relative_path}. Hint: re-read the file to confirm the exact text.${fuzzyEnabled ? " (Fuzzy edit enabled with distance " + fuzzyDistance + ")" : ""}`,
+        { occurrences: 0, suggestion: "re-read file and copy exact old_text" },
       );
-      __err.data = { occurrences: 0, suggestion: "re-read file and copy exact old_text" };
-      throw __err;
     }
     if (replace_all || replaceAll) {
       const parts = content.split(old_text);
@@ -1055,9 +1236,22 @@ async function opEditFile(
     }
   }
 
+  // Prepend BOM if original had it
+  const finalContent = hadBom ? "\ufeff" + content : content;
+
+  // R1: atomic write
+  const dir = path.dirname(absPath);
+  const tmp = path.join(dir, `.venira-tmp-${process.pid}-${Date.now()}`);
   try {
-    await fs.writeFile(absPath, content, "utf8");
+    await fs.writeFile(tmp, finalContent, "utf8");
+    try {
+      const fh = await fs.open(tmp, "r+");
+      await fh.sync();
+      await fh.close();
+    } catch { /* best-effort */ }
+    await fs.rename(tmp, absPath);
   } catch (error) {
+    try { await fs.unlink(tmp); } catch { /* ignore */ }
     throw new Error(`[io_error] ${error instanceof Error ? error.message : String(error)}`);
   }
 
@@ -1178,40 +1372,6 @@ function findFuzzyMatch(
 }
 
 /** Normalize for fuzzy matching: collapse whitespace, optionally lowercase. */
-function normalizeForFuzzy(text: string, ignoreIndentation: boolean, caseInsensitive: boolean): string {
-  let s = text;
-  if (ignoreIndentation) {
-    // Collapse leading whitespace
-    s = s.replace(/^\s+/, "").replace(/\n/g, "\n").replace(/( +)(\t)/g, "$2");
-  } else {
-    // Collapse consecutive whitespace
-    s = s.replace(/\s+/g, " ").trim();
-  }
-  if (caseInsensitive) s = s.toLowerCase();
-  return s;
-}
-
-/** Simple O(n*m) Levenshtein distance for two strings. */
-function levenshtein(a: string, b: string): number {
-  const n = a.length;
-  const m = b.length;
-  if (n === 0) return m;
-  if (m === 0) return n;
-  const dp: number[][] = Array.from({ length: n + 1 }, () => new Array<number>(m + 1).fill(0));
-  for (let i = 0; i <= n; i++) dp[i][0] = i;
-  for (let j = 0; j <= m; j++) dp[0][j] = j;
-  for (let i = 1; i <= n; i++) {
-    for (let j = 1; j <= m; j++) {
-      dp[i][j] = Math.min(
-        dp[i - 1][j] + 1,          // deletion
-        dp[i][j - 1] + 1,          // insertion
-        dp[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1), // substitution
-      );
-    }
-  }
-  return dp[n][m];
-}
-
 async function opCreateDirectory(
   args: Record<string, unknown>,
   root: string,
@@ -1256,7 +1416,7 @@ async function opDeletePath(
 
   if (stat.isDirectory() && !recursive) {
     throw new Error(
-      `[invalid_request] Directory requires recursive=true: ${args.relative_path}.`,
+      `[invalid_request] Directory requires recursive=1: ${args.relative_path}.`,
     );
   }
 
@@ -1343,8 +1503,8 @@ function shellCommandFor(shell: string, command: string): { file: string; args: 
 }
 
 function clampTimeout(value: unknown): number {
-  const raw = Number(value ?? 0);
-  if (!Number.isFinite(raw) || raw <= 0) return 0;
+  const raw = value === undefined || value === null || value === "" ? 600_000 : Number(value);
+  if (!Number.isFinite(raw) || raw <= 0) return 600_000;
   return Math.min(Math.floor(raw), MAX_TIMEOUT_MS);
 }
 
@@ -1361,15 +1521,59 @@ async function opShellRun(
   const cwd = resolveInWorkspace(args.relative_cwd as string | undefined, root);
   const runId = crypto.randomUUID().slice(0, 12);
   const secretNames = normalizeSecretEnv(args.secret_env);
+  let override: ShellOverride | undefined;
+  if (args.override !== undefined) {
+    if (!isShellOverride(args.override)) {
+      throw new Error("[invalid_request] override must be ALLOW_GIT_PUSH or ALLOW_ENV_READ.");
+    }
+    override = args.override;
+    const reason = typeof args.reason === "string" ? args.reason.trim() : "";
+    if (!reason || reason.length > 400) {
+      throw new Error("[invalid_request] A non-empty reason of at most 400 characters is required with override.");
+    }
+    if (!enabledShellOverrides().has(override)) {
+      throw new Error(
+        `[override_not_enabled] Override ${override} is not enabled by the operator (rule: override.${override}). ` +
+          `Set VENIRA_SHELL_OVERRIDES=${override} explicitly to enable it.`,
+      );
+    }
+    if (!shellOverrideMatches(override, command, cwd)) {
+      throw new Error(
+        `[override_scope_mismatch] Override ${override} does not cover this command (rule: override.${override}); ` +
+          `remove override or use a command within its documented scope.`,
+      );
+    }
+  }
 
   // -------------------------------------------------------------------------
   // 1. Policy gate: deny → throw, ask → approval flow, allow → continue.
   // -------------------------------------------------------------------------
-  const decision = evaluateShellCommand(command, cwd);
+  const evaluatedDecision = evaluateShellCommand(command, cwd, {
+    ...(override ? { override, overrideReason: String(args.reason).trim() } : {}),
+  });
+  const decision: Decision =
+    secretNames.length > 0 && evaluatedDecision.tier !== "deny"
+      ? {
+          ...evaluatedDecision,
+          tier: "ask",
+          rule: "ask.secret_env_injection",
+          reason: "Injecting stored secrets into a shell child requires explicit human approval.",
+        }
+      : evaluatedDecision;
   recordDecision(decision);
   const parsed = parseShellCommand(command);
   const approvalKey = commandKey(parsed);
-  let approver: string | null = null;
+  // Everything an approval covers: a grant only redeems for this exact call.
+  const approvalBinding = approvals.bindingHash({
+    command,
+    shell,
+    cwd,
+    secret_env: secretNames,
+    rule: decision.rule,
+  });
+  let approver: string | null = decision.rule.startsWith("override.")
+    ? `agent:${decision.rule.slice("override.".length)}`
+    : null;
 
   if (decision.tier === "deny") {
     throw new Error(
@@ -1378,11 +1582,14 @@ async function opShellRun(
     );
   }
 
+  for (const name of secretNames) assertSecretUsable(name);
+
   if (decision.tier === "ask") {
     const token = typeof args.approval_token === "string" ? args.approval_token.trim() : "";
+    const approvalId = typeof args.approval_id === "string" ? args.approval_id.trim() : "";
     const wantSession = args.approval_scope === "session";
     if (token) {
-      const verdict = verifyApprovalToken(token, sessionId, decision);
+    const verdict = verifyApprovalToken(token, sessionId, decision, `${shell}|${cwd}|${secretNames.slice().sort().join(",")}`);
       if (!verdict.ok) {
         throw new Error(
           `[approval_invalid] Approval token ${verdict.reason ?? "rejected"} (rule: ${decision.rule}). ` +
@@ -1391,26 +1598,62 @@ async function opShellRun(
       }
       approver = "user:token";
       recordApproval("approved");
-      if (wantSession) grantSessionApproval(sessionId, decision, approvalKey);
+      if (wantSession && approvals.sessionScopeAllowed(decision.rule)) grantSessionApproval(sessionId, decision, approvalKey);
     } else if (hasSessionApproval(sessionId, decision, approvalKey)) {
       approver = "user:session";
       recordApproval("approved");
+    } else if (approvalId) {
+      const v = approvals.verifyApprovalGrant(approvalId, sessionId, approvalBinding);
+      if (!v.ok) {
+        const hint =
+          v.reason === "binding_mismatch" || v.reason === "bad_signature"
+            ? `This approval was granted for a different command, shell, cwd or secret_env. Call project_shell_run again without approval_id to get a new approval_id for this exact command.`
+            : `Run \`npx venira-mcp --approve ${approvalId}\` in a terminal first, then retry with approval_id="${approvalId}".`;
+        throw new Error(`[approval_invalid] Approval ${approvalId} ${v.reason ?? "rejected"}. Hint: ${hint}`);
+      }
+      approver = "user:cli";
+      recordApproval("approved");
+      // Scope comes from the human's grant, never from the model's arguments.
+      if (v.scope === "session" && approvals.sessionScopeAllowed(decision.rule)) {
+        grantSessionApproval(sessionId, decision, approvalKey);
+      }
+      approvals.consumeApproval(approvalId);
     } else {
-      const issued = issueApprovalToken(sessionId, decision);
+      const autoToken =
+        decision.rule !== "ask.secret_env_injection" &&
+        envFlag("VENIRA_SHELL_AUTO_APPROVE_TOKEN", false);
+      const issued = autoToken
+        ? issueApprovalToken(sessionId, decision, undefined, `${shell}|${cwd}|${secretNames.slice().sort().join(",")}`)
+        : null;
+      const pendingId = crypto.randomUUID();
+      approvals.createPendingApproval({
+        approval_id: pendingId,
+        session_id: sessionId,
+        command: redactSecrets(command),
+        shell,
+        cwd,
+        secret_env: secretNames.slice(),
+        rule: decision.rule,
+        reason: decision.reason,
+        binding: approvalBinding,
+        expires_at: issued?.expires_at ?? Date.now() + 5 * 60 * 1000,
+        status: "pending",
+        created_at: Date.now(),
+      });
       return {
         status: "completed",
         result: {
           kind: "shell_approval",
           data: {
             approval_required: true,
+            approval_id: pendingId,
             command: redactSecrets(command),
             shell,
             cwd,
             rule: decision.rule,
             reason: decision.reason,
             mode: decision.mode,
-            approval_token: issued.token,
-            expires_at: issued.expires_at,
+            ...(issued ? { approval_token: issued.token, expires_at: issued.expires_at } : {}),
             retry_with: {
               tool: "project_shell_run",
               arguments: {
@@ -1418,9 +1661,18 @@ async function opShellRun(
                 shell,
                 ...(typeof args.relative_cwd === "string" ? { relative_cwd: args.relative_cwd } : {}),
                 ...(secretNames.length > 0 ? { secret_env: secretNames } : {}),
-                approval_token: issued.token,
+                ...(issued ? { approval_token: issued.token } : { approval_id: pendingId }),
               },
             },
+            ...(!issued
+              ? {
+                  note: `A human must run: npx venira-mcp --approve ${pendingId} (then retry with approval_id).${
+                    decision.rule === "ask.secret_env_injection"
+                      ? " Secret injection cannot use automatic approval tokens."
+                      : " Or set VENIRA_SHELL_AUTO_APPROVE_TOKEN=1 to enable legacy behavior."
+                  }`,
+                }
+              : {}),
           },
         },
       };
@@ -1431,6 +1683,7 @@ async function opShellRun(
   // 2. Execution with hardening: env scrub, output cap, timeout, tree kill.
   // -------------------------------------------------------------------------
   const timeoutMs = clampTimeout(args.timeout_ms);
+  const earlyExit = isEarlyExit(args.early_exit);
   const { file, args: spawnArgs } = shellCommandFor(shell, command);
 
   // Secrets are decrypted only now (post-approval) and handed to the child
@@ -1489,6 +1742,7 @@ async function opShellRun(
     timer: null,
   };
   shellRuns.set(runId, run);
+  pruneShellRuns();
 
   child.stdout?.on("data", (chunk: Buffer) => {
     const text = chunk.toString("utf8");
@@ -1532,7 +1786,7 @@ async function opShellRun(
   });
 
   if (timeoutMs > 0) {
-    const policy: "soft" | "hard" = process.env.VENIRA_SHELL_TIMEOUT_POLICY === "hard" ? "hard" : "soft";
+    const policy = SHELL_TIMEOUT_POLICY;
     run.timer = setTimeout(() => {
       if (!run.running) return;
       run.timed_out = true;
@@ -1559,12 +1813,19 @@ async function opShellRun(
     setTimeout(resolve, 2000);
   });
 
+  if (isEarlyExit(args.early_exit)) {
+    while (run.running) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
+
   return {
     status: "completed",
     result: {
       kind: "shell_run",
       data: {
         run_id: runId,
+        shell_id: runId,
         shell,
         running: run.running,
         exit_code: run.exit_code,
@@ -1574,6 +1835,12 @@ async function opShellRun(
         dropped_bytes: run.dropped_bytes,
         timed_out: run.timed_out,
         timeout_ms: run.timeout_ms,
+        ...(earlyExit
+          ? {
+              stdout: redactSecretValues(run.stdout_full),
+              stderr: redactSecretValues(run.stderr_full),
+            }
+          : {}),
         ...(secretNames.length > 0 ? { secret_env: secretNames } : {}),
         policy: { decision: run.decision.tier, rule: run.decision.rule, mode: decision.mode, approver },
       },
@@ -1594,7 +1861,7 @@ async function opShellStatus(
   if (waitSeconds > 0 && run.running) {
     // P1: VENIRA_SHELL_EXIT_EARLY=1 — return as soon as the exit code is known
     // instead of waiting out the entire window.
-    const pollEarly = process.env.VENIRA_SHELL_EXIT_EARLY === "1";
+    const pollEarly = SHELL_EXIT_EARLY;
     const deadline = Date.now() + waitSeconds * 1000;
     while (run.running && Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 250));
@@ -1608,6 +1875,7 @@ async function opShellStatus(
       kind: "shell_run",
       data: {
         run_id: runId,
+        shell_id: runId,
         shell: run.shell,
         running: run.running,
         exit_code: run.exit_code,
@@ -1665,12 +1933,13 @@ function opShellCancel(args: Record<string, unknown>): RustResponse {
 //
 // Values are never returned by default: `get`/`list` expose only metadata
 // (length + sha256 prefix + update time) so an agent can confirm a key exists
-// without ever putting it in a transcript. `reveal:true` is an explicit opt-in
+// without ever putting it in a transcript. `reveal=1` is an explicit opt-in
 // *and* needs VENIRA_SECRET_ALLOW_REVEAL=1 on the host, so a compromised agent
 // cannot exfiltrate keys from a normal install.
 // ---------------------------------------------------------------------------
 
 const MAX_REVEAL_VALUE_CHARS = 16 * 1024;
+const githubDeviceFlow = new GithubDeviceFlow();
 
 /**
  * Expiry arguments for `project_secret action=set`:
@@ -1717,7 +1986,7 @@ async function opSecret(args: Record<string, unknown>): Promise<RustResponse> {
           action: "list",
           count: secrets.length,
           secrets,
-          store: process.env.VENIRA_DATA_DIR ? "VENIRA_DATA_DIR" : "workspace/data",
+          store: process.env.VENIRA_DATA_DIR?.trim() ? "VENIRA_DATA_DIR" : "default_data_dir",
         },
       },
       ...(secrets.length === 0
@@ -1772,10 +2041,10 @@ async function opSecret(args: Record<string, unknown>): Promise<RustResponse> {
           hint:
             "Metadata only (the value stays out of the transcript). Hint: inject it with project_shell_run secret_env=[\"" +
             name +
-            '"], or set VENIRA_SECRET_ALLOW_REVEAL=1 and pass reveal=true.',
+            '"], or set VENIRA_SECRET_ALLOW_REVEAL=1 and pass reveal=1.',
         };
       }
-      if (process.env.VENIRA_SECRET_ALLOW_REVEAL !== "1") {
+      if (!envFlag("VENIRA_SECRET_ALLOW_REVEAL", false)) {
         throw new Error(
           "[reveal_denied] Plaintext reveal is disabled on this host. " +
             "Hint: inject the value via project_shell_run secret_env instead; set VENIRA_SECRET_ALLOW_REVEAL=1 only if the user explicitly wants the value printed.",
@@ -1797,7 +2066,7 @@ async function opSecret(args: Record<string, unknown>): Promise<RustResponse> {
             value: value.slice(0, MAX_REVEAL_VALUE_CHARS),
           },
         },
-        hint: "Revealed because reveal=true and VENIRA_SECRET_ALLOW_REVEAL=1. The value is now in this transcript.",
+        hint: "Revealed because reveal=1 and VENIRA_SECRET_ALLOW_REVEAL=1. The value is now in this transcript.",
       };
     }
 
@@ -1855,6 +2124,36 @@ async function opSecret(args: Record<string, unknown>): Promise<RustResponse> {
   }
 }
 
+async function opGithubConnect(args: Record<string, unknown>): Promise<RustResponse> {
+  const action = String(args.action ?? "").trim().toLowerCase();
+  if (action === "start") {
+    const data = await githubDeviceFlow.start(args.replace_existing === true);
+    return {
+      status: "completed",
+      result: { kind: "github_connect", data },
+      hint:
+        `Open ${data.verification_uri}, sign in to GitHub, and enter code ${data.user_code}. ` +
+        `After approving, call project_github_connect action=poll with pending_id; wait at least ${data.poll_interval_seconds}s between polls. ` +
+        "Never ask the user to paste a token into chat.",
+    };
+  }
+  if (action === "poll") {
+    const pendingId = typeof args.pending_id === "string" ? args.pending_id.trim() : "";
+    if (!pendingId) {
+      throw new Error("[invalid_request] `pending_id` is required for action=poll.");
+    }
+    const data = await githubDeviceFlow.poll(pendingId);
+    return {
+      status: "completed",
+      result: { kind: "github_connect", data },
+      ...(data.status === "pending"
+        ? { hint: `Authorization is not complete. Wait ${String(data.wait_seconds)}s, then poll again.` }
+        : {}),
+    };
+  }
+  throw new Error('[invalid_request] action must be "start" or "poll".');
+}
+
 type OperationHandler = (args: Record<string, unknown>, root: string, sessionId: string) => Promise<RustResponse>;
 
 const operations: Record<string, OperationHandler> = {
@@ -1882,6 +2181,7 @@ const operations: Record<string, OperationHandler> = {
   ci_trigger: opCiTrigger,
   ci_logs: opCiLogs,
   secret: opSecret,
+  github_connect: opGithubConnect,
 };
 
 /**
@@ -1931,9 +2231,12 @@ function describeExternalOp(operation: string, args: Record<string, unknown>): s
     case "secret": {
       const action = String(args.action ?? "").toLowerCase();
       const name = typeof args.name === "string" ? args.name : "";
-      summary = `secret_${action || "?"} name=${name}${args.reveal === true ? " reveal=true" : ""}`;
+      summary = `secret_${action || "?"} name=${name}${args.reveal === true ? " reveal=1" : ""}`;
       break;
     }
+    case "github_connect":
+      summary = `github_device_${String(args.action ?? "?").toLowerCase()}`;
+      break;
     default:
       return undefined;
   }
@@ -2087,10 +2390,17 @@ export class CoreHost {
           throw new Error("[capability_expired] Capability is expired or revoked. Hint: the scope re-opens automatically on the next call.");
         }
 
-        const reasonText = sanitizeReason(redactSecretValues(typeof p.reason === "string" ? p.reason : ""));
+        const reasonText = sanitizeReason(
+          redactSecretValues(redactSecrets(typeof p.reason === "string" ? p.reason : "")),
+        );
         const externalSummary = describeExternalOp(operation, args);
+        const argsHash = crypto
+          .createHash("sha256")
+          .update(JSON.stringify(args, Object.keys(args).sort()))
+          .digest("hex");
         const startedAt = auditStart(sessionId, p.project_id ?? "chat-terminal", operation, requestId, {
           reason: reasonText,
+          args_hash: argsHash,
           ...(externalSummary ? { command: externalSummary } : {}),
         });
 
@@ -2135,6 +2445,8 @@ export class CoreHost {
               decision:
                 reasonCode === "command_denied"
                   ? "deny"
+                  : reasonCode.startsWith("override_")
+                    ? "deny"
                   : reasonCode === "approval_invalid" || reasonCode === "approval_required"
                     ? "ask"
                     : undefined,

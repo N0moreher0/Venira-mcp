@@ -5,16 +5,12 @@
  *   { ok:false, status:"failed", request_id, kind, error:{code, message, retryable}, hint, elapsed_ms }
  */
 import { randomBytes } from "node:crypto";
+import { envChoice, envFlag } from "./env.js";
 
-export type OutputMode = "full" | "compact" | "summary";
+export type OutputMode = "full" | "compact";
 
-function outputModeFromEnv(): OutputMode {
-  const raw = (process.env.VENIRA_OUTPUT_MODE ?? "full").trim().toLowerCase();
-  return raw === "compact" || raw === "summary" ? raw : "full";
-}
-
-export const OUTPUT_MODE: OutputMode = outputModeFromEnv();
-export const PRETTY = process.env.VENIRA_PRETTY === "1";
+export const OUTPUT_MODE: OutputMode = envChoice("VENIRA_OUTPUT_MODE", "full", ["full", "compact"]);
+export const PRETTY = envFlag("VENIRA_PRETTY", false);
 
 export const stringify = (value: unknown): string =>
   PRETTY ? JSON.stringify(value, null, 2) : JSON.stringify(value);
@@ -77,7 +73,7 @@ function inferHint(kind: string, data: unknown): string | undefined {
     if (typeof data.hint === "string" && data.hint) return data.hint;
     const hits = Array.isArray(data.hits) ? data.hits : [];
     if (hits.length === 0) {
-      return "No matches. Broaden the search: drop glob/relative_path, set regex=false, or use kind=file_name.";
+      return "No matches. Broaden the search: drop glob/relative_path, set regex=0, or use kind=file_name.";
     }
     if (data.complete === false) {
       return "Search incomplete (see diagnostics). Narrow with relative_path/glob or raise limit (max 200).";
@@ -275,12 +271,12 @@ export function buildEnvelope(
   if (options.cached) envelope.cached = true;
   if (hint) envelope.hint = hint;
 
-  if (OUTPUT_MODE === "summary") {
+  if (OUTPUT_MODE === "compact" && stringify(data ?? null).length > SUMMARY_THRESHOLD_BYTES) {
     envelope.data = previewData(kind, data);
     const summary = summarize(kind, data);
     if (summary !== undefined) envelope.summary = summary;
     envelope.trimmed = true;
-    const trimHint = "Output mode summary: payload trimmed; set VENIRA_OUTPUT_MODE=full for complete data.";
+    const trimHint = "Output mode compact: payload trimmed; set VENIRA_OUTPUT_MODE=full for complete data.";
     envelope.hint = envelope.hint ? `${envelope.hint} ${trimHint}` : trimHint;
     return envelope;
   }
@@ -288,8 +284,7 @@ export function buildEnvelope(
   envelope.data = data;
   const summary = summarize(kind, data);
   if (summary !== undefined) {
-    const tooBig =
-      OUTPUT_MODE === "compact" || stringify(data ?? null).length > SUMMARY_THRESHOLD_BYTES;
+    const tooBig = stringify(data ?? null).length > SUMMARY_THRESHOLD_BYTES;
     if (tooBig) envelope.summary = summary;
   }
   return envelope;

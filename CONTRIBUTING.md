@@ -27,7 +27,7 @@ npm run bench:mcp    # numbers for PR descriptions
 
 Run `verify` after **every** commit. It covers envelope shape, cache invalidation, batch budgets,
 search-cache asymmetry, shell run/poll/cancel, audit rows (including `orphan_running` detection),
-summary output mode, and tool annotations.
+compact output mode, and tool annotations.
 
 ## Code conventions
 

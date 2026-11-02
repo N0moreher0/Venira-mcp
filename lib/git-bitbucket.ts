@@ -123,6 +123,11 @@ function summaryStep(step: any): Record<string, unknown> {
   };
 }
 
+// Real Bitbucket pipeline/step UUIDs are 36 chars (38 with braces), so an
+// 8-char floor is generous for production. It bites short fixture/test IDs
+// though: the floor is checked again on the de-braced value, so e.g.
+// "{step-1}" (8 chars raw) fails because "step-1" (6 chars bare) is too
+// short -- keep any mock/test UUID at >= 8 chars once the braces are off.
 const UUID_RE = /^[A-Za-z0-9{}_-]{8,80}$/;
 
 function pipelineUuid(value: unknown, label: string): string {

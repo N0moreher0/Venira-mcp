@@ -54,6 +54,9 @@ jobs:
       - name: Type-check (strict)
         run: npx tsc --noEmit
 
+      - name: Source shape
+        run: npm run check:source-shape
+
       - name: Smoke (in-process backend)
         run: npm run smoke
 
@@ -63,8 +66,14 @@ jobs:
       - name: Verify (behavioural suite)
         run: npm run verify
 
+      - name: Shell policy corpus
+        run: npm run test:policy-corpus
+
       - name: Bench (MCP end-to-end, recorded only)
         run: npm run bench:mcp
+
+      - name: npm audit
+        run: npm audit --audit-level=high || true
 
   package:
     runs-on: ubuntu-latest

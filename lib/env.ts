@@ -1,0 +1,51 @@
+export function envFlag(name: string, defaultValue: boolean, value = process.env[name]): boolean {
+  if (value === undefined) return defaultValue;
+  if (value === "0") return false;
+  if (value === "1") return true;
+  throw new Error(`[config_invalid] ${name} must be "0" or "1".`);
+}
+
+export function envFlagValue(name: string, value: string | undefined, defaultValue: boolean): boolean {
+  return envFlag(name, defaultValue, value);
+}
+
+export function envChoice<const T extends readonly string[]>(
+  name: string,
+  defaultValue: T[number],
+  choices: T,
+): T[number] {
+  const raw = process.env[name];
+  if (raw === undefined) return defaultValue;
+  const value = raw.trim().toLowerCase();
+  if ((choices as readonly string[]).includes(value)) return value as T[number];
+  throw new Error(`[config_invalid] ${name} must be one of: ${choices.join(", ")}.`);
+}
+
+const BOOLEAN_ENV_NAMES = [
+  "VENIRA_UNRESTRICTED",
+  "VENIRA_ALLOW_JS_EXEC",
+  "VENIRA_CACHE_ALL",
+  "VENIRA_CACHE_LIST_ONLY",
+  "VENIRA_CACHE_SEARCH_ONLY",
+  "VENIRA_AUDIT_STRICT",
+  "VENIRA_AUDIT_FAST",
+  "VENIRA_SHELL_EXIT_EARLY",
+  "VENIRA_SHELL_ENV_PASS_ALL",
+  "VENIRA_EDIT_FUZZY",
+  "VENIRA_SHELL_AUTO_APPROVE_TOKEN",
+  "VENIRA_SECRET_ALLOW_REVEAL",
+  "VENIRA_SHELL_ELICIT",
+  "VENIRA_PRETTY",
+  "VENIRA_NETWORK",
+  "VENIRA_ALLOW_SELF_INSTALL",
+  "VENIRA_GIT_ALLOW_HTTP",
+  "VENIRA_GITHUB_ALLOW_HTTP",
+  "VENIRA_TRACE",
+  "VENIRA_VERIFY_DEBUG",
+] as const;
+
+export function validateBooleanEnvironment(): void {
+  for (const name of BOOLEAN_ENV_NAMES) {
+    if (process.env[name] !== undefined) envFlag(name, false);
+  }
+}

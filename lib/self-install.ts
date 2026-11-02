@@ -7,15 +7,17 @@
  *
  * All writes are ATOMIC + reversible:
  * - Backup the original file to `<file>.venira-bak` before modifying
- * - JSON: parse + deep-merge the target key; if the JSON has comments (jsonc) and
- *   `JSON.parse` fails, fall back to regex-based key insertion
+ * - JSON/JSONC: parse + edit the target key with jsonc-parser, preserving comments
  * - TOML: append a `[mcp_servers.venira]` section if not present
  */
 
 import { existsSync, readFileSync, writeFileSync, copyFileSync } from "node:fs";
+import * as fsSync from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { performance } from "node:perf_hooks";
+import { applyEdits, modify, parse as parseJsonc, printParseErrorCode } from "jsonc-parser";
+import { defaultDataDir } from "./workspace.js";
 
 type HarnessName =
   | "opencode"
@@ -148,7 +150,7 @@ function veniraMcpEntry(opts: { workspace?: string; dataDir?: string }): {
   environment: Record<string, string>;
 } {
   const workspace = opts.workspace ?? process.cwd();
-  const dataDir = opts.dataDir ?? path.join(workspace, "data");
+  const dataDir = opts.dataDir ?? defaultDataDir();
   return {
     command: ["npx"],
     args: ["venira-mcp"],
@@ -158,7 +160,7 @@ function veniraMcpEntry(opts: { workspace?: string; dataDir?: string }): {
       VENIRA_UNRESTRICTED: "0",
       VENIRA_DEFAULT_SHELL: "powershell",
       VENIRA_SHELL_MODE: "balanced",
-      VENIRA_PERMISSION_MODE: "allow_all",
+      VENIRA_PERMISSION_MODE: "manual",
       VENIRA_OUTPUT_MODE: "full",
       VENIRA_PRETTY: "0",
       VENIRA_ALLOW_JS_EXEC: "0",
@@ -182,14 +184,40 @@ function backupFile(file: string): string {
   return bak;
 }
 
-/**
- * For JSON/JSONC files: parse, deep-merge mcpServers/mcp.venira, write back.
- * JSONC with comments: if JSON.parse fails, use a regex-based "add key if missing"
- * strategy (safer than trying to strip comments).
- */
-async function installJsonLike(
+function writeAtomicFileSync(file: string, content: string): void {
+  const dir = path.dirname(file);
+  const tmp = path.join(dir, `.venira-tmp-${process.pid}-${Date.now()}`);
+  const delays = [20, 40, 80, 160, 200];
+  let attempt = 0;
+  while (true) {
+    try {
+      fsSync.writeFileSync(tmp, content, "utf8");
+      try {
+        const fd = fsSync.openSync(tmp, "r+");
+        fsSync.fsyncSync(fd);
+        fsSync.closeSync(fd);
+      } catch { /* best-effort */ }
+      fsSync.renameSync(tmp, file);
+      return;
+    } catch (err) {
+      try { fsSync.unlinkSync(tmp); } catch { /* ignore */ }
+      const code = (err as { code?: string })?.code;
+      if ((code === "EPERM" || code === "EBUSY" || code === "EACCES") && attempt < delays.length) {
+        const d = delays[attempt++];
+        const end = Date.now() + d;
+        while (Date.now() < end) { /* spin */ }
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
+/** Parse and edit JSON/JSONC while preserving comments and existing formatting. */
+export async function installJsonLike(
   file: string,
   mcpBlockName: "mcp" | "mcpServers",
+  config: { workspace?: string; dataDir?: string },
 ): Promise<InstallResult> {
   const harness = "unknown" as HarnessName; // set by caller
   let existing = "";
@@ -205,85 +233,32 @@ async function installJsonLike(
     };
   }
 
-  // Try JSON.parse first; JSONC files with comments will fail.
-  let parsed: Record<string, unknown> | null = null;
-  try {
-    parsed = JSON.parse(existing);
-  } catch {
-    parsed = null;
-  }
-
-  if (parsed) {
-    // Clean JSON: deep-merge
-    const mcpSection = (parsed[mcpBlockName] ?? {}) as Record<string, unknown>;
-    if (typeof mcpSection === "object" && mcpSection !== null) {
-      const block = veniraMcpEntry({});
-      mcpSection["venira"] = {
-        type: "local",
-        command: block.command,
-        args: block.args,
-        enabled: true,
-        environment: block.environment,
-      };
-      parsed[mcpBlockName] = mcpSection;
-    }
-    backupFile(file);
-    writeFileSync(file, JSON.stringify(parsed, null, 2));
-    return {
-      harness,
-      config_path: file,
-      status: "installed",
-      needs_restart: true,
-    };
-  }
-
-  // JSONC (with comments): use string-based insertion if "venira" not present
-  if (!existing.includes('"venira"')) {
-    const block = veniraMcpEntry({});
-    const snippet = JSON.stringify(
-      {
-        [mcpBlockName === "mcp" ? "mcp" : "mcpServers"]: {
-          venira: {
-            type: "local",
-            command: block.command,
-            args: block.args,
-            enabled: true,
-            environment: block.environment,
-          },
-        },
-      },
-      null,
-      2,
-    );
-    // Naive: insert before the last closing brace (last "}") — only for simple cases
-    // For robustness, back up and append as a separate key. This works for OpenCode
-    // (the jsonc is one big object). For other clients, user may need manual merge.
-    backupFile(file);
-    // Insert before final "}" of the outer object
-    const lastBrace = existing.lastIndexOf("}");
-    if (lastBrace > 0) {
-      const inner = existing.slice(0, lastBrace);
-      const outer = existing.slice(lastBrace);
-      // Strip any trailing comma at end of inner to keep valid
-      const cleanInner = inner.replace(/,\s*$/, "");
-      writeFileSync(file, cleanInner + ",\n" + snippet.replace(/\}\s*$/, "\n") + outer);
-      return {
-        harness,
-        config_path: file,
-        status: "installed",
-        needs_restart: true,
-      };
-    }
+  const errors: { error: number; offset: number; length: number }[] = [];
+  const parsed = parseJsonc(existing, errors, { allowTrailingComma: true });
+  if (errors.length > 0 || !parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    const detail = errors[0]
+      ? `${printParseErrorCode(errors[0].error)} at offset ${errors[0].offset}`
+      : "top-level value is not an object";
     return {
       harness,
       config_path: file,
       status: "error",
       needs_restart: true,
-      error:
-        "Could not parse config as JSON or JSONC; manual merge required. " +
-        `Backup kept at ${file}.venira-bak`,
+      error: `Could not parse config as JSONC (${detail}); manual merge required.`,
     };
-  } else {
+  }
+
+  const block = veniraMcpEntry(config);
+  const entry = {
+    type: "local",
+    command: block.command,
+    args: block.args,
+    enabled: true,
+    environment: block.environment,
+  };
+  const section = (parsed as Record<string, unknown>)[mcpBlockName];
+  if (section && typeof section === "object" && !Array.isArray(section) &&
+      Object.prototype.hasOwnProperty.call(section, "venira")) {
     return {
       harness,
       config_path: file,
@@ -291,6 +266,15 @@ async function installJsonLike(
       needs_restart: false,
     };
   }
+  const edits = modify(existing, [mcpBlockName, "venira"], entry, {
+    formattingOptions: { insertSpaces: true, tabSize: 2 },
+  });
+  if (edits.length === 0) {
+    return { harness, config_path: file, status: "already_present", needs_restart: false };
+  }
+  backupFile(file);
+  writeAtomicFileSync(file, applyEdits(existing, edits));
+  return { harness, config_path: file, status: "installed", needs_restart: true };
 }
 
 /**
@@ -333,7 +317,7 @@ startup_timeout_sec = 120
 `;
 
   backupFile(file);
-  writeFileSync(file, existing.trimEnd() + "\n\n" + tomlBlock, "utf8");
+  writeAtomicFileSync(file, existing.trimEnd() + "\n\n" + tomlBlock);
   return {
     harness: "codex",
     config_path: file,
@@ -396,6 +380,7 @@ export async function installSelf(opts: {
       : await installJsonLike(
           file,
           opts.harness === "opencode" ? "mcp" : "mcpServers",
+          { workspace: opts.workspace, dataDir: opts.dataDir },
         );
 
   result.harness = opts.harness;
