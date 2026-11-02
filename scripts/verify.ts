@@ -162,6 +162,9 @@ const expectedNewTools = [
   "project_ci_status",
   "project_ci_trigger",
   "project_ci_logs",
+  "project_ci_wait",
+  "project_dependency_graph",
+  "project_change_impact",
   "project_secret",
   "project_explain_error",
   "project_plan_read_batch",
@@ -1560,6 +1563,240 @@ check(
   githubMock.blobAuth,
 );
 
+// 11d-bis. project_ci_wait: terminal, transition, timeout, selector validation.
+console.log("[verify] checking ci_wait...");
+const ciWaitTerminal = asEnvelope(await call("project_ci_wait", { run_id: 99 }));
+check(
+  "ci_wait_terminal_failure_tail",
+  ciWaitTerminal.ok === true &&
+    ciWaitTerminal.data?.terminal === true &&
+    ciWaitTerminal.data?.overall === "failure" &&
+    ciWaitTerminal.data?.polls === 1 &&
+    String(ciWaitTerminal.data?.failure_tail?.text ?? "").includes("FAIL demo.test.ts:42"),
+  { overall: ciWaitTerminal.data?.overall, polls: ciWaitTerminal.data?.polls, tail: ciWaitTerminal.data?.failure_tail },
+);
+const ciWaitTransition = asEnvelope(
+  await call("project_ci_wait", { run_id: 100, timeout_ms: 10000, interval_ms: 2000 }),
+);
+check(
+  "ci_wait_reaches_terminal",
+  ciWaitTransition.ok === true &&
+    ciWaitTransition.data?.terminal === true &&
+    ciWaitTransition.data?.overall === "success" &&
+    ciWaitTransition.data?.changed === true &&
+    Number(ciWaitTransition.data?.polls) >= 2,
+  { overall: ciWaitTransition.data?.overall, changed: ciWaitTransition.data?.changed, polls: ciWaitTransition.data?.polls },
+);
+const ciWaitTimeout = asEnvelope(
+  await call("project_ci_wait", { run_id: 101, timeout_ms: 2500, interval_ms: 2000 }),
+);
+check(
+  "ci_wait_timeout_returns_state",
+  ciWaitTimeout.ok === true &&
+    ciWaitTimeout.data?.terminal === false &&
+    ciWaitTimeout.data?.overall === "in_progress" &&
+    Number(ciWaitTimeout.data?.waited_ms) >= 2000 &&
+    Number(ciWaitTimeout.data?.polls) >= 2,
+  { overall: ciWaitTimeout.data?.overall, waited_ms: ciWaitTimeout.data?.waited_ms, polls: ciWaitTimeout.data?.polls },
+);
+const ciWaitNoSelector = asEnvelope(await call("project_ci_wait", {}));
+check("ci_wait_requires_selector", ciWaitNoSelector.error?.code === "invalid_request", ciWaitNoSelector);
+const ciWaitTwoSelectors = asEnvelope(await call("project_ci_wait", { run_id: 99, branch: "main" }));
+check("ci_wait_rejects_two_selectors", ciWaitTwoSelectors.error?.code === "invalid_request", ciWaitTwoSelectors);
+const waitAudit = asEnvelope(await call("project_read_audit", { operation: "ci_wait", limit: 50 }));
+const completedWaits = (waitAudit.data?.rows ?? []).filter((row: Record<string, unknown>) => row.outcome === "succeeded");
+check(
+  "ci_wait_audit_one_row_per_wait",
+  waitAudit.ok === true && completedWaits.length === 3,
+  { count: completedWaits.length, rows: waitAudit.data?.rows },
+);
+
+// 11d-ter. Dependency graph + change impact fixtures (written directly: no tool call needed).
+console.log("[verify] checking dependency graph + change impact...");
+const dgRoot = `${dir}/dg`;
+const dgPath = (rel: string) => `${dgRoot}/${rel}`;
+async function writeFixture(rel: string, text: string): Promise<void> {
+  const abs = path.join(process.cwd(), dgRoot, rel);
+  await fs.mkdir(path.dirname(abs), { recursive: true });
+  await fs.writeFile(abs, text, "utf8");
+}
+await writeFixture(
+  "src/app.ts",
+  'import { util } from "./lib/util";\nimport { re } from "./lib";\nconst dyn = () => import("./dynamic");\nimport { nope } from "./nope";\nexport function app() { return util(); }\n',
+);
+await writeFixture("src/lib/util.ts", "export function util() { return 1; }\nexport class Base {}\n");
+await writeFixture("src/lib/index.ts", 'export * from "./util";\n');
+await writeFixture("src/dynamic.ts", "export const d = 1;\n");
+await writeFixture("src/cycle-a.ts", 'import { b } from "./cycle-b";\nexport function a() { return b(); }\n');
+await writeFixture("src/cycle-b.ts", 'import { a } from "./cycle-a";\nexport function b() { return a(); }\n');
+await writeFixture("src/lib/util.test.ts", 'import { util } from "./util";\nit("x", () => util());\n');
+await writeFixture("src/child.ts", 'import { Base } from "./lib/util";\nexport class Child extends Base {}\n');
+await writeFixture("src/dup-a.ts", "export function dup() { return 1; }\n");
+await writeFixture("src/dup-b.ts", "export function dup() { return 2; }\n");
+await writeFixture("src/use-dup.ts", 'import { dup } from "./dup-a";\nexport const v = dup();\n');
+await writeFixture("src/.env.local.ts", 'import { util } from "./lib/util";\nexport const secret = util();\n');
+await writeFixture("pkg/__init__.py", "");
+await writeFixture("pkg/mod.py", "def thing():\n    return 1\n");
+await writeFixture("pkg/main.py", "from .mod import thing\n\ndef main():\n    return thing()\n");
+
+const graph = asEnvelope(
+  await call("project_dependency_graph", {
+    kind: "both",
+    relative_path: dgRoot,
+    depth: 5,
+    include_external: 1,
+    max_nodes: 100,
+    max_edges: 200,
+  }),
+);
+const graphNodes = (graph.data?.nodes ?? []).map((node: { id: string }) => node.id) as string[];
+const graphEdges = (graph.data?.edges ?? []) as Array<{ from: string; to: string; type: string; confidence: string }>;
+const hasEdge = (from: string, to: string, type: string, confidence?: string) =>
+  graphEdges.some(
+    (edge) =>
+      edge.from === dgPath(from) &&
+      edge.to === dgPath(to) &&
+      edge.type === type &&
+      (!confidence || edge.confidence === confidence),
+  );
+check(
+  "dependency_graph_ts_relative_imports",
+  graph.ok === true && graph.data?.kind === "both" && hasEdge("src/app.ts", "src/lib/util.ts", "import", "exact") && hasEdge("src/lib/index.ts", "src/lib/util.ts", "import", "exact"),
+  { nodes: graphNodes, edges: graphEdges.filter((edge) => edge.type === "import") },
+);
+check(
+  "dependency_graph_cycle",
+  hasEdge("src/cycle-a.ts", "src/cycle-b.ts", "import") && hasEdge("src/cycle-b.ts", "src/cycle-a.ts", "import"),
+  graphEdges.filter((edge) => edge.from.startsWith("src/cycle")),
+);
+check(
+  "dependency_graph_dynamic_import_possible",
+  hasEdge("src/app.ts", "src/dynamic.ts", "import", "possible"),
+  graphEdges.filter((edge) => edge.to === "src/dynamic.ts"),
+);
+check(
+  "dependency_graph_python_relative_import",
+  hasEdge("pkg/main.py", "pkg/mod.py", "import", "exact"),
+  graphEdges.filter((edge) => edge.from.startsWith("pkg/")),
+);
+check(
+  "dependency_graph_protected_file_excluded",
+  !graphNodes.includes(dgPath("src/.env.local.ts")),
+  graphNodes,
+);
+check(
+  "dependency_graph_extends_edge",
+  hasEdge("src/child.ts", "src/lib/util.ts", "extends"),
+  graphEdges.filter((edge) => edge.from === "src/child.ts"),
+);
+check(
+  "dependency_graph_unresolved_reported",
+  (graph.data?.unresolved ?? []).some((entry: { specifier?: string }) => entry.specifier === "./nope"),
+  graph.data?.unresolved,
+);
+
+const graphDot = asEnvelope(await call("project_dependency_graph", { kind: "files", relative_path: dgRoot, depth: 5, format: "dot" }));
+check(
+  "dependency_graph_dot",
+  graphDot.ok === true && String(graphDot.data?.graph ?? "").startsWith("digraph dependencies") && String(graphDot.data?.graph ?? "").includes(`"${dgPath("src/app.ts")}" -> "${dgPath("src/lib/util.ts")}"`),
+  String(graphDot.data?.graph ?? "").slice(0, 120),
+);
+const graphMermaid = asEnvelope(await call("project_dependency_graph", { kind: "files", relative_path: dgRoot, depth: 5, format: "mermaid" }));
+check(
+  "dependency_graph_mermaid",
+  graphMermaid.ok === true && String(graphMermaid.data?.graph ?? "").startsWith("graph LR") && String(graphMermaid.data?.graph ?? "").includes("-->|import|"),
+  String(graphMermaid.data?.graph ?? "").slice(0, 120),
+);
+const graphTruncated = asEnvelope(await call("project_dependency_graph", { kind: "files", relative_path: dgRoot, depth: 5, max_nodes: 2 }));
+check(
+  "dependency_graph_truncation",
+  graphTruncated.ok === true && graphTruncated.data?.truncated === true && (graphTruncated.data?.nodes ?? []).length === 2 && !!graphTruncated.hint,
+  { truncated: graphTruncated.data?.truncated, nodes: graphTruncated.data?.nodes, hint: graphTruncated.hint },
+);
+
+// Writing invalidates the 5 s graph index cache: the new file must show up immediately.
+const lateWrite = await call("project_write_file", {
+  relative_path: dgPath("src/late.ts"),
+  content: "export const late = 1;\n",
+  reason: "verify graph cache invalidation",
+});
+const graphAfterWrite = asEnvelope(await call("project_dependency_graph", { kind: "files", relative_path: dgRoot, depth: 5 }));
+check(
+  "dependency_graph_cache_invalidated_on_write",
+  asEnvelope(lateWrite).ok === true &&
+    (graphAfterWrite.data?.nodes ?? []).some((node: { id: string }) => node.id === dgPath("src/late.ts")),
+  (graphAfterWrite.data?.nodes ?? []).map((node: { id: string }) => node.id),
+);
+
+const impact = asEnvelope(
+  await call("project_change_impact", {
+    files: [dgPath("src/lib/util.ts")],
+    direction: "dependents",
+    depth: 5,
+    max_nodes: 50,
+  }),
+);
+const impactIds = (impact.data?.affected ?? []).map((entry: { id: string }) => entry.id) as string[];
+check(
+  "change_impact_reverse_closure",
+  impact.ok === true &&
+    impactIds.includes(dgPath("src/app.ts")) &&
+    impactIds.includes(dgPath("src/child.ts")) &&
+    impactIds.includes(dgPath("src/lib/index.ts")) &&
+    impactIds.includes(dgPath("src/lib/util.test.ts")) &&
+    Number(impact.data?.summary?.max_distance) >= 1,
+  { affected: impactIds, summary: impact.data?.summary },
+);
+check(
+  "change_impact_tests_counted_separately",
+  impact.data?.summary?.tests_affected === 1 && Number(impact.data?.summary?.affected_symbols) >= 1,
+  impact.data?.summary,
+);
+const impactNoTests = asEnvelope(
+  await call("project_change_impact", {
+    files: [dgPath("src/lib/util.ts")],
+    direction: "dependents",
+    depth: 5,
+    include_tests: 0,
+  }),
+);
+check(
+  "change_impact_excludes_tests",
+  !(impactNoTests.data?.affected ?? []).some((entry: { id: string }) => entry.id === dgPath("src/lib/util.test.ts")) &&
+    impactNoTests.data?.summary?.tests_affected === 0,
+  impactNoTests.data?.summary,
+);
+const impactAmbiguous = asEnvelope(await call("project_change_impact", { symbols: ["dup"], direction: "dependents", depth: 3 }));
+check(
+  "change_impact_ambiguous_symbol_possible",
+  impactAmbiguous.ok === true &&
+    (impactAmbiguous.data?.unresolved ?? []).some((entry: { symbol?: string; reason?: string }) => entry.symbol === "dup" && /ambiguous/.test(entry.reason ?? "")) &&
+    (impactAmbiguous.data?.affected ?? []).every((entry: { confidence: string }) => entry.confidence === "possible"),
+  { unresolved: impactAmbiguous.data?.unresolved, affected: impactAmbiguous.data?.affected },
+);
+const impactPinned = asEnvelope(
+  await call("project_change_impact", {
+    symbols: [{ name: "dup", file: dgPath("src/dup-a.ts") }],
+    direction: "dependents",
+    depth: 3,
+  }),
+);
+check(
+  "change_impact_symbol_pinned_to_file",
+  impactPinned.ok === true &&
+    impactPinned.data?.seed?.files?.length === 1 &&
+    (impactPinned.data?.affected ?? []).some((entry: { id: string; confidence: string }) => entry.id === dgPath("src/use-dup.ts") && entry.confidence === "exact"),
+  { seed: impactPinned.data?.seed, affected: impactPinned.data?.affected, unresolved: impactPinned.data?.unresolved },
+);
+const impactMermaid = asEnvelope(
+  await call("project_change_impact", { files: [dgPath("src/lib/util.ts")], direction: "dependents", format: "mermaid" }),
+);
+check(
+  "change_impact_mermaid",
+  impactMermaid.ok === true && String(impactMermaid.data?.graph ?? "").startsWith("graph LR"),
+  String(impactMermaid.data?.graph ?? "").slice(0, 120),
+);
+
 // 11d-ter. Provider dialects: GitLab + Bitbucket Cloud against local mocks.
 console.log("[verify] checking gitlab/bitbucket dialects...");
 async function providerClient(extraEnv: Record<string, string>) {
@@ -1578,6 +1815,12 @@ const providerCall = async (target: Client, name: string, args: Record<string, u
   const raw = await target.callTool({ name, arguments: args });
   return JSON.parse((raw as { content?: { text?: string }[] }).content?.[0]?.text ?? "{}");
 };
+
+// VENIRA_NETWORK=0 must refuse the wait before a socket opens.
+const offlineWaitClient = await providerClient({ VENIRA_NETWORK: "0" });
+const offlineWait = await providerCall(offlineWaitClient, "project_ci_wait", { run_id: 99, timeout_ms: 2000 });
+check("ci_wait_network_disabled", offlineWait.ok === false && offlineWait.error?.code === "network_disabled", offlineWait);
+await offlineWaitClient.close();
 
 const gl = await providerClient({
   VENIRA_GIT_PROVIDER: "gitlab",

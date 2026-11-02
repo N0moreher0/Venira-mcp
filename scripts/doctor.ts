@@ -94,7 +94,7 @@ async function main() {
       await new Promise((r) => setTimeout(r, 500)); // let warm-up finish
 
       const tools = await client.listTools();
-      const expectedTools = 41;
+      const expectedTools = 44;
       results.push(await check("tools_count", tools.tools.length === expectedTools, { actual: tools.tools.length, expected: expectedTools }));
 
       const healthRes = await client.callTool({ name: "project_health", arguments: { include_audit: 0 } });
