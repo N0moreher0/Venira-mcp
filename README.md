@@ -146,6 +146,36 @@ npm run bench:mcp# end-to-end MCP benchmark (first call, batch 8, search, health
 
 ### 3.1 VS Code (`.vscode/mcp.json`)
 
+Add this to `.vscode/mcp.json` to run the latest npm release in the current workspace:
+
+```json
+{
+  "servers": {
+    "venira": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["--yes", "--package=venira-mcp@latest", "venira-mcp"],
+      "env": {
+        "VENIRA_WORKSPACE": "${workspaceFolder}",
+        "VENIRA_DATA_DIR": "${userHome}\\AppData\\Local\\venira",
+        "VENIRA_UNRESTRICTED": "0",
+        "VENIRA_DEFAULT_SHELL": "powershell",
+        "VENIRA_SHELL_MODE": "balanced",
+        "VENIRA_PERMISSION_MODE": "allow_all",
+        "VENIRA_OUTPUT_MODE": "full"
+      }
+    }
+  }
+}
+```
+
+`npx` downloads and runs the package; a global npm install is not required. After
+saving the file, start or restart the Venira server in VS Code. You can ask the
+agent: “Configure Venira in this workspace using the VS Code example from the
+README; preserve other servers and verify it with a read-only tool call.”
+
+To authorize GitHub:
+
 ```bash
 npx venira-mcp --setup-github
 ```
