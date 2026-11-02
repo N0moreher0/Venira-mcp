@@ -141,7 +141,7 @@ const directBooleanToolInputs = tools.tools.flatMap((tool) =>
 check("tool_boolean_flags_are_numeric", directBooleanToolInputs.length === 0, directBooleanToolInputs);
 const shellToolSchema = tools.tools.find((tool) => tool.name === "project_shell_run");
 const shellProperties = shellToolSchema?.inputSchema?.properties as
-  | Record<string, { type?: string; minimum?: number; maximum?: number }>
+  | Record<string, { type?: string; minimum?: number; maximum?: number; anyOf?: { type?: string }[] }>
   | undefined;
 check(
   "shell_flag_schema_is_0_1_integer",
@@ -149,6 +149,12 @@ check(
     shellProperties.early_exit.minimum === 0 &&
     shellProperties.early_exit.maximum === 1,
   shellProperties?.early_exit,
+);
+const backgroundTypes = (shellProperties?.background?.anyOf ?? []).map((entry) => entry?.type);
+check(
+  "shell_background_schema_accepts_number_boolean_string",
+  backgroundTypes.includes("integer") && backgroundTypes.includes("boolean") && backgroundTypes.includes("string"),
+  shellProperties?.background,
 );
 const snapshotTool = tools.tools.find((t) => t.name === "project_snapshot");
 check("tool_snapshot_present", !!snapshotTool, tools.tools.map((t) => t.name));
@@ -350,6 +356,35 @@ check(
     typeof earlyShell.data?.exit_code === "number",
   earlyShell.data,
 );
+
+// background=0 / "False" must block for the whole run and return final output.
+const sleepCommand = (ms: number) => (isWin ? `Start-Sleep -Milliseconds ${ms}; echo fg-done-${ms}` : `sleep ${ms / 1000}; echo fg-done-${ms}`);
+for (const [label, background, delay] of [
+  ["shell_foreground_background_0", 0, 1500],
+  ["shell_foreground_background_string_false", "False", 1200],
+] as const) {
+  const startedAt = Date.now();
+  const foreground = JSON.parse(
+    textOf(
+      await call("project_shell_run", {
+        command: sleepCommand(delay),
+        shell: isWin ? "powershell" : "bash",
+        background,
+      }),
+    ) || "{}",
+  );
+  const elapsed = Date.now() - startedAt;
+  check(
+    label,
+    foreground.ok === true &&
+      foreground.data?.running === false &&
+      foreground.data?.foreground === true &&
+      foreground.data?.background === false &&
+      String(foreground.data?.stdout ?? "").includes(`fg-done-${delay}`) &&
+      elapsed >= delay - 100,
+    { elapsed_ms: elapsed, data: foreground.data },
+  );
+}
 
 check("missing_file_isError", (missing as { isError?: boolean }).isError === true, missing);
 

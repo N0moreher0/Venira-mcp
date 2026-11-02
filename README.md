@@ -28,10 +28,12 @@ Prefer your agent to do it? Paste the prompt from [§2.2](#22-fastest-path-paste
   is rejected with `path_escape`.
 - **Validated read cache.** Reads are cached and re-validated by `mtime + size`, which
   detects normal external edits or deletes; it is not a filesystem transaction or watcher.
-- **Async shell.** `project_shell_run` returns `run_id`/`shell_id` immediately by default;
-  poll with `project_shell_status` (5–30 s observation window, deliberately non-queued).
-  Set `early_exit: 1` when the agent needs the bounded final `stdout`/`stderr` in the
-  same call; leave it false for non-blocking workflows.
+- **Async shell by default, foreground on request.** `project_shell_run` returns
+  `run_id`/`shell_id` immediately by default; poll with `project_shell_status`
+  (5–30 s observation window, deliberately non-queued). Pass `background: 0` (or
+  `false`) when the agent needs the complete final `stdout`/`stderr` in the same call:
+  it blocks until the command exits and flushes, and the agent must not start other work
+  while waiting. `early_exit: 1` remains a backwards-compatible alias.
 - **Full observability.** `project_health` reports capability state, queue depth, cache
   hit-rates, active shells, and p50/p95/max per operation.
 - **Audit trail.** Operations (including failures, shell runs, and cancellations) are written
@@ -570,7 +572,7 @@ project_plan_read_batch({ task_description: "add retry handling to the GitHub cl
 
 | Tool | Purpose | Notes |
 |---|---|---|
-| `project_shell_run` | Start a shell command; returns `run_id`/`shell_id` immediately by default | `shell`: `powershell` / `cmd` / `bash` · `relative_cwd` · `early_exit: 1` waits for completion and returns bounded full `stdout`/`stderr` in the same call; `0` (default) remains non-blocking and returns tails for polling · `timeout_ms` (kills the **process tree** under hard timeout policy) · `secret_env: ["NAME"]` (inject stored secrets as env vars only after explicit human approval; raw values are not added to command/audit text, output scrubbing is best-effort) · Node script executions also require approval because the policy cannot inspect their effects · `approval_id` for the default human approval flow; `approval_token` + `approval_scope` are legacy compatibility. All captured streams remain capped at 1 MiB each. |
+| `project_shell_run` | Start a shell command; returns `run_id`/`shell_id` immediately by default | `shell`: `powershell` / `cmd` / `bash` · `relative_cwd` · `background: 0` / `false` blocks until the command exits and returns bounded full `stdout`/`stderr` in the same call; `1` (default) stays non-blocking and returns tails for polling · `early_exit: 1` is the legacy alias for `background: 0` · `timeout_ms` (kills the **process tree** under hard timeout policy) · `secret_env: ["NAME"]` (inject stored secrets as env vars only after explicit human approval; raw values are not added to command/audit text, output scrubbing is best-effort) · Node script executions also require approval because the policy cannot inspect their effects · `approval_id` for the default human approval flow; `approval_token` + `approval_scope` are legacy compatibility. All captured streams remain capped at 1 MiB each. |
 | `project_shell_status` | Poll a running command | `wait_seconds` 0–30 is an *observation window*, not a timeout. Deliberately **not queued** behind other calls, not audit-logged (prevents orphan "running" rows). Reports `timed_out`, `dropped_bytes` and the policy decision. |
 | `project_shell_cancel` | Kill a running command by `run_id` | Kills the whole tree (`taskkill /T` on Windows, process group on POSIX). Also used at MCP shutdown to avoid orphan processes. |
 | `project_shell_cancel_session` | Cancel **all** shell runs tracked in this session | P1; kills every process tree in the session at once. |
@@ -619,7 +621,10 @@ At connect time the server advertises an `instructions` block (MCP SDK ≥ 1.32)
 7. Before a large/multi-file change chain → project_snapshot action=create; if it goes wrong
    → action=restore id=… (dry_run first when unsure)
 8. Build/test/long command → project_shell_run (returns run_id immediately),
-   then poll project_shell_status (wait_seconds 5..30); project_shell_cancel to stop
+   then poll project_shell_status (wait_seconds 5..30); project_shell_cancel to stop.
+   Need the final output in one call? Use project_shell_run background=0: it blocks
+   until the command exits, so do not start other work while waiting (keep the run
+   under the client request timeout, or poll the async run instead)
 9. A token/credential → project_secret action=set (prefer value_env; expires_in_days for
    rotation) or action=get/list for metadata; inject with project_shell_run secret_env=["NAME"]
    — never paste the value. Expired secrets are refused (secret_expired)
@@ -1000,8 +1005,11 @@ etc. The model is expected to read `hint` first.
   falls back to a bounded scan capped at 4 000 files / 300 directories, skipping
   `node_modules`, `target`, `dist`, `.git`, etc.
 - **Shell output is bounded.** The default async response returns bounded stdout/stderr tails,
-  not a live stream. With `early_exit: 1`, the completed response also includes bounded
-  `stdout`/`stderr`; long outputs are still capped by design.
+  not a live stream. With `background: 0` (or legacy `early_exit: 1`), the call blocks until
+  the process exits and its stdio flushes, then returns bounded `stdout`/`stderr`; long
+  outputs are still capped by design. A foreground call is bounded by `timeout_ms`
+  (default 10 minutes), but the MCP client may impose a shorter request timeout — use the
+  async path plus polling for runs that could outlive the client budget.
 - **One workspace per server instance.** The workspace, data dir, and permission mode are
   fixed at process start. To serve multiple workspaces concurrently, run multiple instances.
 - **`better-sqlite3` is a native module.** Prebuilt binaries cover the common Node ×
@@ -1133,6 +1141,7 @@ The full history, in order — from the standalone rewrite to the provider, secr
 
 | Date | Version | Milestone |
 |---|---|---|
+| 2026-11-02 | **v1.9.1** | **True foreground shell runs.** `project_shell_run` gains `background` (number/boolean/string): `background: 0` / `false` / `"False"` blocks until the command exits and stdio flushes, then returns the complete bounded `stdout`/`stderr` in the same call; the async default is unchanged and `early_exit: 1` remains a backwards-compatible alias. The old 2-second "give up waiting" cap no longer applies to foreground calls, and the host-call budget now covers `timeout_ms` instead of 30 s. **44 tools**, verify **370/370**. |
 | 2026-11-02 | **v1.9.0** | **Dependency graph + change impact + CI waiting.** `project_dependency_graph` builds a deterministic TS/JS + Python import/symbol graph (JSON, DOT or Mermaid; relative imports, `require()`, dynamic `import()`, `extends`/`implements`, cross-file references; bounded walk, protected paths skipped, 5 s cache invalidated by writes). `project_change_impact` answers "what breaks if I edit this?" with a bounded reverse/forward closure, per-hit `confidence`, `affected_symbols` and a separate `tests_affected` count; ambiguous bare symbol names downgrade to `possible` and are listed in `unresolved[]`. `project_ci_wait` long-polls one run/ref/PR/branch until terminal, `any_change` or `timeout_ms` (default 45 s, max 110 s), returning the failure log tail in the same call; it is unqueued and documented as a long-poll because MCP stdio cannot wake the model. **44 tools**, verify **367/367**. |
 | 2026-11-02 | **v1.8.2** | **Audit/secret hardening.** Audit rows are keyed (HMAC chain) so an in-place edit is detected, and secret ciphertext is bound to its name so a renamed entry cannot decrypt another entry's value. |
 | 2026-11-02 | **v1.8.1** | **Docs-only release.** README now opens with the one-line install and a copy/paste agent prompt, followed by a short quick start and a command cheat sheet; per-client config paths, raw JSON/TOML, developer and Docker installs moved behind it. No code changes. |
