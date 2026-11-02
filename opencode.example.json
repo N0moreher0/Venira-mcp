@@ -19,6 +19,7 @@
         "VENIRA_OUTPUT_MODE": "full"
         // Optional: VENIRA_DATA_DIR (default: per-user OS dir),
         // VENIRA_DEFAULT_SHELL (default: auto-detect), VENIRA_ALLOW_JS_EXEC=1,
+        // VENIRA_JS_EXEC_APPROVAL=0 (disable per-call human approval for JS),
         // VENIRA_PRETTY=1, VENIRA_TRACE=1, VENIRA_CACHE_ALL=0.
       }
     }

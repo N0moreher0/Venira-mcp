@@ -5,16 +5,18 @@ import { activeDataDir } from "./workspace.js";
 import { readOrCreateHexKey, writeFileAtomicSync } from "./keyfile.js";
 
 /**
- * Human-in-the-loop approvals for `ask`-tier shell commands.
+ * Human-in-the-loop approvals for `ask`-tier shell commands and for
+ * `project_execute_js`.
  *
- * Flow: the server stores a pending record (bound to the exact command, shell,
- * cwd, secret_env and rule) and returns its approval_id. A human grants it with
- * `npx venira-mcp --approve <id>` in a real terminal. The grant file carries an
- * HMAC over (id, session, binding, scope, timestamp) keyed by a secret that
- * lives in the data dir, and the server recomputes that HMAC from the *current*
- * call when the id is redeemed. So a grant cannot be forged without the key,
- * cannot be replayed for a different command, and its scope (once / session) is
- * decided by the human at approval time, never by the model.
+ * Flow: the server stores a pending record (bound to the exact command/script,
+ * shell, cwd, secret_env and rule) and returns its approval_id. A human grants
+ * it with `npx venira-mcp --approve <id>` in a real terminal. The grant file
+ * carries an HMAC over (id, session, binding, scope, timestamp) keyed by a
+ * secret that lives in the data dir, and the server recomputes that HMAC from
+ * the *current* call when the id is redeemed. So a grant cannot be forged
+ * without the key, cannot be replayed for a different command, and its scope
+ * (once / session) is decided by the human at approval time, never by the
+ * model.
  *
  * Note: this is a guard rail, not a sandbox. An agent that can run arbitrary
  * code as the same OS user can still read the key; use a container or a
@@ -95,6 +97,8 @@ export interface PendingApproval {
   secret_env: string[];
   rule: string;
   reason: string;
+  /** Tool the human must retry after granting (defaults to project_shell_run). */
+  tool?: string;
   /** bindingHash() of the real (unredacted) call this approval covers. */
   binding?: string;
   expires_at: number;
@@ -123,6 +127,9 @@ function pendingMac(p: PendingApproval): string {
         p.rule,
         p.created_at,
         p.expires_at,
+        // Appended only when present, so records written before `tool`
+        // existed still verify against their original tuple.
+        ...(p.tool ? [p.tool] : []),
       ]),
     )
     .digest("hex");

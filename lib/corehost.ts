@@ -1648,6 +1648,7 @@ async function opShellRun(
         secret_env: secretNames.slice(),
         rule: decision.rule,
         reason: decision.reason,
+        tool: "project_shell_run",
         binding: approvalBinding,
         expires_at: issued?.expires_at ?? Date.now() + 5 * 60 * 1000,
         status: "pending",

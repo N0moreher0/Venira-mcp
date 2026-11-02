@@ -42,17 +42,18 @@ try {
   console.log(`Shell:   ${p.shell}`);
   console.log(`Cwd:     ${p.cwd}`);
   if (p.secret_env.length > 0) console.log(`Secrets: ${p.secret_env.join(", ")}`);
-  console.log(`Command: ${p.command}`);
+  const tool = p.tool ?? "project_shell_run";
+  console.log(`${tool === "project_execute_js" ? "Code:    " : "Command: "}${p.command}`);
   console.log(`Scope:   ${wantSession ? "session (same command group until it expires)" : "once"}`);
   if (!assumeYes) {
-    const answer = (await ask("Approve this command? [y/N] ")).trim().toLowerCase();
+    const answer = (await ask("Approve this call? [y/N] ")).trim().toLowerCase();
     if (answer !== "y" && answer !== "yes") {
       console.log("Not approved.");
       process.exit(1);
     }
   }
   writeApprovalGrant(id, "cli", wantSession ? "session" : "once");
-  console.log(`Approved ${id}. Retry the original project_shell_run with approval_id="${id}".`);
+  console.log(`Approved ${id}. Retry the original ${tool} with approval_id="${id}".`);
   process.exit(0);
 } catch (err) {
   console.error(err instanceof Error ? err.message : String(err));

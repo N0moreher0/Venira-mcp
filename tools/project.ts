@@ -1,5 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
@@ -35,6 +35,7 @@ import {
   CACHE_SEARCH_ONLY_ENABLED,
   isProtectedPath,
   ALLOW_JS_EXEC,
+  JS_EXEC_APPROVAL,
   activeDataDir,
 } from "../lib/workspace.js";
 import { addTrace, recentTraces, traceSnapshot } from "../lib/tracer.js";
@@ -1745,6 +1746,23 @@ function applyDisabledTools(server: McpServer): void {
   console.error(`[venira-coding] disabled tools: ${[...blocked].join(", ")}`);
 }
 
+const JS_EXEC_RULE = "ask.js_exec";
+
+/**
+ * The whole call is the approval scope: the script plus its argv. Hashing both
+ * (instead of trusting a stored copy) means a grant cannot be replayed for a
+ * different snippet or different `process.argv` values.
+ */
+function jsExecBinding(code: string, argv: string[] | undefined): string {
+  return approvals.bindingHash({
+    command: `${code}\u0000${JSON.stringify(argv ?? [])}`,
+    shell: "node",
+    cwd: WORKSPACE,
+    secret_env: [],
+    rule: JS_EXEC_RULE,
+  });
+}
+
 async function runExecuteJs(args: Args): Promise<ToolResult> {
   const started = performance.now();
   const requestId = newRequestId();
@@ -1759,8 +1777,87 @@ async function runExecuteJs(args: Args): Promise<ToolResult> {
   const timeoutMs = typeof args.timeout_ms === "number" && Number.isFinite(args.timeout_ms) && args.timeout_ms > 0
     ? Math.min(Math.floor(args.timeout_ms), 600_000)
     : 30_000;
+  const cliArgs = Array.isArray(args.argv) ? (args.argv as string[]).map(String) : undefined;
+
+  // Per-call human approval. Enabling the tool only says the operator accepts
+  // the risk in general; it does not say they have read this snippet, which can
+  // still read protected files and (best-effort) reach the network.
+  if (JS_EXEC_APPROVAL) {
+    const binding = jsExecBinding(code, cliArgs);
+    const approvalId = typeof args.approval_id === "string" ? args.approval_id.trim() : "";
+    if (!approvalId) {
+      const pendingId = randomUUID();
+      const createdAt = Date.now();
+      const expiresAt = createdAt + 5 * 60 * 1000;
+      const reason =
+        "project_execute_js runs arbitrary JavaScript outside shell policy and the protected-path guard.";
+      approvals.createPendingApproval({
+        approval_id: pendingId,
+        session_id: SESSION_ID,
+        // The approver must see exactly what they are approving, so the code is
+        // stored as written (the data dir is per-user, 0700). Redaction belongs
+        // in the tool response/transcript, not in the human's review copy.
+        command: code.slice(0, 8000),
+        shell: "node",
+        cwd: WORKSPACE,
+        secret_env: [],
+        rule: JS_EXEC_RULE,
+        reason,
+        tool: "project_execute_js",
+        binding,
+        expires_at: expiresAt,
+        status: "pending",
+        created_at: createdAt,
+      });
+      const elapsedMs = performance.now() - started;
+      return toolResult(
+        errorEnvelope("execute_js", new Error(`[approval_required] ${reason} (rule: ${JS_EXEC_RULE})`), {
+          requestId,
+          elapsedMs,
+          data: {
+            approval_required: true,
+            approval_id: pendingId,
+            rule: JS_EXEC_RULE,
+            reason,
+            cwd: WORKSPACE,
+            code_preview: redactSecrets(code).slice(0, 2000),
+            ...(cliArgs ? { argv: cliArgs } : {}),
+            expires_at: expiresAt,
+            retry_with: {
+              tool: "project_execute_js",
+              arguments: {
+                code,
+                ...(cliArgs ? { argv: cliArgs } : {}),
+                ...(typeof args.timeout_ms === "number" ? { timeout_ms: args.timeout_ms } : {}),
+                approval_id: pendingId,
+              },
+            },
+            note: `A human must run: npx venira-mcp --approve ${pendingId} (then retry with approval_id).`,
+          },
+          hint: `Ask the user to run \`npx venira-mcp --approve ${pendingId}\` in an interactive terminal, then retry project_execute_js with approval_id="${pendingId}".`,
+        }),
+        true,
+      );
+    }
+    const verdict = approvals.verifyApprovalGrant(approvalId, SESSION_ID, binding);
+    if (!verdict.ok) {
+      const elapsedMs = performance.now() - started;
+      const hint =
+        verdict.reason === "binding_mismatch" || verdict.reason === "bad_signature"
+          ? "This approval was granted for different code or argv. Call project_execute_js again without approval_id to get a new approval_id for this exact snippet."
+          : `Run \`npx venira-mcp --approve ${approvalId}\` in a terminal first, then retry with approval_id="${approvalId}".`;
+      return toolResult(
+        errorEnvelope("execute_js", new Error(`[approval_invalid] Approval ${approvalId} ${verdict.reason ?? "rejected"}. Hint: ${hint}`), {
+          requestId,
+          elapsedMs,
+        }),
+        true,
+      );
+    }
+    approvals.consumeApproval(approvalId);
+  }
+
   try {
-    const cliArgs = Array.isArray(args.argv) ? (args.argv as string[]).map(String) : undefined;
     const r = executeJs(code, { cwd: WORKSPACE, timeout: timeoutMs, args: cliArgs });
     const response: RustResponse = {
       status: "completed",
@@ -2995,13 +3092,13 @@ export function registerProjectTools(server: McpServer): void {
       "project_execute_js",
       {
         ...config(
-          "Evaluate JavaScript code. Runs `node` in the workspace, capturing stdout/stderr; supports top-level await and `require`.",
+          "Evaluate JavaScript code. Runs `node` in the workspace, capturing stdout/stderr; supports top-level await and `require`. Each call needs human approval by default (`VENIRA_JS_EXEC_APPROVAL=1`): call without `approval_id` to receive one, then retry after the user grants it.",
           "Execute JS",
           {
             use_when: "you need to run a small JS snippet for computation, file I/O via fs, or prototyping.",
             avoid_when: "you need a full shell pipeline (project_shell_run) or a persistent process.",
             speed_profile: "synchronous node exec with timeout (default 30s, cap 10min); output capped at 1 MiB.",
-            output_kind: "execute_js: stdout_tail, stderr_tail, exit_code, timed_out, ok.",
+            output_kind: "execute_js: stdout_tail, stderr_tail, exit_code, timed_out, ok. Without approval_id: approval_required + approval_id.",
             batch_safe: false,
           },
           { destructiveHint: true, openWorldHint: false },
@@ -3010,6 +3107,10 @@ export function registerProjectTools(server: McpServer): void {
           code: z.string().min(1),
           timeout_ms: z.number().int().min(1).max(600_000).optional(),
           argv: z.array(z.string()).optional(),
+          approval_id: z
+            .string()
+            .optional()
+            .describe("Approval id from a previous project_execute_js approval_required response, granted with `npx venira-mcp --approve <id>`."),
         },
       },
       (args) => runExecuteJs(args as Args),

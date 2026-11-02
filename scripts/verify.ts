@@ -1171,11 +1171,16 @@ await rootGuardClient.close();
 await fs.rm(rootGuardDir, { recursive: true, force: true });
 
 // 17d. execute_js output is redacted and the network globals are removed.
+// Approval is switched off here so the redaction/network assertions run in one
+// call; 17e covers the approval gate separately.
 const jsTransport = new StdioClientTransport({
   command: "node",
   args: ["dist/server.js"],
   cwd: process.cwd(),
-  env: verifyEnv({ VENIRA_SESSION_ID: `${SESSION_ID}-js-exec`, VENIRA_ALLOW_JS_EXEC: "1" }, "full"),
+  env: verifyEnv(
+    { VENIRA_SESSION_ID: `${SESSION_ID}-js-exec`, VENIRA_ALLOW_JS_EXEC: "1", VENIRA_JS_EXEC_APPROVAL: "0" },
+    "full",
+  ),
   stderr: "pipe",
 });
 const jsClient = new Client({ name: "verify-js-exec", version: "0.0.0" }, { capabilities: {} });
@@ -1193,6 +1198,61 @@ check(
   jsLeak,
 );
 await jsClient.close();
+
+// 17e. execute_js needs a per-call human grant by default, bound to the exact
+// code, single-use, and granted through the same CLI as shell approvals.
+const jsApprovalTransport = new StdioClientTransport({
+  command: "node",
+  args: ["dist/server.js"],
+  cwd: process.cwd(),
+  env: verifyEnv(
+    { VENIRA_SESSION_ID: `${SESSION_ID}-js-approval`, VENIRA_ALLOW_JS_EXEC: "1", VENIRA_JS_EXEC_APPROVAL: "1" },
+    "full",
+  ),
+  stderr: "pipe",
+});
+const jsApprovalClient = new Client({ name: "verify-js-approval", version: "0.0.0" }, { capabilities: {} });
+await jsApprovalClient.connect(jsApprovalTransport);
+const jsApprovedCode = 'console.log("approval-ok");';
+const jsAsk = asEnvelope(
+  await jsApprovalClient.callTool({ name: "project_execute_js", arguments: { code: jsApprovedCode } }),
+);
+const jsApprovalId = String(jsAsk.data?.approval_id ?? "");
+check(
+  "execute_js_approval_required",
+  jsAsk.error?.code === "approval_required" &&
+    !!jsApprovalId &&
+    jsAsk.data?.rule === "ask.js_exec" &&
+    String(jsAsk.data?.note ?? "").includes("npx venira-mcp --approve"),
+  jsAsk,
+);
+writeApprovalGrant(jsApprovalId);
+const jsWrongCode = asEnvelope(
+  await jsApprovalClient.callTool({
+    name: "project_execute_js",
+    arguments: { code: `${jsApprovedCode} console.log("different");`, approval_id: jsApprovalId },
+  }),
+);
+check("execute_js_approval_bound_to_code", jsWrongCode.error?.code === "approval_invalid", jsWrongCode);
+const jsApprovedRun = asEnvelope(
+  await jsApprovalClient.callTool({
+    name: "project_execute_js",
+    arguments: { code: jsApprovedCode, approval_id: jsApprovalId },
+  }),
+);
+check(
+  "execute_js_approval_runs_once",
+  jsApprovedRun.ok === true && String(jsApprovedRun.data?.stdout_tail ?? "").includes("approval-ok"),
+  jsApprovedRun,
+);
+const jsApprovalReuse = asEnvelope(
+  await jsApprovalClient.callTool({
+    name: "project_execute_js",
+    arguments: { code: jsApprovedCode, approval_id: jsApprovalId },
+  }),
+);
+check("execute_js_approval_single_use", jsApprovalReuse.error?.code === "approval_invalid", jsApprovalReuse);
+await jsApprovalClient.close();
 
 // 18. batch per-item budget
 const batchBudget = await call("project_read_batch", {

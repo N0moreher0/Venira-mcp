@@ -40,6 +40,7 @@ export function parseBackgroundFlag(value: unknown): boolean {
 const BOOLEAN_ENV_NAMES = [
   "VENIRA_UNRESTRICTED",
   "VENIRA_ALLOW_JS_EXEC",
+  "VENIRA_JS_EXEC_APPROVAL",
   "VENIRA_CACHE_ALL",
   "VENIRA_CACHE_LIST_ONLY",
   "VENIRA_CACHE_SEARCH_ONLY",
