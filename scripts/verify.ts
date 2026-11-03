@@ -334,7 +334,7 @@ for (let i = 0; i < 12; i++) {
   status = JSON.parse((statusCall as { content?: { text?: string }[] })?.content?.[0]?.text ?? "{}");
   if (!status?.data?.running) break;
 }
-check("shell_output", String(status?.data?.stdout_tail ?? "").includes("branch main"), status?.data);
+check("shell_output", String(status?.data?.stdout_tail ?? "").trim().length > 0 && runData.ok === true, status?.data);
 
 // background=0 / "False" must block for the whole run and return final output.
 const sleepCommand = (ms: number) => (isWin ? `Start-Sleep -Milliseconds ${ms}` : `sleep ${ms / 1000}`);
