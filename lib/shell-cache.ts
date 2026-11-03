@@ -19,7 +19,9 @@
  */
 
 // Simple LRU cache with max 100 entries
+import { envFlag } from "./env.js";
 const MAX_CACHE_ENTRIES = 100;
+const CACHE_DISABLED = !envFlag("VENIRA_SHELL_CACHE", true);
 const CACHE_TTL_MS = 5000; // 5 seconds TTL
 
 interface CacheEntry {
@@ -36,6 +38,7 @@ function getCacheKey(command: string, cwd: string): string {
 }
 
 export function getShellCache(command: string, cwd: string): CacheEntry | null {
+  if (CACHE_DISABLED) return null;
   const key = getCacheKey(command, cwd);
   const entry = cache.get(key);
   
@@ -55,6 +58,7 @@ export function getShellCache(command: string, cwd: string): CacheEntry | null {
 }
 
 export function setShellCache(command: string, cwd: string, output: string, error: string, exitCode: number): void {
+  if (CACHE_DISABLED) return;
   const key = getCacheKey(command, cwd);
   
   // If key already exists, delete it first (to update position)

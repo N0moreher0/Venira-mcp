@@ -611,7 +611,7 @@ const ASK_RULES: AskRule[] = [
 
 /** Commands that are safe and routine in a dev workspace. Not flagged. */
 const SAFE_COMMANDS = new Set([
-  "node",
+  "start-sleep", "sleep", "node",
   "npx",
   "tsc",
   "esbuild",
