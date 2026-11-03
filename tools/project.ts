@@ -592,6 +592,9 @@ async function readFileCached(args: Args): Promise<Execution> {
     const stat = await statSignature(absolutePath);
     if (!stat) {
       if (Date.now() - negTs <= NEGATIVE_CACHE_TTL_MS) {
+        // MRU: refresh recency without displacing unrelated cache entries.
+        negativeReadCache.delete(key);
+        negativeReadCache.set(key, negTs);
         throw new Error(
           '[not_found] Path does not exist: ' + args.relative_path + '. Hint: Check it with project_list_files; do not retry the same path.',
         );
