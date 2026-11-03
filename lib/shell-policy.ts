@@ -407,6 +407,21 @@ const HARD_DENY: HardDenyRule[] = [
       return collect(all);
     },
   },
+  {
+    id: "taskkill_force",
+    reason: "Force-killing processes can terminate critical system processes or applications.",
+    test: (_p, raw) => /\btaskkill\b[^\n]*\/f/i.test(raw) || /\btaskkill\b[^\n]*--force/i.test(raw),
+  },
+  {
+    id: "powershell_encoded_command",
+    reason: "PowerShell encoded commands (-enc/-e/-ec/-encodedcommand) are a common obfuscation technique used in attacks.",
+    test: (parsed) =>
+      parsed.segments.some((segment) => {
+        if (segment.command !== "powershell" && segment.command !== "pwsh") return false;
+        const flags = segment.argv.map((a) => a.toLowerCase());
+        return flags.some((f) => ["-e", "-ec", "-enc", "-encodedcommand"].includes(f));
+      }),
+  },
 ];
 
 const ASK_RULES: AskRule[] = [
@@ -484,6 +499,51 @@ const ASK_RULES: AskRule[] = [
     id: "secret_dump",
     reason: "This prints the whole environment, which usually contains secrets.",
     test: (parsed) => parsed.segments.some((segment) => ["env", "printenv", "set", "export"].includes(segment.command) && segment.argv.length === 1),
+  },
+  {
+    id: "dynamic_execution",
+    reason: "This executes code that the policy cannot safely inspect.",
+    test: (parsed) =>
+      parsed.segments.some((segment) => {
+        if (["eval", "exec", "source", ".", "invoke-expression", "iex"].includes(segment.command)) return true;
+        const flags = segment.argv;
+        if (segment.command === "node" || segment.command === "nodejs") {
+          const informationalFlags = new Set(["--version", "-v", "--help", "-h"]);
+          return (
+            parsed.has_pipe ||
+            parsed.has_redirect ||
+            parsed.has_background ||
+            flags.length === 0 ||
+            !flags.every((flag) => informationalFlags.has(flag.toLowerCase()))
+          );
+        }
+        const interpreters: Record<string, string[]> = {
+          node: ["-e", "--eval", "-p", "--print", "-pe", "-pr"],
+          nodejs: ["-e", "--eval", "-p", "--print", "-pe", "-pr"],
+          python: ["-c"],
+          python3: ["-c"],
+          deno: ["eval"],
+          bash: ["-c", "-lc", "-ec"],
+          sh: ["-c", "-ec"],
+          zsh: ["-c", "-lc"],
+          powershell: ["-command", "-encodedcommand", "-e", "-ec", "-enc", "-co", "-c"],
+          pwsh: ["-command", "-encodedcommand", "-e", "-ec", "-enc", "-co", "-c"],
+          cmd: ["/c"],
+          perl: ["-e"],
+          ruby: ["-e"],
+        };
+        const expected = interpreters[segment.command];
+        if (!expected) return false;
+        return flags.some((flag) => expected.some((exp) => {
+          const f = flag.toLowerCase();
+          const e = exp.toLowerCase();
+          if (f === e) return true;
+          if (f.startsWith("-") && e.startsWith("-") && f.length > 2 && e.length === 2) {
+            return f.includes(e.slice(1));
+          }
+          return false;
+        }));
+      }),
   },
   {
     id: "wrapper_command",

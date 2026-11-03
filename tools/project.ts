@@ -1,5 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
@@ -40,6 +40,7 @@ import {
 } from "../lib/workspace.js";
 import { addTrace, recentTraces, traceSnapshot } from "../lib/tracer.js";
 import { invalidateDependencyGraphCache } from "../lib/dependency-graph.js";
+import { clearShellCache, getShellCacheStats } from "../lib/shell-cache.js";
 import { auditKeyPath, verifyAuditRows } from "../lib/audit-hash.js";
 import { readHexKey } from "../lib/keyfile.js";
 import {
@@ -80,6 +81,7 @@ const MAX_CACHE_ENTRIES = 1024;
 const LIST_CACHE_MS = envInt("VENIRA_LIST_CACHE_MS", 1500);
 const SEARCH_CACHE_MS = envInt("VENIRA_SEARCH_CACHE_MS", 3000);
 const RECENT_CACHE_MS = envInt("VENIRA_RECENT_CACHE_MS", 2000);
+const NEGATIVE_CACHE_TTL_MS = envInt("VENIRA_NEGATIVE_CACHE_MS", 500);
 const MAX_BATCH_RESPONSE_BYTES = 2 * 1024 * 1024;
 const MAX_BATCH_ITEM_BYTES = envInt("VENIRA_BATCH_ITEM_BYTES", 512 * 1024);
 const MAX_READ_BYTES = 1048576; // 1 MiB, safer than the native ceiling
@@ -173,6 +175,19 @@ function isCapabilityError(error: unknown): boolean {
 export async function warmUp(): Promise<void> {
   try {
     await capabilityReady();
+    // Cache warm-up: proactively read the handful of files that are read
+    // in virtually every session, so the first real tool call hits a
+    // warm cache. Failures (missing files) are expected and swallowed.
+    const candidates = ["README.md", "AGENTS.md", "CLAUDE.md", "package.json", ".env.example"];
+    await Promise.allSettled(
+      candidates.map(async (name) => {
+        try {
+          await readFileCached({ relative_path: name } as Args);
+        } catch {
+          /* not_found is expected for missing candidates; negative cache stores it */
+        }
+      }),
+    );
   } catch (error) {
     console.error(
       "[venira-coding] warmup failed:",
@@ -372,6 +387,7 @@ const infoCache = new Map<string, CachedRead>();
 const listCache = new Map<string, CachedTtl>();
 const searchCache = new Map<string, CachedTtl>();
 const recentCache = new Map<string, CachedTtl>();
+const negativeReadCache = new Map<string, number>(); // Absolute path -> timestamp of not_found
 
 let readBytes = 0;
 let infoBytes = 0;
@@ -427,9 +443,164 @@ function fromReadEntry(entry: CachedRead): RustResponse {
   };
 }
 
+async function runSafeEdit(args: Args): Promise<RustResponse> {
+  const relativePath = typeof args.relative_path === "string" ? args.relative_path.trim() : "";
+  if (!relativePath) {
+    throw new Error("[invalid_request] relative_path is required. Hint: provide the file path to safely edit.");
+  }
+  const edits = Array.isArray(args.edits) ? (args.edits as Args[]) : null;
+  if (!edits || edits.length === 0) {
+    throw new Error("[invalid_request] edits must be a non-empty array. Hint: provide [{ old_text, new_text }].");
+  }
+  if (edits.length > 100) {
+    throw new Error("[invalid_request] too many edits (max 100). Hint: split into multiple safe_edit calls.");
+  }
+  const reason = typeof args.reason === "string" ? args.reason.trim() : "";
+  if (!reason || reason.length > 400) {
+    throw new Error("[invalid_request] reason (why) of <= 400 chars is required for audit.");
+  }
+  const expectedSha = typeof args.expected_sha256 === "string" ? args.expected_sha256.trim() : null;
+
+  // 1. Read fresh (bypass any cached result; detect TOCTOU).
+  const readResp = (await execute("read_file", { relative_path: relativePath })) as RustResponse;
+  const readText = (readResp.result?.data && typeof (readResp.result.data as { text?: unknown }).text === "string")
+    ? ((readResp.result.data as { text: string }).text)
+    : null;
+  if (readText === null) {
+    throw new Error("[io_error] Could not read file content. Hint: check existence with project_list_files; do not retry pinned-broken files within the same plan.");
+  }
+  const beforeSha = createHash("sha256").update(readText, "utf8").digest("hex");
+
+  if (expectedSha && expectedSha !== beforeSha) {
+    throw new Error(
+      "[content_changed] File changed since the agent originally read it " +
+      "(expected_sha256=" + expectedSha + ", actual=" + beforeSha +
+      "). Re-read and re-run the edit with the fresh expected_sha256.",
+    );
+  }
+
+  // 2. Apply edits in memory.
+  let current = readText;
+  let replacementsTotal = 0;
+  for (let i = 0; i < edits.length; i++) {
+    const e = edits[i];
+    const oldText = (e && typeof e.old_text === "string") ? e.old_text : null;
+    const newText = (e && typeof e.new_text === "string") ? e.new_text : null;
+    if (oldText === null || newText === null) {
+      throw new Error("[invalid_request] edit[" + i + "] must have string old_text and new_text.");
+    }
+    if (oldText.length === 0) {
+      throw new Error("[invalid_request] edit[" + i + "].old_text must be non-empty.");
+    }
+    const replaceAll = !!(e && e.replaceAll === true);
+    let count = 0;
+    if (replaceAll) {
+      const parts = current.split(oldText);
+      count = parts.length - 1;
+      if (count === 0) throw new Error("[no_match] edit[" + i + "] old_text not found: " + oldText.slice(0, 120) + "...");
+      current = current.split(oldText).join(newText);
+    } else {
+      const first = current.indexOf(oldText);
+      if (first === -1) throw new Error("[no_match] edit[" + i + "] old_text not found: " + oldText.slice(0, 120) + "...");
+      count = 1;
+      current = current.slice(0, first) + newText + current.slice(first + oldText.length);
+    }
+    replacementsTotal += count;
+  }
+
+  const afterSha = createHash("sha256").update(current, "utf8").digest("hex");
+  if (afterSha === beforeSha) {
+    // No-op change; skip write to keep audit focused.
+    return {
+      status: "completed",
+      result: {
+        kind: "safe_edit",
+        data: {
+          relative_path: relativePath,
+          before_sha256: beforeSha,
+          after_sha256: afterSha,
+          verified_sha256: afterSha,
+          replacements: replacementsTotal,
+          verified: true,
+          changed: false,
+          reason,
+          message: "Edits produced no content change; write skipped to avoid useless writes.",
+        },
+      },
+    };
+  }
+
+  // Limit output sizes to prevent huge writes.
+  if (current.length > 2 * 1024 * 1024) {
+    throw new Error("[resource_limit] Resulting content exceeds 2MB. Hint: split into smaller edits.");
+  }
+
+  // 3. Write atomically at the tools layer perspective (backend does the actual write).
+  await execute("write_file", {
+    relative_path: relativePath,
+    content: current,
+    reason: "safe_edit: " + reason,
+  });
+
+  // 4. Invalidate caches (safe_edit bypassed executeCached default handling).
+  try {
+    const abs = toHostPath(relativePath);
+    invalidatePath(abs);
+    invalidateListCaches();
+    invalidateDependencyGraphCache();
+  } catch {
+    /* cache invalidation failure is non-fatal; stale cache will be detected via mtime */
+  }
+
+  // 5. Verify read-back.
+  const verifyResp = (await execute("read_file", { relative_path: relativePath })) as RustResponse;
+  const verifyText = (verifyResp.result?.data && typeof (verifyResp.result.data as { text?: unknown }).text === "string")
+    ? ((verifyResp.result.data as { text: string }).text)
+    : null;
+  const verifiedSha = verifyText !== null
+    ? createHash("sha256").update(verifyText, "utf8").digest("hex")
+    : null;
+  const verified = verifyText !== null && verifyText === current;
+
+  return {
+    status: "completed",
+    result: {
+      kind: "safe_edit",
+      data: {
+        relative_path: relativePath,
+        before_sha256: beforeSha,
+        after_sha256: afterSha,
+        verified_sha256: verifiedSha,
+        replacements: replacementsTotal,
+        verified,
+        changed: true,
+        reason,
+        message: verified
+          ? "Edit completed and read-back verified (content + sha256 match)."
+          : "Edit written but read-back mismatch! Investigate filesystem race or read-cache staleness.",
+      },
+    },
+  };
+}
+
 async function readFileCached(args: Args): Promise<Execution> {
   const absolutePath = toHostPath(args.relative_path as string | undefined);
   const key = cacheKey(absolutePath, args);
+  // Negative cache: short-TTL suppress repeated backend calls for not_found paths.
+  const negTs = negativeReadCache.get(key);
+  if (negTs !== undefined) {
+    const stat = await statSignature(absolutePath);
+    if (!stat) {
+      if (Date.now() - negTs <= NEGATIVE_CACHE_TTL_MS) {
+        throw new Error(
+          '[not_found] Path does not exist: ' + args.relative_path + '. Hint: Check it with project_list_files; do not retry the same path.',
+        );
+      }
+      negativeReadCache.delete(key);
+    } else {
+      negativeReadCache.delete(key);
+    }
+  }
   const entry = readCache.get(key);
   if (entry) {
     const signature = await statSignature(absolutePath);
@@ -450,18 +621,33 @@ async function readFileCached(args: Args): Promise<Execution> {
     // The backend lumps "does not exist" and "locked" into io_error; stat again to return the right code.
     const signature = await statSignature(absolutePath);
     if (!signature) {
+      while (negativeReadCache.size >= 256) {
+       const oldest = negativeReadCache.keys().next().value;
+       if (oldest === undefined) break;
+       negativeReadCache.delete(oldest);
+     }
+     negativeReadCache.set(key, Date.now());
       throw new Error(
-        `[not_found] Path does not exist: ${args.relative_path}. Hint: Check it with project_list_files; do not retry the same path.`,
+        '[not_found] Path does not exist: ' + args.relative_path + '. Hint: Check it with project_list_files; do not retry the same path.',
       );
     }
     if (!signature.isFile) {
       throw new Error(
-        `[invalid_request] Not a file: ${args.relative_path}. Hint: Use project_list_files for folders or project_get_file_info for metadata.`,
+        '[invalid_request] Not a file: ' + args.relative_path + '. Hint: Use project_list_files for folders or project_get_file_info for metadata.',
       );
     }
     throw error;
   }  const signature = await statSignature(absolutePath);
-  if (signature && signature.isFile && typeof (response.result?.data as { text?: unknown })?.text === "string") {
+  const readData = response.result && typeof response.result === 'object' ? (response.result.data as Record<string, unknown> | null) : null;
+  const readText = typeof readData?.text === 'string' ? (readData.text as string) : null;
+  if (signature && signature.isFile && readText !== null) {
+    // Surface content integrity + freshness metadata for Agents (TOCTOU guard). Hash computed once on first read, reused from cache.
+    const sha256 = createHash('sha256').update(readText, 'utf8').digest('hex');
+    if (readData) {
+      readData.sha256 = sha256;
+      readData.mtime_ms = signature.mtimeMs;
+      readData.size_bytes = signature.size;
+    }
     const bytes = stringify(response).length;
     if (bytes <= MAX_BATCH_RESPONSE_BYTES) {
       const cached: CachedRead = {
@@ -571,19 +757,33 @@ async function listCached(args: Args): Promise<Execution> {
   return { response, cached: false };
 }
 
+// In-flight de-duplication protects concurrent callers (MCP batching) from
+// triggering duplicate full-tree walks for the same query while one is running.
+const inflightSearches = new Map<string, Promise<Execution>>();
 async function searchCached(args: Args): Promise<Execution> {
   const prepared = prepare("search", args);
   const key = stableKey(prepared);
   const cached = ttlLookup(searchCache, key, SEARCH_CACHE_MS, cacheStats.search);
   if (cached) return { response: cached, cached: true };
-  const response = (await execute("search", args)) as RustResponse;
-  // Only cache COMPLETE results that have hits. 0-hit results are not cached,
-  // to avoid returning a stale "no match" right after a file was written.
-  const data = response.result?.data as { complete?: boolean; hits?: unknown[] } | undefined;
-  if (data?.complete !== false && (data?.hits?.length ?? 0) > 0) {
-    ttlStore(searchCache, key, response);
+
+  const inFlight = inflightSearches.get(key);
+  if (inFlight) return await inFlight;
+
+  const promise = (async () => {
+    const response = (await execute("search", args)) as RustResponse;
+    // Cache any COMPLETE result (including zero-hit).
+    const data = response.result?.data as { complete?: boolean; hits?: unknown[] } | undefined;
+    if (data?.complete !== false) {
+      ttlStore(searchCache, key, response);
+    }
+    return { response, cached: false };
+  })();
+  inflightSearches.set(key, promise);
+  try {
+    return await promise;
+  } finally {
+    inflightSearches.delete(key);
   }
-  return { response, cached: false };
 }
 
 function invalidatePath(absolutePath: string): void {
@@ -592,6 +792,12 @@ function invalidatePath(absolutePath: string): void {
     if (key.startsWith(prefix)) {
       readCache.delete(key);
       readBytes -= entry.bytes;
+    }
+  }
+  // Clear negative-cache entries keyed by the same path prefix.
+  for (const key of negativeReadCache.keys()) {
+    if (key.startsWith(prefix)) {
+      negativeReadCache.delete(key);
     }
   }
   const info = infoCache.get(absolutePath);
@@ -605,6 +811,7 @@ function invalidatePath(absolutePath: string): void {
 function invalidateAllCaches(): void {
   readCache.clear();
   infoCache.clear();
+  negativeReadCache.clear();
   readBytes = 0;
   infoBytes = 0;
   invalidateListCaches();
@@ -679,6 +886,57 @@ async function executeCached(operation: string, args: Args): Promise<Execution> 
       if (decision.tier === "ask") {
         throw new Error(`[approval_required] ${decision.reason}`);
       }
+    }
+
+    // project_cache_clear: short-circuit backend; clear in-process caches by type.
+    if (operation === "cache_clear") {
+      const type = (args.type as string | undefined) ?? "all";
+      const cleared: Record<string, number> = {};
+      const clearType = (name: string, fn: () => number | void) => {
+        try {
+          const n = fn();
+          cleared[name] = typeof n === "number" ? n : 0;
+        } catch {
+          cleared[name] = 0;
+        }
+      };
+      if (type === "all" || type === "shell") {
+        clearShellCache();
+        cleared.shell = -1; // not tracked by size
+      }
+      if (type === "all" || type === "read") {
+        clearType("read", () => { const n = readCache.size; readCache.clear(); readBytes = 0; return n; });
+      }
+      if (type === "all" || type === "info") {
+        clearType("info", () => { const n = infoCache.size; infoCache.clear(); infoBytes = 0; return n; });
+      }
+      if (type === "all" || type === "list") {
+        clearType("list", () => { const n = listCache.size; listCache.clear(); return n; });
+      }
+      if (type === "all" || type === "search") {
+        clearType("search", () => { const n = searchCache.size; searchCache.clear(); return n; });
+      }
+      if (type === "all" || type === "recent") {
+        clearType("recent", () => { const n = recentCache.size; recentCache.clear(); return n; });
+      }
+      if (type === "all" || type === "negative") {
+        clearType("negative", () => { const n = negativeReadCache.size; negativeReadCache.clear(); return n; });
+      }
+      if (type === "all" || type === "graph") {
+        invalidateDependencyGraphCache();
+        cleared.graph = -1;
+      }
+      const summary = { type, cleared };
+      const response: RustResponse = {
+        status: "completed",
+        result: { kind: "cache_clear", data: summary },
+      };
+      return { response, cached: false };
+    }
+
+    if (operation === "safe_edit") {
+      const response = await runSafeEdit(args);
+      return { response, cached: false };
     }
 
     // VENIRA_CACHE_ALL=0: bypass every read-side cache (strict fresh mode).
@@ -1545,6 +1803,9 @@ function cacheReport() {
       bytes: readBytes,
       ...cacheStats.read,
       hit_rate: rate(cacheStats.read),
+    },
+    negative: {
+      entries: negativeReadCache.size,
     },
     info: {
       entries: infoCache.size,
@@ -3033,7 +3294,7 @@ export function registerProjectTools(server: McpServer): void {
         output_kind: "cancellation: accepted, cleanup_complete.",
         batch_safe: false,
       }, { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false }),
-      inputSchema: { run_id: z.string() },
+      inputSchema: { run_id: z.string(), kill_key: z.string() },
     },
     (args) => runOne("cancel", args),
   );
@@ -3085,6 +3346,57 @@ export function registerProjectTools(server: McpServer): void {
     },
     (args) => runHealth(args as Args),
 
+  );
+
+  server.registerTool(
+    "project_cache_clear",
+    {
+      ...config(
+        "Clear in-process read/search/list/recent/search/shell/graph caches. Use after a toolchain generates files outside normal write flow, or to force fresh reads.",
+        "Clear caches",
+        {
+          use_when: "force-fresh reads after external tooling mutated files, or the cache stats show high hit/miss pressure.",
+          avoid_when: "normal flow (cache invalidates on write/edit/delete).",
+          speed_profile: "instant; clears LRU/TTL maps only (no backend call).",
+          output_kind: "cache_clear: type, cleared per-cache entry counts.",
+          batch_safe: false,
+        },
+        { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+      ),
+      inputSchema: {
+        type: z.enum(["all", "shell", "read", "info", "list", "search", "recent", "negative", "graph"]).default("all").describe("Which cache to clear."),
+      },
+    },
+    (args) => runOne("cache_clear", args as Args),
+  );
+
+  server.registerTool(
+    "project_safe_edit",
+    {
+      ...config(
+        "Read+edit+verify atomically in one MCP call (no TOCTOU race): reads fresh content, requires expected_sha256 to guard, applies edits, writes, invalidates caches, and re-reads to confirm content + sha256.",
+        "Safe edit (TOCTOU-guarded)",
+        {
+          use_when: "you have a sha256 from a prior read_file and want guaranteed content unchanged before write.",
+          avoid_when: "single small edit where plain project_edit_file suffices.",
+          speed_profile: "one read + one write + one verify (slower than edit_file but race-free).",
+          output_kind: "safe_edit: before/after/verified sha256, replacements, verified boolean, changed boolean.",
+          batch_safe: false,
+        },
+        { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+      ),
+      inputSchema: {
+        relative_path: path_.min(1),
+        edits: z.array(z.object({
+          old_text: z.string().min(1),
+          new_text: z.string(),
+          replaceAll: z.boolean().optional(),
+        })).min(1).max(100),
+        expected_sha256: z.string().optional(),
+        reason: z.string().min(1).max(400),
+      },
+    },
+    (args) => runOne("safe_edit", args as Args),
   );
 
   if (ALLOW_JS_EXEC) {
