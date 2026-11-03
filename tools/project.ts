@@ -179,15 +179,19 @@ export async function warmUp(): Promise<void> {
     // in virtually every session, so the first real tool call hits a
     // warm cache. Failures (missing files) are expected and swallowed.
     const candidates = ["README.md", "AGENTS.md", "CLAUDE.md", "package.json", ".env.example"];
-    await Promise.allSettled(
+    // Fire-and-forget: do not block server start on I/O warmup.
+    void Promise.allSettled(
       candidates.map(async (name) => {
         try {
           await readFileCached({ relative_path: name } as Args);
         } catch {
-          /* not_found is expected for missing candidates; negative cache stores it */
+          /* not_found expected; negative cache stores it */
         }
       }),
-    );
+    ).catch(() => {});
+    // Pre-warm the content-search path (OS filesystem cache + search cache)
+    // with a representative query so a user search's first hit is fast.
+    void searchCached({ query: "project_read_file", kind: "literal_content", limit: 50 } as Args).catch(() => {});
   } catch (error) {
     console.error(
       "[venira-coding] warmup failed:",
