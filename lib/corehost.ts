@@ -54,7 +54,7 @@ import {
   normalizeForFuzzy,
 } from "./file-ops-helpers.js";
 import * as approvals from "./approvals.js";
-import { WORKSPACE, PLATFORM, resolveWithin, isProtectedPath, activeDataDir } from "./workspace.js";
+import { WORKSPACE, PLATFORM, resolveWithin, isProtectedPath, activeDataDir, dynamicWorkspaceEnabled, switchWorkspaceRoot, allowedWorkspaceRoots } from "./workspace.js";
 import {
   opSnapshotCreate,
   opSnapshotDelete,
@@ -2693,6 +2693,17 @@ export class CoreHost {
           }
         }
         return { cancelled: true } as T;
+      }
+
+      case "project_tool.workspace.switch": {
+        if (!dynamicWorkspaceEnabled() && !envFlag("VENIRA_UNRESTRICTED", false)) {
+          throw new Error('[workspace_switch_denied] dynamic workspace disabled; set VENIRA_DYNAMIC_WORKSPACE=1 plus VENIRA_WORKSPACE_ROOTS.');
+        }
+        const target = String((p as any).root ?? (p as any).relative_path ?? (p as any).absolute_path ?? "");
+        if (!target.trim()) throw new Error("[invalid_request] root/relative_path required.");
+        const next = switchWorkspaceRoot(target);
+        listFilesCache.clear();
+        return { workspace_root: next, allowed_roots: allowedWorkspaceRoots() } as T;
       }
 
       case "project_tool.execute": {
