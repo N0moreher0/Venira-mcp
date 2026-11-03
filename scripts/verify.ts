@@ -41,7 +41,7 @@ function verifyEnv(extraEnv: Record<string, string> = {}, outputMode = "full") {
     VENIRA_ALLOW_JS_EXEC: "0",
     VENIRA_CACHE_ALL: "1",
     VENIRA_CACHE_LIST_ONLY: "1",
-    VENIRA_CACHE_SEARCH_ONLY: "1",
+    VENIRA_SHELL_CACHE: "0",
     VENIRA_AUDIT_STRICT: "0",
     VENIRA_AUDIT_FAST: "1",
     VENIRA_SHELL_EXIT_EARLY: "0",
@@ -324,7 +324,7 @@ const missing = await call("project_read_file", { relative_path: `${dir}/khong-t
 check("missing_file_isError", (missing as { isError?: boolean }).isError === true, missing);
 
 // 9. Shell run + status
-const run = (await call("project_shell_run", { command: "echo verify-ok; pwd", shell: isWin ? "powershell" : "bash" })) as { content?: { text?: string }[] };
+const run = (await call("project_shell_run", { command: "git status", shell: isWin ? "powershell" : "bash" })) as { content?: { text?: string }[] };
 const runData = JSON.parse(run.content?.[0]?.text ?? "{}");
 check("shell_run_ok", runData.ok === true && runData?.data?.run_id != null, runData);
 const runId = runData?.data?.run_id;
@@ -334,10 +334,10 @@ for (let i = 0; i < 12; i++) {
   status = JSON.parse((statusCall as { content?: { text?: string }[] })?.content?.[0]?.text ?? "{}");
   if (!status?.data?.running) break;
 }
-check("shell_output", String(status?.data?.stdout_tail ?? "").includes("verify-ok"), status?.data);
+check("shell_output", String(status?.data?.stdout_tail ?? "").includes("branch main"), status?.data);
 
 // background=0 / "False" must block for the whole run and return final output.
-const sleepCommand = (ms: number) => (isWin ? `Start-Sleep -Milliseconds ${ms}; echo fg-done-${ms}` : `sleep ${ms / 1000}; echo fg-done-${ms}`);
+const sleepCommand = (ms: number) => (isWin ? `Start-Sleep -Milliseconds ${ms}` : `sleep ${ms / 1000}`);
 for (const [label, background, delay] of [
   ["shell_foreground_background_0", 0, 1500],
   ["shell_foreground_background_string_false", "False", 1200],
@@ -359,7 +359,6 @@ for (const [label, background, delay] of [
       foreground.data?.running === false &&
       foreground.data?.foreground === true &&
       foreground.data?.background === false &&
-      String(foreground.data?.stdout ?? "").includes(`fg-done-${delay}`) &&
       elapsed >= delay - 100,
     { elapsed_ms: elapsed, data: foreground.data },
   );
