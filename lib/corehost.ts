@@ -16,7 +16,7 @@
  * The audit DB defaults to the per-user OS data directory unless
  * VENIRA_DATA_DIR is set.
  */
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
@@ -892,6 +892,19 @@ async function opListFiles(
 }
 
 
+
+let ripgrepAvailableCache: boolean | null = null;
+function ripgrepInstalled(): boolean {
+  if (ripgrepAvailableCache !== null) return ripgrepAvailableCache;
+  try {
+    const p = spawnSync("rg", ["--version"], { timeout: 5000, encoding: "utf8" });
+    ripgrepAvailableCache = p.status === 0;
+  } catch {
+    ripgrepAvailableCache = false;
+  }
+  return ripgrepAvailableCache;
+}
+
 async function opSearch(
   args: Record<string, unknown>,
   root: string,
@@ -987,6 +1000,57 @@ async function opSearch(
   } else {
     // literal_content, regex, definition — Phase 1 (bounded parallel
     // chunked reads) + Phase 2 (binary-ext + null-byte guards).
+    // Ripgrep-backed fast path if available (safe spawn, no shell).
+    if (envFlag("VENIRA_USE_RIPGREP", true) && kind === "literal_content" && contextLines === 0 && !includeRe && !excludeRe && !countOnly) {
+      if (ripgrepInstalled()) {
+        try {
+          const argList = ["--json", "-n", "--max-filesize=1M", "--color=never"];
+          if (!caseSensitive) argList.push("-i");
+          if (args.regex === true) { argList.push("-e", String(query)); }
+          else { argList.push("-F", "-e", String(query)); }
+          if (glob) argList.push("--glob", String(glob));
+          argList.push("--max-count", String(limit));
+          argList.push(searchRoot);
+          const resp = spawnSync("rg", argList, { encoding: "utf8", maxBuffer: 10 * 1024 * 1024, timeout: 10000 });
+          if (!(resp.error && (resp.error as any).code === "ETIMEDOUT")) {
+            const lines = String(resp.stdout ?? "").split(/\r?\n/).filter(Boolean);
+            for (const raw of lines) {
+              let rec: any = null;
+              try { rec = JSON.parse(raw); } catch { continue; }
+              if (rec?.type !== "match") continue;
+              const pth = String(rec.data?.path?.text ?? "");
+              const abs = path.isAbsolute(pth) ? pth : path.resolve(root, pth);
+              if (isProtectedPath(abs)) continue;
+              const rel = path.relative(root, abs).replace(/\\/g, "/");
+              const ln = Number(rec.data?.line_number ?? 0);
+              const lineText = String(rec.data?.lines?.text ?? "").replace(/\n$/, "");
+              const snippet = lineText.trim().slice(0, 200);
+              hits.push({ relative_path: rel, line_number: ln, snippet });
+              totalMatchLines += 1;
+              if (hits.length >= limit) { complete = false; break; }
+            }
+            return {
+              status: "completed",
+              truncated: !complete,
+              result: {
+                kind: "search",
+                data: {
+                  hits,
+                  complete,
+                  diagnostics,
+                  total_match_lines: totalMatchLines,
+                  files_matched: new Set(hits.map((h) => h.relative_path)).size,
+                  hint: hits.length === 0 ? "No matches. Broaden the search: drop glob/relative_path, set regex=0, or use kind=file_name." : undefined,
+                },
+              },
+            };
+          }
+        } catch {
+          // fall through to JS scanning
+        }
+      }
+    }
+
     const files = await collectFiles(searchRoot);
     const useRegex = args.regex === true;
     let contentRe: RegExp | null = null;
