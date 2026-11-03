@@ -138,5 +138,9 @@ export function evaluateParsedShellCommand(
       }
     }
   }
+  // In balanced mode, default to ask (not allow) for unclassified commands
+  if (mode === "balanced") {
+    return { tier: "ask", rule: "balanced.default_ask", reason: "Not classified as safe or explicitly allowed; approval required in balanced mode.", mode, command_hash: hash };
+  }
   return { tier: "allow", rule: "default_allow", reason: "No deny/ask rule matched.", mode, command_hash: hash };
 }

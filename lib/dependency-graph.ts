@@ -65,7 +65,7 @@ const MAX_FILES = 5000;
 const MAX_TOTAL_BYTES = 64 * 1024 * 1024;
 const MAX_FILE_BYTES = 1024 * 1024;
 const INDEX_CACHE_TTL_MS = 5000;
-const INDEX_CACHE_MAX = 4;
+const INDEX_CACHE_MAX = 8;
 
 type ImportRef = {
   specifier: string;
