@@ -150,7 +150,7 @@ tool counts. That is the only real proof — a config file on disk is not.
 | `npx --yes venira-mcp@latest --print-config <client>` | Print a config instead of writing it |
 | `npx --yes venira-mcp@latest --doctor` | Preflight: workspace, data dir, tools, shell |
 | `npx --yes venira-mcp@latest --setup-github` | Store a GitHub token once (interactive terminal) |
-| `npx --yes venira-mcp@latest --version` | Print the version (current release: 1.13.6) |
+| `npx --yes venira-mcp@latest --version` | Print the version (current release: 1.13.7) |
 | `npx --yes venira-mcp@latest --help` | All flags and environment variables |
 | `npx --yes venira-mcp@latest --verify` | Behavioural regression suite |
 

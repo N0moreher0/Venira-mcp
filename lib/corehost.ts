@@ -894,15 +894,62 @@ async function opListFiles(
 
 
 let ripgrepAvailableCache: boolean | null = null;
-function ripgrepInstalled(): boolean {
+async function ripgrepInstalled(): Promise<boolean> {
   if (ripgrepAvailableCache !== null) return ripgrepAvailableCache;
   try {
-    const p = spawnSync("rg", ["--version"], { timeout: 5000, encoding: "utf8" });
-    ripgrepAvailableCache = p.status === 0;
+    const result = await new Promise<boolean>((resolve) => {
+      const child = spawn("rg", ["--version"], { timeout: 5000 });
+      let timer: NodeJS.Timeout | null = setTimeout(() => {
+        try { child.kill("SIGKILL"); } catch { /* ignored */ }
+        resolve(false);
+      }, 5000);
+      child.on("exit", (code: number | null) => {
+        if (timer) { clearTimeout(timer); timer = null; }
+        resolve(code === 0);
+      });
+      child.on("error", () => {
+        if (timer) { clearTimeout(timer); timer = null; }
+        resolve(false);
+      });
+      child.stdout?.resume();
+      child.stderr?.resume();
+    });
+    ripgrepAvailableCache = result;
   } catch {
     ripgrepAvailableCache = false;
   }
   return ripgrepAvailableCache;
+}
+
+function ripgrepExec(args: string[], timeoutMs: number): Promise<{ status: number | null; stdout: string; stderr: string; error?: any; }> {
+  return new Promise((resolve) => {
+    const child = spawn("rg", args, { timeout: timeoutMs });
+    let stdout = "";
+    let stderr = "";
+    let done = false;
+    const timer = setTimeout(() => {
+      if (done) return;
+      done = true;
+      try { child.kill("SIGKILL"); } catch { /* ignored */ }
+      resolve({ status: null, stdout, stderr, error: { code: "ETIMEDOUT" } });
+    }, timeoutMs);
+    child.stdout?.setEncoding("utf8");
+    child.stderr?.setEncoding("utf8");
+    child.stdout?.on("data", (d: string) => { stdout += d; });
+    child.stderr?.on("data", (d: string) => { stderr += d; });
+    child.on("error", (e: any) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      resolve({ status: null, stdout, stderr, error: e });
+    });
+    child.on("exit", (code: number | null) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      resolve({ status: code, stdout, stderr });
+    });
+  });
 }
 
 async function opSearch(
@@ -1002,7 +1049,7 @@ async function opSearch(
     // chunked reads) + Phase 2 (binary-ext + null-byte guards).
     // Ripgrep-backed fast path if available (safe spawn, no shell).
     if (envFlag("VENIRA_USE_RIPGREP", true) && kind === "literal_content" && contextLines === 0 && !includeRe && !excludeRe && !countOnly) {
-      if (ripgrepInstalled()) {
+      if (await ripgrepInstalled()) {
         try {
           const argList = ["--json", "-n", "--max-filesize=1M", "--color=never"];
           if (!caseSensitive) argList.push("-i");
@@ -1011,8 +1058,9 @@ async function opSearch(
           if (glob) argList.push("--glob", String(glob));
           argList.push("--max-count", String(limit));
           argList.push(searchRoot);
-          const resp = spawnSync("rg", argList, { encoding: "utf8", maxBuffer: 10 * 1024 * 1024, timeout: 10000 });
-          if (!(resp.error && (resp.error as any).code === "ETIMEDOUT")) {
+          const resp = await ripgrepExec(argList, 10000);
+
+          if (!resp.error || (resp.error as any).code !== "ETIMEDOUT") {
             const lines = String(resp.stdout ?? "").split(/\r?\n/).filter(Boolean);
             for (const raw of lines) {
               let rec: any = null;

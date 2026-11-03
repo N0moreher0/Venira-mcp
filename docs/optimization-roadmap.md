@@ -20,8 +20,11 @@ Plan grouped. Security invariants:
 - [x] spawn ripgrep safe args
 - [x] fallback scanner
 - [x] regulated output sanitize (protected path skip)
-- [ ] optional SQLite trigram inverted index
-- [x] cache/inflight coalesce (existing + negative cache)
+- [x] cache/inflight coalesce
+- [ ] async spawn with AbortController timeout (fix: blocks event loop, risk low)
+- [ ] context_lines support via rg --context parser (medium risk)
+- [ ] env/backend choice + optional @vscode/ripgrep discovery (medium risk)
+- [ ] SQLite trigram inverted index (defer high risk)
 
 ## C. Security/ops
 - [x] shell cache scope correctness on overrides (done)
