@@ -18,15 +18,17 @@ Plan grouped. Security invariants:
 ## B. Index backend
 - [x] Auto-detect rg
 - [x] spawn ripgrep safe args
+- [x] async spawn with AbortController timeout (non-blocking)
 - [x] fallback scanner
 - [x] regulated output sanitize (protected path skip)
 - [x] cache/inflight coalesce
-- [ ] async spawn with AbortController timeout (fix: blocks event loop, risk low)
 - [ ] context_lines support via rg --context parser (medium risk)
-- [ ] env/backend choice + optional @vscode/ripgrep discovery (medium risk)
+- [ ] env/backend choice + @vscode/ripgrep discovery (medium risk, defer)
 - [ ] SQLite trigram inverted index (defer high risk)
 
 ## C. Security/ops
-- [x] shell cache scope correctness on overrides (done)
+- [x] shell cache scope correctness on overrides
 - [ ] workspace root validation tests
 - [x] npm audit CI green
+- [x] MRU touch for negative read cache
+- [x] warm start cache search path
