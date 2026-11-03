@@ -94,7 +94,7 @@ async function main() {
       await new Promise((r) => setTimeout(r, 500)); // let warm-up finish
 
       const tools = await client.listTools();
-      const expectedTools = 44;
+      const expectedTools = 46;
       results.push(await check("tools_count", tools.tools.length === expectedTools, { actual: tools.tools.length, expected: expectedTools }));
 
       const healthRes = await client.callTool({ name: "project_health", arguments: { include_audit: 0 } });
@@ -133,7 +133,7 @@ async function main() {
     await new Promise((r) => setTimeout(r, 300));
     const shellName = process.platform === "win32" ? "powershell" : "bash";
     const shellOk = await client2
-      .callTool({ name: "project_shell_run", arguments: { command: "echo doctor-ok", shell: shellName } })
+      .callTool({ name: "project_shell_run", arguments: { command: "git status", shell: shellName } })
       .then((res) => {
         const data = JSON.parse(((res as { content?: { text?: string }[] })?.content?.[0]?.text ?? "{}"));
         return data.ok === true && typeof data.data?.run_id === "string";
