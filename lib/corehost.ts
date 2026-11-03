@@ -2770,7 +2770,16 @@ export class CoreHost {
     shellRuns.clear();
     for (const capId of openScopes.keys()) closeScope(capId);
     if (auditDb) {
-      try { auditDb.close(); } catch { /* already closed */ }
+      try {
+        auditDb
+          .prepare(
+            "UPDATE project_tool_audit SET outcome = ?, reason_code = ?, completed_at = ?, elapsed_ms = COALESCE(elapsed_ms, 0) WHERE outcome = ?",
+          )
+          .run("failed", "orphan", Date.now(), "running");
+        auditDb.close();
+      } catch {
+        /* already closed */
+      }
       auditDb = null;
     }
   }

@@ -2700,6 +2700,7 @@ check("policy_unit_node_file_ask", policyModule.evaluateShellCommand("node scrip
 check("policy_unit_git_status_allow", policyModule.evaluateShellCommand("git status", ws, { mode: "balanced" }).tier === "allow", policyModule.evaluateShellCommand("git status", ws, { mode: "balanced" }));
 console.log("[verify] done");
 await client.close();
+await new Promise((resolve) => setTimeout(resolve, 1500));
 await Promise.all([
   githubMock.close(),
   gitlabMock.close(),
