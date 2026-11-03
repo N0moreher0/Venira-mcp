@@ -16,14 +16,14 @@ Plan grouped. Security invariants:
 - [ ] tests + smoke update
 
 ## B. Index backend
-- [ ] Auto-detect rg
-- [ ] spawn ripgrep safe args
-- [ ] fallback scanner
-- [ ] regulated output sanitize
+- [x] Auto-detect rg
+- [x] spawn ripgrep safe args
+- [x] fallback scanner
+- [x] regulated output sanitize (protected path skip)
 - [ ] optional SQLite trigram inverted index
-- [ ] cache/inflight coalesce
+- [x] cache/inflight coalesce (existing + negative cache)
 
 ## C. Security/ops
-- [ ] shell cache scope correctness on overrides (done)
+- [x] shell cache scope correctness on overrides (done)
 - [ ] workspace root validation tests
-- [ ] npm audit CI green
+- [x] npm audit CI green
