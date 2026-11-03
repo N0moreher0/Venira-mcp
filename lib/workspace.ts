@@ -7,7 +7,7 @@ import fs from "node:fs";
 import { envFlag } from "./env.js";
 export const PLATFORM = process.platform;
 
-export const WORKSPACE = path.resolve(process.env.VENIRA_WORKSPACE ?? process.cwd());
+export let WORKSPACE = path.resolve(process.env.VENIRA_WORKSPACE ?? process.cwd());
 
 import os from "node:os";
 export function migrateLegacyDataDirIfNeeded(): void {
@@ -112,6 +112,59 @@ function normalizedProtectedBase(canonicalPath: string): string {
     .toLowerCase()
     .replace(/:[^\\/]*$/, "")
     .replace(/[. ]+$/, "");
+}
+
+
+
+export function dynamicWorkspaceEnabled(): boolean {
+  return envFlag("VENIRA_DYNAMIC_WORKSPACE", false);
+}
+
+export function allowedWorkspaceRoots(): string[] {
+  const roots: string[] = [WORKSPACE];
+  if (dynamicWorkspaceEnabled()) {
+    const raw = process.env.VENIRA_WORKSPACE_ROOTS ?? "";
+    for (const part of raw.split(/[,;]/)) {
+      const value = part.trim();
+      if (!value) continue;
+      const abs = path.resolve(value);
+      if (fs.existsSync(abs) && !roots.includes(abs)) {
+        roots.push(abs);
+      }
+    }
+  }
+  if (envFlag("VENIRA_UNRESTRICTED", false)) {
+    roots.push("/");
+  }
+  return roots;
+}
+
+export function canSwitchWorkspace(target: string): string | null {
+  const abs = path.resolve(target);
+  if (!fs.existsSync(abs)) return null;
+  // stat file check
+  try { if (!fs.statSync(abs).isDirectory()) return null; } catch { return null; }
+  const roots = allowedWorkspaceRoots();
+  if (roots.length === 1 && roots[0] === WORKSPACE && !envFlag("VENIRA_DYNAMIC_WORKSPACE",false)) return null;
+  return roots.some((root) => {
+    try {
+      const realRoot = fs.realpathSync(root);
+      const realAbs = fs.realpathSync(abs);
+      const rel = path.relative(realRoot, realAbs);
+      return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+    } catch {
+      return false;
+    }
+  }) ? abs : null;
+}
+
+export function switchWorkspaceRoot(target: string): string {
+  const next = canSwitchWorkspace(target);
+  if (!next) {
+    throw new Error("[workspace_switch_denied] Path is not in allowed roots. Set VENIRA_DYNAMIC_WORKSPACE=1 and VENIRA_WORKSPACE_ROOTS.");
+  }
+  WORKSPACE = next;
+  return WORKSPACE;
 }
 
 export function isProtectedPath(absPath: string): boolean {
