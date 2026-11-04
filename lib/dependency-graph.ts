@@ -3,9 +3,11 @@
  *
  * Parser-lite by design: no new runtime dependencies, no language server. The
  * indexer walks the workspace with the same bounded rules as `list_files`,
- * extracts imports/declarations line by line for TypeScript/JavaScript and
- * Python, resolves relative specifiers against the real filesystem, and turns
- * the result into a deterministic graph (JSON, DOT or Mermaid).
+ * extracts imports/declarations line by line for TypeScript/JavaScript,
+ * Python and Rust (mod/use/extern crate, resolved through the rustc module
+ * file layout: foo.rs vs foo/mod.rs, crate root via main.rs/lib.rs), resolves
+ * relative specifiers against the real filesystem, and turns the result into a
+ * deterministic graph (JSON, DOT or Mermaid).
  *
  * Security:
  *   - protected paths (`.env*`, keys, `secrets.*`, the data dir) are skipped
@@ -18,7 +20,7 @@ import { existsSync, promises as fs } from "node:fs";
 import path from "node:path";
 import { isProtectedPath } from "./workspace.js";
 
-export type GraphLanguage = "ts" | "js" | "tsx" | "jsx" | "py";
+export type GraphLanguage = "ts" | "js" | "tsx" | "jsx" | "py" | "rs";
 export type EdgeConfidence = "exact" | "likely" | "possible";
 export type EdgeType = "import" | "extends" | "implements" | "references";
 
@@ -32,6 +34,7 @@ const EXT_LANG: Record<string, GraphLanguage> = {
   ".cjs": "js",
   ".jsx": "jsx",
   ".py": "py",
+  ".rs": "rs",
 };
 
 const TS_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
@@ -163,10 +166,11 @@ function looksTestFile(rel: string): boolean {
   const lower = rel.toLowerCase();
   const base = path.basename(lower);
   return (
-    /(^|\/)(__tests__|tests?|specs?)\//.test(lower) ||
+    /(^|\/)(__tests__|tests?|specs?|benches)\//.test(lower) ||
     /\.(test|spec)\.[^.]+$/.test(base) ||
     /^test_.*\.py$/.test(base) ||
-    /_test\.py$/.test(base)
+    /_test\.py$/.test(base) ||
+    /_test\.rs$/.test(base)
   );
 }
 
@@ -190,6 +194,7 @@ function parseLanguages(value: unknown): Set<string> | null {
     if (item === "typescript" || item === "ts" || item === "tsx") out.add(item === "tsx" ? "tsx" : "ts");
     else if (item === "javascript" || item === "js" || item === "jsx") out.add(item === "jsx" ? "jsx" : "js");
     else if (item === "python" || item === "py") out.add("py");
+    else if (item === "rust" || item === "rs") out.add("rs");
   }
   return out.size > 0 ? out : null;
 }
@@ -212,7 +217,7 @@ function protectedLike(absPath: string, rel: string): boolean {
   // files named `secrets.*`, but never a source module such as secrets.ts.
   const base = path.basename(rel).toLowerCase();
   const ext = path.extname(base);
-  const sourceExt = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py"]);
+  const sourceExt = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".rs"]);
   return /^secrets\./.test(base) && !sourceExt.has(ext);
 }
 
@@ -313,6 +318,109 @@ function stripPythonNonCode(text: string): string {
   return chars.join("");
 }
 
+function stripRustNonCode(text: string): string {
+  const chars = text.split("");
+  const n = chars.length;
+  const blank = (from: number, to: number) => {
+    for (let j = from; j < to && j < n; j += 1) {
+      if (chars[j] !== "\n") chars[j] = " ";
+    }
+  };
+  let i = 0;
+  while (i < n) {
+    const ch = text[i];
+    const next = text[i + 1];
+    if (ch === "/" && next === "/") {
+      let end = text.indexOf("\n", i + 2);
+      if (end < 0) end = n;
+      blank(i, end);
+      i = end;
+      continue;
+    }
+    if (ch === "/" && next === "*") {
+      // Rust block comments nest, unlike C/TS.
+      let depth = 1;
+      let j = i + 2;
+      while (j < n && depth > 0) {
+        if (text[j] === "/" && text[j + 1] === "*") {
+          depth += 1;
+          j += 2;
+          continue;
+        }
+        if (text[j] === "*" && text[j + 1] === "/") {
+          depth -= 1;
+          j += 2;
+          continue;
+        }
+        j += 1;
+      }
+      blank(i, Math.min(j, n));
+      i = j;
+      continue;
+    }
+    const prev = i > 0 ? text[i - 1] : "";
+    const afterWordChar = /[A-Za-z0-9_]/.test(prev);
+    if (!afterWordChar && ch === "r") {
+      // Raw strings: r"..." / r#"..."# / r##"..."## (the r must not be an
+      // identifier suffix such as `for` or `err`).
+      let hashes = 0;
+      let j = i + 1;
+      while (j < n && text[j] === "#") {
+        hashes += 1;
+        j += 1;
+      }
+      if (j < n && text[j] === '"') {
+        const closing = '"' + "#".repeat(hashes);
+        const end = text.indexOf(closing, j + 1);
+        const stop = end < 0 ? n : end + closing.length;
+        blank(i, stop);
+        i = stop;
+        continue;
+      }
+    }
+    if (ch === '"') {
+      let j = i + 1;
+      while (j < n) {
+        if (text[j] === "\\") {
+          j += 2;
+          continue;
+        }
+        if (text[j] === '"') {
+          j += 1;
+          break;
+        }
+        j += 1;
+      }
+      blank(i + 1, Math.max(i + 1, j - 1));
+      i = j;
+      continue;
+    }
+    if (ch === "'") {
+      // Char literal ('a', '\n', '\'', '\u{1F600}') vs lifetime/label ('a, 'static).
+      if (next === "\\") {
+        let j = i + 2;
+        while (j < n && text[j] !== "'") j += 1;
+        if (j < n) {
+          blank(i + 1, j);
+          i = j + 1;
+          continue;
+        }
+        i += 1;
+        continue;
+      }
+      if (next !== undefined && next !== "'" && text[i + 2] === "'") {
+        blank(i + 1, i + 2);
+        i = i + 3;
+        continue;
+      }
+      i += 1;
+      continue;
+    }
+    i += 1;
+  }
+  return chars.join("");
+}
+
 function parseImportsTs(text: string): ImportRef[] {
   const imports: ImportRef[] = [];
   const seen = new Set<string>();
@@ -403,8 +511,145 @@ function parseImportsPython(text: string): ImportRef[] {
   return imports;
 }
 
+/**
+ * Rust import extraction (parser-lite):
+ *   - `mod foo;` / `pub mod foo;`          -> `moddecl:foo` (child module file)
+ *   - `use crate::a::b;` / `use ::a::b;`   -> crate-root relative
+ *   - `use super::a` / `use self::a`       -> module relative
+ *   - `use a::b::{c, d};`                  -> expands group items
+ *   - `extern crate foo;`                  -> `externcrate:foo` (always external)
+ *   - bare `use a::b;`                     -> uniform path: local module first,
+ *                                             then an external crate.
+ * Multi-line `use x::{...};` groups are accumulated until the closing brace.
+ */
+function parseImportsRust(text: string): ImportRef[] {
+  const imports: ImportRef[] = [];
+  const seen = new Set<string>();
+  const lines = splitLines(text);
+  let inBlockComment = false;
+  let group: { base: string; inner: string; line: number; via: string } | null = null;
+
+  const push = (specifier: string, line: number, via: string) => {
+    const key = `${specifier}\u0000${line}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    imports.push({ specifier, line, via, dynamic: false });
+  };
+
+  const expandGroup = (base: string, inner: string, line: number, via: string) => {
+    const closing = inner.indexOf("}");
+    const body = closing >= 0 ? inner.slice(0, closing) : inner;
+    for (const raw of body.split(",")) {
+      const item = raw
+        .replace(/[{}]/g, "")
+        .replace(/\s+as\s+[A-Za-z_]\w*$/, "")
+        .trim();
+      if (!item) continue;
+      if (item === "self" || item === "super") push(base, line, via);
+      else push(`${base}::${item}`, line, via);
+    }
+  };
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const original = lines[i];
+    let trimmed = original.trim();
+    if (inBlockComment) {
+      const close = trimmed.indexOf("*/");
+      if (close < 0) continue;
+      inBlockComment = false;
+      trimmed = trimmed.slice(close + 2).trim();
+    }
+    if (trimmed.startsWith("/*")) {
+      const close = trimmed.indexOf("*/");
+      if (close < 0) {
+        inBlockComment = true;
+        continue;
+      }
+      trimmed = trimmed.slice(close + 2).trim();
+    }
+    if (!trimmed || trimmed.startsWith("//") || trimmed.startsWith("*")) continue;
+    if (group) {
+      group.inner += " " + trimmed;
+      if (trimmed.includes("}")) {
+        expandGroup(group.base, group.inner, group.line, group.via);
+        group = null;
+      }
+      continue;
+    }
+    const line = i + 1;
+    const via = trimmed.slice(0, 160);
+
+    const externCrate = /^\s*(?:pub\s+)?extern\s+crate\s+([A-Za-z_]\w*)/.exec(original);
+    if (externCrate) {
+      push(`externcrate:${externCrate[1]}`, line, via);
+      continue;
+    }
+    const modDecl = /^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z_]\w*)\s*;/.exec(original);
+    if (modDecl) {
+      push(`moddecl:${modDecl[1]}`, line, via);
+      continue;
+    }
+    // `use path::{items` — group may continue on the following lines.
+    const useGroup = /^\s*(?:pub(?:\([^)]*\))?\s+)?use\s+([^;{]+?)\s*\{(.*)$/.exec(original);
+    if (useGroup) {
+      const base = useGroup[1].trim().replace(/::\s*$/, "");
+      const rest = useGroup[2];
+      if (!base) continue;
+      if (rest.includes("}")) expandGroup(base, rest, line, via);
+      else group = { base, inner: rest, line, via };
+      continue;
+    }
+    const useSingle = /^\s*(?:pub(?:\([^)]*\))?\s+)?use\s+([^;{]+);/.exec(original);
+    if (useSingle) {
+      const spec = useSingle[1].trim().replace(/\s+as\s+[A-Za-z_]\w*$/, "").trim();
+      if (spec) push(spec.startsWith("::") ? `crate::${spec.replace(/^::+/, "")}` : spec, line, via);
+      continue;
+    }
+  }
+  if (group) expandGroup(group.base, group.inner, group.line, group.via);
+  return imports;
+}
+
 function collectDeclarations(text: string, lang: GraphLanguage): Declaration[] {
   const declarations: Declaration[] = [];
+  if (lang === "rs") {
+    // Brace depth over comment/string-stripped text: only depth-0 items are
+    // module-level (mirrors the TS strategy; `impl` bodies stay at depth 1).
+    const stripped = stripRustNonCode(text);
+    const lines = splitLines(stripped);
+    let depth = 0;
+    for (let i = 0; i < lines.length; i += 1) {
+      const line = lines[i];
+      if (depth === 0) {
+        const candidates: Array<{ re: RegExp; kind: string }> = [
+          { re: /^(?:pub(?:\([^)]*\))?\s+)?(?:default\s+)?(?:async\s+)?(?:unsafe\s+)?(?:const\s+)?fn\s+([A-Za-z_]\w*)/, kind: "function" },
+          { re: /^(?:pub(?:\([^)]*\))?\s+)?struct\s+([A-Za-z_]\w*)/, kind: "struct" },
+          { re: /^(?:pub(?:\([^)]*\))?\s+)?enum\s+([A-Za-z_]\w*)/, kind: "enum" },
+          { re: /^(?:pub(?:\([^)]*\))?\s+)?trait\s+([A-Za-z_]\w*)/, kind: "trait" },
+          { re: /^(?:pub(?:\([^)]*\))?\s+)?union\s+([A-Za-z_]\w*)/, kind: "union" },
+          { re: /^(?:pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z_]\w*)/, kind: "module" },
+          { re: /^(?:pub(?:\([^)]*\))?\s+)?type\s+([A-Za-z_]\w*)\s*=/, kind: "type" },
+          { re: /^(?:pub(?:\([^)]*\))?\s+)?(?:static|const)\s+([A-Za-z_]\w*)/, kind: "constant" },
+        ];
+        for (const candidate of candidates) {
+          const match = candidate.re.exec(line);
+          if (!match) continue;
+          declarations.push({
+            name: match[1],
+            kind: candidate.kind,
+            line: i + 1,
+            signature: lines[i].trim().slice(0, 160),
+          });
+          break;
+        }
+      }
+      for (const ch of line) {
+        if (ch === "{") depth += 1;
+        else if (ch === "}") depth = Math.max(0, depth - 1);
+      }
+    }
+    return declarations;
+  }
   if (lang === "py") {
     const lines = splitLines(text);
     for (let i = 0; i < lines.length; i += 1) {
@@ -479,6 +724,36 @@ function normalizeBaseName(raw: string): string {
 
 function collectBases(text: string, lang: GraphLanguage): BaseRef[] {
   const bases: BaseRef[] = [];
+  if (lang === "rs") {
+    const lines = splitLines(text);
+    for (let i = 0; i < lines.length; i += 1) {
+      const line = lines[i].trim();
+      if (!line || line.startsWith("//") || line.startsWith("*")) continue;
+      // `impl<..> Trait for Type` -> implements edge on the trait path's last
+      // segment (inherent `impl Type { }` has no `for` and never matches).
+      const implFor = /^(?:unsafe\s+)?impl(?:<[^>]*>)?\s+(.+?)\s+for\s+[A-Za-z_][\w:]*/.exec(line);
+      if (implFor) {
+        const traitPath = implFor[1].trim().replace(/[+]*\s*$/, "");
+        const name = traitPath.split("::").pop()?.trim() ?? "";
+        if (/^[A-Za-z_]\w*$/.test(name)) bases.push({ name, type: "implements", line: i + 1 });
+        continue;
+      }
+      // `trait Foo: Bar + Baz` -> supertrait extends edges.
+      const traitBounds = /^(?:pub(?:\([^)]*\))?\s+)?(?:unsafe\s+)?trait\s+[A-Za-z_]\w*\s*:\s*(.+)$/.exec(line);
+      if (traitBounds) {
+        for (const part of traitBounds[1].split("+")) {
+          const name = part
+            .replace(/where\b.*$/, "")
+            .split("::")
+            .pop()
+            ?.replace(/<[^>]*>/g, "")
+            .trim();
+          if (name && /^[A-Za-z_]\w*$/.test(name)) bases.push({ name, type: "extends", line: i + 1 });
+        }
+      }
+    }
+    return bases;
+  }
   const lines = splitLines(text);
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i].trim();
@@ -528,7 +803,7 @@ function scanUsages(
   declarations: Declaration[],
   declaredNames: Set<string>,
 ): Map<string, Usage> {
-  const cleaned = lang === "py" ? stripPythonNonCode(text) : stripTsNonCode(text);
+  const cleaned = lang === "py" ? stripPythonNonCode(text) : lang === "rs" ? stripRustNonCode(text) : stripTsNonCode(text);
   const lines = splitLines(cleaned);
   const usage = new Map<string, Usage>();
   for (let i = 0; i < lines.length; i += 1) {
@@ -538,6 +813,8 @@ function scanUsages(
     // depends on its behaviour. Skip them; the import edge already covers it.
     if (/^\s*(?:import\b|from\s+\S+\s+import\b|export\b.*\bfrom\b)/.test(line)) continue;
     if (/^\s*require\s*\(/.test(line)) continue;
+    if (/^\s*(?:use\s|extern\s+crate\b)/.test(line)) continue;
+    if (/^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+[A-Za-z_]\w*\s*[;{]/.test(line)) continue;
     const lineNumber = i + 1;
     const enclosing = enclosingDeclaration(declarations, lineNumber);
     const tokenRe = /[A-Za-z_$][\w$]*/g;
@@ -700,7 +977,12 @@ async function buildIndex(
       lang: item.lang,
       loc: text.split("\n").length,
       bytes: item.bytes,
-      imports: item.lang === "py" ? parseImportsPython(text) : parseImportsTs(text),
+      imports:
+        item.lang === "rs"
+          ? parseImportsRust(text)
+          : item.lang === "py"
+            ? parseImportsPython(text)
+            : parseImportsTs(text),
       declarations,
       bases: collectBases(text, item.lang),
     });
@@ -784,6 +1066,12 @@ function probePython(fromAbs: string, specifier: string, rootAbs: string): strin
 }
 
 function externalId(specifier: string, lang: GraphLanguage): string {
+  if (lang === "rs") {
+    const raw = specifier.startsWith("externcrate:") ? specifier.slice("externcrate:".length) : specifier;
+    const top = raw.split("::")[0]?.trim() || raw;
+    if (top === "std" || top === "core" || top === "alloc") return `rust:${top}`;
+    return `cargo:${top}`;
+  }
   if (lang === "py") {
     const top = specifier.split(".")[0] || specifier;
     return `pip:${top}`;
@@ -799,8 +1087,120 @@ function externalId(specifier: string, lang: GraphLanguage): string {
 }
 
 function isRelativeSpecifier(specifier: string, lang: GraphLanguage): boolean {
+  if (lang === "rs") {
+    return (
+      specifier.startsWith("moddecl:") ||
+      specifier.startsWith("crate::") ||
+      specifier.startsWith("super::") ||
+      specifier.startsWith("self::") ||
+      specifier.startsWith("::")
+    );
+  }
   if (lang === "py") return specifier.startsWith(".");
   return specifier.startsWith("./") || specifier.startsWith("../") || specifier.startsWith("/");
+}
+
+// ---------------------------------------------------------------------------
+// Rust module resolution (rustc's file layout, parser-lite)
+// ---------------------------------------------------------------------------
+
+const RUST_CRATE_ROOT_FILES = ["main.rs", "lib.rs"];
+
+/**
+ * The directory holding main.rs/lib.rs for the crate that owns `abs`,
+ * walking up from the file's own directory. Returns null when the file
+ * does not belong to any crate inside the workspace (then internal paths
+ * stay unresolved instead of guessing against the workspace root).
+ */
+function rustCrateRootDir(abs: string): string | null {
+  let dir = path.dirname(abs);
+  for (let i = 0; i < 24; i += 1) {
+    if (RUST_CRATE_ROOT_FILES.some((name) => existsSync(path.join(dir, name)))) return dir;
+    if (existsSync(path.join(dir, "Cargo.toml"))) {
+      const src = path.join(dir, "src");
+      if (RUST_CRATE_ROOT_FILES.some((name) => existsSync(path.join(src, name)))) return src;
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return null;
+}
+
+/** Module path of a file relative to its crate root (main.rs/lib.rs => []). */
+function rustModulePath(abs: string, crateDir: string): string[] {
+  const rel = path.relative(crateDir, abs);
+  if (rel.startsWith("..") || path.isAbsolute(rel)) return [];
+  const noExt = rel.replace(/\.rs$/i, "").split(path.sep).filter(Boolean);
+  const base = noExt[noExt.length - 1];
+  if (base === "main" || base === "lib" || base === "build") noExt.pop();
+  else if (base === "mod") noExt.pop();
+  return noExt;
+}
+
+/** Directory in which the children of `abs`'s module live. */
+function rustModDir(abs: string): string {
+  const base = path.basename(abs).toLowerCase();
+  if (base === "mod.rs" || base === "lib.rs" || base === "main.rs" || base === "build.rs") return path.dirname(abs);
+  return abs.replace(/\.rs$/i, "");
+}
+
+/**
+ * Resolve a Rust import specifier to a file, following rustc's rules:
+ *   moddecl:X      -> <modDir>/X.rs | <modDir>/X/mod.rs
+ *   crate::a::b    -> <crateDir>/a/b.rs (longest existing prefix wins, so
+ *                     `use crate::m::item` lands on m.rs when `item` is an item)
+ *   self::/super:: -> relative to the current module path
+ *   bare a::b      -> uniform path: current module first, then crate root
+ * Returns null for `externcrate:` and unresolved internal paths (the caller
+ * decides external-vs-unresolved).
+ */
+function probeRust(fromAbs: string, specifier: string, rootAbs: string): string | null {
+  if (specifier.startsWith("externcrate:")) return null;
+  if (specifier.startsWith("moddecl:")) {
+    const name = specifier.slice("moddecl:".length);
+    if (!/^[A-Za-z_]\w*$/.test(name)) return null;
+    const dir = rustModDir(fromAbs);
+    return firstExisting([path.join(dir, `${name}.rs`), path.join(dir, name, "mod.rs")], rootAbs);
+  }
+  const crateDir = rustCrateRootDir(fromAbs);
+  if (!crateDir || !isInside(rootAbs, crateDir)) return null;
+
+  let segs: string[];
+  if (specifier.startsWith("crate::") || specifier.startsWith("::")) {
+    segs = specifier.replace(/^(?:crate::|:+)/, "").split("::").filter(Boolean);
+  } else {
+    const modPath = [...rustModulePath(fromAbs, crateDir)];
+    let rest = specifier;
+    if (rest.startsWith("super::") || rest === "super") {
+      let supers = 0;
+      while (rest.startsWith("super::")) {
+        supers += 1;
+        rest = rest.slice("super::".length);
+      }
+      if (rest === "super") {
+        supers += 1;
+        rest = "";
+      }
+      for (let i = 0; i < supers && modPath.length > 0; i += 1) modPath.pop();
+    } else if (rest.startsWith("self::")) {
+      rest = rest.slice("self::".length);
+    }
+    // Uniform path: current module first, then (unresolved => caller: extern crate).
+    segs = [...modPath, ...rest.split("::").filter(Boolean)];
+  }
+
+  if (segs.length === 0) {
+    return firstExisting(RUST_CRATE_ROOT_FILES.map((name) => path.join(crateDir, name)), rootAbs);
+  }
+  // Longest existing prefix wins: `use crate::m::item` lands on m.rs when
+  // `item` is a plain item, and on item.rs when it is a module.
+  for (let k = segs.length; k >= 1; k -= 1) {
+    const target = path.join(crateDir, ...segs.slice(0, k));
+    const hit = firstExisting([`${target}.rs`, path.join(target, "mod.rs")], rootAbs);
+    if (hit) return hit;
+  }
+  return null;
 }
 
 function buildEdges(index: Index, withSymbols: boolean): BuiltEdges {
@@ -828,6 +1228,35 @@ function buildEdges(index: Index, withSymbols: boolean): BuiltEdges {
     const fromAbs = path.resolve(index.rootAbs, file.rel);
     for (const ref of file.imports) {
       const specifier = ref.specifier;
+      if (file.lang === "rs") {
+        // Internal-first: moddecl/crate/super/self AND bare uniform paths that
+        // resolve to a local module; only what stays unresolved goes external.
+        const resolved = probeRust(fromAbs, specifier, index.rootAbs);
+        if (resolved) {
+          addEdge({
+            from: file.rel,
+            to: relFromRoot(index.rootAbs, resolved),
+            type: "import",
+            confidence: ref.dynamic ? "possible" : "exact",
+            line: ref.line,
+            via: ref.via,
+          });
+        } else if (isRelativeSpecifier(specifier, file.lang)) {
+          if (unresolved.length < 200) {
+            unresolved.push({
+              from: file.rel,
+              specifier: specifier.replace(/^moddecl:/, "mod "),
+              reason: "unresolved Rust module path",
+            });
+          }
+        } else {
+          const id = externalId(specifier, file.lang);
+          const entry = externals.get(id) ?? { id, usedBy: new Set<string>() };
+          entry.usedBy.add(file.rel);
+          externals.set(id, entry);
+        }
+        continue;
+      }
       if (isRelativeSpecifier(specifier, file.lang)) {
         const resolved =
           file.lang === "py" ? probePython(fromAbs, specifier, index.rootAbs) : probeTs(fromAbs, specifier, index.rootAbs);
@@ -1016,7 +1445,7 @@ export async function buildDependencyGraph(
         next_cursor: null,
       },
       truncated: index.discoveryTruncated,
-      hint: `No supported files (TS/JS/Python) under ${label}. Hint: pass relative_path to a source directory, or set languages=${JSON.stringify(["ts", "py"])}.`,
+      hint: `No supported files (TS/JS/Python/Rust) under ${label}. Hint: pass relative_path to a source directory, or set languages=${JSON.stringify(["ts", "py", "rs"])}.`,
     };
   }
 
