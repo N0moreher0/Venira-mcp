@@ -62,6 +62,7 @@ function mcpEnv(extra: Record<string, string> = {}) {
     VENIRA_DATA_DIR: DATA_DIR,
     VENIRA_UNRESTRICTED: "0",
     VENIRA_SESSION_ID: SESSION_ID,
+    VENIRA_TOOL_MODE: "expert",
     ...extra,
   };
 }

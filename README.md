@@ -1,6 +1,6 @@
 # venira-mcp
 
-> Fast, workspace-scoped **MCP server for coding agents** (OpenCode, Claude Desktop, any MCP client). 44 tools by default, structured JSON envelopes, validated read caches, async shell, code-intelligence (outline/symbols/diff/references/selective search), **dependency graph + change impact**, fuzzy edit, SQLite recent-files index, **git-free checkpoints/rollback**, **audit reasons ("why")**, **pull requests + CI provider integrations (including bounded CI waiting)**, **encrypted secrets with rotation metadata**, **deterministic error diagnosis + read planning**, and full SQLite audit trail — **pure Node, 1 native dependency (better-sqlite3), no GUI.**
+> Fast, workspace-scoped **MCP server for coding agents** (OpenCode, Claude Desktop, any MCP client). Two tool modes — **Default** (lean 31-tool coding set) · **Expert** (full surface) — structured JSON envelopes, validated read caches, async shell, code-intelligence (outline/symbols/diff/references/selective search), **dependency graph + change impact**, fuzzy edit, SQLite recent-files index, **git-free checkpoints/rollback**, **audit reasons ("why")**, **pull requests + CI provider integrations (including bounded CI waiting)**, **encrypted secrets with rotation metadata**, **deterministic error diagnosis + read planning**, and full SQLite audit trail — **pure Node, 1 native dependency (better-sqlite3), no GUI.**
 
 **Setup in one line** (run it in the project you want to work on, then restart your client):
 
@@ -13,7 +13,7 @@ Prefer your agent to do it? Paste the prompt from [§2.2](#22-fastest-path-paste
 ```
 ┌──────────────┐   stdio (MCP)   ┌────────────────────────────────────────────┐
 │ MCP client    │ ◄──────────────► │  venira-mcp (Node, single process)        │
-│ (OpenCode,    │                  │  44 tools · read caches · async shell     │
+│ (OpenCode,    │                  │  Default 31 / Expert full · async shell   │
 │  Claude, ...) │                  │  SQLite audit (WAL) · p50/p95 metrics     │
 └──────────────┘                  └────────────────────────────────────────────┘
 ```
@@ -62,7 +62,7 @@ Prefer your agent to do it? Paste the prompt from [§2.2](#22-fastest-path-paste
 
 - [Quick start](#2-quick-start)
 - [MCP client configuration (JSON)](#3-mcp-client-configuration-json)
-- [Tools](#4-tools-44)
+- [Tools](#4-tools)
 - [Architecture](#5-architecture)
 - [Security model](#6-security-model)
 - [Benchmark](#7-benchmark)
@@ -341,6 +341,7 @@ restart it, then ask the agent to call `project_health`.
 | `VENIRA_ALLOW_SELF_INSTALL` | `"0"` | An agent cannot rewrite MCP configs for other clients on its own. |
 | `VENIRA_DATA_DIR` | unset | The server, `npx venira-mcp --approve` and `--setup-github` must share one vault; override it only if you override it everywhere. |
 | `VENIRA_NETWORK` | `"1"` | GitHub/CI tools work. Use `"0"` for an offline repo: every outbound call is refused before a socket opens. |
+| `VENIRA_TOOL_MODE` | `"expert"` | The recommended profile assumes the full surface (shell, builds, CI/CD). Set `"default"` for a coding-only agent: no shell execution, no JS eval, no CI/CD shipping, no destructive deletes. |
 
 Leave the cache and audit flags alone: `VENIRA_CACHE_ALL`,
 `VENIRA_CACHE_LIST_ONLY`, `VENIRA_CACHE_SEARCH_ONLY` and `VENIRA_AUDIT_FAST`
@@ -367,7 +368,8 @@ not expand `${workspaceFolder}`):
         "VENIRA_ALLOW_JS_EXEC": "0",
         "VENIRA_JS_EXEC_APPROVAL": "1",
         "VENIRA_ALLOW_SELF_INSTALL": "0",
-        "VENIRA_NETWORK": "1"
+        "VENIRA_NETWORK": "1",
+        "VENIRA_TOOL_MODE": "expert"
       }
     }
   }
@@ -394,7 +396,8 @@ here, so no path edit is needed:
         "VENIRA_ALLOW_JS_EXEC": "0",
         "VENIRA_JS_EXEC_APPROVAL": "1",
         "VENIRA_ALLOW_SELF_INSTALL": "0",
-        "VENIRA_NETWORK": "1"
+        "VENIRA_NETWORK": "1",
+        "VENIRA_TOOL_MODE": "expert"
       }
     }
   }
@@ -420,7 +423,8 @@ shape (config path per client: [§3.0](#30-supported-clients)):
         "VENIRA_ALLOW_JS_EXEC": "0",
         "VENIRA_JS_EXEC_APPROVAL": "1",
         "VENIRA_ALLOW_SELF_INSTALL": "0",
-        "VENIRA_NETWORK": "1"
+        "VENIRA_NETWORK": "1",
+        "VENIRA_TOOL_MODE": "expert"
       }
     }
   }
@@ -446,6 +450,7 @@ VENIRA_ALLOW_JS_EXEC = "0"
 VENIRA_JS_EXEC_APPROVAL = "1"
 VENIRA_ALLOW_SELF_INSTALL = "0"
 VENIRA_NETWORK = "1"
+VENIRA_TOOL_MODE = "expert"
 ```
 
 `npx --yes venira-mcp@latest --print-config <client>` prints the minimal shape
@@ -513,6 +518,7 @@ Venira Code Mode rules:
 | `VENIRA_SHELL_ENV_PASS_ALL` | `"0"` | `"1"` passes the full parent environment to the child. Default: allow list only, so agent secrets never reach a command. |
 | `VENIRA_SHELL_ENV_ALLOW` | unset | Extra comma-separated env var names to pass through (e.g. `GITHUB_TOKEN`). |
 | `VENIRA_DISABLE_TOOLS` | unset | Comma-separated tool names to keep out of `tools/list` entirely (e.g. `project_shell_run,project_delete_path`). |
+| `VENIRA_TOOL_MODE` | `default` | Two modes, layered on top of `VENIRA_DISABLE_TOOLS` / `VENIRA_PROFILE=core`. `default` = lean coding set (31 tools): no `project_shell_run` / `project_shell_status` / `project_shell_cancel` / `project_shell_cancel_session`, no `project_execute_js`, no `project_delete_path`, no `project_pr_*` / `project_ci_*` (CI/CD shipping). `expert` = the full surface (46 tools; 47 with `VENIRA_ALLOW_JS_EXEC=1`). Also settable as `toolMode` (`"default"` \| `"expert"`) in `venira.config.json`; the env wins over the config. |
 | `VENIRA_OUTPUT_MODE` | `full` | `full` = complete payloads · `compact` = trim payloads over 8 KB. `summary` is no longer accepted. |
 | `VENIRA_PRETTY` | `"0"` | `"1"` = 2-space pretty JSON in tool results. |
 | `VENIRA_SESSION_ID` | auto (`opencode-<pid>-<rand>`) | Session tag; audit rows are grouped by it. Useful for verification / parallel test runs. |
@@ -559,7 +565,7 @@ Venira Code Mode rules:
 
 ---
 
-## 4. Tools (44)
+## 4. Tools
 
 Every tool returns the standard envelope ([§8](#8-envelopes-hints--error-codes)):
 
@@ -576,6 +582,17 @@ Every tool returns the standard envelope ([§8](#8-envelopes-hints--error-codes)
   "elapsed_ms": 2.57
 }
 ```
+
+### 4.0 Tool modes
+
+`tools/list` is filtered per workspace; whatever the mode hides the client never sees:
+
+| Mode | Tools | Focus |
+|---|---|---|
+| `default` (default) | **31** | Coding-focused loop: read/write/edit (`project_write_file`, `project_edit_file`, `project_edit_batch`), `project_search`, checkpoints, code intel (`project_outline_symbol`, `project_file_symbols`, …), dependency graph + change impact, diagnostics, read planning, audit/trace, secrets metadata. **No** shell execution (`project_shell_run`, `project_shell_status`, `project_shell_cancel`, `project_shell_cancel_session`), **no** `project_execute_js`, **no** destructive `project_delete_path`, **no** CI/CD shipping (`project_pr_*`, `project_ci_*`). |
+| `expert` | **46** (47 with `VENIRA_ALLOW_JS_EXEC=1`) | Full surface: everything in `default` plus shell, JS eval, PR/CI tools and `project_delete_path`. |
+
+Set with `VENIRA_TOOL_MODE=default|expert` or `"toolMode"` in `venira.config.json` (env wins over config). `VENIRA_DISABLE_TOOLS` and `VENIRA_PROFILE=core` still apply on top of the mode — all three exclusions are unioned, so anything they disable stays disabled in both modes.
 
 ### 4.1 Read family (read-only, batch-safe, cached)
 
@@ -832,7 +849,7 @@ prompt-driven and tool-discovery-driven clients get the same signal.
 venira-mcp/
 ├── server.ts                 # MCP entry point: McpServer + StdioTransport, warm-up, shutdown
 ├── tools/
-│   └── project.ts            # 44 tool registrations by default, serial queue, caches, shell tracking,
+│   └── project.ts            # tool registrations per tool mode (default 31 / expert full), serial queue, caches, shell tracking,
 │                             #   audit-DB inspection, project_health, code-intelligence,
 │                             #   diagnostics and read-planning handlers
 ├── lib/
@@ -1393,6 +1410,7 @@ The full history, in order — from the standalone rewrite to the provider, secr
 
 | Date | Version | Milestone |
 |---|---|---|
+| 2026-11-05 | **Unreleased (v1.14.0)** | **Rust support + per-mode tools.** `project_dependency_graph` / `project_change_impact` now parse Rust: crate roots via `main.rs` / `lib.rs`, `mod foo;` / `pub mod`, `use crate::` / `super::`, `extern crate`; longest-existing-prefix resolution, raw strings, nested block comments, char-vs-lifetime literals; test files detected via `benches/` and `*_test.rs`. Checkpoints skip Rust artifacts (`target/`, `**/*.pdb`, `*.d`) so the 512 MiB cap is not wasted. Shell-output redaction also covers `DATABASE_URL` / `GITHUB_TOKEN`-style env assignments and `env::var("NAME")` patterns. `venira.config.json` gains per-workspace `snapshot.maxFiles` (may raise `VENIRA_SNAPSHOT_MAX_FILES`; hard ceiling 20 000). New **tool modes**: `VENIRA_TOOL_MODE=default` (lean coding set, 31 tools — no shell, no JS eval, no CI/CD shipping, no destructive `project_delete_path`) or `expert` (full surface, 46; 47 with `VENIRA_ALLOW_JS_EXEC=1`); settable via env or `toolMode` in `venira.config.json`. verify **391 checks**. |
 | 2026-11-03 | **v1.12.2** | **Code Mode rules in Agent instructions.** README [§3.4](#34-recommended-setup-for-agents-copy-paste) adds a `Code Mode rules` block for the OpenCode `execute` tool: `search()` is synchronous (never await, always pass an object), `tools.*` calls return Promises (always await), and on `SchemaError` / `un-awaited Promise` fix the call shape once instead of retrying identical code. Documentation only; **44 tools**, verify **378/378**. |
 | 2026-11-02 | **v1.12.1** | **Agent setup profiles.** New README [§3.4](#34-recommended-setup-for-agents-copy-paste): one recommended environment profile (workspace lock on, `balanced` shell policy, complete envelopes, exit-early status polling, JS execution off with per-call approval, self-install off, one shared vault) rendered for OpenCode, VS Code, Claude Desktop/Cursor/Kimi/DeepSeek/Antigravity and Codex TOML, plus a copy-paste `AGENTS.md` block that tunes tool selection (plan first, batch reads, edit over rewrite, snapshot before bulk changes, follow hints). `opencode.example.json` mirrors the profile. Documentation only; **44 tools**, verify **378/378**. |
 | 2026-11-02 | **v1.12.0** | **Per-call approval for `project_execute_js`.** Enabling the tool is no longer enough: with `VENIRA_JS_EXEC_APPROVAL=1` (the default) the first call returns `approval_required` with an `approval_id`, and a human grants that exact code + `argv` with `npx venira-mcp --approve <id>` before the agent retries. Grants are single-use and bound to the snippet, so an id cannot be replayed for different code; `VENIRA_JS_EXEC_APPROVAL=0` restores the previous behaviour for trusted automation. Pending approval records now record the retry tool, so the approver CLI tells the user to retry `project_execute_js` instead of `project_shell_run`. **44 tools**, verify **378/378**. |

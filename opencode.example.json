@@ -25,7 +25,9 @@
         // An agent cannot rewrite other clients' MCP configs.
         "VENIRA_ALLOW_SELF_INSTALL": "0",
         // "0" refuses every outbound call (offline repos / no GitHub tools).
-        "VENIRA_NETWORK": "1"
+        "VENIRA_NETWORK": "1",
+        // "expert" = full surface (shell, builds, CI/CD); "default" = lean coding set (no shell / JS eval / CI-CD shipping).
+        "VENIRA_TOOL_MODE": "expert"
         // Leave VENIRA_DATA_DIR unset so the MCP server, --approve and
         // --setup-github share one per-user vault. VENIRA_DEFAULT_SHELL is
         // auto-detected. Cache and audit flags already default to "1".

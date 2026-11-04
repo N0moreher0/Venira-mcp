@@ -24,6 +24,7 @@ const transport = new StdioClientTransport({
     VENIRA_SHELL_MODE: "balanced",
     VENIRA_SHELL_OVERRIDES: "",
     VENIRA_SHELL_AUTO_APPROVE_TOKEN: "0",
+    VENIRA_TOOL_MODE: "expert",
   },
   stderr: "pipe",
 });
@@ -99,6 +100,7 @@ try {
       VENIRA_SHELL_MODE: "strict",
       VENIRA_SHELL_OVERRIDES: "ALLOW_ENV_READ,ALLOW_GIT_PUSH",
       VENIRA_SHELL_AUTO_APPROVE_TOKEN: "0",
+      VENIRA_TOOL_MODE: "expert",
     },
     stderr: "pipe",
   });

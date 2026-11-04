@@ -9,6 +9,7 @@ const transport = new StdioClientTransport({
   env: {
     ...process.env,
     VENIRA_UNRESTRICTED: "1",
+    VENIRA_TOOL_MODE: "expert",
   },
   stderr: "pipe",
 });

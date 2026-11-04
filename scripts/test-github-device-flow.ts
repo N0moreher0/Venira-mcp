@@ -141,6 +141,7 @@ try {
         VENIRA_GITHUB_API_URL: mock.apiUrl,
         VENIRA_GITHUB_REPO: "acme/demo",
         VENIRA_GITHUB_TOKEN: "test-mcp-provider-token",
+        VENIRA_TOOL_MODE: "expert",
       },
       stderr: "pipe",
     });
