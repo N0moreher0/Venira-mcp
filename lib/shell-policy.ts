@@ -930,6 +930,10 @@ const REDACTIONS: Array<[RegExp, string]> = [
   [/\bxox[abprs]-[A-Za-z0-9-]{10,}\b/g, "[REDACTED]"],
   [/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, "[REDACTED]"],
   [/\b((?:export\s+)?[A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY|PRIVATE_KEY)[A-Z0-9_]*\s*=\s*)("[^"]*"|'[^']*'|\S+)/g, "$1[REDACTED]"],
+  // ENV-style secret vars in Rust / cargo log output (DATABASE_URL=..., GITHUB_TOKEN=..., ...)
+  [/\b((?:export\s+)?[A-Z][A-Z0-9_]*(?:_URL|SECRET|TOKEN|PASSWORD|API_KEY|PRIVATE_KEY|ACCESS_KEY)[A-Z0-9_]*\s*=\s*)("[^"]*"|'[^']*'|\S+)/g, "$1[REDACTED]"],
+  // Rust/cargo logs that read secrets through env::var("GITHUB_TOKEN", ...) / env::var("DATABASE_URL", ...)
+  [/\benv::var(?:_with_default|_with_current)?\(\s*["'](?:[A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY|PRIVATE_KEY|ACCESS_KEY|DATABASE_URL)[A-Z0-9_]*)["']/g, "[REDACTED]"],
 ];
 
 export function redactSecrets(text: string): string {

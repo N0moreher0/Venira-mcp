@@ -16,11 +16,11 @@
  * `resolveWithin`, symlinks are skipped (never followed), and the
  * snapshot store itself is excluded from captures.
  */
-import { promises as fs, existsSync } from "node:fs";
+import { promises as fs, existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { gunzipSync, gzipSync } from "node:zlib";
-import { resolveWithin, activeDataDir } from "./workspace.js";
+import { resolveWithin, activeDataDir, WORKSPACE } from "./workspace.js";
 import { redactSecrets } from "./shell-policy.js";
 import type { RustResponse } from "./output.js";
 
@@ -32,11 +32,43 @@ const envInt = (name: string, fallback: number): number => {
   return Number.isFinite(value) && value >= 0 ? value : fallback;
 };
 
-const MAX_FILES = envInt("VENIRA_SNAPSHOT_MAX_FILES", 4000);
+const DEFAULT_MAX_FILES = 4000;
 const MAX_FILE_BYTES = envInt("VENIRA_SNAPSHOT_MAX_FILE_BYTES", 32 * 1024 * 1024);
 const MAX_TOTAL_BYTES = envInt("VENIRA_SNAPSHOT_MAX_BYTES", 512 * 1024 * 1024);
 const KEEP_CHECKPOINTS = Math.max(1, envInt("VENIRA_SNAPSHOT_KEEP", 20));
 const MAX_DELETE_EXTRA = 500;
+
+/** Hard ceiling for a single checkpoint file cap, whatever the source (env / config / arg). */
+const HARD_MAX_FILES = 20000;
+
+/**
+ * Per-workspace checkpoint cap: `<workspace>/venira.config.json` ->
+ * `snapshot.maxFiles`. Lets one big repo raise the process-wide default
+ * (`VENIRA_SNAPSHOT_MAX_FILES`) without touching other workspaces.
+ */
+function workspaceSnapshotMaxFiles(): number | null {
+  const file = path.join(WORKSPACE, "venira.config.json");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(file, "utf8"));
+  } catch {
+    return null;
+  }
+  const root = parsed as { snapshot?: unknown } | null;
+  const snapshot = root?.snapshot;
+  if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) return null;
+  const n = Number((snapshot as { maxFiles?: unknown }).maxFiles);
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n < 1) return null;
+  return Math.min(n, HARD_MAX_FILES);
+}
+
+/** Effective checkpoint file cap: a per-workspace config may raise the global default. */
+function effectiveMaxFiles(): number {
+  const fromEnv = envInt("VENIRA_SNAPSHOT_MAX_FILES", 0);
+  const base = fromEnv > 0 ? fromEnv : DEFAULT_MAX_FILES;
+  const fromWorkspace = workspaceSnapshotMaxFiles();
+  return Math.max(base, fromWorkspace ?? 0);
+}
 
 /** Default excludes: build output, VCS metadata and the store itself. */
 const DEFAULT_EXCLUDES = new Set([
@@ -44,6 +76,7 @@ const DEFAULT_EXCLUDES = new Set([
   ".hg",
   ".svn",
   "node_modules",
+  "target", // Rust build output (cargo target/)
   "dist",
   "build",
   ".next",
@@ -52,6 +85,17 @@ const DEFAULT_EXCLUDES = new Set([
   "__pycache__",
   SNAPSHOT_DIR_NAME,
 ]);
+
+/**
+ * File-level excludes for toolchain artifacts that must never enter a
+ * checkpoint: Rust compiler dep files (`foo.d`) and MSVC PDBs (`foo.pdb`).
+ * Matched against the full relative path; the trailing anchor keeps `*.d`
+ * from swallowing TypeScript declaration files such as `foo.d.ts`.
+ */
+const SNAPSHOT_FILE_EXCLUDE_PATTERNS: Array<{ re: RegExp; reason: string }> = [
+  { re: /\.pdb$/i, reason: "excluded:rust_pdb" },
+  { re: /\.d$/i, reason: "excluded:rust_dep" },
+];
 
 export function snapshotDataDir(): string {
   return path.join(activeDataDir(), SNAPSHOT_DIR_NAME);
@@ -366,6 +410,11 @@ async function walkForSnapshot(options: {
       pushSkip(rel, "excluded:audit_db");
       continue;
     }
+    const fileExclude = SNAPSHOT_FILE_EXCLUDE_PATTERNS.find((entry) => entry.re.test(rel));
+    if (fileExclude) {
+      pushSkip(rel, fileExclude.reason);
+      continue;
+    }
     if (stat.size > MAX_FILE_BYTES) {
       pushSkip(rel, `too_large:${stat.size}`);
       continue;
@@ -413,7 +462,8 @@ export async function opSnapshotCreate(
     throw new Error("[invalid_request] paths[] is limited to 64 entries.");
   }
   const protectedDirs = protectedPrefixes(root);
-  const maxFiles = Math.max(1, Math.min(MAX_FILES, Number(args.max_files ?? MAX_FILES) || MAX_FILES));
+  const maxFilesCap = effectiveMaxFiles();
+  const maxFiles = Math.max(1, Math.min(maxFilesCap, Number(args.max_files ?? maxFilesCap) || maxFilesCap));
   const maxTotalBytes = Math.max(
     1,
     Math.min(MAX_TOTAL_BYTES, Number(args.max_total_bytes ?? MAX_TOTAL_BYTES) || MAX_TOTAL_BYTES),

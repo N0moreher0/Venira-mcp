@@ -780,6 +780,14 @@ check(
     (redacted.match(/\[REDACTED\]/g)?.length ?? 0) >= 3,
   redacted,
 );
+const redactedEnv = policyModule.redactSecrets(
+  "cargo run: DATABASE_URL=postgres://user:supersecret@db.internal:5432/app GITHUB_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz1234567890",
+);
+check(
+  "policy_redaction_env_var",
+  !redactedEnv.includes("supersecret") && !redactedEnv.includes("ghp_abcdefghijklmnopqrstuvwxyz1234567890") && redactedEnv.includes("[REDACTED]"),
+  redactedEnv,
+);
 
 // 13. Health exposes the policy snapshot and counters.
 const healthPolicy = asEnvelope(await call("project_health", { include_audit: 0 }));
@@ -903,6 +911,17 @@ check(
   "snapshot_create",
   snapCreate.ok === true && snapCreate.kind === "snapshot_create" && (snapCreate.data?.file_count ?? 0) >= 8,
   snapCreate,
+);
+await fs.mkdir(`${dir}/target/debug`, { recursive: true });
+await fs.writeFile(`${dir}/target/debug/build-artifact`, "binary-bytes\n");
+const snapCreateRust = asEnvelope(
+  await call("project_snapshot", { action: "create", paths: [dir], label: "verify checkpoint rust excludes" }),
+);
+const rustSkipped = (snapCreateRust.data?.skipped ?? []) as Array<{ path?: string; reason?: string }>;
+check(
+  "snapshot_excludes_rust_artifacts",
+  snapCreateRust.ok === true && rustSkipped.some((entry) => String(entry?.path ?? "").includes("target")),
+  rustSkipped,
 );
 const snapId = String(snapCreate.data?.id ?? "");
 await call("project_write_file", {
@@ -1788,6 +1807,39 @@ await writeFixture("pkg/__init__.py", "");
 await writeFixture("pkg/mod.py", "def thing():\n    return 1\n");
 await writeFixture("pkg/main.py", "from .mod import thing\n\ndef main():\n    return thing()\n");
 
+await writeFixture("rust/cli/src/main.rs", `mod report;
+
+use crate::report::run;
+
+pub fn cli() {
+    run();
+}
+`);
+await writeFixture("rust/cli/src/report.rs", `pub fn run() {
+    println!("hello");
+}
+`);
+await writeFixture(
+  "rust/svc/src/main.rs",
+  `mod util;
+pub mod api;
+extern crate serde;
+
+use crate::util::fmt;
+use super::api::Thing;
+
+pub fn main() {}
+`,
+);
+await writeFixture("rust/svc/src/util.rs", `pub fn fmt() {}
+`);
+await writeFixture("rust/svc/src/api/mod.rs", `pub struct Thing {}
+`);
+await writeFixture("rust/orphan/src/main.rs", `use crate::missing::thing;
+
+pub fn orphan() {}
+`);
+
 const graph = asEnvelope(
   await call("project_dependency_graph", {
     kind: "both",
@@ -1841,6 +1893,26 @@ check(
 check(
   "dependency_graph_unresolved_reported",
   (graph.data?.unresolved ?? []).some((entry: { specifier?: string }) => entry.specifier === "./nope"),
+  graph.data?.unresolved,
+);
+check(
+  "dependency_graph_rust_mod_decl",
+  graph.ok === true && hasEdge("rust/cli/src/main.rs", "rust/cli/src/report.rs", "import", "exact"),
+  graphEdges.filter((edge) => edge.from.startsWith("rust/")),
+);
+check(
+  "dependency_graph_rust_pub_mod_and_crate_use",
+  graph.ok === true && hasEdge("rust/svc/src/main.rs", "rust/svc/src/api/mod.rs", "import", "exact") && hasEdge("rust/svc/src/main.rs", "rust/svc/src/util.rs", "import", "exact"),
+  graphEdges.filter((edge) => edge.from.startsWith("rust/")),
+);
+check(
+  "dependency_graph_rust_extern_crate_external",
+  (graph.data?.external ?? []).some((entry: { id?: string }) => entry.id === "cargo:serde"),
+  graph.data?.external,
+);
+check(
+  "dependency_graph_rust_unresolved_module",
+  (graph.data?.unresolved ?? []).some((entry: { specifier?: string }) => entry.specifier === "crate::missing::thing"),
   graph.data?.unresolved,
 );
 
@@ -1944,6 +2016,20 @@ check(
   "change_impact_mermaid",
   impactMermaid.ok === true && String(impactMermaid.data?.graph ?? "").startsWith("graph LR"),
   String(impactMermaid.data?.graph ?? "").slice(0, 120),
+);
+const rustImpact = asEnvelope(
+  await call("project_change_impact", {
+    files: [dgPath("rust/cli/src/main.rs")],
+    direction: "dependencies",
+    depth: 5,
+    max_nodes: 50,
+  }),
+);
+const rustImpactIds = (rustImpact.data?.affected ?? []).map((entry: { id: string }) => entry.id) as string[];
+check(
+  "change_impact_rust_module_dependent",
+  rustImpact.ok === true && rustImpactIds.includes(dgPath("rust/cli/src/report.rs")),
+  { affected: rustImpactIds, summary: rustImpact.data?.summary },
 );
 
 // 11d-ter. Provider dialects: GitLab + Bitbucket Cloud against local mocks.

@@ -3667,7 +3667,7 @@ export function registerProjectTools(server: McpServer): void {
     "project_dependency_graph",
     {
       ...config(
-        "Build a deterministic file/symbol dependency graph for TypeScript/JavaScript and Python (relative imports, require(), dynamic import(), extends/implements, cross-file symbol references). Renders as JSON, DOT or Mermaid.",
+        "Build a deterministic file/symbol dependency graph for TypeScript/JavaScript, Python and Rust (module declarations, pub mod, use crate::/super::, extern crate, relative imports, require(), dynamic import(), extends/implements, cross-file symbol references). Renders as JSON, DOT or Mermaid.",
         "Dependency graph",
         {
           use_when:
@@ -3689,7 +3689,7 @@ export function registerProjectTools(server: McpServer): void {
         depth: z.number().int().min(1).max(10).optional().describe("Directory recursion cap (default 3, max 10)."),
         include_external: flag01.optional().describe("1 aggregates npm/pip/node package nodes in external[]. Default 0."),
         include_tests: flag01.optional().describe("1 includes test files/edges (default); 0 hides them."),
-        languages: z.array(z.string().max(20)).max(6).optional().describe('Language filter, e.g. ["ts","py"] (default: all supported).'),
+        languages: z.array(z.string().max(20)).max(6).optional().describe('Language filter, e.g. ["ts","py","rs"] (default: all supported).'),
         max_nodes: z.number().int().min(1).max(2000).optional().describe("Max file nodes (default 500)."),
         max_edges: z.number().int().min(1).max(5000).optional().describe("Max edges (default 2000)."),
       },
@@ -3920,7 +3920,7 @@ export function registerProjectTools(server: McpServer): void {
         respect_default_excludes: flag01
           .optional()
           .describe("1 skips standard generated/cache directories (default); 0 disables those exclusions."),
-        max_files: z.number().int().min(1).max(4000).optional(),
+        max_files: z.number().int().min(1).max(20000).optional(),
         max_total_bytes: z.number().int().min(1).max(512 * 1024 * 1024).optional(),
         dry_run: flag01.optional().describe("restore only: 1 reports changes without writing; 0 writes the restore."),
         verify: flag01.optional().describe("restore only: 1 verifies each blob before writing (default); 0 disables verification."),

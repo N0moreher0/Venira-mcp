@@ -47,9 +47,12 @@ Prefer your agent to do it? Paste the prompt from [§2.2](#22-fastest-path-paste
   `project_ci_wait` drive the configured GitHub, GitLab or Bitbucket provider APIs without
   shelling out to `gh`.
 - **Dependency graph and impact analysis.** `project_dependency_graph` builds a
-  deterministic TS/JS + Python import/symbol graph (JSON, DOT or Mermaid), and
-  `project_change_impact` answers "what breaks if I edit this?" with a bounded reverse
-  closure, confidence per hit and a separate `tests_affected` count.
+  deterministic TS/JS + Python + Rust graph (JSON, DOT or Mermaid) — Rust module
+  declarations (`mod`, `pub mod`), `use crate::`/`super::`, `extern crate`, crate-root
+  relative paths resolved through the rustc file layout (`foo.rs` vs `foo/mod.rs`, crate
+  root via `main.rs`/`lib.rs`) — and `project_change_impact` answers "what breaks if I
+  edit this?" with a bounded reverse/forward closure, confidence per hit and a separate
+  `tests_affected` count.
 - **Secrets are kept out of normal tool metadata.** `project_secret` keeps tokens encrypted
   (AES-256-GCM) at rest and `secret_env` avoids putting them in command arguments; stored
   values are scrubbed from shell tails/audit text on a best-effort basis. Explicit reveal is
@@ -528,7 +531,7 @@ Venira Code Mode rules:
 | `VENIRA_SHELL_TIMEOUT_POLICY` | `soft` | P1: `soft` (default) = an expired command only warns and is left to finish; `hard` = kill the whole process tree at the timeout. |
 | `VENIRA_EDIT_FUZZY` | `"0"` | P2: `"1"` enables fuzzy matching in `project_edit_file` (Levenshtein fallback when the exact `old_text` is not found). |
 | `VENIRA_SNAPSHOT_KEEP` | `20` | Checkpoints kept before the oldest are pruned (and unreferenced blobs garbage-collected). |
-| `VENIRA_SNAPSHOT_MAX_FILES` | `4000` | Per-checkpoint file cap; exceeding it marks the checkpoint `truncated` (never silent). |
+| `VENIRA_SNAPSHOT_MAX_FILES` | `4000` | Per-checkpoint file cap; exceeding it marks the checkpoint `truncated` (never silent). Per-workspace override: `snapshot.maxFiles` in `venira.config.json` (may raise the cap; hard ceiling 20000). |
 | `VENIRA_SNAPSHOT_MAX_FILE_BYTES` | `33554432` (32 MiB) | Files larger than this are skipped and reported in `skipped[]`. |
 | `VENIRA_SNAPSHOT_MAX_BYTES` | `536870912` (512 MiB) | Per-checkpoint logical byte cap (the caller can lower it, never raise it). |
 | `VENIRA_NETWORK` | `"1"` | `"0"` is a hard kill switch: `project_pr_*` / `project_ci_*` return `network_disabled` and never open a socket. |
@@ -604,7 +607,7 @@ Every tool returns the standard envelope ([§8](#8-envelopes-hints--error-codes)
 | `project_diff_files` | Unified (git-style) diff between two workspace files | LCS-based; `lines_added`/`lines_removed`; `context_lines` + `max_lines` caps; `truncated` flag |
 | `project_symbol_references` | Find every occurrence of a named symbol | `scope: "file"` (fast, single file) or `scope: "workspace"` (bounded content search); `limit`/`max_references` caps |
 | `project_selective_search` | Smart multi-query search: combine patterns with AND/NOT + fuzzy scoring | Bounded to a file set (`files_hint` or shallow listing); scored hits sorted by relevance; `limit` cap |
-| `project_dependency_graph` | Deterministic **dependency graph** for TypeScript/JavaScript + Python: relative imports, `require()`, dynamic `import()`, `extends`/`implements` and cross-file symbol references | `kind: files \| symbols \| both` (default `files`) · `format: json \| dot \| mermaid` (`data.graph` for the last two) · `relative_path` scopes the walk · `depth` 1–10 directory cap (default 3) · `languages`, `include_external`, `include_tests`, `max_nodes` (500), `max_edges` (2000). Parser-lite, no new dependencies: bounded walk (≤5,000 files / 64 MB), symlinks and protected paths (`.env*`, keys, `secrets.*` data files) skipped, 5 s index cache invalidated by writes/snapshot restore. Node ids are workspace-relative. |
+| `project_dependency_graph` | Deterministic **dependency graph** for TypeScript/JavaScript, Python and Rust: module declarations (`mod`, `pub mod`), `use crate::`/`super::`, `extern crate`, relative imports, `require()`, dynamic `import()`, `extends`/`implements` and cross-file symbol references | `kind: files \| symbols \| both` (default `files`) · `format: json \| dot \| mermaid` (`data.graph` for the last two) · `relative_path` scopes the walk · `depth` 1–10 directory cap (default 3) · `languages`, `include_external`, `include_tests`, `max_nodes` (500), `max_edges` (2000). Parser-lite, no new dependencies: bounded walk (≤5,000 files / 64 MB), symlinks and protected paths (`.env*`, keys, `secrets.*` data files) skipped, 5 s index cache invalidated by writes/snapshot restore. Node ids are workspace-relative. |
 | `project_change_impact` | Answer "if I edit this, what depends on it?" with a bounded reverse (or forward) closure | Seeds: `files[]` and/or `symbols[]` (a name, or `{name, file}` when ambiguous) · `direction: dependents \| dependencies \| both` · `depth` 1–10 BFS hop cap (default 5) · `include_tests` (default 1) · `max_nodes`, `format: json \| mermaid`. Each affected file carries `distance`, `path`, `reason` and `confidence` (`exact`/`likely`/`possible`); `summary` adds `affected_symbols` and a separate `tests_affected`. Ambiguous bare names seed every declaring file, are reported in `unresolved[]`, and downgrade the closure to `possible`. |
 
 Dependency graph and impact analysis are **disabled in `VENIRA_PROFILE=core`** (they walk the whole
