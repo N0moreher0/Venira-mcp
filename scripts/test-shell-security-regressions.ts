@@ -6,6 +6,24 @@ import os from "node:os";
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
+
+// The MCP SDK times out every request after 60 s by default. On slow or
+// contention-heavy runners that is not enough headroom — and when the spawned
+// server dies silently, the timeout is all the caller sees. Capture the
+// server's stderr so a failing spawn is diagnosable, and give every request
+// generous headroom.
+const RPC_OPTS = { timeout: 180_000 };
+const callTool = (client: Client, params: { name: string; arguments?: Record<string, unknown> }) =>
+  client.callTool(params, CallToolResultSchema, RPC_OPTS);
+const serverStderr: string[] = [];
+function pipeServerStderr(transport: StdioClientTransport, label: string) {
+  transport.stderr?.on("data", (chunk: Buffer) => {
+    const text = chunk.toString("utf8");
+    serverStderr.push(`[server:${label}] ${text}`);
+    if (process.env.VENIRA_SHELL_SECURITY_DEBUG === "1") process.stderr.write(`[server:${label}] ${text}`);
+  });
+}
 
 const tempDir = await mkdtemp(path.join(os.tmpdir(), "venira-shell-security-"));
 const workspaceDir = path.join(tempDir, "workspace");
@@ -28,13 +46,14 @@ const transport = new StdioClientTransport({
   },
   stderr: "pipe",
 });
+pipeServerStderr(transport, "main");
 const client = new Client({ name: "shell-security-regressions", version: "0.0.0" }, { capabilities: {} });
 
 try {
-  await client.connect(transport);
+  await client.connect(transport, RPC_OPTS);
   const shell = process.platform === "win32" ? "powershell" : "bash";
   const callShell = async (command: string) => {
-    const result = await client.callTool({ name: "project_shell_run", arguments: { command, shell } });
+    const result = await callTool(client, { name: "project_shell_run", arguments: { command, shell } });
     const text = (result as { content?: Array<{ text?: string }> }).content?.[0]?.text ?? "{}";
     return { result, envelope: JSON.parse(text) as { error?: { code?: string }; data?: Record<string, unknown> } };
   };
@@ -62,7 +81,7 @@ try {
     assert.equal(hookBypassPush.envelope.data?.run_id, undefined, command);
   }
 
-  const selfEnabledOverride = await client.callTool({
+  const selfEnabledOverride = await callTool(client, {
     name: "project_shell_run",
     arguments: {
       command: "git push origin main",
@@ -74,7 +93,7 @@ try {
   const selfEnabledText = (selfEnabledOverride as { content?: Array<{ text?: string }> }).content?.[0]?.text ?? "{}";
   assert.equal(JSON.parse(selfEnabledText).error?.code, "override_not_enabled");
 
-  const missingReason = await client.callTool({
+  const missingReason = await callTool(client, {
     name: "project_shell_run",
     arguments: { command: "cat .env", shell, override: "ALLOW_ENV_READ" },
   });
@@ -104,9 +123,10 @@ try {
     },
     stderr: "pipe",
   });
+  pipeServerStderr(overrideTransport, "overrides");
   try {
-    await overrideClient.connect(overrideTransport);
-    const envReadOverride = await overrideClient.callTool({
+    await overrideClient.connect(overrideTransport, RPC_OPTS);
+    const envReadOverride = await callTool(overrideClient, {
       name: "project_shell_run",
       arguments: {
         command: process.platform === "win32" ? "Get-Content .env" : "cat .env",
@@ -130,7 +150,7 @@ try {
     try {
       await unlink(envPath);
       await symlink(externalFixture, envPath);
-      const symlinkRead = await overrideClient.callTool({
+      const symlinkRead = await callTool(overrideClient, {
         name: "project_shell_run",
         arguments: {
           command: process.platform === "win32" ? "Get-Content .env" : "cat .env",
@@ -156,7 +176,7 @@ try {
       "cat .e[n]v",
       "cat id_rsa",
     ]) {
-      const outOfScope = await overrideClient.callTool({
+      const outOfScope = await callTool(overrideClient, {
         name: "project_shell_run",
         arguments: { command, shell, override: "ALLOW_ENV_READ", reason: "try out-of-scope fixture" },
       });
@@ -178,7 +198,7 @@ try {
     );
     execFileSync("git", ["-C", repoPath, "remote", "add", "origin", remotePath], { env: gitEnv, stdio: "ignore" });
 
-    const pushOverride = await overrideClient.callTool({
+    const pushOverride = await callTool(overrideClient, {
       name: "project_shell_run",
       arguments: {
         command: "git push --dry-run origin HEAD:main",
@@ -217,6 +237,11 @@ try {
   } finally {
     await overrideClient.close();
   }
+} catch (error) {
+  console.error(
+    `[shell-security] FAILED — venira server stderr (last 4 KiB):\n${serverStderr.join("").slice(-4096)}`,
+  );
+  throw error;
 } finally {
   try {
     await client.close();
