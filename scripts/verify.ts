@@ -57,6 +57,10 @@ function verifyEnv(extraEnv: Record<string, string> = {}, outputMode = "full") {
     VENIRA_GITHUB_ALLOW_HTTP: "0",
     VENIRA_TRACE: "0",
     VENIRA_VERIFY_DEBUG: "0",
+    // Most verify transports need the full surface (shell, JS eval, CI/CD);
+    // the default tool mode is the lean coding set, so opt them into `expert`.
+    // `tool_mode_default_coding_focused` forces "default" on top of this.
+    VENIRA_TOOL_MODE: "expert",
     PATH: `${path.dirname(process.execPath)}${path.delimiter}${process.env.PATH ?? ""}`,
     // keytar/Node 24 can assert during native cleanup in MCP child processes;
     // the backend is covered separately by the Windows keychain integration check.
@@ -87,7 +91,7 @@ const transport = new StdioClientTransport({
   command: "node",
   args: ["dist/server.js"],
   cwd: process.cwd(),
-  env: verifyEnv({ VENIRA_SHELL_TIMEOUT_POLICY: "hard" }, "full"), // full mode for the remaining checks
+  env: verifyEnv({ VENIRA_SHELL_TIMEOUT_POLICY: "hard", VENIRA_TOOL_MODE: "expert" }, "full"), // full mode for the remaining checks
   stderr: "pipe",
 });
 if (envFlag("VENIRA_VERIFY_DEBUG", false)) {
@@ -821,6 +825,54 @@ check(
   { disabledCount: disabledList.tools.length, fullCount: tools.tools.length, names: disabledList.tools.map((t) => t.name) },
 );
 await disabledClient.close();
+
+// 14b. Tool modes: `VENIRA_TOOL_MODE=expert` keeps the full set; `default` is
+// the coding-focused lean set (no CI/CD shipping, no shell, no JS eval).
+const expertTransport = new StdioClientTransport({
+  command: "node",
+  args: ["dist/server.js"],
+  cwd: process.cwd(),
+  env: verifyEnv({ VENIRA_SESSION_ID: `${SESSION_ID}-mode-expert`, VENIRA_ALLOW_JS_EXEC: "1" }, "full"),
+  stderr: "pipe",
+});
+const expertClient = new Client({ name: "verify-expert", version: "0.0.0" }, { capabilities: {} });
+await expertClient.connect(expertTransport);
+const expertList = await expertClient.listTools();
+check(
+  "tool_mode_expert_full",
+  expertList.tools.length === tools.tools.length + 1 &&
+    expertList.tools.some((t) => t.name === "project_ci_wait") &&
+    expertList.tools.some((t) => t.name === "project_shell_run") &&
+    expertList.tools.some((t) => t.name === "project_execute_js") &&
+    expertList.tools.some((t) => t.name === "project_dependency_graph"),
+  { expertCount: expertList.tools.length, fullCount: tools.tools.length, names: expertList.tools.map((t) => t.name) },
+);
+await expertClient.close();
+
+const defaultTransport = new StdioClientTransport({
+  command: "node",
+  args: ["dist/server.js"],
+  cwd: process.cwd(),
+  env: verifyEnv({ VENIRA_SESSION_ID: `${SESSION_ID}-mode-default`, VENIRA_TOOL_MODE: "default" }, "full"),
+  stderr: "pipe",
+});
+const defaultClient = new Client({ name: "verify-default", version: "0.0.0" }, { capabilities: {} });
+await defaultClient.connect(defaultTransport);
+const defaultList = await defaultClient.listTools();
+check(
+  "tool_mode_default_coding_focused",
+  !defaultList.tools.some((t) => t.name === "project_shell_run") &&
+    !defaultList.tools.some((t) => t.name === "project_ci_wait") &&
+    !defaultList.tools.some((t) => t.name === "project_execute_js") &&
+    !defaultList.tools.some((t) => t.name === "project_pr_create") &&
+    defaultList.tools.some((t) => t.name === "project_read_file") &&
+    defaultList.tools.some((t) => t.name === "project_write_file") &&
+    defaultList.tools.some((t) => t.name === "project_dependency_graph") &&
+    defaultList.tools.some((t) => t.name === "project_change_impact") &&
+    defaultList.tools.some((t) => t.name === "project_snapshot"),
+  { defaultCount: defaultList.tools.length, fullCount: tools.tools.length, names: defaultList.tools.map((t) => t.name) },
+);
+await defaultClient.close();
 
 // 15. Audit (standalone: DB is in <workspace>/data or VENIRA_DATA_DIR)
 import Database from "better-sqlite3";

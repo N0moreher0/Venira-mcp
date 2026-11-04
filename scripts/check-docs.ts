@@ -2,11 +2,15 @@ import fs from "node:fs";
 const readme = fs.readFileSync("README.md", "utf8");
 let failed = false;
 if (readme.includes("37 workspace-scoped tools")) {
-  console.error("README still says 37 tools; expected 40+.");
+  console.error("README still says 37 tools; expected the Default/Expert tool modes.");
   failed = true;
 }
-if (!readme.includes("44 tools by default") || !readme.includes("## 4. Tools (44)")) {
-  console.error("README tool count is out of date; expected 44 tools by default.");
+if (readme.includes("44 tools by default")) {
+  console.error("README tool count is out of date; expected Default/Expert tool modes.");
+  failed = true;
+}
+if (!readme.includes("## 4. Tools") || !readme.includes("Two tool modes") || !readme.includes("VENIRA_TOOL_MODE")) {
+  console.error("README tool-mode contract is out of date; expected Default/Expert modes (VENIRA_TOOL_MODE) documented.");
   failed = true;
 }
 if (!readme.includes("VENIRA_PROFILE")) {
