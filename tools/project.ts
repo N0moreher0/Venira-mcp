@@ -2581,6 +2581,119 @@ async function runDiffFiles(args: Args): Promise<ToolResult> {
   return toolResult(buildEnvelope("diff_files", response, { requestId, elapsedMs, cached: false }));
 }
 
+// ---------------------------------------------------------------------------
+// project_search hybrid mode (opt-in, `hybrid: 1`). One backend walk feeds the
+// enrichment — a second ripgrep pass would share the same backend and double
+// the work for no extra information. Every hit is tagged with `source`
+// (symbol_index definition > symbol_reference whole-word > plain content) and
+// `confidence`. A scoped, identifier-like query that returns nothing widens
+// once to the workspace and flags `scope_widened: true` so the agent knows the
+// scope changed underneath it.
+// ---------------------------------------------------------------------------
+const IDENTIFIER_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+type HybridHit = Record<string, unknown> & {
+  relative_path?: unknown;
+  line_number?: unknown;
+  snippet?: unknown;
+  source: string;
+  confidence: "exact_match" | "text_match";
+};
+
+async function runHybridSearch(args: Args): Promise<ToolResult> {
+  const started = performance.now();
+  const requestId = newRequestId();
+  const query = String(args.query ?? "");
+  const queryTrimmed = query.trim();
+  const identifier = IDENTIFIER_RE.test(queryTrimmed) ? queryTrimmed : null;
+  const scoped = typeof args.relative_path === "string" && args.relative_path.trim() !== "";
+  const requestedLimit = Number.isFinite(Number(args.limit))
+    ? Math.max(1, Math.min(200, Math.floor(Number(args.limit))))
+    : 200;
+
+  const searchArgs = { ...args, hybrid: undefined, limit: 200 } as Args;
+  let execution = await executeCached("search", searchArgs);
+  let response = execution.response;
+  let data = (response.result?.data ?? {}) as { hits?: unknown[]; complete?: boolean };
+  let hits = Array.isArray(data.hits) ? (data.hits as Record<string, unknown>[]) : [];
+
+  // Retry-scope fallback: zero hits on a scoped, identifier-like query.
+  let scopeWidened = false;
+  if (hits.length === 0 && scoped && identifier !== null) {
+    const widened = { ...args, hybrid: undefined, relative_path: undefined, limit: 200 } as Args;
+    const widenedExecution = await executeCached("search", widened);
+    const widenedData = (widenedExecution.response.result?.data ?? {}) as { hits?: unknown[] };
+    const widenedHits = Array.isArray(widenedData.hits) ? (widenedData.hits as Record<string, unknown>[]) : [];
+    if (widenedHits.length > 0) {
+      scopeWidened = true;
+      execution = widenedExecution;
+      response = widenedExecution.response;
+      data = (response.result?.data ?? {}) as typeof data;
+      hits = widenedHits;
+    }
+  }
+
+  // Tag hits. Definition sites are detected per file with the same parser-lite
+  // used by project_outline_symbol / project_file_symbols, bounded to files that
+  // actually produced hits.
+  const definitionLines = new Map<string, Set<number>>();
+  if (identifier !== null && hits.length > 0) {
+    const files = [...new Set(hits.map((hit) => String(hit.relative_path ?? "")).filter(Boolean))].slice(0, 32);
+    await Promise.allSettled(
+      files.map(async (rel) => {
+        try {
+          const text = await readTextFile(rel);
+          if (text === null) return;
+          const symbols = extractSymbols(text);
+          const lines = new Set<number>();
+          for (const sym of symbols) {
+            if (sym.name === identifier) lines.add(sym.line);
+          }
+          if (lines.size > 0) definitionLines.set(rel, lines);
+        } catch {
+          /* best effort — the hit keeps its weaker tag */
+        }
+      }),
+    );
+  }
+
+  const wordRe = identifier !== null ? new RegExp(`\\b${escapeRegExp(identifier)}\\b`) : null;
+  const tagged: HybridHit[] = hits.slice(0, requestedLimit).map((hit) => {
+    const rel = String(hit.relative_path ?? "");
+    const line = Number(hit.line_number ?? 0);
+    const snippet = String(hit.snippet ?? "");
+    let source = "content";
+    let confidence: "exact_match" | "text_match" = "text_match";
+    if (definitionLines.get(rel)?.has(line)) {
+      source = "symbol_index";
+      confidence = "exact_match";
+    } else if (wordRe?.test(snippet)) {
+      source = "symbol_reference";
+      confidence = "exact_match";
+    }
+    return { ...hit, source, confidence };
+  });
+
+  const mergedData = {
+    ...data,
+    hits: tagged,
+    hybrid: true,
+    ...(scopeWidened ? { scope_widened: true } : {}),
+  };
+  const merged: RustResponse = {
+    status: "completed",
+    truncated: tagged.length < hits.length || response.truncated === true || data.complete === false,
+    result: { kind: "search", data: mergedData },
+  };
+  const elapsedMs = performance.now() - started;
+  recordMetric("search", elapsedMs, true);
+  return toolResult(buildEnvelope("search", merged, { requestId, elapsedMs, cached: execution.cached }));
+}
+
 async function runSymbolReferences(args: Args): Promise<ToolResult> {
   const started = performance.now();
   const requestId = newRequestId();
@@ -3101,7 +3214,8 @@ export function registerProjectTools(server: McpServer): void {
           use_when: "you need to find code/strings/symbols before reading; use kind=literal_content or definition.",
           avoid_when: "you already know the exact path to read.",
           speed_profile: "medium (file scan); TTL cache 3s for the same query.",
-          output_kind: "search: hits, complete, diagnostics, hint.",
+          output_kind:
+            "search: hits (source+confidence when hybrid:1), complete, diagnostics, hint.",
           batch_safe: true,
         },
         { readOnlyHint: true, openWorldHint: false },
@@ -3119,9 +3233,13 @@ export function registerProjectTools(server: McpServer): void {
         context_lines: z.number().int().min(0).max(20).optional(),
         count_only: flag01.optional(),
         limit: z.number().int().min(1).max(200).optional(),
+        hybrid: flag01.optional().describe("1 = tag each hit with source (symbol_index|symbol_reference|content) and confidence (exact_match|text_match); a scoped identifier query with 0 hits widens once to the workspace (scope_widened:true). literal_content only."),
       },
     },
-    (args) => runOne("search", args),
+    (args) =>
+      args.hybrid === true && args.kind === "literal_content"
+        ? runHybridSearch(args as Args)
+        : runOne("search", args),
   );
 
   server.registerTool(
