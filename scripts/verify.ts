@@ -378,6 +378,7 @@ const asEnvelope = (result: unknown) => JSON.parse(textOf(result) || "{}");
 // Unit checks first (no server interaction)
 const ws = process.cwd();
 const policyModule = await import("../lib/shell-policy.js");
+const shellCacheModule = await import("../lib/shell-cache.js");
 const envModule = await import("../lib/env.js");
 const originalPolicyFile = process.env.VENIRA_SHELL_POLICY_FILE;
 delete process.env.VENIRA_SHELL_POLICY_FILE;
@@ -2900,6 +2901,58 @@ for (const command of ["git -C . push --no-verify origin main", "git -c core.hoo
 check("policy_unit_node_eval_ask", policyModule.evaluateShellCommand('node -e "console.log(1)"', ws, { mode: "balanced" }).tier === "ask", policyModule.evaluateShellCommand('node -e "console.log(1)"', ws, { mode: "balanced" }));
 check("policy_unit_node_file_ask", policyModule.evaluateShellCommand("node scripts/untrusted.js", ws, { mode: "balanced" }).tier === "ask", policyModule.evaluateShellCommand("node scripts/untrusted.js", ws, { mode: "balanced" }));
 check("policy_unit_git_status_allow", policyModule.evaluateShellCommand("git status", ws, { mode: "balanced" }).tier === "allow", policyModule.evaluateShellCommand("git status", ws, { mode: "balanced" }));
+
+// 12b. Shell cache read-only allowlist (Phase D): only genuinely read-only
+// commands may be cached — mutating, networked or shell-structured commands never.
+const readOnlyCases: Array<[string, boolean]> = [
+  ["git status", true],
+  ["git -C . status --short", true],
+  ["git log --oneline -5", true],
+  ["git diff HEAD~1", true],
+  ["git -C repo rev-parse HEAD", true],
+  ["git branch", true],
+  ["git branch -a", true],
+  ["git branch -d feature", false],
+  ["git tag", true],
+  ["git tag -l 'v*'", true],
+  ["git tag -a v1.0 -m msg", false],
+  ["git remote", true],
+  ["git remote -v", true],
+  ["git remote get-url origin", true],
+  ["git remote set-url origin https://x", false],
+  ["git stash list", true],
+  ["git stash", false],
+  ["git worktree list", true],
+  ["git worktree add ../x", false],
+  ["git submodule status", true],
+  ["git submodule update --init", false],
+  ["git push origin main", false],
+  ["git commit -m msg", false],
+  ["git status | findstr src", false],
+  ["git diff > out.txt", false],
+  ["rg foo src --no-heading", true],
+  ["ripgrep --version", true],
+  ["ls -la", true],
+  ["cat package.json", true],
+  ["head -5 README.md", true],
+  ["tail -f server.log", false],
+  ["Get-Content -Wait README.md", false],
+  ["Get-Content README.md", true],
+  ["echo hi", true],
+  ["echo hi > out.txt", false],
+  ["node --version", true],
+  ["node ./scripts/build.js", false],
+  ["npm --version", true],
+  ["npm install", false],
+  ["find . -name '*.ts'", true],
+  ["find . -delete", false],
+  ["wc -l README.md", true],
+  ["git --version", true],
+];
+const readOnlyFailures = readOnlyCases.filter(
+  ([command, expected]) => shellCacheModule.isReadOnlyCommand(command) !== expected,
+);
+check("shell_cache_readonly_allowlist", readOnlyFailures.length === 0, readOnlyFailures);
 console.log("[verify] done");
 await client.close();
 await new Promise((resolve) => setTimeout(resolve, 1500));

@@ -99,16 +99,34 @@ Explicitly rejected:
   existing switch: `VENIRA_SEARCH_CACHE_MS=0`.
 - Global `Promise.all` fan-out without failure isolation — must be `allSettled`.
 
-## Phase D — shell cache allowlisting (opt-in, medium)
+## Phase D — shell cache allowlisting (shipped)
 
-Today `lib/shell-cache.ts` holds a 100-entry, 5 s LRU for **every** command, keyed by
-`cwd::command`. That is fine for `git log`/`rg` and wrong for anything mutating.
+`lib/shell-cache.ts` was rewritten to decide caching on the **parsed argv**, never on a
+raw substring match. Previously *every* successful command (including `git push`, which
+then reported `cache.hit` + `decision: allow` on the repeat) could be stored for 5 s.
 
-- Allowlist of **read-only** patterns (git read subcommands, `rg`, `ls`, file readers,
-  `git status --short`) with 5–30 s TTL.
-- Everything else: never cached. The decision is made on the parsed argv, not a regex
-  substring.
-- Opt-in flag `VENIRA_SHELL_CACHE_READ_ONLY=1` (default off until proven).
+Now, by default, only genuinely read-only commands are stored:
+
+- `git` read subcommands — `status`, `log`, `diff`, `show`, `blame`, `rev-parse`,
+  `rev-list`, `ls-files`, `ls-tree`, `cat-file`, `shortlog`, `describe`, `name-rev`,
+  `var` (and all-flags invocations like `git --version`); `branch`/`tag` allowed unless a
+  write flag is present (`-d`/`-m`/`-u`/`-f`/…, tag additionally `-a`/`-s`/`-m`);
+  `remote` only with `-v`/`get-url`/`get` (or bare); `stash` only `list`/`show`;
+  `worktree list` and `submodule status` only.
+- `rg`/`ripgrep`/`fd`/`fdfind`, `ls`, `dir`, `find` (without `-delete`/`-exec`/…), `grep`,
+  `findstr`, `tree`, file readers (`cat`, `head`, `tail` — never `-f`/`-Wait`; PowerShell
+  `Get-Content` without `-Wait`), `pwd`, `cd`, `echo`, `wc`, `stat`, identity probes
+  (`whoami`, `hostname`, `date`, `ver`, `uname`, `where`, `which`), and version probes
+  (`node|npm|npx|yarn|pnpm|cargo|rustc|go|python -v|--version`).
+- Any compound command — pipes `|`, chains `&&`/`;`/`&`, redirection `>`/`>>`, subshells
+  and substitutions `` ` ``/`$()`/`$(`/`${` — is never cacheable, because any of those can
+  mutate, hang or exfiltrate. Quote-aware scanning decides this on the raw text before
+  argv tokenization, so `git log --format="%s | %s"` (pipe *inside* quotes) is fine.
+
+`VENIRA_SHELL_CACHE_READ_ONLY=0` restores the legacy cache-everything behaviour
+(deprecated, kept for transition); `VENIRA_SHELL_CACHE=0` disables the cache entirely.
+Verify covers a 43-case classifier table (`shell_cache_readonly_allowlist`);
+`test:shell-security` unchanged and green.
 
 ## Deferred / rejected (with reasons)
 
@@ -122,7 +140,7 @@ Today `lib/shell-cache.ts` holds a 100-entry, 5 s LRU for **every** command, key
 
 ## Acceptance criteria per phase
 
-- `tsc --noEmit`, `npm run verify` (389/391 locally, 2 approval-gated Windows flakes excluded), `npm run check:docs`, `npm run check:source-shape`, `npm run test:shell-security` all green.
+- `tsc --noEmit`, `npm run verify` (green; 398/398 on the current local suite), `npm run check:docs`, `npm run check:source-shape`, `npm run test:shell-security` all green.
 - README §3.5/§4 updated whenever a user-visible flag or behaviour ships; `check:docs` contract kept.
 - No tool added/removed/renamed without the Default/Expert lists, README §4.0, and `scripts/check-docs.ts` updated in the same commit.
 - CI matrix (ubuntu/windows/macos × Node 20/22) green; macos-22 runner flakes are environmental (GitHub has auto-cancelled it twice), not code.
