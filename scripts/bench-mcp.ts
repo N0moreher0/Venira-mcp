@@ -87,6 +87,24 @@ const searches: number[] = [];
 for (let i = 0; i < 10; i++) searches.push((await call("project_search", { query: "project_read_file", kind: "literal_content" })).ms);
 out.search_10 = stats(searches);
 
+const searchWarm: number[] = [];
+for (let i = 0; i < 10; i++) searchWarm.push((await call("project_search", { query: "project_read_file", kind: "literal_content" })).ms);
+out.search_warm_10 = stats(searchWarm);
+
+const symRef: number[] = [];
+for (let i = 0; i < 5; i++) {
+  const sr = await call("project_symbol_references", { symbol_name: "project_read_file", scope: "workspace", limit: 10 });
+  symRef.push(sr.ms);
+}
+out.symbol_references_workspace_5 = stats(symRef);
+
+const symRefWarm: number[] = [];
+for (let i = 0; i < 5; i++) {
+  const sr = await call("project_symbol_references", { symbol_name: "project_read_file", scope: "workspace", limit: 10 });
+  symRefWarm.push(sr.ms);
+}
+out.symbol_references_workspace_warm_5 = stats(symRefWarm);
+
 const listRun = await call("project_list_files", { depth: 2, limit: 50 });
 out.list_ok = !(JSON.parse(String((listRun.result as { content?: { text?: string }[] })?.content?.[0]?.text ?? "{}")).error?.code);
 out.list_bytes = String(
