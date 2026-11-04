@@ -30,19 +30,29 @@ Open items carried over:
 - **Doctor stays strict:** `health_capability_open` passes because health triggers the
   refresh, not because state is fake.
 
-## Phase B — search cache validation & parity (next, small)
+## Phase B — search cache validation & parity (shipped)
 
-The search cache (3 s TTL, `VENIRA_SEARCH_CACHE_MS`, `VENIRA_CACHE_SEARCH_ONLY`,
-0-hits never cached, inflight dedup, wiped on mutations) exists but was only exercised
-indirectly. Make it provable:
+- `project_symbol_references(scope:"workspace")` now serves repeats from a dedicated
+  `referencesCache` (3 s TTL, key = inner search args), because the host reports
+  `complete: false` when it stops at the hit cap and `searchCache` only stores
+  complete results — before this, warm calls re-walked the repo (~90 ms → ~0.7 ms).
+  Writes invalidate it via the same mutation path (`invalidateListCaches`).
+- `project_health.caches` gained `negative.ttl_ms` and `negative.oldest_age_ms`
+  (plus `references.entries/hit_rate`) — the negative-cache telemetry is now visible.
+- `verify.ts` covers `search_cache_hit`, `symbol_references_workspace_cache_hit`,
+  `symbol_references_cache_invalidated_on_write`, `health_negative_cache_reported`
+  (verify now 395 checks; "Search incomplete (raise limit max 200)" hint already
+  existed at the envelope layer for hits-capped results).
+- Bench recorded: search warm ≈ 1.3 ms (cold first call ≈ 100 ms), symbol_references
+  workspace warm ≈ 0.74 ms (vs ~78 ms before the dedicated cache).
 
-- Add verify checks that a repeated identical search is served from cache and that a
-  write invalidates it (extend the existing `search_hits` / `search_hits_invalidate_after_write` pattern to `project_search`, plus `project_symbol_references(scope="workspace")`).
-- Bench `project_search` cold vs warm (`bench-mcp.ts`) and record the numbers in the README benchmark table.
-- **Negative-cache telemetry:** expose `negative_entries` and `age` in `project_health.caches`
-  (the data is already in `negativeReadCache`; only the report is missing).
-- **Index-mismatch warning:** when a hits-capped result (`truncated: true`) is returned,
-  attach a `hint` naming the cap so the agent knows the index was incomplete.
+Rejected here:
+
+- "Call `project_cache_clear({type:'all'})` before every search" — anti-pattern;
+  `VENIRA_SEARCH_CACHE_MS=0` is the supported strict-freshness switch.
+- Relaxing `searchCache` to store incomplete results — would hide later matches for
+  the TTL window and changes `project_search` semantics; the dedicated cache is the
+  narrow, reversible fix.
 
 ## Phase C — search hybrid router (opt-in, medium)
 

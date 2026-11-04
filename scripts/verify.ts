@@ -937,6 +937,44 @@ const longGlob = asEnvelope(
 );
 check("search_glob_length_rejected", longGlob.error?.code === "resource_limit", longGlob.error);
 
+// 10b. Search + symbol_references workspace cache (Phase B)
+const probe = `VERIFY_CACHE_PROBE_${Date.now()}`;
+await fs.writeFile(`${dir}/cache-probe.txt`, `${probe}\n`);
+await new Promise((resolve) => setTimeout(resolve, 3200)); // search TTL is 3 s
+const probe1 = asEnvelope(
+  await call("project_search", { query: probe, kind: "literal_content", relative_path: dir, glob: "*.txt" }),
+);
+const probe2 = asEnvelope(
+  await call("project_search", { query: probe, kind: "literal_content", relative_path: dir, glob: "*.txt" }),
+);
+check("search_cache_hit", probe2.cached === true && probe1.cached !== true, { first: probe1.cached, second: probe2.cached });
+const sym1 = asEnvelope(
+  await call("project_symbol_references", { symbol_name: probe, scope: "workspace", relative_path: dir, limit: 10 }),
+);
+const sym2 = asEnvelope(
+  await call("project_symbol_references", { symbol_name: probe, scope: "workspace", relative_path: dir, limit: 10 }),
+);
+check(
+  "symbol_references_workspace_cache_hit",
+  sym2.cached === true && sym1.cached !== true,
+  { first: sym1.cached, second: sym2.cached },
+);
+await call("project_write_file", { relative_path: `${dir}/cache-probe.txt`, content: `${probe} again\n` });
+const sym3 = asEnvelope(
+  await call("project_symbol_references", { symbol_name: probe, scope: "workspace", relative_path: dir, limit: 10 }),
+);
+check("symbol_references_cache_invalidated_on_write", sym3.cached !== true, { cached: sym3.cached });
+await call("project_read_file", { relative_path: `${dir}/phase-b-missing.txt` }); // negative cache entry
+const healthCache = asEnvelope(await call("project_health", { include_audit: 0 }));
+check(
+  "health_negative_cache_reported",
+  typeof healthCache.data?.caches?.negative?.entries === "number" &&
+    healthCache.data.caches.negative.entries >= 1 &&
+    typeof healthCache.data.caches.negative.ttl_ms === "number" &&
+    typeof healthCache.data.caches.negative.oldest_age_ms === "number",
+  healthCache.data?.caches?.negative,
+);
+
 // 11. list write invalidation (cache)
 await new Promise((resolve) => setTimeout(resolve, 1600)); // list cache 1.5s
 const list1 = await call("project_list_files", { relative_path: dir, depth: 1 });

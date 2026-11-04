@@ -82,6 +82,17 @@ const LIST_CACHE_MS = envInt("VENIRA_LIST_CACHE_MS", 1500);
 const SEARCH_CACHE_MS = envInt("VENIRA_SEARCH_CACHE_MS", 3000);
 const RECENT_CACHE_MS = envInt("VENIRA_RECENT_CACHE_MS", 2000);
 const NEGATIVE_CACHE_TTL_MS = envInt("VENIRA_NEGATIVE_CACHE_MS", 500);
+
+/** Age of the oldest entry in the negative-read cache (ms), 0 when empty. */
+function oldestNegativeAge(): number {
+  const now = Date.now();
+  let oldest = 0;
+  for (const ts of negativeReadCache.values()) {
+    const age = now - ts;
+    if (age > oldest) oldest = age;
+  }
+  return oldest;
+}
 const MAX_BATCH_RESPONSE_BYTES = 2 * 1024 * 1024;
 const MAX_BATCH_ITEM_BYTES = envInt("VENIRA_BATCH_ITEM_BYTES", 512 * 1024);
 const MAX_READ_BYTES = 1048576; // 1 MiB, safer than the native ceiling
@@ -409,6 +420,7 @@ const readCache = new Map<string, CachedRead>();
 const infoCache = new Map<string, CachedRead>();
 const listCache = new Map<string, CachedTtl>();
 const searchCache = new Map<string, CachedTtl>();
+const referencesCache = new Map<string, CachedTtl>();
 const recentCache = new Map<string, CachedTtl>();
 const negativeReadCache = new Map<string, number>(); // Absolute path -> timestamp of not_found
 
@@ -420,6 +432,10 @@ const cacheStats = {
   info: { hits: 0, misses: 0 },
   list: { hits: 0, misses: 0 },
   search: { hits: 0, misses: 0 },
+  // symbol_references (workspace) uses a dedicated cache (keyed on the inner
+  // search args) because the host reports complete=false when it stops at the
+  // hit cap, and searchCache only stores complete results.
+  references: { hits: 0, misses: 0 },
   recent: { hits: 0, misses: 0 },
 };
 
@@ -846,6 +862,7 @@ function invalidateAllCaches(): void {
 function invalidateListCaches(): void {
   listCache.clear();
   searchCache.clear();
+  referencesCache.clear();
   recentCache.clear();
 }
 
@@ -1832,6 +1849,8 @@ function cacheReport() {
     },
     negative: {
       entries: negativeReadCache.size,
+      ttl_ms: NEGATIVE_CACHE_TTL_MS,
+      oldest_age_ms: oldestNegativeAge(),
     },
     info: {
       entries: infoCache.size,
@@ -1850,6 +1869,12 @@ function cacheReport() {
       ttl_ms: SEARCH_CACHE_MS,
       ...cacheStats.search,
       hit_rate: rate(cacheStats.search),
+    },
+    references: {
+      entries: referencesCache.size,
+      ttl_ms: SEARCH_CACHE_MS,
+      ...cacheStats.references,
+      hit_rate: rate(cacheStats.references),
     },
     recent: {
       entries: recentCache.size,
@@ -2568,6 +2593,7 @@ async function runSymbolReferences(args: Args): Promise<ToolResult> {
   // the caller should pair this with project_file_symbols first). For "workspace",
   // do a bounded content search for the identifier.
   let references: Array<{ relative_path: string; line_number: number; context: string }> = [];
+  let searchCacheHit = false;
   if (scope === "file") {
     const rel = String(args.relative_path ?? "");
     if (isProtectedPath(toHostPath(rel))) {
@@ -2589,15 +2615,23 @@ async function runSymbolReferences(args: Args): Promise<ToolResult> {
       }
     }
   } else {
-    // workspace scope: bounded search via the existing search op, kind=literal_content
+    // workspace scope: bounded search via the existing search op, kind=literal_content.
+    // Dedicated cache: the host reports complete=false when it stops at the hit
+    // cap, and searchCache only stores complete results — a plain limit=10 query
+    // would never be cached and every call would re-walk the repo.
     const limit = Number(args.limit ?? 50);
-    const searchRes = (await execute("search", {
+    const innerArgs = {
       query: symbolName,
       kind: "literal_content",
       whole_word: true,
       limit,
       relative_path: args.relative_path,
-    })) as RustResponse;
+    };
+    const refKey = stableKey(innerArgs);
+    const cachedSearch = ttlLookup(referencesCache, refKey, SEARCH_CACHE_MS, cacheStats.references);
+    searchCacheHit = cachedSearch !== null;
+    const searchRes = cachedSearch ?? (await executeCached("search", innerArgs)).response;
+    if (!cachedSearch) ttlStore(referencesCache, refKey, searchRes);
     const hits = (searchRes.result?.data as { hits?: unknown[] } | undefined)?.hits ?? [];
     references = (hits as Array<{ relative_path?: unknown; line_number?: unknown; snippet?: unknown; text?: unknown; line?: unknown; context?: unknown }>).map((h) => ({
       relative_path: String(h.relative_path ?? ""),
@@ -2621,7 +2655,7 @@ async function runSymbolReferences(args: Args): Promise<ToolResult> {
   };
   const elapsedMs = performance.now() - started;
   recordMetric("symbol_references", elapsedMs, true);
-  return toolResult(buildEnvelope("symbol_references", response, { requestId, elapsedMs, cached: false }));
+  return toolResult(buildEnvelope("symbol_references", response, { requestId, elapsedMs, cached: searchCacheHit }));
 }
 
 async function runSelectiveSearch(args: Args): Promise<ToolResult> {  const started = performance.now();
