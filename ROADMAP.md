@@ -54,24 +54,43 @@ Rejected here:
   the TTL window and changes `project_search` semantics; the dedicated cache is the
   narrow, reversible fix.
 
-## Phase C — search hybrid router (opt-in, medium)
+## Phase C — search hybrid router (shipped, revised)
 
-Motivation: an agent searching for a symbol today gets either the symbol index or a
-content search, never both merged with provenance. Proposal (adapted to this codebase,
-which already has an async ripgrep adapter from v1.13.7 and `project_symbol_references`):
+Shipped as opt-in `project_search({ hybrid: 1 })` — **no new tool**; the Default/Expert
+counts and the README §4 tables are unchanged.
 
-1. Fan out **in parallel**: native ripgrep (`\b<query>\b` with `--include` inference from
-   the language hint) and `project_symbol_references({ scope: "workspace" })`.
-2. Merge hits by `(relative_path, line_number)`; tag each with
-   `source: "native" | "venira"` and `confidence: "exact_match" | "symbol_index"`
-   (same shape as `project_change_impact`'s confidence model).
-3. `Promise.allSettled`; if one side fails, return the other with a `warning` field —
-   best-effort, never a hard failure.
-4. **Retry-scope fallback:** if the symbol index returns 0 but a content search hits,
-   transparently widen to `scope: "workspace"` and note it in the hint.
-5. Exposed as `project_search` with `hybrid: 1` (or `semantic_boost`), **not** a new tool —
-   the Default/Expert tool counts and the README §4 table stay stable. A new tool is only
-   added if the hybrid path proves itself in benchmarks and agents need it discoverable.
+Implementation differs from the first draft (deliberate engineering call, not a shortcut):
+rather than a second ripgrep pass racing the first (`Promise.allSettled` over identical
+args), hybrid mode runs **one** backend walk and enriches the returned hits — the
+"two sides" would share the same backend anyway, so the fan-out doubled work for zero
+extra information.
+
+Per hit:
+
+- `source: "symbol_index"` + `confidence: "exact_match"` when the line is a **definition**
+  of the queried identifier (detected per file with the same parser-lite as
+  `project_outline_symbol`, bounded to ≤32 files with hits),
+- `source: "symbol_reference"` + `exact_match` for whole-word matches elsewhere,
+- `source: "content"` + `text_match` for substring-only matches.
+
+Fallback behaviour: a scoped (`relative_path`), identifier-like query returning zero hits
+widens once to the workspace and flags `scope_widened: true` in the data — the agent
+knows the scope changed instead of concluding "symbol does not exist".
+
+Envelope stays backward-compatible (additive fields only); `hybrid: true` and
+`kind: literal_content` only. Verify covers `search_hybrid_returns_tagged_hits` and
+`search_hybrid_scope_widened_on_empty`.
+
+Not shipped (deliberately):
+
+- No second search pass / no extra MCP round-trip.
+- No `source: "native" | "venira"` split — both sides would be the same backend; the
+  signal would be meaningless.
+- No fixture-matrix parity suite yet — folded into Phase B's parity checks; defer until
+  the hybrid path proves itself in real sessions.
+
+Rejected (unchanged): "cache-clear before every search"; widening `searchCache` to store
+partial results (changes `project_search` semantics; dedicated `referencesCache` instead).
 
 Explicitly rejected:
 

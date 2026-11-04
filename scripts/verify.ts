@@ -975,6 +975,32 @@ check(
   healthCache.data?.caches?.negative,
 );
 
+// 10c. Hybrid search mode (Phase C)
+const hyb = asEnvelope(
+  await call("project_search", {
+    query: "CoreHost",
+    kind: "literal_content",
+    relative_path: ".",
+    glob: "*.ts",
+    hybrid: 1,
+    limit: 8,
+  }),
+);
+check(
+  "search_hybrid_returns_tagged_hits",
+  Array.isArray(hyb.data?.hits) &&
+    hyb.data.hits.length > 0 &&
+    hyb.data.hits.every(
+      (hit: Record<string, unknown>) => typeof hit.source === "string" && typeof hit.confidence === "string",
+    ) &&
+    hyb.data.hits.some((hit: Record<string, unknown>) => hit.source === "symbol_index"),
+  hyb.data?.hits?.slice(0, 4),
+);
+const scopedMiss = asEnvelope(
+  await call("project_search", { query: "McpServer", kind: "literal_content", relative_path: dir, hybrid: 1, limit: 5 }),
+);
+check("search_hybrid_scope_widened_on_empty", scopedMiss.data?.scope_widened === true, scopedMiss.data);
+
 // 11. list write invalidation (cache)
 await new Promise((resolve) => setTimeout(resolve, 1600)); // list cache 1.5s
 const list1 = await call("project_list_files", { relative_path: dir, depth: 1 });
