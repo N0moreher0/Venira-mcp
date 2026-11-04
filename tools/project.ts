@@ -4,7 +4,7 @@ import { promises as fs, readFileSync } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import { envChoice, envFlag, parseBackgroundFlag } from "../lib/env.js";
-import { CoreHost, SHELL_MAX_TIMEOUT_MS, shellPolicySnapshot } from "../lib/corehost.js";
+import { CoreHost, SHELL_MAX_TIMEOUT_MS, shellPolicySnapshot, SCOPE_TTL_MS } from "../lib/corehost.js";
 import * as approvals from "../lib/approvals.js";
 import { evaluateToolPolicy } from "../lib/tool-policy.js";
 import { recordMetric, metricsSnapshot } from "../lib/metrics.js";
@@ -129,6 +129,18 @@ async function runQueued<T>(task: () => Promise<T>): Promise<T> {
 // Previously each call did open_scope -> canonicalize + open handles for home
 // and each drive, then close_scope right after.
 // ---------------------------------------------------------------------------
+const CAPABILITY_REFRESH_AFTER_MS = SCOPE_TTL_MS / 2;
+
+/** Truthful state for reporting: after proactive refresh the module-level cap is
+ * always younger than CAPABILITY_REFRESH_AFTER_MS, so "expired" only surfaces if
+ * something bypasses capabilityReady(). */
+function capabilityState(cap: Capability): "open" | "refreshing" | "expired" {
+  const age = Date.now() - cap.openedAt;
+  if (age >= SCOPE_TTL_MS) return "expired";
+  if (age >= CAPABILITY_REFRESH_AFTER_MS) return "refreshing";
+  return "open";
+}
+
 type Capability = { id: string; projectId: string; openedAt: number };
 
 let capability: Capability | null = null;
@@ -146,7 +158,14 @@ function openCapability(): Promise<Capability> {
 }
 
 function capabilityReady(): Promise<Capability> {
-  if (capability) return Promise.resolve(capability);
+  // Refresh well before the host's 2 h scope TTL: the first tool call after
+  // the expiry boundary must not observe `capability_expired` at all. After
+  // CAPABILITY_REFRESH_AFTER_MS the scope is silently reopened through the
+  // shared `opening` path; the old scope lingers harmlessly until the host
+  // reaps it at its TTL.
+  if (capability && Date.now() - capability.openedAt < CAPABILITY_REFRESH_AFTER_MS) {
+    return Promise.resolve(capability);
+  }
   if (!opening) {
     opening = openCapability().then(
       (value) => {
@@ -1634,9 +1653,9 @@ async function runCreate(args: Args): Promise<ToolResult> {
       create_parents: args.create_dirs ?? true,
     };
     if (typeof args.reason === "string") dirParams.reason = args.reason;
-    const result = (await execute("create_directory", dirParams)) as RustResponse;
+    const { response: dirResponse } = await executeCached("create_directory", dirParams);
     recordMetric("create", performance.now() - started, true);
-    return toolResult(buildEnvelope("create", result, { requestId, elapsedMs: performance.now() - started }));
+    return toolResult(buildEnvelope("create", dirResponse, { requestId, elapsedMs: performance.now() - started }));
   }
   if (kind !== "file") {
     recordMetric("create", performance.now() - started, false);
@@ -1650,7 +1669,7 @@ async function runCreate(args: Args): Promise<ToolResult> {
   if (args.mode !== undefined) fileParams.mode = args.mode;
   if (args.expected_sha256 !== undefined) fileParams.expected_sha256 = args.expected_sha256;
   if (typeof args.reason === "string") fileParams.reason = args.reason;
-  const result = (await execute("write_file", fileParams)) as RustResponse;
+  const result = (await executeCached("write_file", fileParams)).response;
   recordMetric("create", performance.now() - started, true);
   return toolResult(buildEnvelope("create", result, { requestId, elapsedMs: performance.now() - started }));
 }
@@ -1844,6 +1863,12 @@ function cacheReport() {
 async function runHealth(args: Args): Promise<ToolResult> {
   const started = performance.now();
   const requestId = newRequestId();
+  // Refresh transparently so a long-lived process never reports an expired/stale scope.
+  try {
+    await capabilityReady();
+  } catch {
+    /* health still reports what it can (state "closed" below) */
+  }
   const hostInfo = host.snapshot();
   const dataDir = dataDirFor(hostInfo.exe);
   const includeAudit = args.include_audit !== false;
@@ -1871,7 +1896,7 @@ async function runHealth(args: Args): Promise<ToolResult> {
       },
       capability: capability
         ? {
-            state: "open",
+            state: capabilityState(capability),
             project_id: capability.projectId,
             opened_ago_ms: Date.now() - capability.openedAt,
           }

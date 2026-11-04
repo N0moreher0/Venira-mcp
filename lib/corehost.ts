@@ -417,7 +417,7 @@ type Scope = {
   expires_at: number;
 };
 
-const SCOPE_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours
+export const SCOPE_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours
 const openScopes = new Map<string, Scope>();
 
 function openScope(
