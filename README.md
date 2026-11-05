@@ -214,10 +214,11 @@ loop fast without giving up the guardrails, copy the profile in
       "args": ["--yes", "--package=venira-mcp@latest", "venira-mcp"],
       "env": {
         "VENIRA_WORKSPACE": "${workspaceFolder}",
-        "VENIRA_UNRESTRICTED": "0",
-        "VENIRA_SHELL_MODE": "balanced",
-        "VENIRA_PERMISSION_MODE": "allow_all",
+        // "expert" = full surface (shell, builds, CI/CD); "default" = lean coding set (31 tools, no shell/JS/CI-CD).
+        "VENIRA_TOOL_MODE": "expert",
+        // "full" keeps envelopes complete; "compact" trims payloads over 8 KB.
         "VENIRA_OUTPUT_MODE": "full"
+        // All other VENIRA_* flags keep safe defaults; only add them here when you intentionally override.
       }
     }
   }
@@ -260,11 +261,14 @@ workspace path — OpenCode does not expand `${workspaceFolder}`:
       "command": ["npx", "--yes", "--package=venira-mcp@latest", "venira-mcp"],
       "enabled": true,
       "environment": {
+        // Absolute workspace path. OpenCode does not expand ${workspaceFolder}.
+        // On Windows, JSON paths need escaped backslashes (C:\\path\\to\\project).
         "VENIRA_WORKSPACE": "/absolute/path/to/your-project",
-        "VENIRA_UNRESTRICTED": "0",
-        "VENIRA_SHELL_MODE": "balanced",
-        "VENIRA_PERMISSION_MODE": "allow_all",
+        // "expert" = full surface (shell, builds, CI/CD); "default" = lean coding set (31 tools).
+        "VENIRA_TOOL_MODE": "expert",
+        // "full" keeps envelopes complete; "compact" trims payloads over 8 KB.
         "VENIRA_OUTPUT_MODE": "full"
+        // All other VENIRA_* flags keep safe defaults; only set them here when intentional.
       }
     }
   }
@@ -296,10 +300,11 @@ Claude Desktop, Cursor, Kimi, DeepSeek and Antigravity:
       "args": ["--yes", "--package=venira-mcp@latest", "venira-mcp"],
       "env": {
         "VENIRA_WORKSPACE": "/absolute/path/to/your-project",
-        "VENIRA_UNRESTRICTED": "0",
-        "VENIRA_SHELL_MODE": "balanced",
-        "VENIRA_PERMISSION_MODE": "allow_all",
+        // "expert" = full surface (shell, builds, CI/CD); "default" = lean coding set (31 tools).
+        "VENIRA_TOOL_MODE": "expert",
+        // "full" keeps envelopes complete; "compact" trims payloads over 8 KB.
         "VENIRA_OUTPUT_MODE": "full"
+        // All other VENIRA_* flags keep safe defaults; only set them here when intentional.
       }
     }
   }
@@ -330,22 +335,33 @@ restart it, then ask the agent to call `project_health`.
 
 | Variable | Value | Effect on the agent loop |
 |---|---|---|
-| `VENIRA_WORKSPACE` | absolute path | Every relative path and the shell cwd resolve from here, so the agent never has to guess a root. |
-| `VENIRA_UNRESTRICTED` | `"0"` | Escapes fail fast with `path_escape` plus a hint instead of silently reading outside the project. |
-| `VENIRA_SHELL_MODE` | `"balanced"` | Routine read-only commands run without a prompt; network, outside-workspace writes, `git push` and history rewrites stop for approval. `strict` adds prompts to almost everything; `permissive` removes the guardrail. |
-| `VENIRA_PERMISSION_MODE` | `"allow_all"` | Opens the session capability as `allow_all`. The enforced gates are the workspace lock, shell policy and approvals, not this label. |
-| `VENIRA_OUTPUT_MODE` | `"full"` | Complete envelopes, so an agent never re-reads a file because a payload was trimmed. Use `"compact"` only for small-context models. |
-| `VENIRA_SHELL_EXIT_EARLY` | `"1"` | `project_shell_status` returns the moment the exit code is known instead of sleeping out the full `wait_seconds` window. |
-| `VENIRA_ALLOW_JS_EXEC` | `"0"` | Keeps the arbitrary-code path off. Turn it on only for a task that genuinely needs it; `VENIRA_JS_EXEC_APPROVAL="1"` still makes every snippet wait for your grant. |
-| `VENIRA_JS_EXEC_APPROVAL` | `"1"` | Per-call human approval for `project_execute_js`, bound to the exact code + `argv` and single-use. |
-| `VENIRA_ALLOW_SELF_INSTALL` | `"0"` | An agent cannot rewrite MCP configs for other clients on its own. |
-| `VENIRA_DATA_DIR` | unset | The server, `npx venira-mcp --approve` and `--setup-github` must share one vault; override it only if you override it everywhere. |
-| `VENIRA_NETWORK` | `"1"` | GitHub/CI tools work. Use `"0"` for an offline repo: every outbound call is refused before a socket opens. |
+| `VENIRA_WORKSPACE` | absolute path | Every relative path and the shell cwd resolve from here, so the agent never has to guess a root. **Required** in client config. |
 | `VENIRA_TOOL_MODE` | `"expert"` | The recommended profile assumes the full surface (shell, builds, CI/CD). Set `"default"` for a coding-only agent: no shell execution, no JS eval, no CI/CD shipping, no destructive deletes. |
+| `VENIRA_OUTPUT_MODE` | `"full"` | Complete envelopes, so an agent never re-reads a file because a payload was trimmed. Use `"compact"` only for small-context models. |
 
-Leave the cache and audit flags alone: `VENIRA_CACHE_ALL`,
-`VENIRA_CACHE_LIST_ONLY`, `VENIRA_CACHE_SEARCH_ONLY` and `VENIRA_AUDIT_FAST`
-already default to `1`.
+Leave everything else alone unless you have a specific reason:
+
+| Variable | Default | When to override |
+|---|---|---|
+| `VENIRA_UNRESTRICTED` | `"0"` | Never in production. `"1"` lets absolute paths outside the workspace work. |
+| `VENIRA_SHELL_MODE` | `"balanced"` | Read-only commands run without approval; `git push`/history rewrite ask. `strict` prompts more; `permissive` removes guardrails. |
+| `VENIRA_PERMISSION_MODE` | `"allow_all"` | `manual`/`best_effort`/`allow_all` for coding tool calls; shell policy and approvals still gate risk. |
+| `VENIRA_ALLOW_JS_EXEC` | `"0"` | Set `"1"` only for tasks that genuinely need `project_execute_js`. |
+| `VENIRA_ALLOW_JS_EXEC_APPROVAL` | `"1"` | Per-call human approval for JS; set `"0"` only for trusted automation. |
+| `VENIRA_ALLOW_SELF_INSTALL` | `"0"` | `"1"` lets the agent rewrite other clients' MCP configs. |
+| `VENIRA_DATA_DIR` | unset | Where audit DB/secrets live. Set only if you need a shared vault across clients. |
+| `VENIRA_NETWORK` | `"1"` | Set `"0"` for offline repos: every outbound call is refused. |
+| `VENIRA_SHELL_EXIT_EARLY` | `"1"` | `project_shell_status` returns as soon as exit code is known. |
+| `VENIRA_USE_RIPGREP` | `"1"` | Set `"0"` to force the slower JS line scanner for `project_search`. |
+
+**Tool modes** — set with `VENIRA_TOOL_MODE` or `"toolMode"` in `venira.config.json` (env wins):
+
+| Mode | Tools | Focus |
+|---|---|---|
+| `default` (default) | **31** | Coding-focused loop: read/write/edit, `project_search`, checkpoints, code intel, dependency graph + change impact, diagnostics, audit/trace, secrets metadata. **No** shell, **no** JS eval, **no** CI/CD shipping, **no** destructive deletes. |
+| `expert` | **46** (47 with `VENIRA_ALLOW_JS_EXEC=1`) | Full surface: everything in `default` plus shell, JS eval, PR/CI tools and `project_delete_path`. |
+
+All other `VENIRA_*` flags (cache TTLs, trace, snapshot caps, git provider settings, etc.) have documented defaults and only need setting when you intentionally change behaviour — see §3.5 for the full reference.
 
 **OpenCode** — `~/.config/opencode/opencode.jsonc` (absolute path; OpenCode does
 not expand `${workspaceFolder}`):
@@ -359,17 +375,14 @@ not expand `${workspaceFolder}`):
       "command": ["npx", "--yes", "--package=venira-mcp@latest", "venira-mcp"],
       "enabled": true,
       "environment": {
+        // Absolute workspace path. OpenCode does not expand ${workspaceFolder}.
+        // On Windows, JSON paths need escaped backslashes (C:\\path\\to\\project).
         "VENIRA_WORKSPACE": "/absolute/path/to/your-project",
-        "VENIRA_UNRESTRICTED": "0",
-        "VENIRA_SHELL_MODE": "balanced",
-        "VENIRA_PERMISSION_MODE": "allow_all",
-        "VENIRA_OUTPUT_MODE": "full",
-        "VENIRA_SHELL_EXIT_EARLY": "1",
-        "VENIRA_ALLOW_JS_EXEC": "0",
-        "VENIRA_JS_EXEC_APPROVAL": "1",
-        "VENIRA_ALLOW_SELF_INSTALL": "0",
-        "VENIRA_NETWORK": "1",
-        "VENIRA_TOOL_MODE": "expert"
+        // "expert" = full surface (shell, builds, CI/CD); "default" = lean coding set (31 tools).
+        "VENIRA_TOOL_MODE": "expert",
+        // "full" keeps envelopes complete; "compact" trims payloads over 8 KB.
+        "VENIRA_OUTPUT_MODE": "full"
+        // All other VENIRA_* flags keep safe defaults; only set them here when intentional.
       }
     }
   }
@@ -388,16 +401,11 @@ here, so no path edit is needed:
       "args": ["--yes", "--package=venira-mcp@latest", "venira-mcp"],
       "env": {
         "VENIRA_WORKSPACE": "${workspaceFolder}",
-        "VENIRA_UNRESTRICTED": "0",
-        "VENIRA_SHELL_MODE": "balanced",
-        "VENIRA_PERMISSION_MODE": "allow_all",
-        "VENIRA_OUTPUT_MODE": "full",
-        "VENIRA_SHELL_EXIT_EARLY": "1",
-        "VENIRA_ALLOW_JS_EXEC": "0",
-        "VENIRA_JS_EXEC_APPROVAL": "1",
-        "VENIRA_ALLOW_SELF_INSTALL": "0",
-        "VENIRA_NETWORK": "1",
-        "VENIRA_TOOL_MODE": "expert"
+        // "expert" = full surface (shell, builds, CI/CD); "default" = lean coding set (31 tools).
+        "VENIRA_TOOL_MODE": "expert",
+        // "full" keeps envelopes complete; "compact" trims payloads over 8 KB.
+        "VENIRA_OUTPUT_MODE": "full"
+        // All other VENIRA_* flags keep safe defaults; only set them here when intentional.
       }
     }
   }
@@ -415,16 +423,11 @@ shape (config path per client: [§3.0](#30-supported-clients)):
       "args": ["--yes", "--package=venira-mcp@latest", "venira-mcp"],
       "env": {
         "VENIRA_WORKSPACE": "/absolute/path/to/your-project",
-        "VENIRA_UNRESTRICTED": "0",
-        "VENIRA_SHELL_MODE": "balanced",
-        "VENIRA_PERMISSION_MODE": "allow_all",
-        "VENIRA_OUTPUT_MODE": "full",
-        "VENIRA_SHELL_EXIT_EARLY": "1",
-        "VENIRA_ALLOW_JS_EXEC": "0",
-        "VENIRA_JS_EXEC_APPROVAL": "1",
-        "VENIRA_ALLOW_SELF_INSTALL": "0",
-        "VENIRA_NETWORK": "1",
-        "VENIRA_TOOL_MODE": "expert"
+        // "expert" = full surface (shell, builds, CI/CD); "default" = lean coding set (31 tools).
+        "VENIRA_TOOL_MODE": "expert",
+        // "full" keeps envelopes complete; "compact" trims payloads over 8 KB.
+        "VENIRA_OUTPUT_MODE": "full"
+        // All other VENIRA_* flags keep safe defaults; only set them here when intentional.
       }
     }
   }
@@ -441,16 +444,11 @@ startup_timeout_sec = 120
 
 [mcp_servers.venira.env]
 VENIRA_WORKSPACE = "C:\\path\\to\\your-project"
-VENIRA_UNRESTRICTED = "0"
-VENIRA_SHELL_MODE = "balanced"
-VENIRA_PERMISSION_MODE = "allow_all"
-VENIRA_OUTPUT_MODE = "full"
-VENIRA_SHELL_EXIT_EARLY = "1"
-VENIRA_ALLOW_JS_EXEC = "0"
-VENIRA_JS_EXEC_APPROVAL = "1"
-VENIRA_ALLOW_SELF_INSTALL = "0"
-VENIRA_NETWORK = "1"
+# "expert" = full surface (shell, builds, CI/CD); "default" = lean coding set (31 tools).
 VENIRA_TOOL_MODE = "expert"
+# "full" keeps envelopes complete; "compact" trims payloads over 8 KB.
+VENIRA_OUTPUT_MODE = "full"
+# All other VENIRA_* flags keep safe defaults; only set them here when intentional.
 ```
 
 `npx --yes venira-mcp@latest --print-config <client>` prints the minimal shape
