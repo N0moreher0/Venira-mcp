@@ -1,0 +1,12 @@
+fix(shell-policy): STRICT_ALLOW sanitised — removed mutating commands
+
+The STRICT_ALLOW list (used when VENIRA_SHELL_MODE=strict) contained
+mkdir/touch/cp/mv/rm which are mutating filesystem commands. In strict
+mode they bypassed all ask-rules because they were not outside-workspace
+writes, and were silently ALLOWED — contradicting the mode's purpose of
+"everything requires approval except a narrow read-only set".
+
+Removed them. Now strict mode only allows genuinely read-only/informational
+commands (ls, cat, git status, tsc, etc.). Verified: strict mode now
+correctly asks for rm/mkdir/touch/cp/mv (431 verify checks, 270 policy
+corpus cases).
