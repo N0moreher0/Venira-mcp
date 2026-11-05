@@ -3333,7 +3333,7 @@ export function registerProjectTools(server: McpServer): void {
         "Edit a file by exact text replacement: one old_text/new_text pair, or edits[] for multiple sections.",
         "Edit file",
         {
-          use_when: "change one or a few text sections whose exact content you know; pair with expected_sha256 to guard against blind overwrites.",
+          use_when: "change one or a few text sections whose exact content you know; pair with expected_sha256 to guard against blind overwrites. If editing 2+ files or 2+ sections, create a project_snapshot first so you can rollback in one call.",
           avoid_when: "the whole file must change (project_write_file), or you have not read the file to know old_text.",
           speed_profile: "fast; clears the read/list/search cache for the affected path.",
           output_kind: "file_written: replacements, sha256_before/after.",
@@ -3365,7 +3365,7 @@ export function registerProjectTools(server: McpServer): void {
         "Apply multiple edit_file operations atomically in one call; aborts after the first failure and restores the pre-batch snapshot when possible.",
         "Edit batch",
         {
-          use_when: "you have 2+ independent edits across one or more files.",
+          use_when: "you have 2+ independent edits across one or more files. Consider project_snapshot action=create first so you can rollback the whole batch in one call if something goes wrong.",
           avoid_when: "a single edit (project_edit_file) or a whole-file rewrite (project_write_file).",
           speed_profile: "depends on item count; each runs edit_file and clears caches.",
           output_kind: "batch: responses[] {ok, response|error}, atomic metadata with executed/skipped indexes and rollback status.",
@@ -4116,8 +4116,8 @@ export function registerProjectTools(server: McpServer): void {
         "Workspace checkpoint",
         {
           use_when:
-            "before a multi-file refactor/rename: action=create (paths defaults to ['.']) then action=restore with the returned id if the change goes wrong.",
-          avoid_when: "the repo is clean in git (git is cheaper), or only one file changed and can be re-edited.",
+            "before a multi-file refactor/rename: action=create (paths defaults to ['.']) then action=restore id=<id> if the change goes wrong. Example: create snapshot → edit 3 files → tests fail → restore snapshot in one call instead of re-editing each file manually.",
+          avoid_when: "only one file changed and can be re-edited, or you already committed everything and don't need a safety net.",
           speed_profile:
             "create walks/hashes the captured files (skips .git/node_modules/dist, symlinks, huge files); repeats only store new blobs. restore is atomic per file, concurrency 4, sha256-verified by default.",
           output_kind:
