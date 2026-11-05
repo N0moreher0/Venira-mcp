@@ -2424,7 +2424,7 @@ function opShellCancel(args: Record<string, unknown>): RustResponse {
 // CoreHost class (drop-in replacement for the Rust CoreHost)
 // ---------------------------------------------------------------------------
 
-// ---------------------    const indexed = queryRecentFiles(limit, includeDirs, WORKSPACE);/ Secrets (`project_secret`)
+// Secrets (`project_secret`)
 //
 // Values are never returned by default: `get`/`list` expose only metadata
 // (length + sha256 prefix + update time) so an agent can confirm a key exists
