@@ -20,17 +20,21 @@ export type SymbolInfo = {
 const SYMBOL_REGEX = [
   // TypeScript / JavaScript
   /^(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)/,
-  /^(?:export\s+)?(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)/,
-  /^(?:export\s+)?(?:interface|type)\s+([A-Za-z_$][\w$]*)/,
+  /^(?:export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)/,
+  /^(?:export\s+)?(?:default\s+)?(?:interface|type|enum)\s+([A-Za-z_$][\w$]*)/,
   /^(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=/,
-  // Rust (async/unsafe fn included)
-  /^(?:pub\s+)?(?:async\s+)?(?:unsafe\s+)?(?:fn|func)\s+([A-Za-z_][\w]*)/,
-  /^(?:pub\s+)?(?:struct|enum|impl|trait|type)\s+([A-Za-z_][\w]*)/,
-  // Python
-  /^def\s+([A-Za-z_][\w]*)/,
+  // Rust (async/unsafe/extern fn, visibility qualifiers like pub(crate), const/static,
+  // impl blocks incl. generics and `impl Trait for Target` — target type is captured)
+  /^(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(?:unsafe\s+)?(?:extern\s+"[^"]*"\s+)?fn\s+([A-Za-z_][\w]*)/,
+  /^(?:pub(?:\([^)]*\))?\s+)?(?:struct|enum|trait|type)\s+([A-Za-z_][\w]*)/,
+  /^(?:pub(?:\([^)]*\))?\s+)?(?:const|static)\s+(?:mut\s+)?([A-Za-z_][\w]*)\s*:/,
+  /^(?:unsafe\s+)?impl(?:\s*<[^>]*>)?(?:\s+[^\s<]+(?:<[^>]*>)?\s+for)?\s+([A-Za-z_][\w]*)/,
+  // Python (async def included)
+  /^(?:async\s+)?def\s+([A-Za-z_][\w]*)/,
   /^class\s+([A-Za-z_][\w]*)/,
-  // Go
-  /^(?:func|type|const|var)\s+([A-Za-z_][\w]*)/,
+  // Go (receiver methods and generics included)
+  /^func\s*(?:\([^)]*\)\s*)?([A-Za-z_][\w]*)/,
+  /^(?:type|const|var)\s+([A-Za-z_][\w]*)/,
 ] as const;
 
 function detectKind(match: RegExpMatchArray): SymbolInfo["kind"] {
@@ -41,7 +45,7 @@ function detectKind(match: RegExpMatchArray): SymbolInfo["kind"] {
   if (/\bstruct\b/.test(full)) return "struct";
   if (/\b(class|impl|abstract)\b/.test(full)) return "class";
   if (/\b(fn|func|def|function)\b/.test(full)) return "function";
-  if (/\b(const)\b/.test(full)) return "constant";
+  if (/\bconst\b/.test(full) || /\bstatic\b/.test(full)) return "constant";
   if (/\b(let|var)\b/.test(full)) return "variable";
   return "unknown";
 }

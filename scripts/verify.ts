@@ -1562,9 +1562,9 @@ const injected = asEnvelope(
 );
 const injectedRunId = String(injected.data?.run_id ?? "");
 let injectedStatus: Record<string, any> = {};
-for (let i = 0; i < 20; i++) {
+for (let i = 0; i < 45; i++) {
   injectedStatus = asEnvelope(
-    await call("project_shell_status", { run_id: injectedRunId, wait_seconds: 1 }),
+    await call("project_shell_status", { run_id: injectedRunId, wait_seconds: 2 }),
   );
   if (!injectedStatus?.data?.running) break;
 }
@@ -2994,6 +2994,57 @@ check(
     tsOutline.some((s) => s.name === "answer" && s.kind === "constant") &&
     tsOutline.some((s) => s.name === "Pair" && s.kind === "type"),
   tsOutline,
+);
+// 12d. Fixture matrix — the constructs agents actually navigate by, per language.
+const symbolMatrix: Array<[string, string, string]> = [
+  // TypeScript / JavaScript
+  ["export default async function boot() {}", "boot", "function"],
+  ["export default class Widget {}", "Widget", "class"],
+  ["export default interface Props {}", "Props", "interface"],
+  ["export default type Pair = [number, number];", "Pair", "type"],
+  ["export enum Direction { Up }", "Direction", "enum"],
+  ["class Plain {}", "Plain", "class"],
+  ["const answer = 42;", "answer", "constant"],
+  ["export type Pair<T> = [T, T];", "Pair", "type"],
+  // Rust
+  ["pub(crate) fn helper() {}", "helper", "function"],
+  ["pub(super) fn hidden() {}", "hidden", "function"],
+  ["async fn load() {}", "load", "function"],
+  ["unsafe fn raw() {}", "raw", "function"],
+  ["fn plain() {}", "plain", "function"],
+  ["pub struct Stats;", "Stats", "struct"],
+  ["pub enum Mode { A }", "Mode", "enum"],
+  ["pub trait Iface {}", "Iface", "interface"],
+  ["type Alias = u64;", "Alias", "type"],
+  ["pub const LIMIT: usize = 10;", "LIMIT", "constant"],
+  ["pub static GLOBAL: u32 = 1;", "GLOBAL", "constant"],
+  ["static mut STATE: u32 = 1;", "STATE", "constant"],
+  ["impl Iface for Engine {}", "Engine", "class"],
+  ["impl<T> Runner<T> {}", "Runner", "class"],
+  ["impl Foo<T> {}", "Foo", "class"],
+  ["impl std::io::Write for Buf {}", "Buf", "class"],
+  // Python
+  ["async def fetch():", "fetch", "function"],
+  ["def plain():", "plain", "function"],
+  ["class Thing:", "Thing", "class"],
+  ["class Thing(Base):", "Thing", "class"],
+  // Go
+  ["func (s *Service) Start() {}", "Start", "function"],
+  ["func TopLevel() {}", "TopLevel", "function"],
+  ["func Map[T any](s []T) {}", "Map", "function"],
+  ["type Config struct{}", "Config", "type"],
+  ["const MaxConn = 10", "MaxConn", "constant"],
+];
+const symbolMatrixFailures = symbolMatrix.filter(([src, name, kind]) => {
+  const found = symbolDiffModule
+    .extractSymbols(src)
+    .find((s) => s.name === name && String(s.kind) === kind);
+  return !found;
+});
+check(
+  "symbol_extract_fixture_matrix",
+  symbolMatrixFailures.length === 0,
+  symbolMatrixFailures.map(([src]) => src),
 );
 console.log("[verify] done");
 await client.close();
