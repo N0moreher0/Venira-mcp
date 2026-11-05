@@ -2027,6 +2027,15 @@ async function opShellRun(
   // 'close' fires after stdio has flushed; a foreground caller must wait for it
   // or the last stdout/stderr chunk can be lost.
   child.on("close", () => {
+    // 'close' is the only safe moment to trim tails and cache final output.
+    // On Windows 'exit' can fire before the last 'data' events, so trimming at
+    // 'exit' (or right after spawn on the async path) used to freeze empty
+    // tails forever — and could even poison the shell cache with empty output.
+    run.stdout_tail = trimTail(run.stdout_full);
+    run.stderr_tail = trimTail(run.stderr_full);
+    if (run.exit_code === 0 && run.stdout_full.length < 10000) {
+      setShellCache(command, cwd, run.stdout_full, run.stderr_full, run.exit_code ?? 0);
+    }
     resolveClosed();
   });
   child.on("error", (error) => {
@@ -2077,13 +2086,15 @@ async function opShellRun(
     });
   }
 
-  // OPTIMIZATION: Trim tails once at the end instead of on every chunk
-  run.stdout_tail = trimTail(run.stdout_full);
-  run.stderr_tail = trimTail(run.stderr_full);
-
-  // Cache the result for future identical commands (only if successful)
-  if (run.exit_code === 0 && run.stdout_full.length < 10000) {
-    setShellCache(command, cwd, run.stdout_full, run.stderr_full, run.exit_code ?? 0);
+  // Foreground: output is final now (we awaited 'close'), so trim tails and
+  // cache here. The async path does the same in the 'close' handler instead —
+  // trimming here would freeze empty tails before the child produced output.
+  if (foreground) {
+    run.stdout_tail = trimTail(run.stdout_full);
+    run.stderr_tail = trimTail(run.stderr_full);
+    if (run.exit_code === 0 && run.stdout_full.length < 10000) {
+      setShellCache(command, cwd, run.stdout_full, run.stderr_full, run.exit_code ?? 0);
+    }
   }
 
   return {
@@ -2150,8 +2161,8 @@ async function opShellStatus(
         running: run.running,
         exit_code: run.exit_code,
         cancelled: run.cancelled,
-        stdout_tail: redactSecretValues(run.stdout_tail),
-        stderr_tail: redactSecretValues(run.stderr_tail),
+        stdout_tail: redactSecretValues(trimTail(run.stdout_full)),
+        stderr_tail: redactSecretValues(trimTail(run.stderr_full)),
         truncated: run.stdout_full.length >= MAX_OUTPUT_BYTES || run.stderr_full.length >= MAX_OUTPUT_BYTES,
         dropped_bytes: run.dropped_bytes,
         timed_out: run.timed_out,

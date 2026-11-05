@@ -87,9 +87,10 @@ Not shipped (deliberately):
 - No `source: "native" | "venira"` split — both sides would be the same backend; the
   signal would be meaningless.
 - No fixture-matrix parity suite yet for the *search* path — the **symbol-extraction**
-  matrix shipped (verify `symbol_extract_fixture_matrix`, 33 cases across TS/Rust/
-  Python/Go). The search-path matrix remains deferred until the hybrid path proves
-  itself in real sessions.
+  matrix shipped (verify `symbol_extract_fixture_matrix`, 39 cases across TS/Rust/
+  Python/Go), and the **search-path matrix shipped too**: verify
+  `search_hybrid_symbol_index_{typescript,rust,python,go}` assert an end-to-end hybrid
+  search on a fixture file tags the definition hit `symbol_index` at its line.
 
 Rejected (unchanged): "cache-clear before every search"; widening `searchCache` to store
 partial results (changes `project_search` semantics; dedicated `referencesCache` instead).
@@ -130,6 +131,12 @@ Now, by default, only genuinely read-only commands are stored:
 Verify covers a 43-case classifier table (`shell_cache_readonly_allowlist`);
 `test:shell-security` unchanged and green.
 
+Follow-up (bug fix, same area): async shell runs trimmed their tails **once at spawn**,
+so `project_shell_status` reported `stdout_tail: ""` forever for fast commands — and the
+shell cache could be written with empty output. Tails are now trimmed at status-read time
+and at process `close`; the cache write moved to `close` as well. (`shell_output` /
+`policy_env_scrubbed` local Windows flakes disappeared after this fix.)
+
 ## Deferred / rejected (with reasons)
 
 | Item | Verdict | Reason |
@@ -142,7 +149,7 @@ Verify covers a 43-case classifier table (`shell_cache_readonly_allowlist`);
 
 ## Acceptance criteria per phase
 
-- `tsc --noEmit`, `npm run verify` (401 checks incl. a 33-case language fixture matrix; 2 known Windows-local flakes — `shell_output` and `policy_env_scrubbed` flip empty-stdout runs, environment-side, CI green on all 6 OS×Node combos), `npm run check:docs`, `npm run check:source-shape`, `npm run test:shell-security` all green.
+- `tsc --noEmit`, `npm run verify` (406 checks, all green locally; the two old Windows-local flakes were root-caused and fixed — async shell runs trimmed their tails at spawn instead of at `close`, so fast commands returned empty `stdout_tail`), `npm run check:docs`, `npm run check:source-shape`, `npm run test:shell-security` all green.
 - README §3.5/§4 updated whenever a user-visible flag or behaviour ships; `check:docs` contract kept.
 - No tool added/removed/renamed without the Default/Expert lists, README §4.0, and `scripts/check-docs.ts` updated in the same commit.
 - CI matrix (ubuntu/windows/macos × Node 20/22) green; macos-22 runner flakes are environmental (GitHub has auto-cancelled it twice), not code.

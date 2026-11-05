@@ -12,30 +12,41 @@
 
 export type SymbolInfo = {
   name: string;
-  kind: "function" | "class" | "method" | "variable" | "constant" | "interface" | "type" | "struct" | "enum" | "constructor" | "property" | "unknown";
+  kind: "function" | "class" | "method" | "macro" | "variable" | "constant" | "interface" | "type" | "struct" | "enum" | "constructor" | "property" | "unknown";
   line: number;
   signature?: string;
 };
 
-const SYMBOL_REGEX = [
+const SYMBOL_REGEX: ReadonlyArray<{ re: RegExp; kind?: SymbolInfo["kind"] }> = [
   // TypeScript / JavaScript
-  /^(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)/,
-  /^(?:export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)/,
-  /^(?:export\s+)?(?:default\s+)?(?:interface|type|enum)\s+([A-Za-z_$][\w$]*)/,
-  /^(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=/,
+  { re: /^(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)/ },
+  { re: /^(?:export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)/ },
+  { re: /^(?:export\s+)?(?:default\s+)?(?:interface|type|enum)\s+([A-Za-z_$][\w$]*)/ },
+  { re: /^(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=/ },
+  // TS/JS class methods (async/static/get/set/constructor), only when the line
+  // clearly opens a body: `name(...) {`. Calls like `fetch("/api")` are excluded.
+  { re: /^(?:async\s+)?(?:static\s+)?(?:get\s+|set\s+)?([A-Za-z_$][\w$]*)\s*(?:<[^>]*>)?\s*\([^()]*\)\s*(?::[^{=]+)?\{\s*$/, kind: "method" },
   // Rust (async/unsafe/extern fn, visibility qualifiers like pub(crate), const/static,
   // impl blocks incl. generics and `impl Trait for Target` — target type is captured)
-  /^(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(?:unsafe\s+)?(?:extern\s+"[^"]*"\s+)?fn\s+([A-Za-z_][\w]*)/,
-  /^(?:pub(?:\([^)]*\))?\s+)?(?:struct|enum|trait|type)\s+([A-Za-z_][\w]*)/,
-  /^(?:pub(?:\([^)]*\))?\s+)?(?:const|static)\s+(?:mut\s+)?([A-Za-z_][\w]*)\s*:/,
-  /^(?:unsafe\s+)?impl(?:\s*<[^>]*>)?(?:\s+[^\s<]+(?:<[^>]*>)?\s+for)?\s+([A-Za-z_][\w]*)/,
+  { re: /^(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(?:unsafe\s+)?(?:extern\s+"[^"]*"\s+)?fn\s+([A-Za-z_][\w]*)/ },
+  { re: /^(?:pub(?:\([^)]*\))?\s+)?(?:struct|enum|trait|type)\s+([A-Za-z_][\w]*)/ },
+  { re: /^(?:pub(?:\([^)]*\))?\s+)?(?:const|static)\s+(?:mut\s+)?([A-Za-z_][\w]*)\s*:/ },
+  { re: /^(?:unsafe\s+)?impl(?:\s*<[^>]*>)?(?:\s+[^\s<]+(?:<[^>]*>)?\s+for)?\s+([A-Za-z_][\w]*)/ },
+  // Rust macros
+  { re: /^macro_rules!\s*([a-z_][\w]*)/, kind: "macro" },
   // Python (async def included)
-  /^(?:async\s+)?def\s+([A-Za-z_][\w]*)/,
-  /^class\s+([A-Za-z_][\w]*)/,
+  { re: /^(?:async\s+)?def\s+([A-Za-z_][\w]*)/ },
+  { re: /^class\s+([A-Za-z_][\w]*)/ },
   // Go (receiver methods and generics included)
-  /^func\s*(?:\([^)]*\)\s*)?([A-Za-z_][\w]*)/,
-  /^(?:type|const|var)\s+([A-Za-z_][\w]*)/,
-] as const;
+  { re: /^func\s*(?:\([^)]*\)\s*)?([A-Za-z_][\w]*)/ },
+  { re: /^(?:type|const|var)\s+([A-Za-z_][\w]*)/ },
+];
+
+// Words that may look like TS/JS method names but are control-flow keywords.
+const METHOD_BLOCKLIST = new Set([
+  "if", "for", "while", "switch", "catch", "return", "function", "class", "const", "let", "var",
+  "do", "else", "new", "typeof", "await", "of", "in", "instanceof",
+]);
 
 function detectKind(match: RegExpMatchArray): SymbolInfo["kind"] {
   const full = match[0].toLowerCase();
@@ -51,18 +62,18 @@ function detectKind(match: RegExpMatchArray): SymbolInfo["kind"] {
 }
 
 function findSymbolOnLine(line: string): SymbolInfo | null {
-  for (const re of SYMBOL_REGEX) {
-    const match = line.match(re);
+  for (const entry of SYMBOL_REGEX) {
+    const match = line.match(entry.re);
     if (match) {
       const name = match[1];
-      if (name) {
-        return {
-          name: String(name).trim(),
-          kind: detectKind(match),
-          line: 0, // set by caller
-          signature: line.trim().slice(0, 160),
-        };
-      }
+      if (!name) continue;
+      if (entry.kind === "method" && METHOD_BLOCKLIST.has(name.toLowerCase())) continue;
+      return {
+        name: String(name).trim(),
+        kind: entry.kind ?? detectKind(match),
+        line: 0, // set by caller
+        signature: line.trim().slice(0, 160),
+      };
     }
   }
   return null;

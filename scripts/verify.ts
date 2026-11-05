@@ -1003,6 +1003,33 @@ const scopedMiss = asEnvelope(
 );
 check("search_hybrid_scope_widened_on_empty", scopedMiss.data?.scope_widened === true, scopedMiss.data);
 
+// 10d. Hybrid search fixture matrix — definition detection end-to-end per language.
+const hybridFixture = [
+  { lang: "typescript", file: `${dir}/hybrid-matrix.ts`, content: "export function hybridMatrixTs(): number {\n  return 2;\n}\n", query: "hybridMatrixTs", defLine: 1, glob: "*.ts" },
+  { lang: "rust", file: `${dir}/hybrid-matrix.rs`, content: "pub fn hybridMatrixRs() {}\n", query: "hybridMatrixRs", defLine: 1, glob: "*.rs" },
+  { lang: "python", file: `${dir}/hybrid-matrix.py`, content: "def hybridMatrixPy():\n    return 3\n", query: "hybridMatrixPy", defLine: 1, glob: "*.py" },
+  { lang: "go", file: `${dir}/hybrid-matrix.go`, content: "package main\n\nfunc hybridMatrixGo() {}\n", query: "hybridMatrixGo", defLine: 3, glob: "*.go" },
+];
+for (const fixture of hybridFixture) {
+  await fs.writeFile(fixture.file, fixture.content, "utf8");
+}
+for (const fixture of hybridFixture) {
+  const matrixRes = asEnvelope(
+    await call("project_search", {
+      query: fixture.query,
+      kind: "literal_content",
+      relative_path: dir,
+      glob: fixture.glob,
+      hybrid: 1,
+      whole_word: 1,
+      limit: 5,
+    }),
+  );
+  const matrixHits = Array.isArray(matrixRes.data?.hits) ? (matrixRes.data.hits as Record<string, unknown>[]) : [];
+  const defHit = matrixHits.find((h) => h.source === "symbol_index" && Number(h.line_number) === fixture.defLine);
+  check(`search_hybrid_symbol_index_${fixture.lang}`, defHit !== undefined, matrixHits.slice(0, 4));
+}
+
 // 11. list write invalidation (cache)
 await new Promise((resolve) => setTimeout(resolve, 1600)); // list cache 1.5s
 const list1 = await call("project_list_files", { relative_path: dir, depth: 1 });
@@ -3023,6 +3050,12 @@ const symbolMatrix: Array<[string, string, string]> = [
   ["impl<T> Runner<T> {}", "Runner", "class"],
   ["impl Foo<T> {}", "Foo", "class"],
   ["impl std::io::Write for Buf {}", "Buf", "class"],
+  ["async getToken(): Promise<string> {", "getToken", "method"],
+  ["static create(): Widget {", "create", "method"],
+  ["constructor(private readonly repo: Repo) {", "constructor", "method"],
+  ["get size(): number {", "size", "method"],
+  ["set size(v: number) {", "size", "method"],
+  ["macro_rules! fancy_assert { () => {} }", "fancy_assert", "macro"],
   // Python
   ["async def fetch():", "fetch", "function"],
   ["def plain():", "plain", "function"],
@@ -3045,6 +3078,13 @@ check(
   "symbol_extract_fixture_matrix",
   symbolMatrixFailures.length === 0,
   symbolMatrixFailures.map(([src]) => src),
+);
+check(
+  "symbol_extract_keyword_and_call_not_symbols",
+  symbolDiffModule
+    .extractSymbols("if (condition) {\n  doThing();\n}\n")
+    .every((s) => s.name !== "if") &&
+    symbolDiffModule.extractSymbols('fetch("/api");\n').length === 0,
 );
 console.log("[verify] done");
 await client.close();
