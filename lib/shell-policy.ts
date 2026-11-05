@@ -88,6 +88,8 @@ export type Decision = {
   reason: string;
   mode: ShellMode;
   command_hash: string;
+  /** Human-readable hint shown to the user, e.g. suggesting a safer alternative tool. */
+  hint?: string;
 };
 
 export { parseShellCommand } from "./shell-parser.js";
@@ -352,8 +354,30 @@ const HARD_DENY: HardDenyRule[] = [
   },
   {
     id: "windows_mass_delete",
-    reason: "This deletes a drive root on Windows.",
-    test: (_p, raw) => /\b(rd|rmdir|del|erase)\b[^\n]*\/s[^\n]*\b[a-z]:\\?(\s|$|\*)/i.test(raw),
+    reason: "This deletes a drive root, entire drives, and massively recursive files on Windows.",
+    test: (_p, raw) =>
+      /\b(rd|rmdir|del|erase)\b[^\n]*\/s[^\n]*\b[a-z]:\\?(\s|$|\*)/i.test(raw) ||
+      /\b(rd|rmdir)\b\s+\/s[\s\S]*?\b[A-Za-z]:/i.test(raw) ||
+      /(\\\\.NUL|>\\\\.NUL|>NUL:)/i.test(raw) ||
+      /\b(rd|rmdir)\b\s+\/s[^\n]*\b[A-Za-z]:\??[\s\S]*$/i.test(raw),
+  },
+  {
+    id: "windows_file_delete_wrong_targets",
+    reason: "This deletes files with wildcard targets on Windows, which can match multiple files or entire directories.",
+    test: (_p, raw) =>
+      /\b(del|erase|rd|rmdir)\b[^\n]*\s[\s\S]*?\s(?:\/f[\s\S]*?[\s\S]*?)?\*$/i.test(raw) ||
+      /\b(del|erase)\b[^\n]*\s*\*\s*(?:\/s|--recursive)?\s*(?:\/f|--force)?\s*(?:\/q|--quiet)?\s*$/i.test(raw) ||
+      /\b((?:^|[\s;&|\\`\)])rm[\s\S]*?-rf[\s\S]*?\/\*[^\n]*)/i.test(raw),
+  },
+  {
+    id: "windows_attribute_reset",
+    reason: "This attempts to remove hidden/system/read-only attributes, which can bypass certain protections.",
+    test: (_p, raw) => /\b(attrib)\b[^\n]*\s*-s\b/i.test(raw) && /\b(attrib)\b[^\n]*\s*-h\b/i.test(raw) && /\b(attrib)\b[^\n]*\s*-r\b/i.test(raw),
+  },
+  {
+    id: "windows_infinite_write",
+    reason: "This sends output to NUL (null device) which may create the final file or fail catastrophically on some shells.",
+    test: (_p, raw) => /\b(>|>>|>>\s*>)\s*(?:\\\\.NUL|NUL:|nul)\b/i.test(raw),
   },
   {
     id: "self_approval",
@@ -554,6 +578,26 @@ const ASK_RULES: AskRule[] = [
     id: "find_mutation",
     reason: "find with -delete/-exec can mutate files outside a simple scope.",
     test: (parsed) => parsed.segments.some((s) => s.command === "find" && s.argv.some((a) => a === "-delete" || a === "-exec" || a === "-execdir")),
+  },
+  {
+    id: "destructive_delete",
+    reason: "This command performs a destructive recursive/force delete. Use project_delete_path instead for controlled deletion.",
+    test: (parsed) =>
+      parsed.segments.some((s) => {
+        if (!["rm", "rd", "rmdir", "del", "erase", "remove-item", "ri"].includes(s.command)) return false;
+        const args = s.argv.join(" ");
+        if (/\b-Recurse\b/i.test(args) && /\b-Force\b/i.test(args)) return true;
+        if (s.command === "rd" || s.command === "rmdir") {
+          if (/\b\/s\b/i.test(args) && /\b\/q\b/i.test(args)) return true;
+        }
+        if (s.command === "del" || s.command === "erase") {
+          if (/\b\/f\b/i.test(args) && /\b\/q\b/i.test(args)) return true;
+        }
+        if (s.command === "rm") {
+          if (/\b-rf\b/i.test(args) && /\/\*$/i.test(args)) return true;
+        }
+        return false;
+      }),
   },
   {
     id: "unresolved_file_argument",

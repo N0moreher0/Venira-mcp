@@ -76,22 +76,48 @@ export function evaluateParsedShellCommand(
     override.reason.trim().length > 0 &&
     override.matches(parsed, cwd);
 
+  const deleteHint =
+    parsed.segments.some((s) => ["rm", "rd", "rmdir", "del", "erase", "remove-item", "ri"].includes(s.command))
+      ? "Use project_delete_path instead for controlled, auditable file deletion."
+      : undefined;
+
   for (const rule of hardDeny) {
     if (rule.test(parsed, command, cwd)) {
       if (rule.id === "protected_file_access" && overrideApplies && override?.name === "ALLOW_ENV_READ") {
         continue;
       }
-      return { tier: "deny", rule: `deny.${rule.id}`, reason: rule.reason, mode, command_hash: hash };
+      return {
+        tier: "deny",
+        rule: `deny.${rule.id}`,
+        reason: rule.reason,
+        mode,
+        command_hash: hash,
+        ...(deleteHint ? { hint: deleteHint } : {}),
+      };
     }
   }
   for (const rule of policy.deny) {
     if (matchCustomRule(parsed, rule)) {
-      return { tier: "deny", rule: rule.id, reason: rule.reason ?? "Denied by policy file.", mode, command_hash: hash };
+      return {
+        tier: "deny",
+        rule: rule.id,
+        reason: rule.reason ?? "Denied by policy file.",
+        mode,
+        command_hash: hash,
+        ...(deleteHint ? { hint: deleteHint } : {}),
+      };
     }
   }
   for (const rule of policy.ask) {
     if (matchCustomRule(parsed, rule)) {
-      return { tier: "ask", rule: rule.id, reason: rule.reason ?? "Requires approval (policy file).", mode, command_hash: hash };
+      return {
+        tier: "ask",
+        rule: rule.id,
+        reason: rule.reason ?? "Requires approval (policy file).",
+        mode,
+        command_hash: hash,
+        ...(deleteHint ? { hint: deleteHint } : {}),
+      };
     }
   }
   if (overrideApplies && override) {
@@ -106,7 +132,14 @@ export function evaluateParsedShellCommand(
 
   for (const rule of askRules) {
     if ((mode !== "permissive" || rule.id === "git_history_rewrite") && rule.test(parsed, cwd)) {
-      return { tier: "ask", rule: `ask.${rule.id}`, reason: rule.reason, mode, command_hash: hash };
+      return {
+        tier: "ask",
+        rule: `ask.${rule.id}`,
+        reason: rule.reason,
+        mode,
+        command_hash: hash,
+        ...(deleteHint ? { hint: deleteHint } : {}),
+      };
     }
   }
   if (mode !== "permissive") {
@@ -129,6 +162,7 @@ export function evaluateParsedShellCommand(
       reason: "Not on the strict allow list; approval required by VENIRA_SHELL_MODE=strict.",
       mode,
       command_hash: hash,
+      ...(deleteHint ? { hint: deleteHint } : {}),
     };
   }
   if (mode === "balanced") {
