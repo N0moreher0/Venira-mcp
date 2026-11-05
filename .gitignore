@@ -15,8 +15,12 @@ section*.txt
 /hot-fix-upgrade.txt
 /mcp_test_demo.txt
 
-# Owner-only notes and local dev helpers
+# Owner-only notes, roadmap, progress tracking and local dev helpers
 /PUSH-NOTES.md
+/ROADMAP.md
+/ROADMAP_HARDENING.md
+/TODO.md
+/TOOL-ROADMAP.md
 /set-secret.js
 /wait-ci.js
 /verify2.err
