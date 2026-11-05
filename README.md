@@ -47,16 +47,58 @@ All clients run the same command — only the config format differs. Use the abs
       "command": ["npx", "--yes", "--package=venira-mcp@latest", "venira-mcp"],
       "enabled": true,
       "environment": {
+        // ── REQUIRED ──────────────────────────────────────────────────────
         "VENIRA_WORKSPACE": "/absolute/path/to/project",
+        // Absolute path to the project. On Windows use C:\\path\\to\\project.
+        // OpenCode does NOT expand ${workspaceFolder} — always use absolute.
+
+        // ── TOOL SURFACE ──────────────────────────────────────────────────
+        // "expert" = all 43 tools (coding + shell + JS + PR/CI + diagnostics)
+        // "default" = 33 tools (coding + shell + JS, NO PR/CI)
+        // Pick "expert" for full automation; "default" if you don't need CI/CD.
         "VENIRA_TOOL_MODE": "expert",
-        "VENIRA_OUTPUT_MODE": "full"
+
+        // ── OUTPUT SIZE ───────────────────────────────────────────────────
+        // "full"    = complete payloads (best for most models)
+        // "compact" = trim over 8 KB (use for small-context models)
+        "VENIRA_OUTPUT_MODE": "full",
+
+        // ── SHELL (auto-build + test loops) ──────────────────────────────
+        // "permissive" = skip approval prompts for ordinary commands,
+        //                 still blocks catastrophic (rm -rf, fork bomb, git push --force)
+        // "balanced"   = ask human approval for writes/network/git push (slower, safer)
+        // For a local dev box where you trust the agent: "permissive"
+        "VENIRA_SHELL_MODE": "permissive",
+
+        // Run JS code via project_execute_js (off by default).
+        // "1" enables it; human approval still required per call unless you set
+        // VENIRA_JS_EXEC_APPROVAL="0" (trusted-automation only).
+        "VENIRA_ALLOW_JS_EXEC": "1",
+        "VENIRA_JS_EXEC_APPROVAL": "0",  // ← remove this line to require human approval per call
+
+        // ── SECRETS / GITHUB TOKEN ────────────────────────────────────────
+        // Leave UNSET — the token is stored in the encrypted per-user vault
+        // (created by `npx venira-mcp --setup-github` or project_github_connect).
+        // Do NOT put tokens in this config file.
+        // "VENIRA_GIT_TOKEN": "ghp_...",  ← NEVER do this
+
+        // ── NETWORK KILL SWITCH ───────────────────────────────────────────
+        // "0" = all provider calls (PR/CI) return network_disabled; use for offline work.
+        "VENIRA_NETWORK": "1",
+
+        // ── ADVANCED (leave at defaults unless you have a specific reason) ─
+        // "VENIRA_DATA_DIR": "...",       // where audit DB + encrypted secrets live
+        // "VENIRA_UNRESTRICTED": "0",     // "1" disables workspace lock — NEVER in production
+        // "VENIRA_SHELL_MAX_TIMEOUT_MS": "1800000",  // max shell command duration (30 min)
+        // "VENIRA_SNAPSHOT_KEEP": "20",   // how many checkpoints to keep before pruning
+        // "VENIRA_TRACE": "0",            // "1" logs every tool call to stderr (debug only)
       }
     }
   }
 }
 ```
 
-**VS Code** (`.vscode/mcp.json`):
+**VS Code** (`.vscode/mcp.json`) — same env vars, `${workspaceFolder}` is auto-expanded:
 
 ```json
 {
@@ -68,7 +110,9 @@ All clients run the same command — only the config format differs. Use the abs
       "env": {
         "VENIRA_WORKSPACE": "${workspaceFolder}",
         "VENIRA_TOOL_MODE": "expert",
-        "VENIRA_OUTPUT_MODE": "full"
+        "VENIRA_OUTPUT_MODE": "full",
+        "VENIRA_SHELL_MODE": "permissive",
+        "VENIRA_ALLOW_JS_EXEC": "1"
       }
     }
   }
@@ -86,7 +130,9 @@ All clients run the same command — only the config format differs. Use the abs
       "env": {
         "VENIRA_WORKSPACE": "/absolute/path/to/project",
         "VENIRA_TOOL_MODE": "expert",
-        "VENIRA_OUTPUT_MODE": "full"
+        "VENIRA_OUTPUT_MODE": "full",
+        "VENIRA_SHELL_MODE": "permissive",
+        "VENIRA_ALLOW_JS_EXEC": "1"
       }
     }
   }
@@ -104,11 +150,21 @@ args = ["--yes", "--package=venira-mcp@latest", "venira-mcp"]
 VENIRA_WORKSPACE = "C:\\path\\to\\project"
 VENIRA_TOOL_MODE = "expert"
 VENIRA_OUTPUT_MODE = "full"
+VENIRA_SHELL_MODE = "permissive"
+VENIRA_ALLOW_JS_EXEC = "1"
 ```
 
-> `VENIRA_TOOL_MODE`: `"expert"` = all 43 tools (with CI/CD), `"default"` = 33 tools (coding + shell/JS, no CI/CD).
-> `VENIRA_OUTPUT_MODE`: `"full"` = complete payloads, `"compact"` = trim over 8 KB.
-> Leave `VENIRA_DATA_DIR` unset to share the per-user vault across clients.
+> **Quick reference — what to set vs leave alone:**
+>
+> | Variable | When to change | Default |
+> |---|---|---|
+> | `VENIRA_WORKSPACE` | **Always** — absolute project path | — |
+> | `VENIRA_TOOL_MODE` | `"default"` if you don't need PR/CI | `default` |
+> | `VENIRA_SHELL_MODE` | `"permissive"` for local dev; `"balanced"` for shared/public repos | `balanced` |
+> | `VENIRA_ALLOW_JS_EXEC` | `"1"` only if the task needs JS eval | `0` (off) |
+> | `VENIRA_DATA_DIR` | Only if you need a shared vault across clients | per-user OS dir |
+> | `VENIRA_UNRESTRICTED` | **Never in production** | `0` |
+>
 > Generate any client's config: `npx --yes venira-mcp@latest --print-config <client>`
 
 ## 3. Benchmark (per-op, p50)
