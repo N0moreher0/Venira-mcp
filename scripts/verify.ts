@@ -314,11 +314,11 @@ check(
   { info1: infoData1.data?.size_bytes, info2: infoData2.data?.size_bytes },
 );
 
-// 7. Read theo range + max_bytes
+// 7. Read the range + max_bytes
 const ranged = (await call("project_read_file", { relative_path: "server.ts", start_line: 1, end_line: 3 })) as { content?: { text?: string }[] };
 const rangedData = JSON.parse(ranged.content?.[0]?.text ?? "{}");
 check(
-  "read_range",
+  "read_file_range",
   rangedData.data?.last_line === 3 && rangedData.data?.text?.split("\n").length === 3,
   rangedData.data?.text,
 );
@@ -1226,8 +1226,8 @@ check(
   { hits: search4Data.data?.hits?.length, complete: search4Data.data?.complete, diagnostics: search4Data.data?.diagnostics },
 );
 
-// 13. Read ranges
-const ranges = await call("project_read_ranges", {
+// 13. Read ranges (via project_read_file with ranges)
+const ranges = await call("project_read_file", {
   relative_path: "server.ts",
   ranges: [
     { start_line: 1, end_line: 3 },
@@ -2635,7 +2635,7 @@ check(
   explainTs.ok === true &&
     explainTs.data?.matched === true &&
     explainTs.data?.diagnoses?.[0]?.rule_id === "ts.type_error" &&
-    (explainTs.data?.next_actions ?? []).some((action: { tool?: string }) => action.tool === "project_read_ranges"),
+    (explainTs.data?.next_actions ?? []).some((action: { tool?: string }) => action.tool === "project_read_file"),
   explainTs.data,
 );
 const explainUnknown = asEnvelope(await call("project_explain_error", { error_text: "everything is fine" }));
@@ -3051,9 +3051,9 @@ check(
 );
 await clientCompact.close();
 
-// 20. Metrics ops present (read_batch, read_ranges, recent_files, health, shell_run)
+// 20. Metrics ops present (read_batch, recent_files, health, shell_run)
 const ops = Object.keys(healthData.data?.metrics?.operations ?? {});
-const requiredOps = ["read_file", "read_batch", "read_ranges", "recent_files", "shell_run"];
+const requiredOps = ["read_file", "read_batch", "recent_files", "shell_run"];
 const hasRequired = requiredOps.every((op) => ops.includes(op));
 check("metrics_ops_present", hasRequired, ops);
 

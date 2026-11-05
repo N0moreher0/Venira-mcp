@@ -3148,44 +3148,24 @@ export function registerProjectTools(server: McpServer): void {
         end_line: z.number().int().min(0).optional(),
         line_numbers: flag01.optional(),
         max_bytes: z.number().int().min(1).max(1048576).optional(),
-      },
-    },
-    (args) => {
-      const wantNumbers = Boolean((args as Args).line_numbers);
-      return runOne("read_file", args, wantNumbers ? { line_numbers: true } : undefined);
-    },
-  );
-
-  server.registerTool(
-    "project_read_ranges",
-    {
-      ...config(
-        "Read multiple disjoint line ranges of the SAME file in a single call (max 16 ranges).",
-        "Read file ranges",
-        {
-          use_when: "you need several disjoint segments of one file (e.g. around search hits) without multiple round-trips.",
-          avoid_when: "you need the whole file (project_read_file) or different files (project_read_batch).",
-          speed_profile: "fast; reuses the per-range read_file cache.",
-          output_kind: "file_read_ranges: ranges[] with text/truncated/next_start_line.",
-          batch_safe: false,
-        },
-        { readOnlyHint: true, openWorldHint: false },
-      ),
-      inputSchema: {
-        relative_path: path_,
         ranges: z
           .array(
             z.object({
               start_line: z.number().int().min(1),
               end_line: z.number().int().min(1).optional(),
               max_bytes: z.number().int().min(1).optional(),
-            }),
+            })
           )
           .min(1)
-          .max(16),
+          .max(16)
+          .optional()
+          .describe("Multiple disjoint ranges of the SAME file (max 16). Use instead of multiple read_file calls."),
       },
     },
-    (args) => runReadRanges(args as Args),
+    (args) => {
+      const wantNumbers = Boolean((args as Args).line_numbers);
+      return runOne("read_file", args, wantNumbers ? { line_numbers: true } : undefined);
+    },
   );
 
   server.registerTool(
