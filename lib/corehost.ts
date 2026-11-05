@@ -1479,6 +1479,9 @@ async function opEditFile(
   const fuzzyDistance = Number(args.fuzzy_distance ?? 3);
   const ignoreIndentation = args.ignore_indentation === true;
   const caseInsensitive = args.case_insensitive === true;
+  
+  // TOCTOU guard: "sha256" = read fresh, verify expected_sha256, apply edits, write, re-read and verify
+  const guard = args.guard === "sha256";
 
   const editList = edits ?? (oldText !== undefined ? [{ old_text: oldText, new_text: newText ?? "", replace_all: replaceAll }] : []);
   if (editList.length === 0) {
@@ -1600,6 +1603,28 @@ async function opEditFile(
     throw new Error(`[io_error] ${error instanceof Error ? error.message : String(error)}`);
   }
 
+  // Compute sha256 after write (before guard uses it)
+  let sha256After = "";
+  try {
+    sha256After = crypto.createHash("sha256").update(Buffer.from(content, "utf8")).digest("hex");
+  } catch {
+    /* best-effort */
+  }
+
+  // TOCTOU guard: re-read and verify content matches what we wrote
+  let verified = false;
+  let verifiedSha = "";
+  if (guard) {
+    try {
+      const verifyContent = await fs.readFile(absPath, "utf8");
+      const verifySha = crypto.createHash("sha256").update(Buffer.from(verifyContent, "utf8")).digest("hex");
+      verified = verifySha === sha256After;
+      verifiedSha = verifySha;
+    } catch {
+      verified = false;
+    }
+  }
+
   // P2: Update recent-files index
   recordRecentFile(absPath, root);
   try {
@@ -1607,13 +1632,6 @@ async function opEditFile(
       recordRecentFileMeta(absPath, s);
     });
   } catch { /* best-effort */ }
-
-  let sha256After = "";
-  try {
-    sha256After = crypto.createHash("sha256").update(Buffer.from(content, "utf8")).digest("hex");
-  } catch {
-    /* best-effort */
-  }
 
   return {
     status: "completed",
@@ -1625,6 +1643,8 @@ async function opEditFile(
         replacements,
         sha256_before: sha256Before || undefined,
         sha256_after: sha256After || undefined,
+        verified: guard ? verified : undefined,
+        verified_sha256: guard && verifiedSha ? verifiedSha : undefined,
         fuzzy_used: usedFuzzy || undefined,
         reason: sanitizeReason(args.reason),
       },
