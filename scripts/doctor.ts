@@ -5,14 +5,18 @@
  * Checks:
  *   1. workspace exists
  *   2. data dir / audit DB reachable
- *   3. MCP server starts and exposes the expected tool count
- *   4. project_health is OK
- *   5. shell smoke
- *   6. version
+ *   3. ripgrep availability + workspace scale (warn-only: a missing `rg` on a
+ *      multi-thousand-file workspace forces the JS line scanner)
+ *   4. MCP server starts and exposes the expected tool count
+ *   5. project_health is OK
+ *   6. shell smoke
+ *   7. audit/trace reachability
+ *   8. version
  */
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { existsSync, promises as fs } from "node:fs";
+import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { VERSION } from "../lib/version.js";
@@ -44,7 +48,13 @@ const SERVER_ENTRY = path.join(PKG_ROOT, "dist", "server.js");
 const WORKSPACE = process.env.VENIRA_WORKSPACE ?? process.cwd();
 const DATA_DIR = process.env.VENIRA_DATA_DIR ? path.resolve(process.env.VENIRA_DATA_DIR) : activeDataDir();
 
-type CheckResult = { status: "PASS" | "FAIL"; text?: string; args?: unknown };
+type CheckResult = { status: "PASS" | "FAIL" | "WARN"; text?: string; args?: unknown };
+
+const warn = (text: string, args: Record<string, unknown> = {}): CheckResult => ({
+  status: "WARN",
+  text,
+  args,
+});
 
 async function check(text: string, result: unknown, args: Record<string, unknown> = {}): Promise<CheckResult> {
   const ok = Boolean(result);
@@ -80,7 +90,48 @@ async function main() {
   const dataDirOk = await fs.access(DATA_DIR).then(() => true).catch(() => false);
   results.push(await check("data_dir_exists", dataDirOk, { dataDir: DATA_DIR }));
 
-  // 3. MCP server: spawn + listTools + health
+  // 3. ripgrep availability + workspace scale — both are only decisive on big
+  // workspaces, but a missing `rg` there is the #1 performance foot-gun.
+  const rgOk = await new Promise<boolean>((resolve) => {
+    const child = spawn("rg", ["--version"], { timeout: 5000 });
+    child.stdout?.resume();
+    child.stderr?.resume();
+    child.on("exit", (code) => resolve(code === 0));
+    child.on("error", () => resolve(false));
+  });
+  let fileCount = 0;
+  {
+    const IGNORED = new Set([".git", "node_modules", "target", "dist", "build", ".next", ".venv", "__pycache__", ".cache", ".turbo", "coverage"]);
+    const walk = async (dir: string, depth: number): Promise<void> => {
+      if (fileCount >= 6000 || depth > 12) return;
+      let entries;
+      try {
+        entries = await fs.readdir(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const entry of entries) {
+        if (fileCount >= 6000) return;
+        if (entry.isDirectory()) {
+          if (!IGNORED.has(entry.name) && !entry.name.startsWith(".")) {
+            await walk(path.join(dir, entry.name), depth + 1);
+          }
+        } else {
+          fileCount += 1;
+        }
+      }
+    };
+    await walk(WORKSPACE, 0);
+  }
+  if (rgOk) {
+    results.push({ status: "PASS", text: "ripgrep available", args: { file_count: fileCount } });
+  } else if (fileCount > 5000) {
+    results.push(warn("ripgrep (rg) not found and the workspace has thousands of files — searches will use the JS line scanner; install ripgrep", { file_count: fileCount }));
+  } else {
+    results.push({ status: "PASS", text: "ripgrep not found (fine for small workspaces)", args: { file_count: fileCount } });
+  }
+
+  // 4. MCP server: spawn + listTools + health
   try {
     const client = new Client({ name: "doctor", version: "0.0.0" }, { capabilities: {} });
     const transport = new StdioClientTransport({
@@ -203,9 +254,13 @@ async function main() {
 
   const passes = results.filter((r) => (r as CheckResult).status === "PASS").length;
   const failed = results.filter((r) => (r as CheckResult).status === "FAIL");
-  console.log(`\nDoctor: ${passes}/${results.length} checks passed`);
+  const warnings = results.filter((r) => (r as CheckResult).status === "WARN");
+  console.log(`\nDoctor: ${passes}/${results.length} checks passed${warnings.length > 0 ? ` (${warnings.length} warning(s))` : ""}`);
   if (failed.length > 0) {
     console.log("Failed checks:", JSON.stringify(failed, null, 2));
+  }
+  if (warnings.length > 0) {
+    console.log("Warnings:", JSON.stringify(warnings, null, 2));
   }
 
   // 6. client setup hints (does not affect the pass/fail result)
@@ -224,7 +279,7 @@ async function main() {
   console.log(`[doctor] install: npx --yes venira-mcp@latest --install auto --workspace "${WORKSPACE}"`);
   console.log("[doctor] print a config instead: npx --yes venira-mcp@latest --print-config vscode");
 
-  process.exit(passes === results.length ? 0 : 1);
+  process.exit(failed.length === 0 ? 0 : 1);
 }
 
 main().catch((err) => {

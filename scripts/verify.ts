@@ -1985,6 +1985,62 @@ await writeFixture("rust/orphan/src/main.rs", `use crate::missing::thing;
 pub fn orphan() {}
 `);
 
+await writeFixture("go.mod", `module example.com/verifyapp
+
+go 1.21
+`);
+await writeFixture("main.go", `package main
+
+import (
+	"fmt"
+	"example.com/verifyapp/pkg/tool"
+)
+
+func main() {
+	fmt.Println(tool.Primary())
+}
+`);
+await writeFixture("pkg/tool/tool.go", `package tool
+
+func Primary() string {
+	return "tool"
+}
+`);
+await writeFixture("pkg/tool/tool_test.go", `package tool
+
+import "testing"
+
+func TestPrimary(t *testing.T) {}
+`);
+
+await writeFixture("src/main/java/com/demo/Main.java", `package com.demo;
+
+import java.util.List;
+import com.demo.service.Service;
+
+public class Main {
+    public static void main(String[] args) {
+        Service s = new Service();
+        List<String> names = List.of(s.greet());
+        System.out.println(names);
+    }
+}
+`);
+await writeFixture("src/main/java/com/demo/service/Service.java", `package com.demo.service;
+
+public class Service {
+    public String greet() {
+        return "hello";
+    }
+}
+`);
+await writeFixture("src/main/kotlin/com/demo/KtService.kt", `package com.demo
+
+class KtService {
+    fun greet(): String = "kotlin"
+}
+`);
+
 const graph = asEnvelope(
   await call("project_dependency_graph", {
     kind: "both",
@@ -2059,6 +2115,23 @@ check(
   "dependency_graph_rust_unresolved_module",
   (graph.data?.unresolved ?? []).some((entry: { specifier?: string }) => entry.specifier === "crate::missing::thing"),
   graph.data?.unresolved,
+);
+check(
+  "dependency_graph_go_internal_import",
+  graph.ok === true && hasEdge("main.go", "pkg/tool/tool.go", "import", "exact"),
+  graphEdges.filter((edge) => edge.from === dgPath("main.go") || edge.to === dgPath("main.go")),
+);
+check(
+  "dependency_graph_go_stdlib_external",
+  (graph.data?.external ?? []).some((entry: { id?: string }) => entry.id === "gomod:stdlib:fmt"),
+  graph.data?.external,
+);
+check(
+  "dependency_graph_go_references",
+  graphEdges.some(
+    (edge) => edge.from === dgPath("main.go") && edge.to === dgPath("pkg/tool/tool.go") && edge.type === "references",
+  ),
+  graphEdges.filter((edge) => edge.type === "references"),
 );
 
 const graphDot = asEnvelope(await call("project_dependency_graph", { kind: "files", relative_path: dgRoot, depth: 5, format: "dot" }));
@@ -2175,6 +2248,61 @@ check(
   "change_impact_rust_module_dependent",
   rustImpact.ok === true && rustImpactIds.includes(dgPath("rust/cli/src/report.rs")),
   { affected: rustImpactIds, summary: rustImpact.data?.summary },
+);
+const goImpact = asEnvelope(
+  await call("project_change_impact", {
+    files: [dgPath("pkg/tool/tool.go")],
+    direction: "dependents",
+    depth: 5,
+    max_nodes: 50,
+  }),
+);
+const goImpactIds = (goImpact.data?.affected ?? []).map((entry: { id: string }) => entry.id) as string[];
+check(
+  "change_impact_go_package_dependent",
+  goImpact.ok === true && goImpactIds.includes(dgPath("main.go")),
+  { affected: goImpactIds, summary: goImpact.data?.summary },
+);
+const javaGraphEdges = (graph.data?.edges ?? []).filter(
+  (edge: { type: string; from: string }) => edge.type === "import" && edge.from === dgPath("src/main/java/com/demo/Main.java"),
+);
+check(
+  "dependency_graph_java_internal_import",
+  graph.ok === true &&
+    javaGraphEdges.some((edge: { to: string; type: string; confidence: string }) =>
+      edge.to === dgPath("src/main/java/com/demo/service/Service.java") &&
+      (edge.confidence === "exact" || edge.confidence === "likely"),
+    ),
+  { edges: javaGraphEdges, external: graph.data?.external },
+);
+check(
+  "dependency_graph_java_external_jdk",
+  graph.ok === true &&
+    Array.isArray(graph.data?.external) &&
+    (graph.data.external as { id: string }[]).some((e) => e.id === "jdk:java.util"),
+  { external: graph.data?.external },
+);
+const kotlinGraphEdges = (graph.data?.edges ?? []).filter(
+  (edge: { type: string; from: string }) => edge.type === "import" && edge.from === dgPath("src/main/kotlin/com/demo/KtService.kt"),
+);
+check(
+  "dependency_graph_kotlin_internal_import",
+  graph.ok === true && kotlinGraphEdges.length === 0,
+  { edges: kotlinGraphEdges, note: "KtService.kt has no imports, just checks no crash on .kt parsing" },
+);
+const javaImpact = asEnvelope(
+  await call("project_change_impact", {
+    files: [dgPath("src/main/java/com/demo/service/Service.java")],
+    direction: "dependents",
+    depth: 5,
+    max_nodes: 50,
+  }),
+);
+const javaImpactIds = (javaImpact.data?.affected ?? []).map((entry: { id: string }) => entry.id) as string[];
+check(
+  "change_impact_java_package_dependent",
+  javaImpact.ok === true && javaImpactIds.includes(dgPath("src/main/java/com/demo/Main.java")),
+  { affected: javaImpactIds, summary: javaImpact.data?.summary },
 );
 
 // 11d-ter. Provider dialects: GitLab + Bitbucket Cloud against local mocks.
