@@ -78,7 +78,8 @@ All clients run the same command — only the config format differs. Use the abs
         // "VENIRA_SHELL_ENV_ALLOW": "GITHUB_TOKEN,NPM_TOKEN",  // ← uncomment if build needs specific vars
         // "1" = shell_status returns as soon as exit code is known (faster polling)
         "VENIRA_SHELL_EXIT_EARLY": "1",
-        // "soft" = expired command warns · "hard" = kills process tree
+        // "soft" = expired command warns (keeps running, you can still poll) · "hard" = kills process tree
+        // (default 10 min per command, max cap 30 min — heavy builds fine, hung commands detectable)
         "VENIRA_SHELL_TIMEOUT_POLICY": "soft",
 
         // ═══════════════════════════════════════════════════════════
@@ -117,7 +118,7 @@ All clients run the same command — only the config format differs. Use the abs
         // "VENIRA_UNRESTRICTED": "0",             // "1" = disable workspace lock (NEVER in prod)
         // "VENIRA_SNAPSHOT_KEEP": "20",            // checkpoints kept before pruning
         // "VENIRA_SNAPSHOT_MAX_FILES": "4000",     // per-checkpoint file cap
-        // "VENIRA_SHELL_MAX_TIMEOUT_MS": "1800000" // 30 min max command duration
+        // "VENIRA_SHELL_MAX_TIMEOUT_MS": "1800000"  // 30 min hard cap — rarely need to change
         // "VENIRA_TRACE": "0",                     // "1" = log every tool call to stderr (debug)
         // "VENIRA_PRETTY": "0",                    // "1" = 2-space pretty JSON in results
       }
