@@ -1897,8 +1897,10 @@ type ToolMode = "default" | "expert";
  * Per-mode tool exclusions layered on top of `VENIRA_DISABLE_TOOLS` and the
  * `VENIRA_PROFILE=core` preset. `expert` keeps the full set (everything the
  * server can do: shell, JS eval, CI/CD shipping, secrets, intel); `default` is
- * the coding-focused lean set — no destructive deletes, no CI/CD shipping, no
- * shell execution, no JS eval; keeps read/write/edit/search/snapshot + intel.
+ * the full **sandbox coding toolset** — all specialized tools for reading,
+ * writing, editing, searching, code intelligence, diagnostics, snapshots,
+ * config; only excludes destructive delete, shell execution, JS execution,
+ * and CI/CD shipping (PR/CI tools).
  */
 const TOOL_MODE_EXCLUDES: Record<ToolMode, string[]> = {
   expert: [],
