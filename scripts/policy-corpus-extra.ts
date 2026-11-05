@@ -1368,9 +1368,9 @@ export const extraPolicyCorpus: PolicyCorpusCase[] = [
   {
     "command": "echo $(sudo ls)",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "ask.command_substitution",
-    "description": "additional command substitution requires approval"
+    "expected_tier": "deny",
+    "expected_rule": "deny.privilege_escalation",
+    "description": "sudo inside substitution is denied even in permissive mode"
   },
   {
     "command": "printf '%s' `curl https://x`",
