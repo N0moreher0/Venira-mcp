@@ -688,9 +688,9 @@ async function opReadFile(
     );
   }
 
-  const startLine = (args.start_line as number | undefined) ?? 1;
-  const endLine = (args.end_line as number | undefined) ?? Infinity;
-  const maxBytes = (args.max_bytes as number | undefined) ?? 1_048_576;
+  // Handle multiple ranges (new) vs single range (legacy start_line/end_line)
+  const rangesArg = args.ranges as Array<{ start_line: number; end_line?: number; max_bytes?: number }> | undefined;
+  const maxBytesGlobal = (args.max_bytes as number | undefined) ?? 1_048_576;
 
   let content: string;
   try {
@@ -703,50 +703,90 @@ async function opReadFile(
 
   const allLines = content.split("\n");
   const lastLineOfAll = allLines.length;
-  const startIdx = Math.max(0, startLine - 1);
-  const endIdx = Math.min(allLines.length, endLine);
-  let lines = allLines.slice(startIdx, endIdx);
-  let truncated = false;
 
-  const joined = lines.join("\n");
-  const bytes = Buffer.byteLength(joined, "utf8");
-  if (bytes > maxBytes) {
-    // Truncate by bytes: keep full lines that fit, then truncate the last line.
-    let kept = 0;
-    const keptLines: string[] = [];
-    for (const line of lines) {
-      const lineBytes = Buffer.byteLength(line + "\n", "utf8");
-      if (kept + lineBytes > maxBytes) {
-        truncated = true;
-        break;
+  // If ranges provided, use them; else fall back to single range
+  const effectiveRanges = rangesArg ?? [
+    {
+      start_line: (args.start_line as number | undefined) ?? 1,
+      end_line: (args.end_line as number | undefined) ?? Infinity,
+      max_bytes: maxBytesGlobal,
+    },
+  ];
+
+  const results: Array<{ start_line: number; end_line: number; text: string; truncated: boolean; next_start_line?: number }> = [];
+
+  for (const range of effectiveRanges) {
+    const startLine = range.start_line ?? 1;
+    const endLine = range.end_line ?? Infinity;
+    const maxBytes = range.max_bytes ?? maxBytesGlobal;
+
+    const startIdx = Math.max(0, startLine - 1);
+    const endIdx = Math.min(allLines.length, endLine);
+    let lines = allLines.slice(startIdx, endIdx);
+    let truncated = false;
+
+    const joined = lines.join("\n");
+    const bytes = Buffer.byteLength(joined, "utf8");
+    if (bytes > maxBytes) {
+      // Truncate by bytes: keep full lines that fit, then truncate the last line.
+      let kept = 0;
+      const keptLines: string[] = [];
+      for (const line of lines) {
+        const lineBytes = Buffer.byteLength(line + "\n", "utf8");
+        if (kept + lineBytes > maxBytes) {
+          truncated = true;
+          break;
+        }
+        keptLines.push(line);
+        kept += lineBytes;
       }
-      keptLines.push(line);
-      kept += lineBytes;
+      lines = keptLines;
     }
-    lines = keptLines;
+
+    const text = lines.join("\n");
+    const firstLine = startLine;
+    const lastLine = startIdx + lines.length;
+
+    results.push({
+      start_line: firstLine,
+      end_line: lastLine,
+      text,
+      truncated,
+      ...(truncated && lastLine < lastLineOfAll ? { next_start_line: lastLine + 1 } : {}),
+    });
   }
 
-  const text = lines.join("\n");
-  const firstLine = startLine;
-  const lastLine = startIdx + lines.length;
+  // Backward compatibility: if using legacy params (no ranges arg), return flat format
+  const isLegacy = !rangesArg;
+  const rel = path.relative(root, absPath).replace(/\\/g, "/");
 
-  const data: Record<string, unknown> = {
-    relative_path: path.relative(root, absPath).replace(/\\/g, "/"),
-    kind: "file",
-    text,
-    first_line: firstLine,
-    last_line: lastLine,
-    total_bytes: stat.size,
-    total_lines: lastLineOfAll,
-    truncated,
-  };
-  if (truncated && lastLine < lastLineOfAll) {
-    data.next_start_line = lastLine + 1;
+  let data: Record<string, unknown>;
+  if (isLegacy) {
+    const first = results[0];
+    data = {
+      relative_path: rel,
+      kind: "file",
+      text: first.text,
+      first_line: first.start_line,
+      last_line: first.end_line,
+      total_bytes: stat.size,
+      total_lines: lastLineOfAll,
+      truncated: first.truncated,
+      ...(first.next_start_line !== undefined ? { next_start_line: first.next_start_line } : {}),
+    };
+  } else {
+    data = {
+      relative_path: rel,
+      kind: "file",
+      ranges: results,
+      total_bytes: stat.size,
+      total_lines: lastLineOfAll,
+    };
   }
 
   return {
     status: "completed",
-    truncated,
+    truncated: results.some((r) => r.truncated),
     result: { kind: "file_read", data },
   };
 }
