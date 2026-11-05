@@ -866,7 +866,7 @@ function invalidateListCaches(): void {
   recentCache.clear();
 }
 
-const MUTATING = new Set(["write_file", "edit_file", "delete_path", "create_directory"]);
+const MUTATING = new Set(["write_file", "edit_file", "delete_path"]);
 
 // Files written/edited in this session (project_recent_files returns session_edits).
 const recentEdits = new Set<string>();
@@ -2093,7 +2093,6 @@ function applyDisabledTools(server: McpServer): void {
   if (profile === "core") {
     disabled.push(
       "project_execute_js",
-      "project_file_symbols",
       "project_outline_symbol",
       "project_diff_files",
       "project_symbol_references",
@@ -3387,25 +3386,6 @@ export function registerProjectTools(server: McpServer): void {
   );
 
   server.registerTool(
-    "project_create_directory",
-    {
-      ...config("Create a directory (create_parents defaults to true).", "Create directory", {
-        use_when: "a directory must exist before writing a file into a new path.",
-        avoid_when: "the directory already exists, or you only need to write a file with create_dirs=1.",
-        speed_profile: "fast; create_parents avoids a second call.",
-        output_kind: "directory_created: relative_path.",
-        batch_safe: false,
-      }, { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false }),
-      inputSchema: {
-        relative_path: path_,
-        create_parents: flag01.optional(),
-        reason: reason_,
-      },
-    },
-    (args) => runOne("create_directory", args),
-  );
-
-  server.registerTool(
     "project_delete_path",
     {
       ...config("Delete a file or directory (directories require recursive=1).", "Delete path", {
@@ -3785,31 +3765,6 @@ export function registerProjectTools(server: McpServer): void {
       },
     },
     (args) => runOutlineSymbol(args as Args),
-  );
-
-  server.registerTool(
-    "project_file_symbols",
-    {
-      ...config(
-        "Extract all symbols (fn/def/class/struct/interface) from one source file, with an optional language hint.",
-        "File symbols",
-        {
-          use_when: "you need the complete symbol list of a single file (not just the top-level outline).",
-          avoid_when: "you need cross-file references (project_symbol_references) or a directory tree (project_list_files).",
-          speed_profile: "fast; single-file regex scan, no external indexer.",
-          output_kind: "file_symbols: count, language, symbols[] {name, kind, line, signature}.",
-          batch_safe: true,
-        },
-        { readOnlyHint: true, openWorldHint: false },
-      ),
-      inputSchema: {
-        relative_path: path_,
-        language: z.string().optional(),
-        include_functions: flag01.optional(),
-        include_classes: flag01.optional(),
-      },
-    },
-    (args) => runFileSymbols(args as Args),
   );
 
   server.registerTool(
