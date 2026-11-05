@@ -959,6 +959,61 @@ check(
     (ctxFirst.context as string[])[1].includes("CTX_MARKER_TOKEN"),
   ctxHits,
 );
+
+// 10a4. Literal query with regex metacharacters must not crash ranking;
+// regex=1 with an invalid pattern must surface [invalid_request] instead of
+// silently returning zero hits from the ripgrep fast path.
+const metaSearch = asEnvelope(
+  await call("project_search", {
+    query: "compute_stats(",
+    kind: "literal_content",
+    relative_path: relRankDir,
+    glob: "*.ts",
+  }),
+);
+check(
+  "search_literal_metachar_query_no_crash",
+  metaSearch.error?.code === undefined &&
+    Array.isArray(metaSearch.data?.hits) &&
+    (metaSearch.data.hits as unknown[]).length >= 1,
+  metaSearch,
+);
+const invalidRegex = asEnvelope(
+  await call("project_search", {
+    query: "[",
+    kind: "literal_content",
+    relative_path: dir,
+    regex: 1,
+  }),
+);
+check("search_regex_invalid_returns_invalid_request", invalidRegex.error?.code === "invalid_request", invalidRegex.error);
+
+// 10a5. whole_word and include_hidden flags are honoured by both search backends.
+const wwDir = `${dir}/whole-word`;
+await fs.mkdir(wwDir, { recursive: true });
+await fs.writeFile(`${wwDir}/ww.ts`, "const parseThing = 1;\nconst parse = 2;\nconst reparse = 3;\n");
+const ww = asEnvelope(
+  await call("project_search", { query: "parse", kind: "literal_content", relative_path: wwDir, glob: "*.ts", whole_word: 1 }),
+);
+const wwHits = Array.isArray(ww.data?.hits) ? (ww.data.hits as Record<string, unknown>[]) : [];
+check(
+  "search_whole_word_matches_standalone_only",
+  wwHits.length === 1 && Number(wwHits[0].line_number) === 2,
+  wwHits,
+);
+const hidDir = `${dir}/hidden-check`;
+await fs.mkdir(hidDir, { recursive: true });
+await fs.writeFile(`${hidDir}/.hidden-fixture.ts`, "const HIDDEN_TOKEN_MARK = 1;\n");
+const hidDefault = asEnvelope(
+  await call("project_search", { query: "HIDDEN_TOKEN_MARK", kind: "literal_content", relative_path: hidDir, glob: "*.ts" }),
+);
+const hidDefaultHits = Array.isArray(hidDefault.data?.hits) ? hidDefault.data.hits : [];
+check("search_hidden_included_by_default", hidDefaultHits.length >= 1, hidDefault.data?.hits);
+const hidOff = asEnvelope(
+  await call("project_search", { query: "HIDDEN_TOKEN_MARK", kind: "literal_content", relative_path: hidDir, glob: "*.ts", include_hidden: 0 }),
+);
+const hidOffHits = Array.isArray(hidOff.data?.hits) ? hidOff.data.hits : [];
+check("search_include_hidden_zero_skips_dotfile", hidOffHits.length === 0, hidOff.data?.hits);
 await call("project_write_file", { relative_path: `${dir}/search-token.txt`, content: "NEW_TOKEN\n" });
 await new Promise((resolve) => setTimeout(resolve, 3200));
 const search3 = await call("project_search", {
