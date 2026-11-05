@@ -445,6 +445,13 @@ const explicitEnvRead = policyModule.evaluateShellCommand("cat .env", overrideWo
   overrideReason: "operator enabled this specific read",
 });
 check("named_env_read_override", explicitEnvRead.tier === "allow" && explicitEnvRead.rule === "override.ALLOW_ENV_READ", explicitEnvRead);
+
+// strict mode should reject mutating commands even if they appear in STRICT_ALLOW
+// (the STRICT_ALLOW list is for read-only/local commands only)
+for (const mutatingCmd of ["rm -rf /tmp/x", "mkdir /tmp/x", "touch /tmp/x", "cp a b", "mv a b"]) {
+  const decision = policyModule.evaluateShellCommand(mutatingCmd, ws, { mode: "strict" });
+  check(`strict_mode_rejects_${mutatingCmd.split(" ")[0]}`, decision.tier === "ask", decision);
+}
 for (const command of ["cat .env && echo extra", "echo secret > .env", "cat .e[n]v", "cat id_rsa"]) {
   const decision = policyModule.evaluateShellCommand(command, overrideWorkspace, {
     mode: "permissive",
