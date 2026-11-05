@@ -869,7 +869,7 @@ const defaultTransport = new StdioClientTransport({
   command: "node",
   args: ["dist/server.js"],
   cwd: process.cwd(),
-  env: verifyEnv({ VENIRA_SESSION_ID: `${SESSION_ID}-mode-default`, VENIRA_TOOL_MODE: "default" }, "full"),
+  env: verifyEnv({ VENIRA_SESSION_ID: `${SESSION_ID}-mode-default`, VENIRA_TOOL_MODE: "default", VENIRA_ALLOW_JS_EXEC: "1" }, "full"),
   stderr: "pipe",
 });
 const defaultClient = new Client({ name: "verify-default", version: "0.0.0" }, { capabilities: {} });
@@ -877,10 +877,11 @@ await defaultClient.connect(defaultTransport);
 const defaultList = await defaultClient.listTools();
 check(
   "tool_mode_default_coding_focused",
-  !defaultList.tools.some((t) => t.name === "project_shell_run") &&
-    !defaultList.tools.some((t) => t.name === "project_ci_wait") &&
-    !defaultList.tools.some((t) => t.name === "project_execute_js") &&
+  !defaultList.tools.some((t) => t.name === "project_ci_wait") &&
     !defaultList.tools.some((t) => t.name === "project_pr_create") &&
+    !defaultList.tools.some((t) => t.name === "project_delete_path") &&
+    defaultList.tools.some((t) => t.name === "project_shell_run") &&
+    defaultList.tools.some((t) => t.name === "project_execute_js") &&
     defaultList.tools.some((t) => t.name === "project_read_file") &&
     defaultList.tools.some((t) => t.name === "project_write_file") &&
     defaultList.tools.some((t) => t.name === "project_dependency_graph") &&

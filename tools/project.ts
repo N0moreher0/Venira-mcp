@@ -1897,9 +1897,9 @@ type ToolMode = "default" | "expert";
  * Per-mode tool exclusions layered on top of `VENIRA_DISABLE_TOOLS` and the
  * `VENIRA_PROFILE=core` preset. `expert` keeps the full set (everything the
  * server can do: shell, JS eval, CI/CD shipping, secrets, intel); `default` is
- * the full **sandbox coding toolset** — all specialized tools for reading,
+ * the **full sandbox coding toolset** — all specialized tools for reading,
  * writing, editing, searching, code intelligence, diagnostics, snapshots,
- * config; only excludes destructive delete, shell execution, JS execution,
+ * config, **shell execution, JS execution**; only excludes destructive delete
  * and CI/CD shipping (PR/CI tools).
  */
 const TOOL_MODE_EXCLUDES: Record<ToolMode, string[]> = {
@@ -1916,11 +1916,6 @@ const TOOL_MODE_EXCLUDES: Record<ToolMode, string[]> = {
     "project_pr_list",
     "project_pr_close",
     "project_pr_reopen",
-    "project_shell_run",
-    "project_shell_status",
-    "project_shell_cancel",
-    "project_shell_cancel_session",
-    "project_execute_js",
   ],
 };
 
