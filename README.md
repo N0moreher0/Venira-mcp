@@ -47,80 +47,25 @@ All clients run the same command — only the config format differs. Use the abs
       "command": ["npx", "--yes", "--package=venira-mcp@latest", "venira-mcp"],
       "enabled": true,
       "environment": {
-        // ═══════════════════════════════════════════════════════════
-        // REQUIRED — change this one value
-        // ═══════════════════════════════════════════════════════════
-        "VENIRA_WORKSPACE": "/absolute/path/to/project",
-        // On Windows: "C:\\path\\to\\project". OpenCode does NOT expand ${workspaceFolder}.
+        "VENIRA_WORKSPACE": "/absolute/path/to/project",  // ← change this; Windows: "C:\\path\\to\\project"
 
-        // ═══════════════════════════════════════════════════════════
-        // TOOL SURFACE
-        // ═══════════════════════════════════════════════════════════
-        // "expert" = 43 tools (coding + shell + JS + PR/CI + diagnostics)
-        // "default" = 33 tools (coding + shell + JS, NO PR/CI)
-        "VENIRA_TOOL_MODE": "expert",
+        "VENIRA_TOOL_MODE": "expert",        // "expert" = 43 tools (all) · "default" = 33 (no PR/CI)
+        "VENIRA_OUTPUT_MODE": "full",        // "full" = complete · "compact" = trim >8KB (small models)
+        "VENIRA_SHELL_MODE": "permissive",   // "permissive" = no prompts · "balanced" = ask for writes/net/git push
+        "VENIRA_SHELL_ENV_PASS_ALL": "0",    // "1" = pass full env to shell (build tools that need it)
+        "VENIRA_SHELL_EXIT_EARLY": "1",      // poll returns as soon as exit code is known
+        "VENIRA_SHELL_TIMEOUT_POLICY": "soft", // "soft" = warn on timeout (keeps running) · "hard" = kill
+        "VENIRA_ALLOW_JS_EXEC": "1",         // enable project_execute_js
+        "VENIRA_JS_EXEC_APPROVAL": "0",      // "0" = auto-approve · "1" = human approval per JS call
+        "VENIRA_USE_RIPGREP": "1",           // use ripgrep if installed (faster search on big repos)
+        "VENIRA_CACHE_ALL": "1",             // "1" = TTL caches on · "0" = always-fresh (slower)
+        "VENIRA_EDIT_FUZZY": "0",            // "1" = fuzzy match fallback · "0" = exact only
 
-        // ═══════════════════════════════════════════════════════════
-        // OUTPUT
-        // ═══════════════════════════════════════════════════════════
-        // "full" = complete payloads · "compact" = trim > 8 KB (small-context models)
-        "VENIRA_OUTPUT_MODE": "full",
-
-        // ═══════════════════════════════════════════════════════════
-        // SHELL POLICY
-        // ═══════════════════════════════════════════════════════════
-        // "permissive" = no approval for normal commands (still blocks rm -rf / fork bomb / git push --force)
-        // "balanced"   = human approval for writes / network / git push (slower, safer for shared repos)
-        "VENIRA_SHELL_MODE": "permissive",
-        // "0" = child processes get PATH/HOME/TERM only (secrets never leak — default)
-        // "1" = pass full parent env (only if a build tool needs it)
-        "VENIRA_SHELL_ENV_PASS_ALL": "0",
-        // "VENIRA_SHELL_ENV_ALLOW": "GITHUB_TOKEN,NPM_TOKEN",  // ← uncomment if build needs specific vars
-        // "1" = shell_status returns as soon as exit code is known (faster polling)
-        "VENIRA_SHELL_EXIT_EARLY": "1",
-        // "soft" = expired command warns (keeps running, you can still poll) · "hard" = kills process tree
-        // (default 10 min per command, max cap 30 min — heavy builds fine, hung commands detectable)
-        "VENIRA_SHELL_TIMEOUT_POLICY": "soft",
-
-        // ═══════════════════════════════════════════════════════════
-        // JS EXECUTION (project_execute_js)
-        // ═══════════════════════════════════════════════════════════
-        // "1" = enable · "0" = disable (off by default for safety)
-        "VENIRA_ALLOW_JS_EXEC": "1",
-        // "0" = auto-approve JS calls (trusted local dev only!)
-        // "1" = require human approval per JS call (safer default)
-        "VENIRA_JS_EXEC_APPROVAL": "0",
-
-        // ═══════════════════════════════════════════════════════════
-        // GITHUB / CI / PR (auto-detected from .git/config)
-        // Token lives in encrypted vault — set once with:
-        //   npx venira-mcp --setup-github
-        // NEVER put tokens in this file.
-        // ═══════════════════════════════════════════════════════════
-        // "VENIRA_GIT_PROVIDER": "github",    // auto: github | gitlab | bitbucket
-        // "VENIRA_GIT_TIMEOUT_MS": "60000",   // request timeout (ms)
-        // "VENIRA_NETWORK": "1",              // "0" = hard-off all PR/CI calls (offline work)
-
-        // ═══════════════════════════════════════════════════════════
-        // SEARCH / CACHES / GUARDS
-        // ═══════════════════════════════════════════════════════════
-        // "1" = use ripgrep if installed (faster on big repos)
-        "VENIRA_USE_RIPGREP": "1",
-        // "1" = TTL caches on (fast repeat reads) · "0" = always-fresh (strict, slower)
-        "VENIRA_CACHE_ALL": "1",
-        // "1" = fuzzy edit fallback (Levenshtein) · "0" = exact match only
-        "VENIRA_EDIT_FUZZY": "0",
-
-        // ═══════════════════════════════════════════════════════════
-        // ADVANCED — leave at defaults unless you know why
-        // ═══════════════════════════════════════════════════════════
-        // "VENIRA_DATA_DIR": "",                  // where audit DB + encrypted secrets live
-        // "VENIRA_UNRESTRICTED": "0",             // "1" = disable workspace lock (NEVER in prod)
-        // "VENIRA_SNAPSHOT_KEEP": "20",            // checkpoints kept before pruning
-        // "VENIRA_SNAPSHOT_MAX_FILES": "4000",     // per-checkpoint file cap
-        // "VENIRA_SHELL_MAX_TIMEOUT_MS": "1800000"  // 30 min hard cap — rarely need to change
-        // "VENIRA_TRACE": "0",                     // "1" = log every tool call to stderr (debug)
-        // "VENIRA_PRETTY": "0",                    // "1" = 2-space pretty JSON in results
+        // Uncomment when needed:
+        // "VENIRA_GIT_PROVIDER": "github",   // auto-detect from .git/config; set only to override
+        // "VENIRA_NETWORK": "0",             // "0" = kill all PR/CI calls (offline work)
+        // "VENIRA_UNRESTRICTED": "0",        // "1" = disable workspace lock (NEVER in production)
+        // "VENIRA_TRACE": "0",               // "1" = log every tool call to stderr (debug only)
       }
     }
   }
