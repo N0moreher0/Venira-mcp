@@ -140,7 +140,7 @@ Verify covers a 43-case classifier table (`shell_cache_readonly_allowlist`);
 
 ## Acceptance criteria per phase
 
-- `tsc --noEmit`, `npm run verify` (green; 398/398 on the current local suite), `npm run check:docs`, `npm run check:source-shape`, `npm run test:shell-security` all green.
+- `tsc --noEmit`, `npm run verify` (400 checks; 2 known Windows-runner flakes — `shell_output` flips green/red by run, `secret_env_injected_and_redacted` flips likewise), `npm run check:docs`, `npm run check:source-shape`, `npm run test:shell-security` all green.
 - README §3.5/§4 updated whenever a user-visible flag or behaviour ships; `check:docs` contract kept.
 - No tool added/removed/renamed without the Default/Expert lists, README §4.0, and `scripts/check-docs.ts` updated in the same commit.
 - CI matrix (ubuntu/windows/macos × Node 20/22) green; macos-22 runner flakes are environmental (GitHub has auto-cancelled it twice), not code.

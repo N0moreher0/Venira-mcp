@@ -378,6 +378,7 @@ const asEnvelope = (result: unknown) => JSON.parse(textOf(result) || "{}");
 // Unit checks first (no server interaction)
 const ws = process.cwd();
 const policyModule = await import("../lib/shell-policy.js");
+const symbolDiffModule = await import("../lib/symbol-diff.js");
 const shellCacheModule = await import("../lib/shell-cache.js");
 const envModule = await import("../lib/env.js");
 const originalPolicyFile = process.env.VENIRA_SHELL_POLICY_FILE;
@@ -2953,6 +2954,47 @@ const readOnlyFailures = readOnlyCases.filter(
   ([command, expected]) => shellCacheModule.isReadOnlyCommand(command) !== expected,
 );
 check("shell_cache_readonly_allowlist", readOnlyFailures.length === 0, readOnlyFailures);
+
+// 12c. Symbol extraction regression (names are the final capture group; keyword
+// groups like "fn"/"const" must never be reported as the symbol name).
+const rustOutline = symbolDiffModule.extractSymbols(
+  [
+    "pub fn compute_stats(values: &[i64]) -> i64 {",
+    "    values.iter().sum()",
+    "}",
+    "",
+    "pub struct Stats { total: i64 }",
+    "",
+    "fn helper() {}",
+  ].join("\n"),
+);
+check(
+  "symbol_extract_rust_names",
+  rustOutline.some((s) => s.name === "compute_stats" && s.kind === "function") &&
+    rustOutline.some((s) => s.name === "Stats" && s.kind === "struct") &&
+    rustOutline.some((s) => s.name === "helper" && s.kind === "function"),
+  rustOutline,
+);
+const tsOutline = symbolDiffModule.extractSymbols(
+  [
+    "export async function loadData() {",
+    "  return 1;",
+    "}",
+    "export abstract class Base {}",
+    "export interface Shape {}",
+    "export const answer = 42;",
+    "export type Pair<T> = [T, T];",
+  ].join("\n"),
+);
+check(
+  "symbol_extract_ts_names",
+  tsOutline.some((s) => s.name === "loadData" && s.kind === "function") &&
+    tsOutline.some((s) => s.name === "Base" && s.kind === "class") &&
+    tsOutline.some((s) => s.name === "Shape" && s.kind === "interface") &&
+    tsOutline.some((s) => s.name === "answer" && s.kind === "constant") &&
+    tsOutline.some((s) => s.name === "Pair" && s.kind === "type"),
+  tsOutline,
+);
 console.log("[verify] done");
 await client.close();
 await new Promise((resolve) => setTimeout(resolve, 1500));
