@@ -9,28 +9,12 @@
         // Absolute workspace path. OpenCode does not expand ${workspaceFolder}.
         // On Windows, JSON paths need escaped backslashes (C:\\path\\to\\project).
         "VENIRA_WORKSPACE": "C:\\path\\to\\your-project",
-        // Lock every path to the workspace. Keep this "0" in normal use.
-        "VENIRA_UNRESTRICTED": "0",
-        // Shell policy: balanced | strict | permissive
-        "VENIRA_SHELL_MODE": "balanced",
-        // Tool permission mode: manual | best_effort | allow_all
-        "VENIRA_PERMISSION_MODE": "allow_all",
+        // "default" = lean coding set (no shell/JS/CI-CD shipping); "expert" = full surface.
+        "VENIRA_TOOL_MODE": "expert",
         // "full" keeps envelopes complete; "compact" trims payloads over 8 KB.
-        "VENIRA_OUTPUT_MODE": "full",
-        // project_shell_status returns as soon as the exit code is known.
-        "VENIRA_SHELL_EXIT_EARLY": "1",
-        // Arbitrary JS stays off; if enabled, every snippet needs a human grant.
-        "VENIRA_ALLOW_JS_EXEC": "0",
-        "VENIRA_JS_EXEC_APPROVAL": "1",
-        // An agent cannot rewrite other clients' MCP configs.
-        "VENIRA_ALLOW_SELF_INSTALL": "0",
-        // "0" refuses every outbound call (offline repos / no GitHub tools).
-        "VENIRA_NETWORK": "1",
-        // "expert" = full surface (shell, builds, CI/CD); "default" = lean coding set (no shell / JS eval / CI-CD shipping).
-        "VENIRA_TOOL_MODE": "expert"
-        // Leave VENIRA_DATA_DIR unset so the MCP server, --approve and
-        // --setup-github share one per-user vault. VENIRA_DEFAULT_SHELL is
-        // auto-detected. Cache and audit flags already default to "1".
+        "VENIRA_OUTPUT_MODE": "full"
+        // All other VENIRA_* flags keep safe defaults; only set them in this block
+        // when you intentionally need to change the default (e.g. VENIRA_NETWORK="0" for offline).
       }
     }
   }
