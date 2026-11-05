@@ -952,6 +952,55 @@ function ripgrepExec(args: string[], timeoutMs: number): Promise<{ status: numbe
   });
 }
 
+/**
+ * Score a search hit so the most useful results surface first — agents
+ * usually only read the first few hits, so ranking matters more than raw
+ * ripgrep order (which is filesystem order).
+ *
+ * Scoring (higher = better):
+ *   - whole-word match      +40   (identifier found as a standalone token)
+ *   - prefix match          +20   (line starts with the query)
+ *   - file-name match       +30   (query appears in the file name)
+ *   - shallow depth         +10   (files closer to workspace root)
+ *   - early line            +10   (line number < 10)
+ * Case-insensitive matching throughout; `needle` is pre-lowercased.
+ */
+function scoreHit(hit: Record<string, unknown>, needle: string, rel: string): number {
+  let score = 0;
+  const snippet = String(hit.snippet ?? "").toLowerCase();
+  const lineLower = snippet;
+  // whole-word: needle bounded by non-identifier chars on both sides
+  const wordRe = new RegExp(`(?:^|[^A-Za-z0-9_$])${needle}(?:[^A-Za-z0-9_$]|$)`, "i");
+  if (wordRe.test(lineLower)) score += 40;
+  else if (lineLower.includes(needle)) score += 15; // substring fallback
+  if (lineLower.startsWith(needle)) score += 20; // prefix (definition-like)
+  const base = path.basename(rel).toLowerCase();
+  if (base.includes(needle)) score += 30;
+  else if (rel.toLowerCase().includes(needle)) score += 15;
+  const depth = rel.split("/").length;
+  score += Math.max(0, 10 - depth); // shallow files first
+  const ln = Number(hit.line_number ?? 0);
+  if (ln > 0 && ln <= 10) score += 10; // early line
+  return score;
+}
+
+/**
+ * Sort hits so the most relevant are first, then stable by (path, line).
+ */
+function rankHits(hits: Array<Record<string, unknown>>, needle: string): void {
+  hits.sort((a, b) => {
+    const sa = scoreHit(a, needle, String(a.relative_path ?? ""));
+    const sb = scoreHit(b, needle, String(b.relative_path ?? ""));
+    if (sb !== sa) return sb - sa;
+    const ra = String(a.relative_path ?? "");
+    const rb = String(b.relative_path ?? "");
+    if (ra !== rb) return ra < rb ? -1 : 1;
+    const la = Number(a.line_number ?? 0);
+    const lb = Number(b.line_number ?? 0);
+    return la - lb;
+  });
+}
+
 async function opSearch(
   args: Record<string, unknown>,
   root: string,
@@ -1050,11 +1099,13 @@ async function opSearch(
     // Ripgrep-backed fast path if available (safe spawn, no shell).
     // Include/exclude globs map to `rg --glob` (a negated glob for exclude);
     // they no longer silently disable this path on huge workspaces.
-    if (envFlag("VENIRA_USE_RIPGREP", true) && kind === "literal_content" && contextLines === 0 && !countOnly) {
+    // context_lines maps to `rg -C <n>`.
+    if (envFlag("VENIRA_USE_RIPGREP", true) && kind === "literal_content" && !countOnly) {
       if (await ripgrepInstalled()) {
         try {
           const argList = ["--json", "-n", "--max-filesize=1M", "--color=never"];
           if (!caseSensitive) argList.push("-i");
+          if (contextLines > 0) argList.push("-C", String(contextLines));
           if (args.regex === true) { argList.push("-e", String(query)); }
           else { argList.push("-F", "-e", String(query)); }
           if (glob) argList.push("--glob", String(glob));
@@ -1080,6 +1131,7 @@ async function opSearch(
               totalMatchLines += 1;
               if (hits.length >= limit) { complete = false; break; }
             }
+            rankHits(hits, needle);
             return {
               status: "completed",
               truncated: !complete,
@@ -1176,6 +1228,7 @@ async function opSearch(
         hits.push(hit);
       }
     }
+    rankHits(hits, needleConst);
   }
 
   const filesMatched = new Set(hits.map((h) => h.relative_path)).size;
