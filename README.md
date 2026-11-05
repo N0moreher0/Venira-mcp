@@ -163,6 +163,25 @@ Measured: Windows + Node 24, standalone build, 2026-11-01.
 > Batch: 8 reads as one batch call (16.6 ms) vs 8× individual (~76 ms) — the round-trip saving
 > that makes the agent loop fast.
 
+### Case study: Venira MCP vs Codex `exec_command`
+
+Measured on Windows in the Codex desktop workspace on 2026-11-06. Each case ran five
+sequential rounds. Venira's relevant cache was cleared before each round. The native
+comparison used Codex `exec_command`, starting a fresh PowerShell or ripgrep process for
+each round; timings therefore include process startup and tool-call overhead.
+
+| Workload | Venira MCP | Codex `exec_command` | Median ratio |
+|---|---:|---:|---:|
+| Read the first 80 lines of 8 files in one batch | median 276 ms (159–3,148 ms) | median 5,430 ms (2,881–6,098 ms) | 19.7× |
+| Literal search for `VENIRA_WORKSPACE` | median 225 ms (168–293 ms) | median 2,098 ms (1,649–2,641 ms) | 9.3× |
+
+Both search methods reported 45 matching lines. The batch read returned roughly 33.5k
+characters through Venira and 29.0k through PowerShell; response formatting differs, so
+these are end-to-end tool comparisons rather than isolated filesystem benchmarks. The
+five-round sample is small and includes one 3.1 s Venira outlier; results should not be
+read as a general performance guarantee. The earlier 8.3× single-file result is omitted
+here because this larger case study focuses on batch reads and workspace search.
+
 ## 4. Two tool modes
 
 Two tool modes set which tools the client sees. Set via `VENIRA_TOOL_MODE` env var or
