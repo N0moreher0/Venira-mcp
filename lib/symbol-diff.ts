@@ -19,33 +19,30 @@ export type SymbolInfo = {
 
 const SYMBOL_REGEX = [
   // TypeScript / JavaScript
-  /^(export\s+default\s+)?(async\s+)?function\s+([A-Za-z_$][\w$]*)/,
-  /^(export\s+)?class\s+([A-Za-z_$][\w$]*)/,
-  /^(export\s+)?(abstract\s+)?class\s+([A-Za-z_$][\w$]*)/,
-  /^(export\s+)?(interface|type)\s+([A-Za-z_$][\w$]*)/,
-  /^(export\s+)?(const|let|var)\s+([A-Za-z_$][\w$]*)\s*=/,
-  // Rust
-  /^(pub\s+)?(fn|func)\s+([A-Za-z_][\w]*)/,
-  /^(pub\s+)?(struct|enum|impl|trait|type)\s+([A-Za-z_][\w]*)/,
+  /^(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)/,
+  /^(?:export\s+)?(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)/,
+  /^(?:export\s+)?(?:interface|type)\s+([A-Za-z_$][\w$]*)/,
+  /^(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=/,
+  // Rust (async/unsafe fn included)
+  /^(?:pub\s+)?(?:async\s+)?(?:unsafe\s+)?(?:fn|func)\s+([A-Za-z_][\w]*)/,
+  /^(?:pub\s+)?(?:struct|enum|impl|trait|type)\s+([A-Za-z_][\w]*)/,
   // Python
   /^def\s+([A-Za-z_][\w]*)/,
   /^class\s+([A-Za-z_][\w]*)/,
   // Go
-  /^(func|type|const|var)\s+([A-Za-z_][\w]*)/,
+  /^(?:func|type|const|var)\s+([A-Za-z_][\w]*)/,
 ] as const;
 
-function detectKind(match: RegExpMatchArray, line: string): SymbolInfo["kind"] {
+function detectKind(match: RegExpMatchArray): SymbolInfo["kind"] {
   const full = match[0].toLowerCase();
-  if (full.startsWith("class") || full.startsWith("abstract")) return "class";
-  if (full.startsWith("interface") || full.startsWith("type")) return "type";
-  if (full.startsWith("enum")) return "enum";
-  if (full.startsWith("struct")) return "struct";
-  if (full.startsWith("fn") || full.startsWith("func") || full.startsWith("def")) return "function";
-  if (full.startsWith("impl")) return "class";
-  if (full.startsWith("trait")) return "interface";
-  if (full.startsWith("const") || full.startsWith("let") || full.startsWith("var")) {
-    return /const/i.test(line) ? "constant" : "variable";
-  }
+  if (/\b(interface|trait)\b/.test(full)) return "interface";
+  if (/\btype\b/.test(full)) return "type";
+  if (/\benum\b/.test(full)) return "enum";
+  if (/\bstruct\b/.test(full)) return "struct";
+  if (/\b(class|impl|abstract)\b/.test(full)) return "class";
+  if (/\b(fn|func|def|function)\b/.test(full)) return "function";
+  if (/\b(const)\b/.test(full)) return "constant";
+  if (/\b(let|var)\b/.test(full)) return "variable";
   return "unknown";
 }
 
@@ -53,12 +50,11 @@ function findSymbolOnLine(line: string): SymbolInfo | null {
   for (const re of SYMBOL_REGEX) {
     const match = line.match(re);
     if (match) {
-      // Group 2 or 3 is the symbol name depending on the pattern
-      const name = match[2] ?? match[3] ?? match[1];
-      if (name && name !== "default" && name !== "function") {
+      const name = match[1];
+      if (name) {
         return {
-          name: String(name),
-          kind: detectKind(match, line),
+          name: String(name).trim(),
+          kind: detectKind(match),
           line: 0, // set by caller
           signature: line.trim().slice(0, 160),
         };
