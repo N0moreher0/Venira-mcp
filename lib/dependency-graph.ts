@@ -871,12 +871,18 @@ function collectDeclarations(text: string, lang: GraphLanguage): Declaration[] {
       const line = lines[i];
       const topLevel = depth === 0;
       if (topLevel) {
+        // JVM declaration headers tolerate any run of visibility/semantics
+        // modifiers (`public final class`, `open class`, `data class`,
+        // `sealed interface`, `internal class`, …) — match modifiers first,
+        // then the keyword, so `open class KBase` is not invisible.
+        const MODS = "(?:(?:public|private|protected|internal|abstract|final|sealed|open|data|annotation|inner|expect|actual)\\s+)*";
         const candidates: Array<{ re: RegExp; kind: string }> = [
-          // `public final class Foo extends Bar implements Baz {`
-          { re: /^\s*(?:public|abstract|final|sealed|interface)?\s*(?:abstract\s+)?class\s+([A-Za-z_][\w]*)/, kind: "class" },
-          { re: /^\s*(?:public|abstract|final|sealed)?\s*interface\s+([A-Za-z_][\w]*)/, kind: "interface" },
-          { re: /^\s*(?:public|final|abstract)?\s*enum\s+([A-Za-z_][\w]*)/, kind: "enum" },
+          { re: new RegExp(`^\\s*${MODS}class\\s+([A-Za-z_][\\w]*)`), kind: "class" },
+          { re: new RegExp(`^\\s*${MODS}interface\\s+([A-Za-z_][\\w]*)`), kind: "interface" },
+          { re: new RegExp(`^\\s*${MODS}(?:enum\\s+class|enum)\\s+([A-Za-z_][\\w]*)`), kind: "enum" },
+          { re: /^\s*(?:companion\s+)?object\s+([A-Za-z_][\w]*)/, kind: "class" },
           { re: /^\s*(?:public|private|protected)?\s*(?:static\s+)?(?:final\s+)?[A-Za-z_<>\[\],\s]*\s+([A-Za-z_][\w]*)\s*(?:\*|&)?\s*(?:=|;)/, kind: "variable" },
+          { re: new RegExp(`^\\s*${MODS}fun\\s+([A-Za-z_][\\w]*)`), kind: "function" },
           { re: /^\s*(?:public|private|protected)?\s*(?:static\s+)?(?:final\s+)?[A-Za-z_<>\[\],\s]*\s+([A-Za-z_][\w]*)\s*\([^)]*\)\s*\{?\s*$/, kind: "function" },
         ];
         let matched = false;
@@ -990,6 +996,30 @@ function normalizeBaseName(raw: string): string {
     .trim();
 }
 
+/** Split a comma list, ignoring commas nested in <>, () and []. */
+function splitTopLevel(rest: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let cur = "";
+  for (const ch of rest) {
+    if (ch === "<" || ch === "(" || ch === "[") depth += 1;
+    else if (ch === ">" || ch === ")" || ch === "]") depth = Math.max(0, depth - 1);
+    if (ch === "," && depth === 0) {
+      if (cur.trim()) out.push(cur);
+      cur = "";
+      continue;
+    }
+    cur += ch;
+  }
+  if (cur.trim()) out.push(cur);
+  return out;
+}
+
+/** Last dotted segment of a possibly package-qualified base name. */
+function lastBaseSegment(name: string): string {
+  return name.split(".").pop()?.trim() ?? "";
+}
+
 function collectBases(text: string, lang: GraphLanguage): BaseRef[] {
   const bases: BaseRef[] = [];
   if (lang === "rs") {
@@ -1025,6 +1055,51 @@ function collectBases(text: string, lang: GraphLanguage): BaseRef[] {
   if (lang === "go") {
     // Go has no extends/implements keywords; interface embedding and struct
     // embedding are not attributed (yet) — leaving edges out beats guessing.
+    return bases;
+  }
+  if (lang === "java" || lang === "kotlin") {
+    const lines = splitLines(text);
+    for (let i = 0; i < lines.length; i += 1) {
+      const line = lines[i].trim();
+      if (!line || line.startsWith("//") || line.startsWith("*") || line.startsWith("@")) continue;
+      if (lang === "java") {
+        // class/interface/record/enum Foo<T> extends Bar<Z> implements I1, I2 {
+        const decl = /(?:^|\s)(?:class|interface|record|enum)\s+[A-Za-z_][\w]*/.exec(line);
+        if (!decl) continue;
+        const extendsMatch = /\bextends\s+([^{]*?)(?:\bimplements\b|\{|$)/.exec(line);
+        if (extendsMatch) {
+          for (const part of splitTopLevel(normalizeBaseName(extendsMatch[1]))) {
+            const name = lastBaseSegment(part);
+            if (name && /^[A-Za-z_]\w*$/.test(name)) bases.push({ name, type: "extends", line: i + 1 });
+          }
+        }
+        const implementsMatch = /\bimplements\s+([^{]*?)(?:\{|$)/.exec(line);
+        if (implementsMatch) {
+          for (const part of splitTopLevel(normalizeBaseName(implementsMatch[1]))) {
+            const name = lastBaseSegment(part);
+            if (name && /^[A-Za-z_]\w*$/.test(name)) bases.push({ name, type: "implements", line: i + 1 });
+          }
+        }
+        continue;
+      }
+      // kotlin: `class Foo : Bar(), I1, I2 {` | `interface I : J` | `object O : Base()`
+      const m = /^(?:public\s+|private\s+|protected\s+|internal\s+|abstract\s+|final\s+|open\s+|sealed\s+|data\s+|annotation\s+|inner\s+|enum\s+)*(class|interface|object)\s+[A-Za-z_][\w]*(?:<[^>]*>)?(?:\s*\([^)]*\))?\s*:\s*([^{]+)/.exec(line);
+      if (m) {
+        const isInterfaceDecl = m[1] === "interface";
+        for (const partRaw of splitTopLevel(normalizeBaseName(m[2]))) {
+          const part = partRaw.trim();
+          if (!part) continue;
+          // A supertype with constructor args is the superclass; a bare name is
+          // an interface (Kotlin's `:` list mixes both). Interface supertypes
+          // are always `extends`.
+          const isSuperclass = part.includes("(");
+          const name = lastBaseSegment(part.replace(/\([^)]*\)\s*$/, ""));
+          if (name && /^[A-Za-z_]\w*$/.test(name)) {
+            bases.push({ name, type: isInterfaceDecl || isSuperclass ? "extends" : "implements", line: i + 1 });
+          }
+        }
+      }
+    }
     return bases;
   }
   const lines = splitLines(text);

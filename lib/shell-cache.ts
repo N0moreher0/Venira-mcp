@@ -97,19 +97,21 @@ export function getShellCacheStats(): { size: number; maxSize: number; ttlMs: nu
 // subshells) are never cacheable, because any of those can mutate or hang.
 // ---------------------------------------------------------------------------
 
-/** True when the raw text contains shell structure outside of quotes. */
+/** True when the raw text contains shell structure outside of single quotes. */
 export function hasRawShellSyntax(command: string): boolean {
   let inSingle = false;
   let inDouble = false;
   for (let i = 0; i < command.length; i += 1) {
     const ch = command[i];
     const prev = i > 0 ? command[i - 1] : "";
-    if (ch === "'" && !inDouble && prev !== "\\") inSingle = !inSingle;
-    else if (ch === '"' && !inSingle && prev !== "\\") inDouble = !inDouble;
-    else if (inSingle || inDouble) continue;
-    else if (">|;&`".includes(ch)) return true;
-    else if (ch === "$" && command[i + 1] === "(") return true;
-    else if (ch === "<" && command[i + 1] === "(") return true;
+    if (ch === "'" && !inDouble && prev !== "\\") { inSingle = !inSingle; continue; }
+    if (ch === '"' && !inSingle && prev !== "\\") { inDouble = !inDouble; continue; }
+    if (inSingle) continue; // single quotes: fully inert
+    // $ and backtick are LIVE even inside double quotes ("$(date)" runs).
+    if (ch === "$" || ch === "`") return true;
+    if (inDouble) continue; // other content is inert inside double quotes
+    if (">|;&".includes(ch)) return true;
+    if (ch === "<" && command[i + 1] === "(") return true;
   }
   return false;
 }
