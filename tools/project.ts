@@ -1444,7 +1444,7 @@ async function runRecentFiles(args: Args): Promise<ToolResult> {
 
     // P2: Try the SQLite index first (no bounded scan needed when the index is populated).
     const maxFiles = Math.max(1, Math.min(100, Number(args.limit ?? 20)));
-    const indexHits = queryRecentFiles(maxFiles, args.include_ignored === true);
+    const indexHits = queryRecentFiles(maxFiles, args.include_ignored === true, root);
     if (indexHits.length > 0) {
       const data = {
         relative_path: root,
@@ -2838,7 +2838,7 @@ async function runPlanReadBatch(args: Args): Promise<ToolResult> {  const starte
   // keyword match (a bare task description has no identifiers to search for).
   if (candidates.size < 2) {
     try {
-      for (const recent of queryRecentFiles(12, false)) {
+      for (const recent of queryRecentFiles(12, false, WORKSPACE)) {
         if (!isPlannablePath(recent.relative_path)) continue;
         if (!candidates.has(recent.relative_path)) {
           candidates.set(recent.relative_path, {
