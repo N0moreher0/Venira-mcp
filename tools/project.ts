@@ -1899,13 +1899,15 @@ type ToolMode = "default" | "expert";
  * server can do: shell, JS eval, CI/CD shipping, secrets, intel); `default` is
  * the **full sandbox coding toolset** — all specialized tools for reading,
  * writing, editing, searching, code intelligence, diagnostics, snapshots,
- * config, **shell execution, JS execution**; only excludes destructive delete
- * and CI/CD shipping (PR/CI tools).
+ * config, **shell execution, JS execution**; only excludes CI/CD shipping
+ * (PR/CI tools). `project_delete_path` is available in both modes — shell
+ * `rm -rf` / `rd /s` / `Remove-Item -Recurse -Force` are hard-denied by shell
+ * policy in every mode, so `project_delete_path` is the controlled, auditable
+ * deletion path.
  */
 const TOOL_MODE_EXCLUDES: Record<ToolMode, string[]> = {
   expert: [],
   default: [
-    "project_delete_path",
     "project_ci_status",
     "project_ci_trigger",
     "project_ci_logs",

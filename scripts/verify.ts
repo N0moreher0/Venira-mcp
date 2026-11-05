@@ -843,7 +843,7 @@ check(
 await disabledClient.close();
 
 // 14b. Tool modes: `VENIRA_TOOL_MODE=expert` keeps the full set; `default` is
-// the coding-focused lean set (no CI/CD shipping, no shell, no JS eval).
+// the coding-focused lean set (no CI/CD shipping; shell + JS exec + `project_delete_path` included).
 const expertTransport = new StdioClientTransport({
   command: "node",
   args: ["dist/server.js"],
@@ -879,7 +879,7 @@ check(
   "tool_mode_default_coding_focused",
   !defaultList.tools.some((t) => t.name === "project_ci_wait") &&
     !defaultList.tools.some((t) => t.name === "project_pr_create") &&
-    !defaultList.tools.some((t) => t.name === "project_delete_path") &&
+    defaultList.tools.some((t) => t.name === "project_delete_path") &&
     defaultList.tools.some((t) => t.name === "project_shell_run") &&
     defaultList.tools.some((t) => t.name === "project_execute_js") &&
     defaultList.tools.some((t) => t.name === "project_read_file") &&

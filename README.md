@@ -1,6 +1,6 @@
 # venira-mcp
 
-> Fast, workspace-scoped **MCP server for coding agents** (OpenCode, Claude Desktop, any MCP client). Two tool modes — **Default** (lean 31-tool coding set) · **Expert** (full surface) — structured JSON envelopes, validated read caches, async shell, code-intelligence (outline/symbols/diff/references/selective search), **dependency graph + change impact**, fuzzy edit, SQLite recent-files index, **git-free checkpoints/rollback**, **audit reasons ("why")**, **pull requests + CI provider integrations (including bounded CI waiting)**, **encrypted secrets with rotation metadata**, **deterministic error diagnosis + read planning**, and full SQLite audit trail — **pure Node, 1 native dependency (better-sqlite3), no GUI.**
+> Fast, workspace-scoped **MCP server for coding agents** (OpenCode, Claude Desktop, any MCP client). Two tool modes — **Default** (full sandbox coding toolset: read/write/edit/search, code intel, diagnostics, snapshots, secrets, **shell + JS execution**, `project_delete_path`) · **Expert** (full surface: default + CI/CD shipping) — structured JSON envelopes, validated read caches, async shell, code-intelligence (outline/symbols/diff/references/selective search), **dependency graph + change impact**, fuzzy edit, SQLite recent-files index, **git-free checkpoints/rollback**, **audit reasons ("why")**, **pull requests + CI provider integrations (including bounded CI waiting)**, **encrypted secrets with rotation metadata**, **deterministic error diagnosis + read planning**, and full SQLite audit trail — **pure Node, 1 native dependency (better-sqlite3), no GUI.**
 
 **Setup in one line** (run it in the project you want to work on, then restart your client):
 
@@ -13,7 +13,7 @@ Prefer your agent to do it? Paste the prompt from [§2.2](#22-fastest-path-paste
 ```
 ┌──────────────┐   stdio (MCP)   ┌────────────────────────────────────────────┐
 │ MCP client    │ ◄──────────────► │  venira-mcp (Node, single process)        │
-│ (OpenCode,    │                  │  Default 31 / Expert full · async shell   │
+│ (OpenCode,    │                  │  Default 33 / Expert full · async shell   │
 │  Claude, ...) │                  │  SQLite audit (WAL) · p50/p95 metrics     │
 └──────────────┘                  └────────────────────────────────────────────┘
 ```
@@ -214,7 +214,7 @@ loop fast without giving up the guardrails, copy the profile in
       "args": ["--yes", "--package=venira-mcp@latest", "venira-mcp"],
       "env": {
         "VENIRA_WORKSPACE": "${workspaceFolder}",
-        // "expert" = full surface (shell, builds, CI/CD); "default" = full sandbox toolset (31 tools, with shell/JS).
+        // "expert" = full surface (43 tools with JS / 42 without); "default" = full sandbox toolset (33 tools with JS / 32 without).
         "VENIRA_TOOL_MODE": "expert",
         // "full" keeps envelopes complete; "compact" trims payloads over 8 KB.
         "VENIRA_OUTPUT_MODE": "full"
@@ -264,7 +264,7 @@ workspace path — OpenCode does not expand `${workspaceFolder}`:
         // Absolute workspace path. OpenCode does not expand ${workspaceFolder}.
         // On Windows, JSON paths need escaped backslashes (C:\\path\\to\\project).
         "VENIRA_WORKSPACE": "/absolute/path/to/your-project",
-        // "expert" = full surface (shell, builds, CI/CD); "default" = full sandbox toolset (31 tools).
+        // "expert" = full surface (43 tools with JS / 42 without); "default" = full sandbox toolset (33 tools with JS / 32 without).
         "VENIRA_TOOL_MODE": "expert",
         // "full" keeps envelopes complete; "compact" trims payloads over 8 KB.
         "VENIRA_OUTPUT_MODE": "full"
@@ -300,7 +300,7 @@ Claude Desktop, Cursor, Kimi, DeepSeek and Antigravity:
       "args": ["--yes", "--package=venira-mcp@latest", "venira-mcp"],
       "env": {
         "VENIRA_WORKSPACE": "/absolute/path/to/your-project",
-        // "expert" = full surface (shell, builds, CI/CD); "default" = full sandbox toolset (31 tools).
+        // "expert" = full surface (43 tools with JS / 42 without); "default" = full sandbox toolset (33 tools with JS / 32 without).
         "VENIRA_TOOL_MODE": "expert",
         // "full" keeps envelopes complete; "compact" trims payloads over 8 KB.
         "VENIRA_OUTPUT_MODE": "full"
@@ -336,7 +336,7 @@ restart it, then ask the agent to call `project_health`.
 | Variable | Value | Effect on the agent loop |
 |---|---|---|
 | `VENIRA_WORKSPACE` | absolute path | Every relative path and the shell cwd resolve from here, so the agent never has to guess a root. **Required** in client config. |
-| `VENIRA_TOOL_MODE` | `"expert"` | The recommended profile assumes the full surface (shell, builds, CI/CD). Set `"default"` for a coding-only agent: no shell execution, no JS eval, no CI/CD shipping, no destructive deletes. |
+| `VENIRA_TOOL_MODE` | `"expert"` | The recommended profile assumes the full surface (shell, builds, CI/CD). Set `"default"` for the coding-focused loop: shell execution, JS eval and `project_delete_path` are included; only CI/CD shipping (`project_pr_*`, `project_ci_*`) is excluded. |
 | `VENIRA_OUTPUT_MODE` | `"full"` | Complete envelopes, so an agent never re-reads a file because a payload was trimmed. Use `"compact"` only for small-context models. |
 
 Leave everything else alone unless you have a specific reason:
@@ -358,8 +358,8 @@ Leave everything else alone unless you have a specific reason:
 
 | Mode | Tools | Focus |
 |---|---|---|
-| `default` (default) | **31** | Coding-focused loop: read/write/edit, `project_search`, checkpoints, code intel, dependency graph + change impact, diagnostics, audit/trace, secrets metadata. **No** shell, **no** JS eval, **no** CI/CD shipping, **no** destructive deletes. |
-| `expert` | **46** (47 with `VENIRA_ALLOW_JS_EXEC=1`) | Full surface: everything in `default` plus shell, JS eval, PR/CI tools and `project_delete_path`. |
+| `default` (default) | **33** | Coding-focused loop: read/write/edit, `project_search`, checkpoints, code intel, dependency graph + change impact, diagnostics, audit/trace, secrets metadata, shell execution + JS execution, **and `project_delete_path`** (shell `rm -rf`/`rd /s`/`Remove-Item -Recurse` are hard-denied everywhere; `project_delete_path` is the controlled, auditable path). **No** CI/CD shipping. |
+| `expert` | **43** | Full surface: everything in `default` plus CI/CD shipping (`project_pr_*`, `project_ci_*`). Includes `project_execute_js` when `VENIRA_ALLOW_JS_EXEC=1`. |
 
 All other `VENIRA_*` flags (cache TTLs, trace, snapshot caps, git provider settings, etc.) have documented defaults and only need setting when you intentionally change behaviour — see §3.5 for the full reference.
 
@@ -378,7 +378,7 @@ not expand `${workspaceFolder}`):
         // Absolute workspace path. OpenCode does not expand ${workspaceFolder}.
         // On Windows, JSON paths need escaped backslashes (C:\\path\\to\\project).
         "VENIRA_WORKSPACE": "/absolute/path/to/your-project",
-        // "expert" = full surface (shell, builds, CI/CD); "default" = full sandbox toolset (31 tools).
+        // "expert" = full surface (43 tools with JS / 42 without); "default" = full sandbox toolset (33 tools with JS / 32 without).
         "VENIRA_TOOL_MODE": "expert",
         // "full" keeps envelopes complete; "compact" trims payloads over 8 KB.
         "VENIRA_OUTPUT_MODE": "full"
@@ -401,7 +401,7 @@ here, so no path edit is needed:
       "args": ["--yes", "--package=venira-mcp@latest", "venira-mcp"],
       "env": {
         "VENIRA_WORKSPACE": "${workspaceFolder}",
-        // "expert" = full surface (shell, builds, CI/CD); "default" = full sandbox toolset (31 tools).
+        // "expert" = full surface (43 tools with JS / 42 without); "default" = full sandbox toolset (33 tools with JS / 32 without).
         "VENIRA_TOOL_MODE": "expert",
         // "full" keeps envelopes complete; "compact" trims payloads over 8 KB.
         "VENIRA_OUTPUT_MODE": "full"
@@ -423,7 +423,7 @@ shape (config path per client: [§3.0](#30-supported-clients)):
       "args": ["--yes", "--package=venira-mcp@latest", "venira-mcp"],
       "env": {
         "VENIRA_WORKSPACE": "/absolute/path/to/your-project",
-        // "expert" = full surface (shell, builds, CI/CD); "default" = full sandbox toolset (31 tools).
+        // "expert" = full surface (43 tools with JS / 42 without); "default" = full sandbox toolset (33 tools with JS / 32 without).
         "VENIRA_TOOL_MODE": "expert",
         // "full" keeps envelopes complete; "compact" trims payloads over 8 KB.
         "VENIRA_OUTPUT_MODE": "full"
@@ -444,7 +444,7 @@ startup_timeout_sec = 120
 
 [mcp_servers.venira.env]
 VENIRA_WORKSPACE = "C:\\path\\to\\your-project"
-# "expert" = full surface (shell, builds, CI/CD); "default" = lean coding set (31 tools).
+# "expert" = full surface (43 tools with JS / 42 without); "default" = full sandbox toolset (33 tools with JS / 32 without).
 VENIRA_TOOL_MODE = "expert"
 # "full" keeps envelopes complete; "compact" trims payloads over 8 KB.
 VENIRA_OUTPUT_MODE = "full"
@@ -518,7 +518,7 @@ Venira Code Mode rules:
 | `VENIRA_SHELL_CACHE` | `"1"` | 5 s LRU for read-only command output (max 100 entries). `"0"` disables it entirely. |
 | `VENIRA_SHELL_CACHE_READ_ONLY` | `"1"` | `"1"` (default) limits the command cache to genuinely read-only commands, decided on the parsed argv — `git` read subcommands (`status`/`log`/`diff`/`show`/`branch`/`tag` listings, …), `rg`, `ls`, file readers, version probes. Compound commands (pipes, redirection, chains, substitutions) are never cached. `"0"` restores the legacy cache-everything behaviour (not recommended). |
 | `VENIRA_DISABLE_TOOLS` | unset | Comma-separated tool names to keep out of `tools/list` entirely (e.g. `project_shell_run,project_delete_path`). |
-| `VENIRA_TOOL_MODE` | `default` | Two modes, layered on top of `VENIRA_DISABLE_TOOLS` / `VENIRA_PROFILE=core`. `default` = **full sandbox toolset** (31 tools): all specialized coding tools + shell execution (`project_shell_run`/status/cancel/cancel_session) + JS execution (`project_execute_js`); only excludes destructive `project_delete_path` and CI/CD shipping (`project_pr_*`, `project_ci_*`). `expert` = the full surface (44 tools; 45 with `VENIRA_ALLOW_JS_EXEC=1`). Also settable as `toolMode` (`"default"` \| `"expert"`) in `venira.config.json`; the env wins over the config. |
+| `VENIRA_TOOL_MODE` | `default` | Two modes, layered on top of `VENIRA_DISABLE_TOOLS` / `VENIRA_PROFILE=core`. `default` = **full sandbox toolset** (33 tools with JS; 32 without): all specialized coding tools + shell execution (`project_shell_run`/status/cancel/cancel_session) + JS execution (`project_execute_js`) + `project_delete_path`; only excludes CI/CD shipping (`project_pr_*`, `project_ci_*`). `expert` = the full surface (43 tools with JS; 42 without). Also settable as `toolMode` (`"default"` \| `"expert"`) in `venira.config.json`; the env wins over the config. |
 | `VENIRA_OUTPUT_MODE` | `full` | `full` = complete payloads · `compact` = trim payloads over 8 KB. Measured (this repo, Windows): a 64 KB file read drops ~87 % (70 KB → 9.4 KB); search/health/references stay byte-identical (small payloads are never trimmed). `summary` is no longer accepted. |
 | `VENIRA_USE_RIPGREP` | `"1"` | `literal_content` searches use a ripgrep fast path when `rg` is available (spawned, no shell; `--max-filesize=1M`; include/exclude globs map to `rg --glob`, exclude maps to a negated glob). Measured on a 2 500-file synthetic monorepo (this Windows box): with `rg` p50 ≈ 360 ms, p95 < 1 s; forced JS line scanner p50 ≈ 2.5 s, p95 ≈ 18 s. `"0"` forces the built-in JS scanner. Note: with `rg` active, `.gitignore` files are respected automatically, which the JS scanner does not do. |
 | `VENIRA_PRETTY` | `"0"` | `"1"` = 2-space pretty JSON in tool results. |
@@ -590,8 +590,8 @@ Every tool returns the standard envelope ([§8](#8-envelopes-hints--error-codes)
 
 | Mode | Tools | Focus |
 |---|---|---|
-| `default` (default) | **31** | Coding-focused loop: read/write/edit (`project_write_file`, `project_edit_file`, `project_edit_batch`), `project_search`, checkpoints, code intel (`project_outline_symbol`, `project_file_symbols`, …), dependency graph + change impact, diagnostics, read planning, audit/trace, secrets metadata. **No** shell execution (`project_shell_run`, `project_shell_status`, `project_shell_cancel`, `project_shell_cancel_session`), **no** `project_execute_js`, **no** destructive `project_delete_path`, **no** CI/CD shipping (`project_pr_*`, `project_ci_*`). |
-| `expert` | **46** (47 with `VENIRA_ALLOW_JS_EXEC=1`) | Full surface: everything in `default` plus shell, JS eval, PR/CI tools and `project_delete_path`. |
+| `default` (default) | **33** (32 without JS) | Coding-focused loop: read/write/edit (`project_write_file`, `project_edit_file`, `project_edit_batch`), `project_search`, checkpoints, code intel (`project_outline_symbol`, …), dependency graph + change impact, diagnostics, read planning, audit/trace, secrets metadata, **shell execution** (`project_shell_run`, `project_shell_status`, `project_shell_cancel`, `project_shell_cancel_session`) + **JS execution** (`project_execute_js`) + **`project_delete_path`** (shell `rm -rf` / `rd /s` / `Remove-Item -Recurse -Force` are hard-denied in every mode; `project_delete_path` is the controlled, auditable deletion path). **No** CI/CD shipping (`project_pr_*`, `project_ci_*`). |
+| `expert` | **43** (42 without JS) | Full surface: everything in `default` plus shell, JS eval, PR/CI tools and `project_delete_path`. |
 
 Set with `VENIRA_TOOL_MODE=default|expert` or `"toolMode"` in `venira.config.json` (env wins over config). `VENIRA_DISABLE_TOOLS` and `VENIRA_PROFILE=core` still apply on top of the mode — all three exclusions are unioned, so anything they disable stays disabled in both modes.
 
@@ -600,8 +600,7 @@ Set with `VENIRA_TOOL_MODE=default|expert` or `"toolMode"` in `venira.config.jso
 | Tool | Purpose | Notes |
 |---|---|---|
 | `project_list_files` | List files/dirs, depth 1–3, limit ≤ 200 | TTL cache 1.5 s, invalidated on any mutation |
-| `project_read_file` | Read a text file, by line range (1-based) | mtime+size-validated cache; `next_start_line` when truncated; optional `line_numbers` prefix |
-| `project_read_ranges` | Read **multiple disjoint line ranges of one file** in a single call (max 16) | Reuses the read cache per range |
+| `project_read_file` | Read a text file, by line range (1-based); optional `ranges[]` for multiple disjoint line ranges in one call (max 16) | mtime+size-validated cache; `next_start_line` when truncated; optional `line_numbers` prefix |
 | `project_get_file_info` | File/dir metadata: kind, size, mtime | Very fast; cached |
 | `project_search` | Search by file name, dir name, literal content, regex, or symbol definition | TTL cache 3 s; respects `glob`, `exclude_glob`, `context_lines`, `count_only`, `whole_word` (whole-word match, rg `-w`), `include_hidden` (default on — set `0` to skip dotfiles); `hybrid: 1` tags each hit with `source` (`symbol_index` definition · `symbol_reference` whole-word · `content`) and `confidence` (`exact_match` · `text_match`); a scoped identifier-like query with 0 hits widens once to the workspace (`scope_widened: true`); 0-hit results are cached; mutations invalidate |
 | `project_recent_files` | Files modified recently (SQLite index first, bounded scan fallback) | `source: "index" | "fallback_scan"`; includes `session_edits` — files you wrote in this session |
@@ -620,8 +619,7 @@ Set with `VENIRA_TOOL_MODE=default|expert` or `"toolMode"` in `venira.config.jso
 
 | Tool | Purpose | Notes |
 |---|---|---|
-| `project_outline_symbol` | Parse a source file and return its symbol outline (functions, classes, types, interfaces) with line numbers | Fast single-file regex scan; `max_symbols` cap |
-| `project_file_symbols` | Extract **all** symbols (fn/def/class/struct/interface) from one source file | Optional `language` hint; `include_functions`/`include_classes` filters |
+| `project_outline_symbol` | Parse a source file and return its symbol outline (functions, classes, types, interfaces) with line numbers | Fast single-file regex scan; `max_symbols` cap; `project_file_symbols` was merged here (superset) |
 | `project_diff_files` | Unified (git-style) diff between two workspace files | LCS-based; `lines_added`/`lines_removed`; `context_lines` + `max_lines` caps; `truncated` flag |
 | `project_symbol_references` | Find every occurrence of a named symbol | `scope: "file"` (fast, single file) or `scope: "workspace"` (bounded content search); `limit`/`max_references` caps |
 | `project_selective_search` | Smart multi-query search: combine patterns with AND/NOT + fuzzy scoring | Bounded to a file set (`files_hint` or shallow listing); scored hits sorted by relevance; `limit` cap |
@@ -638,8 +636,7 @@ workspace); `project_ci_wait` stays available because it is a provider call.
 | `project_write_file` | Create / overwrite / append a file | `mode: "create"` errors if file exists; `expected_sha256` guards against blind overwrites; `reason` recorded in the audit log |
 | `project_edit_file` | Replace exact text: one `old_text`/`new_text` pair **or** up to 64 `edits[]` | `replace_all` supported; `expected_sha256` available; `reason` (e.g. "fix null pointer at line 45") recorded in the audit log; **P2 fuzzy edit** (`VENIRA_EDIT_FUZZY=1`): `old_text_fuzzy`, `fuzzy_distance`, `ignore_indentation`, `case_insensitive` args; **TOCTOU guard** `guard=sha256`: atomic read-edit-verify cycle (replaces safe_edit) |
 | `project_edit_batch` | Apply multiple `project_edit_file` operations atomically | Stops at the first failure; restores the pre-batch snapshot when possible; response reports `executed`/`skipped` indexes and rollback status |
-| `project_create_directory` | Create a directory tree | `create_parents` defaults to `true`; optional `reason` |
-| `project_create` | Create a **file or directory in one call** | `kind: "file"` requires `content`; `kind: "directory"` ignores `content`; optional `reason` |
+| `project_create` | Create a **file or directory in one call** | `kind: "file"` requires `content`; `kind: "directory"` ignores `content` (replaces `project_create_directory`); optional `reason` |
 | `project_delete_path` | Delete a file or directory tree | `recursive: 1` for directories. **Not undoable.** Optional `reason` |
 
 ### 4.5 Checkpoints (snapshot + rollback, no git)
@@ -850,7 +847,7 @@ prompt-driven and tool-discovery-driven clients get the same signal.
 venira-mcp/
 ├── server.ts                 # MCP entry point: McpServer + StdioTransport, warm-up, shutdown
 ├── tools/
-│   └── project.ts            # tool registrations per tool mode (default 31 / expert full), serial queue, caches, shell tracking,
+│   └── project.ts            # tool registrations per tool mode (default 33 with JS / 32 without; expert 43 with JS / 42 without), serial queue, caches, shell tracking,
 │                             #   audit-DB inspection, project_health, code-intelligence,
 │                             #   diagnostics and read-planning handlers
 ├── lib/
@@ -1411,7 +1408,7 @@ The full history, in order — from the standalone rewrite to the provider, secr
 
 | Date | Version | Milestone |
 |---|---|---|
-| 2026-11-05 | **Unreleased (v1.14.0)** | **Rust support + per-mode tools + cache fixes + tool consolidation + edit_file guard.** `project_dependency_graph` / `project_change_impact` now parse Rust: crate roots via `main.rs` / `lib.rs`, `mod foo;` / `pub mod`, `use crate::` / `super::`, `extern crate`; longest-existing-prefix resolution, raw strings, nested block comments, char-vs-lifetime literals; test files detected via `benches/` and `*_test.rs`. Checkpoints skip Rust artifacts (`target/`, `**/*.pdb`, `*.d`) so the 512 MiB cap is not wasted. Shell-output redaction also covers `DATABASE_URL` / `GITHUB_TOKEN`-style env assignments and `env::var("NAME")` patterns. `venira.config.json` gains per-workspace `snapshot.maxFiles` (may raise `VENIRA_SNAPSHOT_MAX_FILES`; hard ceiling 20 000). New **tool modes**: `VENIRA_TOOL_MODE=default` (**full sandbox toolset**, 31 tools — all specialized coding tools: read/write/edit/search, code intel, diagnostics, snapshots, config, **plus shell execution and JS execution**; only excludes destructive `project_delete_path` and CI/CD shipping) or `expert` (full surface, 44; 45 with `VENIRA_ALLOW_JS_EXEC=1`); settable via env or `toolMode` in `venira.config.json`. Capability scope is **refreshed proactively** (reopens at half its 2 h TTL — no more first-call `capability_expired`); `project_health` reports `open|refreshing|expired` truthfully; `project_create` now participates in cache invalidation; `project_symbol_references(scope:"workspace")` is served by a dedicated 3 s cache invalidated on writes (bench: warm ≈ 0.74 ms); `project_health.caches` reports `negative.ttl_ms`/`oldest_age_ms` and `references.*`; **hybrid search**: `project_search({hybrid: 1})` tags each hit with `source` + `confidence` (definition sites detected with the same parser-lite as `project_outline_symbol`), zero-hit scoped identifier queries widen once to the workspace (`scope_widened: true`). Search hits are **relevance-ranked** (whole-word +40, file-name +30, prefix +20, shallow depth/early line +10) so the best hit lands first; `context_lines` works on the ripgrep fast path and now returns the same `context` arrays as the JS scanner (previously the field was silently dropped when rg served the query); `whole_word` and `include_hidden` are now honoured by both backends (rg `-w` / `--hidden`, JS word boundaries — default includes hidden files; set `include_hidden: 0` to skip dotfiles; secrets are always excluded) — both flags were previously accepted but silently ignored; rg's fast path only serves clean exits (0/1), so an rg-internal error falls back to the JS scanner instead of returning a silent empty result; a query containing regex metacharacters no longer crashes relevance ranking; `hybrid` search reports `complete: false` when over-fetched candidates are sliced to the requested limit. **JVM dependency graph edges**: Java/Kotlin class hierarchies are now captured (`class Foo extends Bar implements I`, Kotlin `class Foo : Base(), I` / `interface I : J`) as `extends`/`implements` edges, and JVM declarations tolerate any modifier run (`public final`, `open`, `sealed`, `data`, `internal`) — previously the graph found no class-hierarchy edges for Java/Kotlin at all. Shell-cache classification treats `$`/backticks as live even inside double quotes (`echo "$(date)"` is never cached). **TOCTOU guard**: `project_edit_file` gains `guard=sha256` mode for atomic read-edit-verify cycle (reads fresh, verifies expected_sha256, applies edits, writes, re-reads and verifies content+sha256), replacing `project_safe_edit`. `project_read_ranges` merged into `project_read_file` via `ranges[]` param. `project_create_directory` merged into `project_create`. `project_file_symbols` merged into `project_outline_symbol`. STRICT_ALLOW sanitised: removed mutating commands (`rm`, `mkdir`, `touch`, `cp`, `mv`) from strict mode. **Dependency graph now covers Go, Java and Kotlin** — `go.mod` module resolution, Java/Kotlin package-import resolution against `src/main/java` / `src/main/kotlin` roots, per-file declarations (classes, interfaces, functions, `main` methods). The shell output cache now stores **only genuinely read-only commands**, decided on the parsed argv (git read subcommands, `rg`, `ls`, file readers, version probes; compound commands `>|;&` are never cached) — previously every successful command including `git push` was cached with a `cache.hit` allow decision. **Symbol extraction fixed everywhere** (`project_outline_symbol`, `project_file_symbols`, hybrid `symbol_index` tags): identifiers come from the final capture group, with fixture matrix coverage for TS/Rust/Python/Go (`export default class`, `export enum`, TS/JS class methods — `async getToken(): Promise<string> {` incl. `static`/`get`/`set`/`constructor` with a control-flow blocklist, Rust `pub(crate)`/`pub(super)`, `impl Trait for Target`, `impl<T>`, `macro_rules!`, `const`/`static`, Python `async def`, Go receiver methods and generics) — previously `pub fn compute_stats` was reported as name `fn`, and TS plain `export async function` lines were not detected at all. **Shell runs no longer lose output**: async (`background` default) runs discarded stdout/stderr tails forever — tails were trimmed once at spawn, before the child produced output, and on Windows `exit` can fire before stdio flushed; tails are now trimmed at status-read time and at `close`, and the shell cache can no longer be poisoned with empty output (cache write moved to `close`). Hybrid search now tags definition sites in TS/Rust/Python/Go end-to-end (verify covers them). The search ripgrep fast path now honours **include/exclude globs** (`rg --glob`, exclude maps to a negated glob) — a glob used to silently force the JS line scanner. `ROADMAP.md` tracks the phased plan (A shipped, B shipped, C shipped, D shipped). verify **414 checks**. |
+| 2026-11-05 | **Unreleased (v1.14.0)** | **Rust support + per-mode tools + cache fixes + tool consolidation + edit_file guard.** `project_dependency_graph` / `project_change_impact` now parse Rust: crate roots via `main.rs` / `lib.rs`, `mod foo;` / `pub mod`, `use crate::` / `super::`, `extern crate`; longest-existing-prefix resolution, raw strings, nested block comments, char-vs-lifetime literals; test files detected via `benches/` and `*_test.rs`. Checkpoints skip Rust artifacts (`target/`, `**/*.pdb`, `*.d`) so the 512 MiB cap is not wasted. Shell-output redaction also covers `DATABASE_URL` / `GITHUB_TOKEN`-style env assignments and `env::var("NAME")` patterns. `venira.config.json` gains per-workspace `snapshot.maxFiles` (may raise `VENIRA_SNAPSHOT_MAX_FILES`; hard ceiling 20 000). New **tool modes**: `VENIRA_TOOL_MODE=default` (**full sandbox toolset**, 33 tools with JS / 32 without — all specialized coding tools: read/write/edit/search, code intel, diagnostics, snapshots, config, **plus shell execution and JS execution**; only excludes CI/CD shipping (`project_pr_*`, `project_ci_*`); shell `rm -rf`/`rd /s`/`Remove-Item -Recurse -Force` are hard-denied everywhere and `project_delete_path` is the controlled, auditable deletion path) or `expert` (full surface, 43 with JS / 42 without); settable via env or `toolMode` in `venira.config.json`. Capability scope is **refreshed proactively** (reopens at half its 2 h TTL — no more first-call `capability_expired`); `project_health` reports `open|refreshing|expired` truthfully; `project_create` now participates in cache invalidation; `project_symbol_references(scope:"workspace")` is served by a dedicated 3 s cache invalidated on writes (bench: warm ≈ 0.74 ms); `project_health.caches` reports `negative.ttl_ms`/`oldest_age_ms` and `references.*`; **hybrid search**: `project_search({hybrid: 1})` tags each hit with `source` + `confidence` (definition sites detected with the same parser-lite as `project_outline_symbol`), zero-hit scoped identifier queries widen once to the workspace (`scope_widened: true`). Search hits are **relevance-ranked** (whole-word +40, file-name +30, prefix +20, shallow depth/early line +10) so the best hit lands first; `context_lines` works on the ripgrep fast path and now returns the same `context` arrays as the JS scanner (previously the field was silently dropped when rg served the query); `whole_word` and `include_hidden` are now honoured by both backends (rg `-w` / `--hidden`, JS word boundaries — default includes hidden files; set `include_hidden: 0` to skip dotfiles; secrets are always excluded) — both flags were previously accepted but silently ignored; rg's fast path only serves clean exits (0/1), so an rg-internal error falls back to the JS scanner instead of returning a silent empty result; a query containing regex metacharacters no longer crashes relevance ranking; `hybrid` search reports `complete: false` when over-fetched candidates are sliced to the requested limit. **JVM dependency graph edges**: Java/Kotlin class hierarchies are now captured (`class Foo extends Bar implements I`, Kotlin `class Foo : Base(), I` / `interface I : J`) as `extends`/`implements` edges, and JVM declarations tolerate any modifier run (`public final`, `open`, `sealed`, `data`, `internal`) — previously the graph found no class-hierarchy edges for Java/Kotlin at all. Shell-cache classification treats `$`/backticks as live even inside double quotes (`echo "$(date)"` is never cached). **TOCTOU guard**: `project_edit_file` gains `guard=sha256` mode for atomic read-edit-verify cycle (reads fresh, verifies expected_sha256, applies edits, writes, re-reads and verifies content+sha256), replacing `project_safe_edit`. `project_read_ranges` merged into `project_read_file` via `ranges[]` param. `project_create_directory` merged into `project_create`. `project_file_symbols` merged into `project_outline_symbol`. STRICT_ALLOW sanitised: removed mutating commands (`rm`, `mkdir`, `touch`, `cp`, `mv`) from strict mode. **Dependency graph now covers Go, Java and Kotlin** — `go.mod` module resolution, Java/Kotlin package-import resolution against `src/main/java` / `src/main/kotlin` roots, per-file declarations (classes, interfaces, functions, `main` methods). The shell output cache now stores **only genuinely read-only commands**, decided on the parsed argv (git read subcommands, `rg`, `ls`, file readers, version probes; compound commands `>|;&` are never cached) — previously every successful command including `git push` was cached with a `cache.hit` allow decision. **Symbol extraction fixed everywhere** (`project_outline_symbol`, `project_file_symbols`, hybrid `symbol_index` tags): identifiers come from the final capture group, with fixture matrix coverage for TS/Rust/Python/Go (`export default class`, `export enum`, TS/JS class methods — `async getToken(): Promise<string> {` incl. `static`/`get`/`set`/`constructor` with a control-flow blocklist, Rust `pub(crate)`/`pub(super)`, `impl Trait for Target`, `impl<T>`, `macro_rules!`, `const`/`static`, Python `async def`, Go receiver methods and generics) — previously `pub fn compute_stats` was reported as name `fn`, and TS plain `export async function` lines were not detected at all. **Shell runs no longer lose output**: async (`background` default) runs discarded stdout/stderr tails forever — tails were trimmed once at spawn, before the child produced output, and on Windows `exit` can fire before stdio flushed; tails are now trimmed at status-read time and at `close`, and the shell cache can no longer be poisoned with empty output (cache write moved to `close`). Hybrid search now tags definition sites in TS/Rust/Python/Go end-to-end (verify covers them). The search ripgrep fast path now honours **include/exclude globs** (`rg --glob`, exclude maps to a negated glob) — a glob used to silently force the JS line scanner. `ROADMAP.md` tracks the phased plan (A shipped, B shipped, C shipped, D shipped). verify **414 checks**. |
 | 2026-11-03 | **v1.12.2** | **Code Mode rules in Agent instructions.** README [§3.4](#34-recommended-setup-for-agents-copy-paste) adds a `Code Mode rules` block for the OpenCode `execute` tool: `search()` is synchronous (never await, always pass an object), `tools.*` calls return Promises (always await), and on `SchemaError` / `un-awaited Promise` fix the call shape once instead of retrying identical code. Documentation only; **44 tools**, verify **378/378**. |
 | 2026-11-02 | **v1.12.1** | **Agent setup profiles.** New README [§3.4](#34-recommended-setup-for-agents-copy-paste): one recommended environment profile (workspace lock on, `balanced` shell policy, complete envelopes, exit-early status polling, JS execution off with per-call approval, self-install off, one shared vault) rendered for OpenCode, VS Code, Claude Desktop/Cursor/Kimi/DeepSeek/Antigravity and Codex TOML, plus a copy-paste `AGENTS.md` block that tunes tool selection (plan first, batch reads, edit over rewrite, snapshot before bulk changes, follow hints). `opencode.example.json` mirrors the profile. Documentation only; **44 tools**, verify **378/378**. |
 | 2026-11-02 | **v1.12.0** | **Per-call approval for `project_execute_js`.** Enabling the tool is no longer enough: with `VENIRA_JS_EXEC_APPROVAL=1` (the default) the first call returns `approval_required` with an `approval_id`, and a human grants that exact code + `argv` with `npx venira-mcp --approve <id>` before the agent retries. Grants are single-use and bound to the snippet, so an id cannot be replayed for different code; `VENIRA_JS_EXEC_APPROVAL=0` restores the previous behaviour for trusted automation. Pending approval records now record the retry tool, so the approver CLI tells the user to retry `project_execute_js` instead of `project_shell_run`. **44 tools**, verify **378/378**. |
