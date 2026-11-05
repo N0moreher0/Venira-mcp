@@ -35,11 +35,13 @@ All use the same `npx` command. See §2 for ready-to-copy JSON/TOML.
 
 ## 2. Client configs (copy-paste)
 
-All clients run the same command — only the config format differs. Use the absolute workspace path.
+The OpenCode block below is the full config — **only the wrapper format changes per client**.
+Pick your client's shape, copy it, change `VENIRA_WORKSPACE`, and you're done.
 
-**OpenCode** (`opencode.jsonc`) — full config, just change `VENIRA_WORKSPACE`:
+**OpenCode / VS Code / Cursor / Claude / Kimi / DeepSeek / Antigravity / Codex** — same env vars, different wrapper:
 
 ```jsonc
+// ── OpenCode (opencode.jsonc) — wrapper: "mcp" > "venira" > "environment"
 {
   "mcp": {
     "venira": {
@@ -48,37 +50,29 @@ All clients run the same command — only the config format differs. Use the abs
       "enabled": true,
       "environment": {
         "VENIRA_WORKSPACE": "/absolute/path/to/project",  // ← change this; Windows: "C:\\path\\to\\project"
-
         "VENIRA_TOOL_MODE": "expert",        // "expert" = 43 tools (all) · "default" = 33 (no PR/CI)
         "VENIRA_OUTPUT_MODE": "full",        // "full" = complete · "compact" = trim >8KB (small models)
         "VENIRA_SHELL_MODE": "permissive",   // "permissive" = no prompts · "balanced" = ask for writes/net/git push
         "VENIRA_SHELL_ENV_PASS_ALL": "0",    // "1" = pass full env to shell (build tools that need it)
         "VENIRA_SHELL_EXIT_EARLY": "1",      // poll returns as soon as exit code is known
-        "VENIRA_SHELL_TIMEOUT_POLICY": "soft", // "soft" = warn on timeout (keeps running) · "hard" = kill
+        "VENIRA_SHELL_TIMEOUT_POLICY": "soft", // "soft" = warn on timeout · "hard" = kill process tree
         "VENIRA_ALLOW_JS_EXEC": "1",         // enable project_execute_js
         "VENIRA_JS_EXEC_APPROVAL": "0",      // "0" = auto-approve · "1" = human approval per JS call
-        "VENIRA_USE_RIPGREP": "1",           // use ripgrep if installed (faster search on big repos)
-        "VENIRA_CACHE_ALL": "1",             // "1" = TTL caches on · "0" = always-fresh (slower)
-        "VENIRA_EDIT_FUZZY": "0",            // "1" = fuzzy match fallback · "0" = exact only
-
+        "VENIRA_USE_RIPGREP": "1",           // use ripgrep if installed (faster on big repos)
+        "VENIRA_CACHE_ALL": "1",            // "1" = TTL caches on · "0" = always-fresh (slower)
+        "VENIRA_EDIT_FUZZY": "0",           // "1" = fuzzy match fallback · "0" = exact only
         // Uncomment when needed:
-        // "VENIRA_GIT_PROVIDER": "github",   // auto-detect from .git/config; set only to override
-        // "VENIRA_NETWORK": "0",             // "0" = kill all PR/CI calls (offline work)
-        // "VENIRA_UNRESTRICTED": "0",        // "1" = disable workspace lock (NEVER in production)
-        // "VENIRA_TRACE": "0",               // "1" = log every tool call to stderr (debug only)
+        // "VENIRA_GIT_PROVIDER": "github", // auto-detect from .git/config; set only to override
+        // "VENIRA_NETWORK": "0",           // "0" = kill all PR/CI calls (offline work)
+        // "VENIRA_UNRESTRICTED": "0",     // "1" = disable workspace lock (NEVER in production)
+        // "VENIRA_TRACE": "0",            // "1" = log every tool call to stderr (debug only)
       }
     }
   }
 }
-```
 
-> **Copy-paste → change `VENIRA_WORKSPACE` → done.**
-> Every other value is already set for a fast local dev loop.
-> Uncomment a variable and change its value only when you need to.
-
-**VS Code** (`.vscode/mcp.json`) — `${workspaceFolder}` auto-expands:
-
-```json
+// ── VS Code (.vscode/mcp.json) — wrapper: "servers" > "venira" > "env"
+// ${workspaceFolder} auto-expands; everything else identical to OpenCode.
 {
   "servers": {
     "venira": {
@@ -99,11 +93,9 @@ All clients run the same command — only the config format differs. Use the abs
     }
   }
 }
-```
 
-**Claude Desktop / Cursor / Kimi / DeepSeek / Antigravity** (all `mcpServers`):
-
-```json
+// ── Claude / Cursor / Kimi / DeepSeek / Antigravity — wrapper: "mcpServers" > "venira" > "env"
+// Same env vars as VS Code, just a different top-level key and absolute path.
 {
   "mcpServers": {
     "venira": {
@@ -125,7 +117,7 @@ All clients run the same command — only the config format differs. Use the abs
 }
 ```
 
-**Codex** (`~/.codex/config.toml`):
+**Codex** (`~/.codex/config.toml`) — TOML, same values:
 
 ```toml
 [mcp_servers.venira]
@@ -144,20 +136,16 @@ VENIRA_USE_RIPGREP = "1"
 VENIRA_CACHE_ALL = "1"
 ```
 
-> **Quick reference — what to set vs what to leave alone:**
+> **Quick reference — what to change vs what to leave alone:**
 >
-> | Variable | When to change | Default |
+> | Variable | Change when | Default |
 > |---|---|---|
 > | `VENIRA_WORKSPACE` | **Always** — absolute project path | — |
-> | `VENIRA_TOOL_MODE` | `"default"` if no PR/CI needed | `default` |
-> | `VENIRA_SHELL_MODE` | `"balanced"` for shared/public repos | `balanced` |
-> | `VENIRA_ALLOW_JS_EXEC` | `"0"` to disable JS exec entirely | `0` (off) |
-> | `VENIRA_JS_EXEC_APPROVAL` | `"1"` to require human approval per JS call | `1` |
-> | `VENIRA_SHELL_ENV_PASS_ALL` | `"1"` if a build tool needs your full env | `0` |
-> | `VENIRA_NETWORK` | `"0"` for offline repos (all PR/CI refused) | `1` |
-> | `VENIRA_UNRESTRICTED` | **Never** `"1"` in production | `0` |
->
-> Generate a minimal config for any client: `npx --yes venira-mcp@latest --print-config <client>`
+> | `VENIRA_TOOL_MODE` | No PR/CI needed | `default` |
+> | `VENIRA_SHELL_MODE` | Shared/public repo | `balanced` |
+> | `VENIRA_JS_EXEC_APPROVAL` | Want human approval per JS call | `1` |
+> | `VENIRA_NETWORK` | Offline repo | `1` |
+> | `VENIRA_UNRESTRICTED` | **Never in production** | `0` |
       }
     }
   }
