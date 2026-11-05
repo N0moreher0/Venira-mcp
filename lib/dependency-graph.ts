@@ -4,10 +4,13 @@
  * Parser-lite by design: no new runtime dependencies, no language server. The
  * indexer walks the workspace with the same bounded rules as `list_files`,
  * extracts imports/declarations line by line for TypeScript/JavaScript,
- * Python and Rust (mod/use/extern crate, resolved through the rustc module
- * file layout: foo.rs vs foo/mod.rs, crate root via main.rs/lib.rs), resolves
- * relative specifiers against the real filesystem, and turns the result into a
- * deterministic graph (JSON, DOT or Mermaid).
+ * Python, Rust (mod/use/extern crate, resolved through the rustc module
+ * file layout: foo.rs vs foo/mod.rs, crate root via main.rs/lib.rs) and
+ * Go (import blocks, resolved through go.mod at the workspace root:
+ * the module prefix maps to directories; the package's main file is chosen
+ * as <basename>.go, then the alphabetically-first non-test .go),
+ * resolves relative specifiers against the real filesystem, and turns the
+ * result into a deterministic graph (JSON, DOT or Mermaid).
  *
  * Security:
  *   - protected paths (`.env*`, keys, `secrets.*`, the data dir) are skipped
@@ -16,11 +19,11 @@
  *   - every resolved target must stay inside the workspace;
  *   - the output contains file paths, line numbers and short import lines only.
  */
-import { existsSync, promises as fs } from "node:fs";
+import { existsSync, promises as fs, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { isProtectedPath } from "./workspace.js";
 
-export type GraphLanguage = "ts" | "js" | "tsx" | "jsx" | "py" | "rs";
+export type GraphLanguage = "ts" | "js" | "tsx" | "jsx" | "py" | "rs" | "go" | "java" | "kotlin";
 export type EdgeConfidence = "exact" | "likely" | "possible";
 export type EdgeType = "import" | "extends" | "implements" | "references";
 
@@ -35,6 +38,10 @@ const EXT_LANG: Record<string, GraphLanguage> = {
   ".jsx": "jsx",
   ".py": "py",
   ".rs": "rs",
+  ".go": "go",
+  ".java": "java",
+  ".kt": "kotlin",
+  ".kts": "kotlin",
 };
 
 const TS_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
@@ -62,6 +69,8 @@ const IGNORED_DIRS = new Set([
   ".ruff_cache",
   ".tox",
   ".eggs",
+  ".gradle",
+  ".m2",
 ]);
 
 const MAX_FILES = 5000;
@@ -170,7 +179,10 @@ function looksTestFile(rel: string): boolean {
     /\.(test|spec)\.[^.]+$/.test(base) ||
     /^test_.*\.py$/.test(base) ||
     /_test\.py$/.test(base) ||
-    /_test\.rs$/.test(base)
+    /_test\.rs$/.test(base) ||
+    /_test\.go$/.test(base) ||
+    /(test|_test)\.kt$/.test(base) ||
+    /test\.java$/.test(base)
   );
 }
 
@@ -195,6 +207,7 @@ function parseLanguages(value: unknown): Set<string> | null {
     else if (item === "javascript" || item === "js" || item === "jsx") out.add(item === "jsx" ? "jsx" : "js");
     else if (item === "python" || item === "py") out.add("py");
     else if (item === "rust" || item === "rs") out.add("rs");
+    else if (item === "go" || item === "golang") out.add("go");
   }
   return out.size > 0 ? out : null;
 }
@@ -610,6 +623,171 @@ function parseImportsRust(text: string): ImportRef[] {
   return imports;
 }
 
+/**
+ * Go import parsing, parser-lite.
+ *   import "fmt"
+ *   import alias "path", import . "path", import _ "path"
+ *   import (
+ *     "fmt"
+ *     x "github.com/acme/demo/pkg/tool"
+ *     _ "github.com/lib/sideeffect"
+ *   )
+ * Specifiers are the import paths as written (module-relative for local
+ * modules); resolution against go.mod happens in probeGo.
+ */
+function parseImportsGo(text: string): ImportRef[] {
+  const imports: ImportRef[] = [];
+  const seen = new Set<string>();
+  const lines = splitLines(text);
+  let inBlock = false; // inside a /* */ comment
+  let inGroup = false; // inside an import (...) block
+
+  const push = (specifier: string, line: number, via: string) => {
+    const key = `${specifier}\u0000${line}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    imports.push({ specifier, line, via, dynamic: false });
+  };
+
+  const importPath = /^"([^"]+)"/;
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const original = lines[i];
+    let trimmed = original.trim();
+    if (inBlock) {
+      const close = trimmed.indexOf("*/");
+      if (close < 0) continue;
+      inBlock = false;
+      trimmed = trimmed.slice(close + 2).trim();
+    }
+    if (trimmed.startsWith("/*")) {
+      const close = trimmed.indexOf("*/");
+      if (close < 0) {
+        inBlock = true;
+        continue;
+      }
+      trimmed = trimmed.slice(close + 2).trim();
+    }
+    if (!trimmed || trimmed.startsWith("//")) continue;
+    const line = i + 1;
+    const via = trimmed.slice(0, 160);
+
+    if (inGroup) {
+      if (trimmed.startsWith(")")) {
+        inGroup = false;
+        continue;
+      }
+      // Optional alias: name | . | _ before the quoted path.
+      const body = trimmed.replace(/^\.|_/, "").replace(/^[A-Za-z_]\w*\s+/, "").replace(/^\s+/, "");
+      const m = importPath.exec(body);
+      if (m) push(m[1], line, via);
+      continue;
+    }
+
+    const groupStart = /^\s*import\s*\(\s*(?:\/\/.*)?$/.exec(original);
+    if (groupStart) {
+      inGroup = true;
+      continue;
+    }
+    const single = /^\s*import\s+(?:\.|_|[A-Za-z_]\w*\s+)?"([^"]+)"/.exec(original);
+    if (single) {
+      push(single[1], line, via);
+      continue;
+    }
+    // Single-line aliased or parenthesized one-liner: import ( "fmt" )
+    const oneLiner = /^\s*import\s*\(\s*(?:\.|_|[A-Za-z_]\w*\s+)?"([^"]+)"\s*\)/.exec(original);
+    if (oneLiner) push(oneLiner[1], line, via);
+  }
+  return imports;
+}
+
+/**
+ * Java import parsing, parser-lite.
+ *   import foo.bar.Baz;
+ *   import static foo.bar.Baz;
+ *   import foo.bar.*;   -> wildcard recorded with `possible` confidence
+ * Package-qualified paths are resolved against classpath roots in probeJava.
+ */
+function parseImportsJava(text: string): ImportRef[] {
+  const imports: ImportRef[] = [];
+  const seen = new Set<string>();
+  const lines = splitLines(text);
+  let inBlock = false;
+  for (let i = 0; i < lines.length; i += 1) {
+    const original = lines[i];
+    let trimmed = original.trim();
+    if (inBlock) {
+      const close = trimmed.indexOf("*/");
+      if (close < 0) continue;
+      inBlock = false;
+      trimmed = trimmed.slice(close + 2).trim();
+    }
+    if (trimmed.startsWith("/*")) {
+      const close = trimmed.indexOf("*/");
+      if (close < 0) {
+        inBlock = true;
+        continue;
+      }
+      trimmed = trimmed.slice(close + 2).trim();
+    }
+    if (!trimmed || trimmed.startsWith("//")) continue;
+    const line = i + 1;
+    const via = trimmed.slice(0, 160);
+    const push = (specifier: string) => {
+      const key = `${specifier}\u0000${line}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      imports.push({ specifier, line, via, dynamic: false });
+    };
+    const m = /^\s*import(?:\s+static)?\s+([A-Za-z_][\w.]*)(?:\s*;|\s*$)/.exec(original);
+    if (m) push(m[1]);
+  }
+  return imports;
+}
+
+/**
+ * Kotlin import parsing, parser-lite.
+ *   import foo.bar.Baz
+ *   import foo.bar.*
+ *   import foo.bar as br
+ */
+function parseImportsKotlin(text: string): ImportRef[] {
+  const imports: ImportRef[] = [];
+  const seen = new Set<string>();
+  const lines = splitLines(text);
+  let inBlock = false;
+  for (let i = 0; i < lines.length; i += 1) {
+    const original = lines[i];
+    let trimmed = original.trim();
+    if (inBlock) {
+      const close = trimmed.indexOf("*/");
+      if (close < 0) continue;
+      inBlock = false;
+      trimmed = trimmed.slice(close + 2).trim();
+    }
+    if (trimmed.startsWith("/*")) {
+      const close = trimmed.indexOf("*/");
+      if (close < 0) {
+        inBlock = true;
+        continue;
+      }
+      trimmed = trimmed.slice(close + 2).trim();
+    }
+    if (!trimmed || trimmed.startsWith("//")) continue;
+    const line = i + 1;
+    const via = trimmed.slice(0, 160);
+    const push = (specifier: string) => {
+      const key = `${specifier}\u0000${line}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      imports.push({ specifier, line, via, dynamic: false });
+    };
+    const m = /^\s*import\s+([A-Za-z_][\w.]*)\b/.exec(original);
+    if (m) push(m[1]);
+  }
+  return imports;
+}
+
 function collectDeclarations(text: string, lang: GraphLanguage): Declaration[] {
   const declarations: Declaration[] = [];
   if (lang === "rs") {
@@ -641,6 +819,96 @@ function collectDeclarations(text: string, lang: GraphLanguage): Declaration[] {
             signature: lines[i].trim().slice(0, 160),
           });
           break;
+        }
+      }
+      for (const ch of line) {
+        if (ch === "{") depth += 1;
+        else if (ch === "}") depth = Math.max(0, depth - 1);
+      }
+    }
+    return declarations;
+  }
+  if (lang === "go") {
+    const stripped = stripTsNonCode(text); // Go's lexer subset maps onto the TS stripper
+    const lines = splitLines(stripped);
+    let depth = 0;
+    for (let i = 0; i < lines.length; i += 1) {
+      const line = lines[i];
+      if (depth === 0) {
+        const candidates: Array<{ re: RegExp; kind: string }> = [
+          { re: /^\s*func\s+\([^)]*\)\s+([A-Za-z_]\w*)\s*\(/, kind: "method" },
+          { re: /^\s*func\s+([A-Za-z_]\w*)(?:\s*\[[^\]]*\]\s*)?\(/, kind: "function" },
+          { re: /^\s*type\s+([A-Za-z_]\w*)\s+struct\b/, kind: "struct" },
+          { re: /^\s*type\s+([A-Za-z_]\w*)\s+interface\b/, kind: "interface" },
+          { re: /^\s*type\s+([A-Za-z_]\w*)\b/, kind: "type" },
+          { re: /^\s*const\s+([A-Za-z_]\w*)\b/, kind: "constant" },
+          { re: /^\s*var\s+([A-Za-z_]\w*)\b/, kind: "variable" },
+        ];
+        for (const candidate of candidates) {
+          const match = candidate.re.exec(line);
+          if (!match) continue;
+          declarations.push({
+            name: match[1],
+            kind: candidate.kind,
+            line: i + 1,
+            signature: line.trim().slice(0, 160),
+          });
+          break;
+        }
+      }
+      for (const ch of line) {
+        if (ch === "{") depth += 1;
+        else if (ch === "}") depth = Math.max(0, depth - 1);
+      }
+    }
+    return declarations;
+  }
+  if (lang === "java" || lang === "kotlin") {
+    const stripped = stripTsNonCode(text); // JVM lexer subset maps onto the TS stripper
+    const lines = splitLines(stripped);
+    let depth = 0;
+    for (let i = 0; i < lines.length; i += 1) {
+      const line = lines[i];
+      const topLevel = depth === 0;
+      if (topLevel) {
+        const candidates: Array<{ re: RegExp; kind: string }> = [
+          // `public final class Foo extends Bar implements Baz {`
+          { re: /^\s*(?:public|abstract|final|sealed|interface)?\s*(?:abstract\s+)?class\s+([A-Za-z_][\w]*)/, kind: "class" },
+          { re: /^\s*(?:public|abstract|final|sealed)?\s*interface\s+([A-Za-z_][\w]*)/, kind: "interface" },
+          { re: /^\s*(?:public|final|abstract)?\s*enum\s+([A-Za-z_][\w]*)/, kind: "enum" },
+          { re: /^\s*(?:public|private|protected)?\s*(?:static\s+)?(?:final\s+)?[A-Za-z_<>\[\],\s]*\s+([A-Za-z_][\w]*)\s*(?:\*|&)?\s*(?:=|;)/, kind: "variable" },
+          { re: /^\s*(?:public|private|protected)?\s*(?:static\s+)?(?:final\s+)?[A-Za-z_<>\[\],\s]*\s+([A-Za-z_][\w]*)\s*\([^)]*\)\s*\{?\s*$/, kind: "function" },
+        ];
+        let matched = false;
+        for (const candidate of candidates) {
+          const match = candidate.re.exec(line);
+          if (!match) continue;
+          declarations.push({
+            name: match[1],
+            kind: candidate.kind,
+            line: i + 1,
+            signature: lines[i].trim().slice(0, 160),
+          });
+          matched = true;
+          break;
+        }
+        // Kotlin: `fun`, `object`, `companion object`, `data class` fall through
+        if (!matched) {
+          const fun = /^\s*(?:suspend\s+)?fun\s+([A-Za-z_][\w]*)/.exec(line);
+          if (fun) {
+            declarations.push({ name: fun[1], kind: "function", line: i + 1, signature: lines[i].trim().slice(0, 160) });
+            matched = true;
+          }
+          const obj = /^\s*(?:companion\s+)?object\s+([A-Za-z_][\w]*)/.exec(line);
+          if (obj && !matched) {
+            declarations.push({ name: obj[1], kind: "class", line: i + 1, signature: lines[i].trim().slice(0, 160) });
+            matched = true;
+          }
+          const dataClass = /^\s*(?:data\s+)?class\s+([A-Za-z_][\w]*)/.exec(line);
+          if (dataClass && !matched) {
+            declarations.push({ name: dataClass[1], kind: "class", line: i + 1, signature: lines[i].trim().slice(0, 160) });
+            matched = true;
+          }
         }
       }
       for (const ch of line) {
@@ -752,6 +1020,11 @@ function collectBases(text: string, lang: GraphLanguage): BaseRef[] {
         }
       }
     }
+    return bases;
+  }
+  if (lang === "go") {
+    // Go has no extends/implements keywords; interface embedding and struct
+    // embedding are not attributed (yet) — leaving edges out beats guessing.
     return bases;
   }
   const lines = splitLines(text);
@@ -982,7 +1255,11 @@ async function buildIndex(
           ? parseImportsRust(text)
           : item.lang === "py"
             ? parseImportsPython(text)
-            : parseImportsTs(text),
+            : item.lang === "go"
+              ? parseImportsGo(text)
+              : item.lang === "java" || item.lang === "kotlin"
+                ? parseImportsJava(text)  // Kotlin uses the same `import pkg.Path` grammar
+                : parseImportsTs(text),
       declarations,
       bases: collectBases(text, item.lang),
     });
@@ -1076,6 +1353,21 @@ function externalId(specifier: string, lang: GraphLanguage): string {
     const top = specifier.split(".")[0] || specifier;
     return `pip:${top}`;
   }
+  if (lang === "go") {
+    // Stdlib packages never contain a dot in the first path element; Go
+    // module paths do (github.com/..., golang.org/...).
+    const first = specifier.split("/")[0] || specifier;
+    if (first.includes(".")) {
+      const parts = specifier.split("/").filter(Boolean);
+      return `gomod:${parts.slice(0, 2).join("/")}`;
+    }
+    return `gomod:stdlib:${first}`;
+  }
+  if (lang === "java" || lang === "kotlin") {
+    const top = specifier.split(".")[0] || specifier;
+    if (top === "java" || top === "javax") return `jdk:${specifier.split(".").slice(0, 2).join(".")}`;
+    return `maven:${specifier.split(".").slice(0, 2).join(".")}`;
+  }
   if (specifier.startsWith("node:")) {
     const name = specifier.slice(5).split("/")[0];
     return `node:${name}`;
@@ -1096,6 +1388,8 @@ function isRelativeSpecifier(specifier: string, lang: GraphLanguage): boolean {
       specifier.startsWith("::")
     );
   }
+  if (lang === "go") return false; // Go imports are module paths, never file-relative; probeGo handles them.
+  if (lang === "java" || lang === "kotlin") return false; // Java/Kotlin imports are package-qualified, never ./ or ../ relative.
   if (lang === "py") return specifier.startsWith(".");
   return specifier.startsWith("./") || specifier.startsWith("../") || specifier.startsWith("/");
 }
@@ -1203,6 +1497,149 @@ function probeRust(fromAbs: string, specifier: string, rootAbs: string): string 
   return null;
 }
 
+// ---------------------------------------------------------------------------
+// Go module resolution (parser-lite, via go.mod at the workspace root)
+// ---------------------------------------------------------------------------
+
+
+export type GoImportResolution =
+  | { kind: "internal"; file: string; confidence: EdgeConfidence }
+  | { kind: "external" }
+  | { kind: "unresolved"; reason: string };
+
+/**
+ * Resolve a Go import:
+ *   - specifier equal/below the module prefix -> internal package on disk;
+ *     the edge targets the package's main file (name.go, else the single /
+ *     alphabetically-first non-test .go file). no go.mod => unresolvable.
+ *   - module-qualified paths under other modules, stdlib -> external.
+ */
+function resolveGoImport(
+  fromAbs: string,
+  specifier: string,
+  rootAbs: string,
+): GoImportResolution {
+  // Walk up from the importing file to find go.mod (mirrors Rust's crate-root
+  // walk; a workspace may nest modules).
+  let goModDir: string | null = null;
+  let dir = path.dirname(fromAbs);
+  for (let i = 0; i < 24 && isInside(rootAbs, dir); i += 1) {
+    if (existsSync(path.join(dir, "go.mod"))) {
+      goModDir = dir;
+      break;
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  if (!goModDir) return { kind: "external" };
+
+  // Read the module path from go.mod.
+  let modulePath: string | null = null;
+  try {
+    const content = readFileSync(path.join(goModDir, "go.mod"), "utf8")
+      .replace(/^\uFEFF/, "")
+      .replace(/\r/g, "");
+    const match = /^module\s+([^\s]+)/m.exec(content);
+    if (match) modulePath = match[1].trim();
+  } catch {
+    return { kind: "external" };
+  }
+  if (!modulePath) return { kind: "external" };
+
+  const isInternal =
+    specifier === modulePath || specifier.startsWith(`${modulePath}/`);
+  if (!isInternal) {
+    return { kind: "external" };
+  }
+  const rest = specifier.slice(modulePath.length).replace(/^\/+/, "");
+  const dirRel = rest;
+  const dirAbs = rest === "" ? goModDir : path.join(goModDir, ...dirRel.split("/"));
+  if (!isInside(rootAbs, dirAbs) || !existsSync(dirAbs)) {
+    return { kind: "unresolved", reason: "unresolved Go module path" };
+  }
+  // Package file selection: <basename>.go first, then the single non-test file,
+  // else the alphabetically-first Go file (test files only as a last resort).
+  const base = rest === "" ? path.basename(goModDir) : path.basename(dirAbs);
+  const convention = path.join(dirAbs, `${base}.go`);
+  if (existsSync(convention)) return { kind: "internal", file: convention, confidence: "exact" };
+  try {
+    const goFiles = readdirSync(dirAbs)
+      .filter((f: string) => f.endsWith(".go"))
+      .sort();
+    const nonTest = goFiles.filter((f: string) => !f.endsWith("_test.go"));
+    const pick = nonTest[0] ?? goFiles[0];
+    if (pick) {
+      return {
+        kind: "internal",
+        file: path.join(dirAbs, pick),
+        confidence: nonTest.length === 1 && !existsSync(convention) ? "exact" : "likely",
+      };
+    }
+    return { kind: "unresolved", reason: "Go package has no .go files" };
+  } catch {
+    return { kind: "unresolved", reason: "unreadable Go package directory" };
+  }
+}
+
+type JvmImportResolution =
+  | { kind: "internal"; file: string; confidence: EdgeConfidence }
+  | { kind: "external" }
+  | { kind: "unresolved"; reason: string };
+
+/**
+ * Java/Kotlin import resolution, parser-lite.
+ * Imports are package-qualified (`com.acme.demo.Service`, `java.util.List`).
+ * The package path maps to directories under candidate source roots
+ * (`src/main/java`, `src/java`, `src/main/kotlin`, `src/kotlin`, workspace
+ * root, or walking up from the importing file); wildcard imports
+ * (`foo.bar.*`) are reported as external since no single class can be pinned.
+ */
+function resolveJvmImport(
+  fromAbs: string,
+  specifier: string,
+  rootAbs: string,
+): JvmImportResolution {
+  const trimmed = specifier.trim();
+  if (trimmed.endsWith(".*")) return { kind: "external" };
+  const parts = trimmed.split(".").filter(Boolean);
+  if (parts.length < 2) {
+    return { kind: "unresolved", reason: "unresolved Java/Kotlin import path" };
+  }
+  const className = parts[parts.length - 1]!;
+  const pkgParts = parts.slice(0, -1);
+
+  const candidateRoots: string[] = [rootAbs,
+    path.join(rootAbs, "src", "main", "java"),
+    path.join(rootAbs, "src", "java"),
+    path.join(rootAbs, "src", "main", "kotlin"),
+    path.join(rootAbs, "src", "kotlin")];
+  // Walking up from the importing file's dir catches same-package / sibling
+  // package refs that don't follow source-root conventions.
+  let dir = path.dirname(fromAbs);
+  for (let i = 0; i < 24 && isInside(rootAbs, dir); i += 1) {
+    candidateRoots.push(dir);
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+
+  for (const root of candidateRoots) {
+    for (const ext of [".java", ".kt"]) {
+      const candidate = path.join(root, ...pkgParts, `${className}${ext}`);
+      if (isInside(rootAbs, candidate) && existsSync(candidate)) {
+        const confidence = root === rootAbs || root.startsWith(path.join(rootAbs, "src"))
+          ? "exact"
+          : "likely";
+        return { kind: "internal", file: candidate, confidence };
+      }
+    }
+  }
+  // Not found on disk under any candidate source root: treat as an external
+  // Maven/JDK dependency rather than unresolved (parser-lite approximation).
+  return { kind: "external" };
+}
+
 function buildEdges(index: Index, withSymbols: boolean): BuiltEdges {
   const edgeMap = new Map<string, Edge>();
   const externals = new Map<string, ExternalUse>();
@@ -1248,6 +1685,52 @@ function buildEdges(index: Index, withSymbols: boolean): BuiltEdges {
               specifier: specifier.replace(/^moddecl:/, "mod "),
               reason: "unresolved Rust module path",
             });
+          }
+        } else {
+          const id = externalId(specifier, file.lang);
+          const entry = externals.get(id) ?? { id, usedBy: new Set<string>() };
+          entry.usedBy.add(file.rel);
+          externals.set(id, entry);
+        }
+        continue;
+      }
+      if (file.lang === "go") {
+        const resolution = resolveGoImport(fromAbs, specifier, index.rootAbs);
+        if (resolution.kind === "internal") {
+          addEdge({
+            from: file.rel,
+            to: relFromRoot(index.rootAbs, resolution.file),
+            type: "import",
+            confidence: resolution.confidence,
+            line: ref.line,
+            via: ref.via,
+          });
+        } else if (resolution.kind === "unresolved") {
+          if (unresolved.length < 200) {
+            unresolved.push({ from: file.rel, specifier, reason: resolution.reason });
+          }
+        } else {
+          const id = externalId(specifier, file.lang);
+          const entry = externals.get(id) ?? { id, usedBy: new Set<string>() };
+          entry.usedBy.add(file.rel);
+          externals.set(id, entry);
+        }
+        continue;
+      }
+      if (file.lang === "java" || file.lang === "kotlin") {
+        const resolution = resolveJvmImport(fromAbs, specifier, index.rootAbs);
+        if (resolution.kind === "internal") {
+          addEdge({
+            from: file.rel,
+            to: relFromRoot(index.rootAbs, resolution.file),
+            type: "import",
+            confidence: resolution.confidence,
+            line: ref.line,
+            via: ref.via,
+          });
+        } else if (resolution.kind === "unresolved") {
+          if (unresolved.length < 200) {
+            unresolved.push({ from: file.rel, specifier, reason: resolution.reason });
           }
         } else {
           const id = externalId(specifier, file.lang);

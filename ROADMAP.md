@@ -91,6 +91,12 @@ Not shipped (deliberately):
   Python/Go), and the **search-path matrix shipped too**: verify
   `search_hybrid_symbol_index_{typescript,rust,python,go}` assert an end-to-end hybrid
   search on a fixture file tags the definition hit `symbol_index` at its line.
+  Dependency graph also covers Go, Java and Kotlin (`go.mod` module resolution,
+  package-import resolution, per-file declarations) — covered by verify
+  `dependency_graph_go_internal_import`, `dependency_graph_go_stdlib_external`,
+  `dependency_graph_go_references`, `dependency_graph_java_internal_import`,
+  `dependency_graph_java_external_jdk`, `dependency_graph_kotlin_internal_import`,
+  `change_impact_go_package_dependent`, `change_impact_java_package_dependent`.
 
 Rejected (unchanged): "cache-clear before every search"; widening `searchCache` to store
 partial results (changes `project_search` semantics; dedicated `referencesCache` instead).
@@ -149,7 +155,7 @@ and at process `close`; the cache write moved to `close` as well. (`shell_output
 
 ## Acceptance criteria per phase
 
-- `tsc --noEmit`, `npm run verify` (406 checks, all green locally; the two old Windows-local flakes were root-caused and fixed — async shell runs trimmed their tails at spawn instead of at `close`, so fast commands returned empty `stdout_tail`), `npm run check:docs`, `npm run check:source-shape`, `npm run test:shell-security` all green.
+- `tsc --noEmit`, `npm run verify` (414 checks, all green locally; the two old Windows-local flakes were root-caused and fixed — async shell runs trimmed their tails at spawn instead of at `close`, so fast commands returned empty `stdout_tail`), `npm run check:docs`, `npm run check:source-shape`, `npm run test:shell-security` all green.
 - README §3.5/§4 updated whenever a user-visible flag or behaviour ships; `check:docs` contract kept.
 - No tool added/removed/renamed without the Default/Expert lists, README §4.0, and `scripts/check-docs.ts` updated in the same commit.
 - CI matrix (ubuntu/windows/macos × Node 20/22) green; macos-22 runner flakes are environmental (GitHub has auto-cancelled it twice), not code.
