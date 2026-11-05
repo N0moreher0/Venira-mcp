@@ -952,6 +952,10 @@ function ripgrepExec(args: string[], timeoutMs: number): Promise<{ status: numbe
   });
 }
 
+function escapeRegExpLiteral(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 /**
  * Score a search hit so the most useful results surface first — agents
  * usually only read the first few hits, so ranking matters more than raw
@@ -963,14 +967,15 @@ function ripgrepExec(args: string[], timeoutMs: number): Promise<{ status: numbe
  *   - file-name match       +30   (query appears in the file name)
  *   - shallow depth         +10   (files closer to workspace root)
  *   - early line            +10   (line number < 10)
- * Case-insensitive matching throughout; `needle` is pre-lowercased.
+ * Case-insensitive matching throughout; `needle` is pre-lowercased and
+ * `wordRe` is precompiled by the caller (rankHits) — the query text itself
+ * may contain regex metacharacters, so it is never interpolated raw.
  */
-function scoreHit(hit: Record<string, unknown>, needle: string, rel: string): number {
+function scoreHit(hit: Record<string, unknown>, needle: string, rel: string, wordRe: RegExp): number {
   let score = 0;
   const snippet = String(hit.snippet ?? "").toLowerCase();
   const lineLower = snippet;
   // whole-word: needle bounded by non-identifier chars on both sides
-  const wordRe = new RegExp(`(?:^|[^A-Za-z0-9_$])${needle}(?:[^A-Za-z0-9_$]|$)`, "i");
   if (wordRe.test(lineLower)) score += 40;
   else if (lineLower.includes(needle)) score += 15; // substring fallback
   if (lineLower.startsWith(needle)) score += 20; // prefix (definition-like)
@@ -986,19 +991,25 @@ function scoreHit(hit: Record<string, unknown>, needle: string, rel: string): nu
 
 /**
  * Sort hits so the most relevant are first, then stable by (path, line).
+ * Scores are computed once and carried through the sort (no double work).
  */
 function rankHits(hits: Array<Record<string, unknown>>, needle: string): void {
-  hits.sort((a, b) => {
-    const sa = scoreHit(a, needle, String(a.relative_path ?? ""));
-    const sb = scoreHit(b, needle, String(b.relative_path ?? ""));
-    if (sb !== sa) return sb - sa;
-    const ra = String(a.relative_path ?? "");
-    const rb = String(b.relative_path ?? "");
-    if (ra !== rb) return ra < rb ? -1 : 1;
-    const la = Number(a.line_number ?? 0);
-    const lb = Number(b.line_number ?? 0);
-    return la - lb;
+  const wordRe = new RegExp(
+    `(?:^|[^A-Za-z0-9_$])${escapeRegExpLiteral(needle)}(?:[^A-Za-z0-9_$]|$)`,
+    "i",
+  );
+  const scored = hits.map((hit) => ({
+    hit,
+    rel: String(hit.relative_path ?? "").toLowerCase(),
+    line: Number(hit.line_number ?? 0),
+    score: scoreHit(hit, needle, String(hit.relative_path ?? ""), wordRe),
+  }));
+  scored.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    if (a.rel !== b.rel) return a.rel < b.rel ? -1 : 1;
+    return a.line - b.line;
   });
+  for (let i = 0; i < scored.length; i += 1) hits[i] = scored[i].hit;
 }
 
 async function opSearch(
@@ -1008,6 +1019,13 @@ async function opSearch(
   const query = args.query as string;
   const kind = (args.kind as string) ?? "literal_content";
   const searchRoot = resolveInWorkspace(args.relative_path as string, root);
+  // Hidden files are searched by default (parity with the JS walker; agents
+  // legitimately search `.github/`, `.vscode/`). Pass include_hidden=0 to skip
+  // dotfiles (rg-style). Protected secrets are always excluded either way.
+  const includeHidden = args.include_hidden === undefined
+    ? true
+    : args.include_hidden === true || args.include_hidden === 1;
+  const wholeWord = args.whole_word === true || args.whole_word === 1;
   if (isProtectedPath(searchRoot)) {
     throw new Error(`[sensitive_result] Path is protected by policy: ${args.relative_path}. Hint: do not search protected files.`);
   }
@@ -1064,6 +1082,9 @@ async function opSearch(
       }
       for (const entry of entries) {
         if (entry.isSymbolicLink()) continue;
+        // Hidden files/dot-directories are skipped unless include_hidden=1.
+        // IGNORED (node_modules/target/…) and isProtectedPath always apply.
+        if (!includeHidden && entry.name.startsWith(".")) continue;
         const abs = path.join(d, entry.name);
         if (entry.isDirectory()) {
           if (IGNORED.has(entry.name)) continue;
@@ -1108,6 +1129,8 @@ async function opSearch(
         try {
           const argList = ["--json", "-n", "--max-filesize=1M", "--color=never"];
           if (!caseSensitive) argList.push("-i");
+          if (wholeWord) argList.push("-w");
+          if (includeHidden) argList.push("--hidden");
           if (args.regex === true) { argList.push("-e", String(query)); }
           else { argList.push("-F", "-e", String(query)); }
           if (glob) argList.push("--glob", String(glob));
@@ -1116,7 +1139,12 @@ async function opSearch(
           argList.push(searchRoot);
           const resp = await ripgrepExec(argList, 10000);
 
-          if (!resp.error || (resp.error as any).code !== "ETIMEDOUT") {
+          // Only clean exits (0 = matches, 1 = no matches) are served by the
+          // fast path. Exit 2 (rg-internal error, e.g. an invalid regex that
+          // survived JSON parsing) or any spawn error falls through to the JS
+          // scanner, which either serves the query or throws the proper
+          // [invalid_request] envelope — never a silent empty "no matches".
+          if ((resp.status === 0 || resp.status === 1) && !resp.error) {
             const lines = String(resp.stdout ?? "").split(/\r?\n/).filter(Boolean);
             for (const raw of lines) {
               let rec: any = null;
@@ -1187,6 +1215,10 @@ async function opSearch(
 
     const files = await collectFiles(searchRoot);
     const useRegex = args.regex === true;
+    let wordRe: RegExp | null = null;
+    if (wholeWord) {
+      wordRe = new RegExp(`(?:^|[^A-Za-z0-9_$])${escapeRegExpLiteral(needle)}(?:[^A-Za-z0-9_$]|$)`, caseSensitive ? "" : "i");
+    }
     let contentRe: RegExp | null = null;
     if (useRegex) {
       if (query.length > 512 || /(?:\([^)]*[+*][^)]*\)|\[[^\]]+\][+*])[+*{]/.test(query)) {
@@ -1236,8 +1268,10 @@ async function opSearch(
           ? (contentRe as RegExp).test(line)
           : kind === "definition"
             ? /^\s*(?:export\s+)?(?:function|class|const|let|var|type|interface|struct|fn|impl|trait|enum)\s+/.test(line) &&
-              lineLower.includes(needleConst)
-            : lineLower.includes(needleConst);
+              (wordRe ? wordRe.test(lineLower) : lineLower.includes(needleConst))
+            : wordRe
+              ? wordRe.test(lineLower)
+              : lineLower.includes(needleConst);
         if (match) matchIndices.push(i);
       }
       if (matchIndices.length === 0) continue;

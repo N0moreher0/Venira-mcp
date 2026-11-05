@@ -155,7 +155,7 @@ and at process `close`; the cache write moved to `close` as well. (`shell_output
 
 ## Acceptance criteria per phase
 
-- `tsc --noEmit`, `npm run verify` (418 checks, all green locally; the two old Windows-local flakes were root-caused and fixed — async shell runs trimmed their tails at spawn instead of at `close`, so fast commands returned empty `stdout_tail`; relevance-ranked search adds `search_relevance_*`, `context_lines` parity adds `search_context_lines_shape`), `npm run check:docs`, `npm run check:source-shape`, `npm run test:shell-security` all green.
+- `tsc --noEmit`, `npm run verify` (423 checks, all green locally; the two old Windows-local flakes were root-caused and fixed — async shell runs trimmed their tails at spawn instead of at `close`, so fast commands returned empty `stdout_tail`; relevance-ranked search adds `search_relevance_*`, `context_lines` parity adds `search_context_lines_shape`, regex-escape/rank robustness + honoured `whole_word`/`include_hidden` add `search_literal_metachar_query_no_crash` / `search_regex_invalid_returns_invalid_request` / `search_whole_word_*` / `search_hidden_*` / `search_include_hidden_*`), `npm run check:docs`, `npm run check:source-shape`, `npm run test:shell-security` all green.
 - README §3.5/§4 updated whenever a user-visible flag or behaviour ships; `check:docs` contract kept.
 - No tool added/removed/renamed without the Default/Expert lists, README §4.0, and `scripts/check-docs.ts` updated in the same commit.
 - CI matrix (ubuntu/windows/macos × Node 20/22) green; macos-22 runner flakes are environmental (GitHub has auto-cancelled it twice), not code.

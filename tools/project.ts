@@ -2678,15 +2678,20 @@ async function runHybridSearch(args: Args): Promise<ToolResult> {
     return { ...hit, source, confidence };
   });
 
+  const truncated = tagged.length < hits.length || response.truncated === true || data.complete === false;
   const mergedData = {
     ...data,
     hits: tagged,
+    // The over-fetch returns up to 200 hits; when we slice below the request,
+    // the agent did NOT get everything — report `complete: false` (matching
+    // the plain path's cap semantics) instead of a stale `true`.
+    complete: !truncated,
     hybrid: true,
     ...(scopeWidened ? { scope_widened: true } : {}),
   };
   const merged: RustResponse = {
     status: "completed",
-    truncated: tagged.length < hits.length || response.truncated === true || data.complete === false,
+    truncated,
     result: { kind: "search", data: mergedData },
   };
   const elapsedMs = performance.now() - started;
@@ -3228,8 +3233,8 @@ export function registerProjectTools(server: McpServer): void {
         exclude_glob: z.string().optional(),
         regex: flag01.optional(),
         case_sensitive: flag01.optional(),
-        whole_word: flag01.optional(),
-        include_hidden: flag01.optional(),
+        whole_word: flag01.optional().describe("1 = whole-word match only (rg -w / JS word boundaries) for literal_content and definition."),
+        include_hidden: flag01.optional().describe("1 = include hidden files (default); 0 = skip dotfiles (rg-style). Secrets (.env*, credentials, keys) are always excluded either way."),
         context_lines: z.number().int().min(0).max(20).optional(),
         count_only: flag01.optional(),
         limit: z.number().int().min(1).max(200).optional(),
