@@ -11,6 +11,14 @@ npm run bench:mcp    # end-to-end over MCP stdio
 Numbers below are from **2026-11-03** on Windows 11 / NVMe / Node 20, standalone build
 (`venira-mcp@1.13.8`, no external binary).
 
+## 0. Methodology & caveats
+
+- **Single machine/environment.** Numbers are captured on one host (Windows 11 / NVMe / Node 20). Latency reflects that disk/CPU; treat deltas vs a new baseline, not absolute targets.
+- **Process startup is included in exec_command / foreground shell measurements.** `project_shell_run` (background=0) spawns a child process and waits for exit, so `shell_foreground_ms` includes node/shell spawn + stdio handshake. Pure tool latency is better read from the in-process `npm run bench` row or from cached reads.
+- **Warm-up required.** The first 3 `project_read_file` warm-ups attach the session cache; the reported "First call" row is post-warm-up. Cold runs (capability open) take ~100-200ms longer.
+- **Cache state matters.** Cached-read rows only apply after the warm-up calls; reset with `project_cache_clear` or a fresh session before re-benchmarking.
+- Results can be **truncated** (`complete:false` / `truncated:true`) when a limit is hit; check those flags before trusting a number.
+
 ## 1. End-to-end MCP (`npm run bench:mcp`)
 
 | Scenario | avg | p50 | p95 | max |

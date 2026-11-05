@@ -257,7 +257,12 @@ export function buildEnvelope(
 ): Envelope {
   const data = response?.result?.data;
   const kind = response?.result?.kind ?? operation;
-  const truncated = response?.truncated === true;
+  const dd = (data ?? {}) as { complete?: unknown; truncated?: unknown; hits?: unknown };
+  const dataTruncated =
+    dd.complete === false ||
+    dd.truncated === true ||
+    (Array.isArray(dd.hits) && dd.truncated === true);
+  const truncated = response?.truncated === true || dataTruncated;
   const hint = options.hint ?? inferHint(kind, data);
 
   const envelope: Envelope = {

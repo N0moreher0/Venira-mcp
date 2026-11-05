@@ -158,25 +158,54 @@ function ensureAuditDb(): Database.Database | null {
     }
     
     // P2: Recent files index (SQLite cache, updated on write/edit/delete)
-    auditDb.exec(`
-      CREATE TABLE IF NOT EXISTS project_file_index (
-        path TEXT PRIMARY KEY,
-        kind TEXT NOT NULL DEFAULT 'file',
-        mtime_ms INTEGER NOT NULL,
-        size INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
-      );
-      CREATE INDEX IF NOT EXISTS idx_file_index_mtime ON project_file_index(updated_at DESC);
-    `);
-    // Additive migration for the recent-files index (SQLite has no ADD COLUMN IF NOT EXISTS).
+    // P2: Recent-files index is scoped per workspace so a shared data dir (the
+    // default per-user OS dir) cannot leak entries from one project into another.
+    // Composite PK keeps the same relative path distinct across workspaces.
     const indexColumns = new Set(
       (auditDb.prepare("PRAGMA table_info(project_file_index)").all() as Array<{ name: string }>).map((c) => c.name),
     );
-    for (const [name, type] of [
-      ["kind", "TEXT NOT NULL DEFAULT 'file'"],
-    ] as const) {
-      if (!indexColumns.has(name)) auditDb.exec(`ALTER TABLE project_file_index ADD COLUMN ${name} ${type}`);
+    const indexPkCols = (auditDb.prepare("PRAGMA table_info(project_file_index)").all() as Array<{ name: string; pk: number }>).filter((c) => c.pk > 0).length;
+    const needsRebuild = !indexColumns.has("workspace_root") || indexPkCols < 2;
+    if (needsRebuild) {
+      auditDb.exec(`
+        CREATE TABLE IF NOT EXISTS project_file_index_new (
+          workspace_root TEXT NOT NULL,
+          path TEXT NOT NULL,
+          kind TEXT NOT NULL DEFAULT 'file',
+          mtime_ms INTEGER NOT NULL,
+          size INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          PRIMARY KEY (workspace_root, path)
+        );
+        CREATE INDEX IF NOT EXISTS idx_file_index_mtime_new ON project_file_index_new(updated_at DESC);
+      `);
+      // Carry over only rows that already carry a workspace_root (legacy rows
+      // without one are dropped to avoid cross-workspace leakage).
+      if (indexColumns.has("workspace_root")) {
+        try {
+          auditDb.exec(`
+            INSERT OR IGNORE INTO project_file_index_new (workspace_root, path, kind, mtime_ms, size, updated_at)
+            SELECT workspace_root, path, kind, mtime_ms, size, updated_at
+            FROM project_file_index WHERE workspace_root IS NOT NULL;
+          `);
+        } catch { /* best-effort */ }
+      }
+      auditDb.exec("DROP TABLE IF EXISTS project_file_index;");
+      auditDb.exec("ALTER TABLE project_file_index_new RENAME TO project_file_index;");
+      auditDb.exec("CREATE INDEX IF NOT EXISTS idx_file_index_mtime ON project_file_index(updated_at DESC);");
     }
+    auditDb.exec(`
+      CREATE TABLE IF NOT EXISTS project_file_index (
+        workspace_root TEXT NOT NULL,
+        path TEXT NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'file',
+        mtime_ms INTEGER NOT NULL,
+        size INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (workspace_root, path)
+      );
+      CREATE INDEX IF NOT EXISTS idx_file_index_mtime ON project_file_index(updated_at DESC);
+    `);
     // R8 retention + VACUUM (best-effort)
     try {
       const days = Number(process.env.VENIRA_AUDIT_KEEP_DAYS ?? 90);
@@ -1666,9 +1695,9 @@ function recordRecentFile(absPath: string, root: string): void {
   const rel = path.relative(root, absPath).replace(/\\/g, "/");
   try {
     db.prepare(
-      `INSERT OR REPLACE INTO project_file_index (path, mtime_ms, size, updated_at)
-       VALUES (?, 0, 0, ?)`,
-    ).run(rel, Date.now());
+      `INSERT OR REPLACE INTO project_file_index (workspace_root, path, mtime_ms, size, updated_at)
+       VALUES (?, ?, 0, 0, ?)`,
+    ).run(root, rel, Date.now());
   } catch (error) {
     console.error(`[corehost] recent index write failed: ${error instanceof Error ? error.message : String(error)}`);
   }
@@ -1682,22 +1711,23 @@ function recordRecentFileMeta(absPath: string, stat: { mtimeMs: number; size: nu
   const rel = path.relative(root, absPath).replace(/\\/g, "/");
   try {
     db.prepare(
-      `UPDATE project_file_index SET mtime_ms = ?, size = ?, updated_at = ? WHERE path = ?`,
-    ).run(stat.mtimeMs, stat.size, Date.now(), rel);
+      `UPDATE project_file_index SET mtime_ms = ?, size = ?, updated_at = ? WHERE workspace_root = ? AND path = ?`,
+    ).run(stat.mtimeMs, stat.size, Date.now(), root, rel);
   } catch (error) {
     console.error(`[corehost] recent index update failed: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
 /** P2: Query the recent-files index, optionally limiting the result. */
-export function queryRecentFiles(limit: number, includeDirs: boolean): Array<{ relative_path: string; mtime_ms: number; size: number; kind: string; updated_at: number }> {
+export function queryRecentFiles(limit: number, includeDirs: boolean, workspaceRoot: string = WORKSPACE): Array<{ relative_path: string; mtime_ms: number; size: number; kind: string; updated_at: number }> {
   const db = ensureAuditDb();
   if (!db) return [];
   try {
-    const where = includeDirs ? "" : `WHERE kind = 'file'`;
+    const wsClause = "workspace_root = ?";
+    const kindClause = includeDirs ? "" : " AND kind = 'file'";
     const rows = db.prepare(
-      `SELECT path, mtime_ms, size, kind, updated_at FROM project_file_index ${where} ORDER BY updated_at DESC LIMIT ?`,
-    ).all(limit) as Array<{ path: string; mtime_ms: number; size: number; kind: string; updated_at: number }>
+      `SELECT path, mtime_ms, size, kind, updated_at FROM project_file_index WHERE ${wsClause}${kindClause} ORDER BY updated_at DESC LIMIT ?`,
+    ).all(workspaceRoot, limit) as Array<{ path: string; mtime_ms: number; size: number; kind: string; updated_at: number }>
     return rows.map((r) => ({ relative_path: r.path, mtime_ms: r.mtime_ms, size: r.size, kind: r.kind, updated_at: r.updated_at }));
   } catch (error) {
     console.error(`[corehost] recent index query failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -2394,8 +2424,7 @@ function opShellCancel(args: Record<string, unknown>): RustResponse {
 // CoreHost class (drop-in replacement for the Rust CoreHost)
 // ---------------------------------------------------------------------------
 
-// ---------------------------------------------------------------------------
-// Secrets (`project_secret`)
+// ---------------------    const indexed = queryRecentFiles(limit, includeDirs, WORKSPACE);/ Secrets (`project_secret`)
 //
 // Values are never returned by default: `get`/`list` expose only metadata
 // (length + sha256 prefix + update time) so an agent can confirm a key exists
@@ -2760,7 +2789,7 @@ function removeFromRecentIndex(absPath: string, root: string): void {
   if (!db) return;
   const rel = path.relative(root, absPath).replace(/\\/g, "/");
   try {
-    db.prepare("DELETE FROM project_file_index WHERE path = ?").run(rel);
+    db.prepare("DELETE FROM project_file_index WHERE workspace_root = ? AND path = ?").run(root, rel);
   } catch (error) {
     console.error("[corehost] recent index delete failed: " + (error instanceof Error ? error.message : String(error)));
   }
