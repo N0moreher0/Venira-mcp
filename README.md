@@ -37,7 +37,7 @@ All use the same `npx` command. See §2 for ready-to-copy JSON/TOML.
 
 All clients run the same command — only the config format differs. Use the absolute workspace path.
 
-**OpenCode** (`opencode.jsonc`):
+**OpenCode** (`opencode.jsonc`) — full config, just change `VENIRA_WORKSPACE`:
 
 ```jsonc
 {
@@ -47,51 +47,171 @@ All clients run the same command — only the config format differs. Use the abs
       "command": ["npx", "--yes", "--package=venira-mcp@latest", "venira-mcp"],
       "enabled": true,
       "environment": {
-        // ── REQUIRED ──────────────────────────────────────────────────────
+        // ═══════════════════════════════════════════════════════════
+        // REQUIRED — change this one value
+        // ═══════════════════════════════════════════════════════════
         "VENIRA_WORKSPACE": "/absolute/path/to/project",
-        // Absolute path to the project. On Windows use C:\\path\\to\\project.
-        // OpenCode does NOT expand ${workspaceFolder} — always use absolute.
+        // On Windows: "C:\\path\\to\\project". OpenCode does NOT expand ${workspaceFolder}.
 
-        // ── TOOL SURFACE ──────────────────────────────────────────────────
-        // "expert" = all 43 tools (coding + shell + JS + PR/CI + diagnostics)
+        // ═══════════════════════════════════════════════════════════
+        // TOOL SURFACE
+        // ═══════════════════════════════════════════════════════════
+        // "expert" = 43 tools (coding + shell + JS + PR/CI + diagnostics)
         // "default" = 33 tools (coding + shell + JS, NO PR/CI)
-        // Pick "expert" for full automation; "default" if you don't need CI/CD.
         "VENIRA_TOOL_MODE": "expert",
 
-        // ── OUTPUT SIZE ───────────────────────────────────────────────────
-        // "full"    = complete payloads (best for most models)
-        // "compact" = trim over 8 KB (use for small-context models)
+        // ═══════════════════════════════════════════════════════════
+        // OUTPUT
+        // ═══════════════════════════════════════════════════════════
+        // "full" = complete payloads · "compact" = trim > 8 KB (small-context models)
         "VENIRA_OUTPUT_MODE": "full",
 
-        // ── SHELL (auto-build + test loops) ──────────────────────────────
-        // "permissive" = skip approval prompts for ordinary commands,
-        //                 still blocks catastrophic (rm -rf, fork bomb, git push --force)
-        // "balanced"   = ask human approval for writes/network/git push (slower, safer)
-        // For a local dev box where you trust the agent: "permissive"
+        // ═══════════════════════════════════════════════════════════
+        // SHELL POLICY
+        // ═══════════════════════════════════════════════════════════
+        // "permissive" = no approval for normal commands (still blocks rm -rf / fork bomb / git push --force)
+        // "balanced"   = human approval for writes / network / git push (slower, safer for shared repos)
         "VENIRA_SHELL_MODE": "permissive",
+        // "0" = child processes get PATH/HOME/TERM only (secrets never leak — default)
+        // "1" = pass full parent env (only if a build tool needs it)
+        "VENIRA_SHELL_ENV_PASS_ALL": "0",
+        // "VENIRA_SHELL_ENV_ALLOW": "GITHUB_TOKEN,NPM_TOKEN",  // ← uncomment if build needs specific vars
+        // "1" = shell_status returns as soon as exit code is known (faster polling)
+        "VENIRA_SHELL_EXIT_EARLY": "1",
+        // "soft" = expired command warns · "hard" = kills process tree
+        "VENIRA_SHELL_TIMEOUT_POLICY": "soft",
 
-        // Run JS code via project_execute_js (off by default).
-        // "1" enables it; human approval still required per call unless you set
-        // VENIRA_JS_EXEC_APPROVAL="0" (trusted-automation only).
+        // ═══════════════════════════════════════════════════════════
+        // JS EXECUTION (project_execute_js)
+        // ═══════════════════════════════════════════════════════════
+        // "1" = enable · "0" = disable (off by default for safety)
         "VENIRA_ALLOW_JS_EXEC": "1",
-        "VENIRA_JS_EXEC_APPROVAL": "0",  // ← remove this line to require human approval per call
+        // "0" = auto-approve JS calls (trusted local dev only!)
+        // "1" = require human approval per JS call (safer default)
+        "VENIRA_JS_EXEC_APPROVAL": "0",
 
-        // ── SECRETS / GITHUB TOKEN ────────────────────────────────────────
-        // Leave UNSET — the token is stored in the encrypted per-user vault
-        // (created by `npx venira-mcp --setup-github` or project_github_connect).
-        // Do NOT put tokens in this config file.
-        // "VENIRA_GIT_TOKEN": "ghp_...",  ← NEVER do this
+        // ═══════════════════════════════════════════════════════════
+        // GITHUB / CI / PR (auto-detected from .git/config)
+        // Token lives in encrypted vault — set once with:
+        //   npx venira-mcp --setup-github
+        // NEVER put tokens in this file.
+        // ═══════════════════════════════════════════════════════════
+        // "VENIRA_GIT_PROVIDER": "github",    // auto: github | gitlab | bitbucket
+        // "VENIRA_GIT_TIMEOUT_MS": "60000",   // request timeout (ms)
+        // "VENIRA_NETWORK": "1",              // "0" = hard-off all PR/CI calls (offline work)
 
-        // ── NETWORK KILL SWITCH ───────────────────────────────────────────
-        // "0" = all provider calls (PR/CI) return network_disabled; use for offline work.
-        "VENIRA_NETWORK": "1",
+        // ═══════════════════════════════════════════════════════════
+        // SEARCH / CACHES / GUARDS
+        // ═══════════════════════════════════════════════════════════
+        // "1" = use ripgrep if installed (faster on big repos)
+        "VENIRA_USE_RIPGREP": "1",
+        // "1" = TTL caches on (fast repeat reads) · "0" = always-fresh (strict, slower)
+        "VENIRA_CACHE_ALL": "1",
+        // "1" = fuzzy edit fallback (Levenshtein) · "0" = exact match only
+        "VENIRA_EDIT_FUZZY": "0",
 
-        // ── ADVANCED (leave at defaults unless you have a specific reason) ─
-        // "VENIRA_DATA_DIR": "...",       // where audit DB + encrypted secrets live
-        // "VENIRA_UNRESTRICTED": "0",     // "1" disables workspace lock — NEVER in production
-        // "VENIRA_SHELL_MAX_TIMEOUT_MS": "1800000",  // max shell command duration (30 min)
-        // "VENIRA_SNAPSHOT_KEEP": "20",   // how many checkpoints to keep before pruning
-        // "VENIRA_TRACE": "0",            // "1" logs every tool call to stderr (debug only)
+        // ═══════════════════════════════════════════════════════════
+        // ADVANCED — leave at defaults unless you know why
+        // ═══════════════════════════════════════════════════════════
+        // "VENIRA_DATA_DIR": "",                  // where audit DB + encrypted secrets live
+        // "VENIRA_UNRESTRICTED": "0",             // "1" = disable workspace lock (NEVER in prod)
+        // "VENIRA_SNAPSHOT_KEEP": "20",            // checkpoints kept before pruning
+        // "VENIRA_SNAPSHOT_MAX_FILES": "4000",     // per-checkpoint file cap
+        // "VENIRA_SHELL_MAX_TIMEOUT_MS": "1800000" // 30 min max command duration
+        // "VENIRA_TRACE": "0",                     // "1" = log every tool call to stderr (debug)
+        // "VENIRA_PRETTY": "0",                    // "1" = 2-space pretty JSON in results
+      }
+    }
+  }
+}
+```
+
+> **Copy-paste → change `VENIRA_WORKSPACE` → done.**
+> Every other value is already set for a fast local dev loop.
+> Uncomment a variable and change its value only when you need to.
+
+**VS Code** (`.vscode/mcp.json`) — `${workspaceFolder}` auto-expands:
+
+```json
+{
+  "servers": {
+    "venira": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["--yes", "--package=venira-mcp@latest", "venira-mcp"],
+      "env": {
+        "VENIRA_WORKSPACE": "${workspaceFolder}",
+        "VENIRA_TOOL_MODE": "expert",
+        "VENIRA_OUTPUT_MODE": "full",
+        "VENIRA_SHELL_MODE": "permissive",
+        "VENIRA_SHELL_EXIT_EARLY": "1",
+        "VENIRA_ALLOW_JS_EXEC": "1",
+        "VENIRA_JS_EXEC_APPROVAL": "0",
+        "VENIRA_USE_RIPGREP": "1",
+        "VENIRA_CACHE_ALL": "1"
+      }
+    }
+  }
+}
+```
+
+**Claude Desktop / Cursor / Kimi / DeepSeek / Antigravity** (all `mcpServers`):
+
+```json
+{
+  "mcpServers": {
+    "venira": {
+      "command": "npx",
+      "args": ["--yes", "--package=venira-mcp@latest", "venira-mcp"],
+      "env": {
+        "VENIRA_WORKSPACE": "/absolute/path/to/project",
+        "VENIRA_TOOL_MODE": "expert",
+        "VENIRA_OUTPUT_MODE": "full",
+        "VENIRA_SHELL_MODE": "permissive",
+        "VENIRA_SHELL_EXIT_EARLY": "1",
+        "VENIRA_ALLOW_JS_EXEC": "1",
+        "VENIRA_JS_EXEC_APPROVAL": "0",
+        "VENIRA_USE_RIPGREP": "1",
+        "VENIRA_CACHE_ALL": "1"
+      }
+    }
+  }
+}
+```
+
+**Codex** (`~/.codex/config.toml`):
+
+```toml
+[mcp_servers.venira]
+command = "npx"
+args = ["--yes", "--package=venira-mcp@latest", "venira-mcp"]
+
+[mcp_servers.venira.env]
+VENIRA_WORKSPACE = "C:\\path\\to\\project"
+VENIRA_TOOL_MODE = "expert"
+VENIRA_OUTPUT_MODE = "full"
+VENIRA_SHELL_MODE = "permissive"
+VENIRA_SHELL_EXIT_EARLY = "1"
+VENIRA_ALLOW_JS_EXEC = "1"
+VENIRA_JS_EXEC_APPROVAL = "0"
+VENIRA_USE_RIPGREP = "1"
+VENIRA_CACHE_ALL = "1"
+```
+
+> **Quick reference — what to set vs what to leave alone:**
+>
+> | Variable | When to change | Default |
+> |---|---|---|
+> | `VENIRA_WORKSPACE` | **Always** — absolute project path | — |
+> | `VENIRA_TOOL_MODE` | `"default"` if no PR/CI needed | `default` |
+> | `VENIRA_SHELL_MODE` | `"balanced"` for shared/public repos | `balanced` |
+> | `VENIRA_ALLOW_JS_EXEC` | `"0"` to disable JS exec entirely | `0` (off) |
+> | `VENIRA_JS_EXEC_APPROVAL` | `"1"` to require human approval per JS call | `1` |
+> | `VENIRA_SHELL_ENV_PASS_ALL` | `"1"` if a build tool needs your full env | `0` |
+> | `VENIRA_NETWORK` | `"0"` for offline repos (all PR/CI refused) | `1` |
+> | `VENIRA_UNRESTRICTED` | **Never** `"1"` in production | `0` |
+>
+> Generate a minimal config for any client: `npx --yes venira-mcp@latest --print-config <client>`
       }
     }
   }
