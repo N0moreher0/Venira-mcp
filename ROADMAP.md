@@ -86,8 +86,10 @@ Not shipped (deliberately):
 - No second search pass / no extra MCP round-trip.
 - No `source: "native" | "venira"` split — both sides would be the same backend; the
   signal would be meaningless.
-- No fixture-matrix parity suite yet — folded into Phase B's parity checks; defer until
-  the hybrid path proves itself in real sessions.
+- No fixture-matrix parity suite yet for the *search* path — the **symbol-extraction**
+  matrix shipped (verify `symbol_extract_fixture_matrix`, 33 cases across TS/Rust/
+  Python/Go). The search-path matrix remains deferred until the hybrid path proves
+  itself in real sessions.
 
 Rejected (unchanged): "cache-clear before every search"; widening `searchCache` to store
 partial results (changes `project_search` semantics; dedicated `referencesCache` instead).
@@ -140,7 +142,7 @@ Verify covers a 43-case classifier table (`shell_cache_readonly_allowlist`);
 
 ## Acceptance criteria per phase
 
-- `tsc --noEmit`, `npm run verify` (400 checks; 2 known Windows-runner flakes — `shell_output` flips green/red by run, `secret_env_injected_and_redacted` flips likewise), `npm run check:docs`, `npm run check:source-shape`, `npm run test:shell-security` all green.
+- `tsc --noEmit`, `npm run verify` (401 checks incl. a 33-case language fixture matrix; 2 known Windows-local flakes — `shell_output` and `policy_env_scrubbed` flip empty-stdout runs, environment-side, CI green on all 6 OS×Node combos), `npm run check:docs`, `npm run check:source-shape`, `npm run test:shell-security` all green.
 - README §3.5/§4 updated whenever a user-visible flag or behaviour ships; `check:docs` contract kept.
 - No tool added/removed/renamed without the Default/Expert lists, README §4.0, and `scripts/check-docs.ts` updated in the same commit.
 - CI matrix (ubuntu/windows/macos × Node 20/22) green; macos-22 runner flakes are environmental (GitHub has auto-cancelled it twice), not code.
