@@ -514,6 +514,13 @@ check(
   policyModule.evaluateShellCommand("rm -rf ~", ws, { mode: "permissive" }),
 );
 check(
+  "policy_unit_deny_inside_substitution",
+  policyModule.evaluateShellCommand("echo $(rm -rf ~)", ws, { mode: "permissive" }).tier === "deny" &&
+    policyModule.evaluateShellCommand("echo $(sudo id)", ws, { mode: "permissive" }).tier === "deny" &&
+    policyModule.evaluateShellCommand("echo `rm -rf /`", ws, { mode: "permissive" }).tier === "deny",
+  { substitution: policyModule.evaluateShellCommand("echo $(rm -rf ~)", ws, { mode: "permissive" }) },
+);
+check(
   "policy_unit_node_script_ask",
   policyModule.evaluateShellCommand("node scripts/untrusted.js", ws, { mode: "balanced" }).tier === "ask" &&
     policyModule.evaluateShellCommand("node ../../outside.js", ws, { mode: "strict" }).tier === "ask",
