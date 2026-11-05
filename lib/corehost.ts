@@ -1099,13 +1099,15 @@ async function opSearch(
     // Ripgrep-backed fast path if available (safe spawn, no shell).
     // Include/exclude globs map to `rg --glob` (a negated glob for exclude);
     // they no longer silently disable this path on huge workspaces.
-    // context_lines maps to `rg -C <n>`.
+    // context_lines are NOT taken from rg's `-C` output — context records
+    // would need per-file cluster correlation, so instead each hit file is
+    // re-read once (bounded, chunked) and the surrounding lines are sliced,
+    // exactly matching the JS path's `context` shape.
     if (envFlag("VENIRA_USE_RIPGREP", true) && kind === "literal_content" && !countOnly) {
       if (await ripgrepInstalled()) {
         try {
           const argList = ["--json", "-n", "--max-filesize=1M", "--color=never"];
           if (!caseSensitive) argList.push("-i");
-          if (contextLines > 0) argList.push("-C", String(contextLines));
           if (args.regex === true) { argList.push("-e", String(query)); }
           else { argList.push("-F", "-e", String(query)); }
           if (glob) argList.push("--glob", String(glob));
@@ -1130,6 +1132,35 @@ async function opSearch(
               hits.push({ relative_path: rel, line_number: ln, snippet });
               totalMatchLines += 1;
               if (hits.length >= limit) { complete = false; break; }
+            }
+            if (contextLines > 0 && hits.length > 0) {
+              const hitsByRel = new Map<string, Hit[]>();
+              for (const hit of hits) {
+                const list = hitsByRel.get(hit.relative_path) ?? [];
+                list.push(hit);
+                hitsByRel.set(hit.relative_path, list);
+              }
+              const distinct = [...hitsByRel.keys()];
+              for (let ci = 0; ci < distinct.length; ci += 16) {
+                const chunk = distinct.slice(ci, ci + 16);
+                await Promise.all(chunk.map(async (rel) => {
+                  const abs = path.resolve(root, rel);
+                  if (isProtectedPath(abs)) return;
+                  let content: string;
+                  try { content = await fs.readFile(abs, "utf8"); }
+                  catch { return; }
+                  if (Buffer.byteLength(content, "utf8") > 1_048_576) return;
+                  if (content.indexOf("\u0000") >= 0) return;
+                  const lines = content.split("\n");
+                  for (const hit of hitsByRel.get(rel) ?? []) {
+                    const idx = (hit.line_number ?? 0) - 1;
+                    if (idx < 0 || idx >= lines.length) continue;
+                    const start = Math.max(0, idx - contextLines);
+                    const end = Math.min(lines.length, idx + contextLines + 1);
+                    hit.context = lines.slice(start, end);
+                  }
+                }));
+              }
             }
             rankHits(hits, needle);
             return {

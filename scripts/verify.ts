@@ -934,6 +934,31 @@ const relRankHits = Array.isArray(relRank.data?.hits) ? (relRank.data.hits as Re
 check("search_relevance_file_name_first", String(relRankHits[0]?.relative_path ?? "").endsWith("compute_stats.ts"), relRankHits.map((h) => h.relative_path));
 check("search_relevance_whole_word_before_substring", relRankHits.some((h) => h.line_number === 1), relRankHits.map((h) => `${h.relative_path}:${h.line_number}`));
 check("search_relevance_shallow_first", relRankHits.findIndex((h) => String(h.relative_path ?? "").includes("deep/nested")) > relRankHits.findIndex((h) => String(h.relative_path ?? "") === "util.ts"), relRankHits.map((h) => h.relative_path));
+
+// 10a3. `context_lines` on the ripgrep fast path must return the same `context`
+// arrays as the JS scanner (it used to drop the field silently). This check is
+// path-agnostic: whichever backend serves it must produce the same shape.
+const ctxDir = `${dir}/ctx-check`;
+await fs.mkdir(ctxDir, { recursive: true });
+await fs.writeFile(`${ctxDir}/sample.ts`, "alpha line\nbeta CTX_MARKER_TOKEN line\ngamma line\ndelta line\n");
+const ctxSearch = asEnvelope(
+  await call("project_search", {
+    query: "CTX_MARKER_TOKEN",
+    kind: "literal_content",
+    relative_path: ctxDir,
+    glob: "*.ts",
+    context_lines: 1,
+  }),
+);
+const ctxHits = Array.isArray(ctxSearch.data?.hits) ? (ctxSearch.data.hits as Record<string, unknown>[]) : [];
+const ctxFirst = ctxHits[0] as { context?: unknown } | undefined;
+check(
+  "search_context_lines_shape",
+  Array.isArray(ctxFirst?.context) &&
+    (ctxFirst.context as string[]).length === 3 &&
+    (ctxFirst.context as string[])[1].includes("CTX_MARKER_TOKEN"),
+  ctxHits,
+);
 await call("project_write_file", { relative_path: `${dir}/search-token.txt`, content: "NEW_TOKEN\n" });
 await new Promise((resolve) => setTimeout(resolve, 3200));
 const search3 = await call("project_search", {
