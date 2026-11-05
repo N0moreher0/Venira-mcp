@@ -2144,6 +2144,45 @@ class KtService {
     fun greet(): String = "kotlin"
 }
 `);
+await writeFixture("src/main/java/com/demo/Named.java", `package com.demo;
+
+public interface Named {
+}
+`);
+await writeFixture("src/main/java/com/demo/Base.java", `package com.demo;
+
+public class Base implements Named {
+}
+`);
+await writeFixture("src/main/java/com/demo/Child.java", `package com.demo;
+
+public class Child extends Base implements Named {
+}
+`);
+await writeFixture("src/main/kotlin/com/demo/KBase.kt", `package com.demo
+
+open class KBase
+`);
+await writeFixture("src/main/kotlin/com/demo/KNamed.kt", `package com.demo
+
+interface KNamed
+`);
+await writeFixture("src/main/kotlin/com/demo/KChild.kt", `package com.demo
+
+class KChild : KBase()
+`);
+await writeFixture("src/main/kotlin/com/demo/KService.kt", `package com.demo
+
+class KService : KBase(), KNamed
+`);
+await writeFixture("src/main/kotlin/com/demo/KParent.kt", `package com.demo
+
+interface KParent
+`);
+await writeFixture("src/main/kotlin/com/demo/KChild2.kt", `package com.demo
+
+interface KChild2 : KParent
+`);
 
 const graph = asEnvelope(
   await call("project_dependency_graph", {
@@ -2393,6 +2432,23 @@ check(
   "dependency_graph_kotlin_internal_import",
   graph.ok === true && kotlinGraphEdges.length === 0,
   { edges: kotlinGraphEdges, note: "KtService.kt has no imports, just checks no crash on .kt parsing" },
+);
+check(
+  "dependency_graph_java_extends_implements",
+  graph.ok === true &&
+    hasEdge("src/main/java/com/demo/Child.java", "src/main/java/com/demo/Base.java", "extends") &&
+    hasEdge("src/main/java/com/demo/Child.java", "src/main/java/com/demo/Named.java", "implements") &&
+    hasEdge("src/main/java/com/demo/Base.java", "src/main/java/com/demo/Named.java", "implements"),
+  graphEdges.filter((edge) => edge.from.includes("com/demo/Child") || edge.from.includes("com/demo/Base")),
+);
+check(
+  "dependency_graph_kotlin_extends_implements",
+  graph.ok === true &&
+    hasEdge("src/main/kotlin/com/demo/KChild.kt", "src/main/kotlin/com/demo/KBase.kt", "extends") &&
+    hasEdge("src/main/kotlin/com/demo/KService.kt", "src/main/kotlin/com/demo/KBase.kt", "extends") &&
+    hasEdge("src/main/kotlin/com/demo/KService.kt", "src/main/kotlin/com/demo/KNamed.kt", "implements") &&
+    hasEdge("src/main/kotlin/com/demo/KChild2.kt", "src/main/kotlin/com/demo/KParent.kt", "extends"),
+  graphEdges.filter((edge) => edge.from.includes("com/demo/K")),
 );
 const javaImpact = asEnvelope(
   await call("project_change_impact", {
@@ -3192,6 +3248,11 @@ const readOnlyCases: Array<[string, boolean]> = [
   ["git diff > out.txt", false],
   ["rg foo src --no-heading", true],
   ["ripgrep --version", true],
+  ["echo \"$(date)\"", false],
+  ["echo \"`date`\"", false],
+  ["echo \"$HOME\"", false],
+  ["echo '$HOME'", true],
+  ["rg 'x$' src", true],
   ["ls -la", true],
   ["cat package.json", true],
   ["head -5 README.md", true],
