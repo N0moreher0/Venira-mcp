@@ -1048,7 +1048,9 @@ async function opSearch(
     // literal_content, regex, definition — Phase 1 (bounded parallel
     // chunked reads) + Phase 2 (binary-ext + null-byte guards).
     // Ripgrep-backed fast path if available (safe spawn, no shell).
-    if (envFlag("VENIRA_USE_RIPGREP", true) && kind === "literal_content" && contextLines === 0 && !includeRe && !excludeRe && !countOnly) {
+    // Include/exclude globs map to `rg --glob` (a negated glob for exclude);
+    // they no longer silently disable this path on huge workspaces.
+    if (envFlag("VENIRA_USE_RIPGREP", true) && kind === "literal_content" && contextLines === 0 && !countOnly) {
       if (await ripgrepInstalled()) {
         try {
           const argList = ["--json", "-n", "--max-filesize=1M", "--color=never"];
@@ -1056,6 +1058,7 @@ async function opSearch(
           if (args.regex === true) { argList.push("-e", String(query)); }
           else { argList.push("-F", "-e", String(query)); }
           if (glob) argList.push("--glob", String(glob));
+          if (excludeGlob) argList.push("--glob", `!${excludeGlob}`);
           argList.push("--max-count", String(limit));
           argList.push(searchRoot);
           const resp = await ripgrepExec(argList, 10000);
