@@ -305,7 +305,7 @@ const HARD_DENY: HardDenyRule[] = [
   {
     id: "power_state",
     reason: "This command shuts down or reboots the machine.",
-    test: (_p, raw) => /^\s*(shutdown|reboot|halt|poweroff)\b/im.test(raw) || /^\s*(shutdown|restart-computer|stop-computer)\b/im.test(raw),
+    test: (_p, raw) => /(^|[\s;&|`(])(shutdown|reboot|halt|poweroff)\b/im.test(raw) || /(^|[\s;&|`(])(shutdown|restart-computer|stop-computer)\b/im.test(raw),
   },
   {
     id: "vm_state",
@@ -338,12 +338,12 @@ const HARD_DENY: HardDenyRule[] = [
   {
     id: "privilege_escalation",
     reason: "Elevating privileges is never allowed from an agent session.",
-    test: (_p, raw, _cwd) => /(^|[\s;&|])(sudo|doas|pkexec|runas)\b/i.test(raw),
+    test: (_p, raw, _cwd) => /(^|[\s;&|`(])(sudo|doas|pkexec|runas)\b/i.test(raw),
   },
   {
     id: "root_delete",
     reason: "This deletes a filesystem root or your entire home directory.",
-    test: (_p, raw) => /(^|[\s;&|])rm\s+(-[a-z]*[rf][a-z]*\s+)+(\/|\/\*|~|~\/\*|\$HOME|\$HOME\/\*)\s*($|[;&|])/i.test(raw),
+    test: (_p, raw) => /(^|[\s;&|`(])rm\s+(-[a-z]*[rf][a-z]*\s+)+(\/|\/\*|~|~\/\*|\$HOME|\$HOME\/\*)\s*($|[;&|)`])/i.test(raw),
   },
   {
     id: "chmod_root",
@@ -547,53 +547,8 @@ const ASK_RULES: AskRule[] = [
   },
   {
     id: "wrapper_command",
-    reason: "This wraps another command; the policy inspects the inner command only after stripping the wrapper.",
+    reason: "This wraps another command; the policy cannot see what it will run and requires approval.",
     test: (parsed) => parsed.segments.some((s) => ["command", "builtin", "env", "nohup", "time", "nice", "xargs", "exec", "stdbuf", "setsid", "start", "call"].includes(s.command)),
-  },
-  {
-    id: "dynamic_execution",
-    reason: "This executes code that the policy cannot safely inspect.",
-    test: (parsed) =>
-      parsed.segments.some((segment) => {
-        if (["eval", "exec", "source", ".", "invoke-expression", "iex"].includes(segment.command)) return true;
-        const flags = segment.argv;
-        if (segment.command === "node" || segment.command === "nodejs") {
-          const informationalFlags = new Set(["--version", "-v", "--help", "-h"]);
-          return (
-            parsed.has_pipe ||
-            parsed.has_redirect ||
-            parsed.has_background ||
-            flags.length === 0 ||
-            !flags.every((flag) => informationalFlags.has(flag.toLowerCase()))
-          );
-        }
-        const interpreters: Record<string, string[]> = {
-          node: ["-e", "--eval", "-p", "--print", "-pe", "-pr"],
-          nodejs: ["-e", "--eval", "-p", "--print", "-pe", "-pr"],
-          python: ["-c"],
-          python3: ["-c"],
-          deno: ["eval"],
-          bash: ["-c", "-lc", "-ec"],
-          sh: ["-c", "-ec"],
-          zsh: ["-c", "-lc"],
-          powershell: ["-command", "-encodedcommand", "-e", "-ec", "-enc", "-co", "-c"],
-          pwsh: ["-command", "-encodedcommand", "-e", "-ec", "-enc", "-co", "-c"],
-          cmd: ["/c"],
-          perl: ["-e"],
-          ruby: ["-e"],
-        };
-        const expected = interpreters[segment.command];
-        if (!expected) return false;
-        return flags.some((flag) => expected.some((exp) => {
-          const f = flag.toLowerCase();
-          const e = exp.toLowerCase();
-          if (f === e) return true;
-          if (f.startsWith("-") && e.startsWith("-") && f.length > 2 && e.length === 2) {
-            return f.includes(e.slice(1));
-          }
-          return false;
-        }));
-      }),
   },
   {
     id: "find_mutation",
