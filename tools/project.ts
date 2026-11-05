@@ -482,146 +482,6 @@ function fromReadEntry(entry: CachedRead): RustResponse {
   };
 }
 
-async function runSafeEdit(args: Args): Promise<RustResponse> {
-  const relativePath = typeof args.relative_path === "string" ? args.relative_path.trim() : "";
-  if (!relativePath) {
-    throw new Error("[invalid_request] relative_path is required. Hint: provide the file path to safely edit.");
-  }
-  const edits = Array.isArray(args.edits) ? (args.edits as Args[]) : null;
-  if (!edits || edits.length === 0) {
-    throw new Error("[invalid_request] edits must be a non-empty array. Hint: provide [{ old_text, new_text }].");
-  }
-  if (edits.length > 100) {
-    throw new Error("[invalid_request] too many edits (max 100). Hint: split into multiple safe_edit calls.");
-  }
-  const reason = typeof args.reason === "string" ? args.reason.trim() : "";
-  if (!reason || reason.length > 400) {
-    throw new Error("[invalid_request] reason (why) of <= 400 chars is required for audit.");
-  }
-  const expectedSha = typeof args.expected_sha256 === "string" ? args.expected_sha256.trim() : null;
-
-  // 1. Read fresh (bypass any cached result; detect TOCTOU).
-  const readResp = (await execute("read_file", { relative_path: relativePath })) as RustResponse;
-  const readText = (readResp.result?.data && typeof (readResp.result.data as { text?: unknown }).text === "string")
-    ? ((readResp.result.data as { text: string }).text)
-    : null;
-  if (readText === null) {
-    throw new Error("[io_error] Could not read file content. Hint: check existence with project_list_files; do not retry pinned-broken files within the same plan.");
-  }
-  const beforeSha = createHash("sha256").update(readText, "utf8").digest("hex");
-
-  if (expectedSha && expectedSha !== beforeSha) {
-    throw new Error(
-      "[content_changed] File changed since the agent originally read it " +
-      "(expected_sha256=" + expectedSha + ", actual=" + beforeSha +
-      "). Re-read and re-run the edit with the fresh expected_sha256.",
-    );
-  }
-
-  // 2. Apply edits in memory.
-  let current = readText;
-  let replacementsTotal = 0;
-  for (let i = 0; i < edits.length; i++) {
-    const e = edits[i];
-    const oldText = (e && typeof e.old_text === "string") ? e.old_text : null;
-    const newText = (e && typeof e.new_text === "string") ? e.new_text : null;
-    if (oldText === null || newText === null) {
-      throw new Error("[invalid_request] edit[" + i + "] must have string old_text and new_text.");
-    }
-    if (oldText.length === 0) {
-      throw new Error("[invalid_request] edit[" + i + "].old_text must be non-empty.");
-    }
-    const replaceAll = !!(e && e.replaceAll === true);
-    let count = 0;
-    if (replaceAll) {
-      const parts = current.split(oldText);
-      count = parts.length - 1;
-      if (count === 0) throw new Error("[no_match] edit[" + i + "] old_text not found: " + oldText.slice(0, 120) + "...");
-      current = current.split(oldText).join(newText);
-    } else {
-      const first = current.indexOf(oldText);
-      if (first === -1) throw new Error("[no_match] edit[" + i + "] old_text not found: " + oldText.slice(0, 120) + "...");
-      count = 1;
-      current = current.slice(0, first) + newText + current.slice(first + oldText.length);
-    }
-    replacementsTotal += count;
-  }
-
-  const afterSha = createHash("sha256").update(current, "utf8").digest("hex");
-  if (afterSha === beforeSha) {
-    // No-op change; skip write to keep audit focused.
-    return {
-      status: "completed",
-      result: {
-        kind: "safe_edit",
-        data: {
-          relative_path: relativePath,
-          before_sha256: beforeSha,
-          after_sha256: afterSha,
-          verified_sha256: afterSha,
-          replacements: replacementsTotal,
-          verified: true,
-          changed: false,
-          reason,
-          message: "Edits produced no content change; write skipped to avoid useless writes.",
-        },
-      },
-    };
-  }
-
-  // Limit output sizes to prevent huge writes.
-  if (current.length > 2 * 1024 * 1024) {
-    throw new Error("[resource_limit] Resulting content exceeds 2MB. Hint: split into smaller edits.");
-  }
-
-  // 3. Write atomically at the tools layer perspective (backend does the actual write).
-  await execute("write_file", {
-    relative_path: relativePath,
-    content: current,
-    reason: "safe_edit: " + reason,
-  });
-
-  // 4. Invalidate caches (safe_edit bypassed executeCached default handling).
-  try {
-    const abs = toHostPath(relativePath);
-    invalidatePath(abs);
-    invalidateListCaches();
-    invalidateDependencyGraphCache();
-  } catch {
-    /* cache invalidation failure is non-fatal; stale cache will be detected via mtime */
-  }
-
-  // 5. Verify read-back.
-  const verifyResp = (await execute("read_file", { relative_path: relativePath })) as RustResponse;
-  const verifyText = (verifyResp.result?.data && typeof (verifyResp.result.data as { text?: unknown }).text === "string")
-    ? ((verifyResp.result.data as { text: string }).text)
-    : null;
-  const verifiedSha = verifyText !== null
-    ? createHash("sha256").update(verifyText, "utf8").digest("hex")
-    : null;
-  const verified = verifyText !== null && verifyText === current;
-
-  return {
-    status: "completed",
-    result: {
-      kind: "safe_edit",
-      data: {
-        relative_path: relativePath,
-        before_sha256: beforeSha,
-        after_sha256: afterSha,
-        verified_sha256: verifiedSha,
-        replacements: replacementsTotal,
-        verified,
-        changed: true,
-        reason,
-        message: verified
-          ? "Edit completed and read-back verified (content + sha256 match)."
-          : "Edit written but read-back mismatch! Investigate filesystem race or read-cache staleness.",
-      },
-    },
-  };
-}
-
 async function readFileCached(args: Args): Promise<Execution> {
   const absolutePath = toHostPath(args.relative_path as string | undefined);
   const key = cacheKey(absolutePath, args);
@@ -978,8 +838,7 @@ async function executeCached(operation: string, args: Args): Promise<Execution> 
     }
 
     if (operation === "safe_edit") {
-      const response = await runSafeEdit(args);
-      return { response, cached: false };
+      throw new Error("[invalid_request] safe_edit tool removed. Use project_edit_file with guard=sha256 instead.");
     }
 
     // VENIRA_CACHE_ALL=0: bypass every read-side cache (strict fresh mode).
@@ -3314,13 +3173,13 @@ export function registerProjectTools(server: McpServer): void {
     "project_edit_file",
     {
       ...config(
-        "Edit a file by exact text replacement: one old_text/new_text pair, or edits[] for multiple sections.",
+        "Edit a file by exact text replacement: one old_text/new_text pair, or edits[] for multiple sections. Supports TOCTOU guard mode (guard=sha256) for atomic read-edit-verify cycle.",
         "Edit file",
         {
-          use_when: "change one or a few text sections whose exact content you know; pair with expected_sha256 to guard against blind overwrites. If editing 2+ files or 2+ sections, create a project_snapshot first so you can rollback in one call.",
+          use_when: "change one or a few text sections whose exact content you know; pair with expected_sha256 to guard against blind overwrites. Use guard=sha256 for atomic read-edit-verify cycle (replaces safe_edit). If editing 2+ files or 2+ sections, create a project_snapshot first so you can rollback in one call.",
           avoid_when: "the whole file must change (project_write_file), or you have not read the file to know old_text.",
           speed_profile: "fast; clears the read/list/search cache for the affected path.",
-          output_kind: "file_written: replacements, sha256_before/after.",
+          output_kind: "file_written: replacements, sha256_before/after, verified (with guard=sha256).",
           batch_safe: false,
         },
         { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
@@ -3337,6 +3196,8 @@ export function registerProjectTools(server: McpServer): void {
         fuzzy_distance: z.number().int().min(0).max(10).optional().describe("P2: Max Levenshtein distance for fuzzy matching (default 3)."),
         ignore_indentation: flag01.optional().describe("P2: Ignore leading whitespace differences in fuzzy matching; 1=on, 0=off."),
         case_insensitive: flag01.optional().describe("P2: Case-insensitive fuzzy matching; 1=on, 0=off."),
+        // TOCTOU guard: "sha256" = read fresh, verify content unchanged vs expected_sha256, apply edits, write, re-read and verify
+        guard: z.enum(["sha256"]).optional().describe("TOCTOU guard: 'sha256' reads fresh content, verifies expected_sha256, applies edits, writes, then re-reads to verify content+sha256 match. Provides atomic read-edit-verify cycle."),
         reason: reason_,
       },
     },
@@ -3564,35 +3425,6 @@ export function registerProjectTools(server: McpServer): void {
       },
     },
     (args) => runOne("cache_clear", args as Args),
-  );
-
-  server.registerTool(
-    "project_safe_edit",
-    {
-      ...config(
-        "Read+edit+verify atomically in one MCP call (no TOCTOU race): reads fresh content, requires expected_sha256 to guard, applies edits, writes, invalidates caches, and re-reads to confirm content + sha256.",
-        "Safe edit (TOCTOU-guarded)",
-        {
-          use_when: "you have a sha256 from a prior read_file and want guaranteed content unchanged before write.",
-          avoid_when: "single small edit where plain project_edit_file suffices.",
-          speed_profile: "one read + one write + one verify (slower than edit_file but race-free).",
-          output_kind: "safe_edit: before/after/verified sha256, replacements, verified boolean, changed boolean.",
-          batch_safe: false,
-        },
-        { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
-      ),
-      inputSchema: {
-        relative_path: path_.min(1),
-        edits: z.array(z.object({
-          old_text: z.string().min(1),
-          new_text: z.string(),
-          replaceAll: z.boolean().optional(),
-        })).min(1).max(100),
-        expected_sha256: z.string().optional(),
-        reason: z.string().min(1).max(400),
-      },
-    },
-    (args) => runOne("safe_edit", args as Args),
   );
 
   if (ALLOW_JS_EXEC) {
