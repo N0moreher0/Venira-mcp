@@ -910,6 +910,30 @@ const search2 = await call("project_search", {
 });
 const search2Data = JSON.parse((search2 as { content?: { text?: string }[] })?.content?.[0]?.text ?? "{}");
 check("search_hits_invalidate_after_write", search2Data.data?.hits?.length >= 1, search2Data.data?.hits?.length);
+
+// 10a2. Search relevance ranking — most useful hits surface first:
+// - file name matching the query outranks plain content match
+// - whole-word match outranks substring match
+// - shallow file outranks deep file
+const relRankDir = `${dir}/rel-rank`;
+await fs.mkdir(relRankDir, { recursive: true });
+await fs.writeFile(`${relRankDir}/compute_stats.ts`, `export function compute_stats() { return 1; }\n`);
+await fs.writeFile(`${relRankDir}/util.ts`, `const x = compute_stats_helper();\n`);
+await fs.mkdir(`${relRankDir}/deep/nested`, { recursive: true });
+await fs.writeFile(`${relRankDir}/deep/nested/other.ts`, `const y = compute_stats_helper();\n`);
+const relRank = asEnvelope(
+  await call("project_search", {
+    query: "compute_stats",
+    kind: "literal_content",
+    relative_path: relRankDir,
+    glob: "*.ts",
+    limit: 10,
+  }),
+);
+const relRankHits = Array.isArray(relRank.data?.hits) ? (relRank.data.hits as Record<string, unknown>[]) : [];
+check("search_relevance_file_name_first", String(relRankHits[0]?.relative_path ?? "").endsWith("compute_stats.ts"), relRankHits.map((h) => h.relative_path));
+check("search_relevance_whole_word_before_substring", relRankHits.some((h) => h.line_number === 1), relRankHits.map((h) => `${h.relative_path}:${h.line_number}`));
+check("search_relevance_shallow_first", relRankHits.findIndex((h) => String(h.relative_path ?? "").includes("deep/nested")) > relRankHits.findIndex((h) => String(h.relative_path ?? "") === "util.ts"), relRankHits.map((h) => h.relative_path));
 await call("project_write_file", { relative_path: `${dir}/search-token.txt`, content: "NEW_TOKEN\n" });
 await new Promise((resolve) => setTimeout(resolve, 3200));
 const search3 = await call("project_search", {
