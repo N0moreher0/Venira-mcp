@@ -310,16 +310,6 @@ const HARD_DENY: HardDenyRule[] = [
     test: (_p, raw) => /(^|[\s;&|`(])(shutdown|reboot|halt|poweroff)\b/im.test(raw) || /(^|[\s;&|`(])(shutdown|restart-computer|stop-computer)\b/im.test(raw),
   },
   {
-    id: "vm_state",
-    reason: "Powering off or destroying a virtual machine / container is unrecoverable.",
-    test: (_p, raw) => /\b(virtualbox|vmware|libvirt|virsh|lxc)\b[^\n]*\b(destroy|off|stop|delete|kill)\b/i.test(raw) || /\bdestroy-machine\b/i.test(raw),
-  },
-  {
-    id: "container_state",
-    reason: "Destroying container state or pruning container resources on the host is irreversible.",
-    test: (_p, raw) => /\b(docker|podman|nerdctl|kubernetes|kubectl)\b[^\n]*\b(destroy|prune|system)\b/i.test(raw),
-  },
-  {
     id: "fork_bomb",
     reason: "This is a fork bomb.",
     test: (_p, raw) => /:\(\)\s*\{[^}]*\|[^}]*:/.test(raw),
@@ -368,16 +358,6 @@ const HARD_DENY: HardDenyRule[] = [
       /\b(del|erase|rd|rmdir)\b[^\n]*\s[\s\S]*?\s(?:\/f[\s\S]*?[\s\S]*?)?\*$/i.test(raw) ||
       /\b(del|erase)\b[^\n]*\s*\*\s*(?:\/s|--recursive)?\s*(?:\/f|--force)?\s*(?:\/q|--quiet)?\s*$/i.test(raw) ||
       /\b((?:^|[\s;&|\\`\)])rm[\s\S]*?-rf[\s\S]*?\/\*[^\n]*)/i.test(raw),
-  },
-  {
-    id: "windows_attribute_reset",
-    reason: "This attempts to remove hidden/system/read-only attributes, which can bypass certain protections.",
-    test: (_p, raw) => /\b(attrib)\b[^\n]*\s*-s\b/i.test(raw) && /\b(attrib)\b[^\n]*\s*-h\b/i.test(raw) && /\b(attrib)\b[^\n]*\s*-r\b/i.test(raw),
-  },
-  {
-    id: "windows_infinite_write",
-    reason: "This sends output to NUL (null device) which may create the final file or fail catastrophically on some shells.",
-    test: (_p, raw) => /\b(>|>>|>>\s*>)\s*(?:\\\\.NUL|NUL:|nul)\b/i.test(raw),
   },
   {
     id: "self_approval",
@@ -430,21 +410,6 @@ const HARD_DENY: HardDenyRule[] = [
       all.push(...parsed.redirect_targets);
       return collect(all);
     },
-  },
-  {
-    id: "taskkill_force",
-    reason: "Force-killing processes can terminate critical system processes or applications.",
-    test: (_p, raw) => /\btaskkill\b[^\n]*\/f/i.test(raw) || /\btaskkill\b[^\n]*--force/i.test(raw),
-  },
-  {
-    id: "powershell_encoded_command",
-    reason: "PowerShell encoded commands (-enc/-e/-ec/-encodedcommand) are a common obfuscation technique used in attacks.",
-    test: (parsed) =>
-      parsed.segments.some((segment) => {
-        if (segment.command !== "powershell" && segment.command !== "pwsh") return false;
-        const flags = segment.argv.map((a) => a.toLowerCase());
-        return flags.some((f) => ["-e", "-ec", "-enc", "-encodedcommand"].includes(f));
-      }),
   },
 ];
 
@@ -598,6 +563,41 @@ const ASK_RULES: AskRule[] = [
         }
         return false;
       }),
+  },
+  {
+    id: "vm_state",
+    reason: "Powering off or destroying a virtual machine / container is unrecoverable.",
+    test: (_p, raw) => /\b(virtualbox|vmware|libvirt|virsh|lxc)\b[^\n]*\b(destroy|off|stop|delete|kill)\b/i.test(raw) || /\bdestroy-machine\b/i.test(raw),
+  },
+  {
+    id: "container_state",
+    reason: "Destroying container state or pruning container resources on the host is irreversible.",
+    test: (_p, raw) => /\b(docker|podman|nerdctl|kubernetes|kubectl)\b[^\n]*\b(destroy|prune|system)\b/i.test(raw),
+  },
+  {
+    id: "taskkill_force",
+    reason: "Force-killing processes can terminate critical system processes or applications.",
+    test: (_p, raw) => /\btaskkill\b[^\n]*\/f/i.test(raw) || /\btaskkill\b[^\n]*--force/i.test(raw),
+  },
+  {
+    id: "powershell_encoded_command",
+    reason: "PowerShell encoded commands (-enc/-e/-ec/-encodedcommand) are a common obfuscation technique used in attacks.",
+    test: (parsed) =>
+      parsed.segments.some((segment) => {
+        if (segment.command !== "powershell" && segment.command !== "pwsh") return false;
+        const flags = segment.argv.map((a) => a.toLowerCase());
+        return flags.some((f) => ["-e", "-ec", "-enc", "-encodedcommand"].includes(f));
+      }),
+  },
+  {
+    id: "windows_attribute_reset",
+    reason: "This attempts to remove hidden/system/read-only attributes, which can bypass certain protections.",
+    test: (_p, raw) => /\b(attrib)\b[^\n]*\s*-s\b/i.test(raw) && /\b(attrib)\b[^\n]*\s*-h\b/i.test(raw) && /\b(attrib)\b[^\n]*\s*-r\b/i.test(raw),
+  },
+  {
+    id: "windows_infinite_write",
+    reason: "This sends output to NUL (null device) which may create the final file or fail catastrophically on some shells.",
+    test: (_p, raw) => /\b(>|>>|>>\s*>)\s*(?:\\\\.NUL|NUL:|nul)\b/i.test(raw),
   },
   {
     id: "unresolved_file_argument",

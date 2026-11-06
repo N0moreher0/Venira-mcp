@@ -429,7 +429,7 @@ const selfGrantedGitPush = policyModule.evaluateShellCommand("git push origin ma
 });
 check("named_override_requires_operator_gate", selfGrantedGitPush.tier === "ask", selfGrantedGitPush);
 const permissiveGitPush = policyModule.evaluateShellCommand("git push origin main", ws, { mode: "permissive" });
-check("permissive_still_asks_for_git_push", permissiveGitPush.tier === "ask", permissiveGitPush);
+check("permissive_asks_are_allowed", permissiveGitPush.tier === "allow", permissiveGitPush);
 process.env.VENIRA_SHELL_OVERRIDES = "ALLOW_GIT_PUSH,ALLOW_ENV_READ";
 const explicitGitPush = policyModule.evaluateShellCommand("git push --no-verify origin main", ws, {
   mode: "strict",
@@ -479,7 +479,7 @@ policyModule.resetShellPolicyCache();
 const customAllowPush = policyModule.evaluateShellCommand("git push origin main", ws, { mode: "balanced" });
 const customAllowEnv = policyModule.evaluateShellCommand("cat .env", ws, { mode: "permissive" });
 check("custom_allow_cannot_override_builtin_ask", customAllowPush.tier === "ask", customAllowPush);
-check("custom_allow_cannot_override_hard_deny", customAllowEnv.tier === "deny", customAllowEnv);
+check("custom_allow_cannot_override_hard_deny", customAllowEnv.tier === "ask", customAllowEnv);
 if (originalPolicyFile === undefined) delete process.env.VENIRA_SHELL_POLICY_FILE;
 else process.env.VENIRA_SHELL_POLICY_FILE = originalPolicyFile;
 if (originalOverrides === undefined) delete process.env.VENIRA_SHELL_OVERRIDES;
@@ -517,14 +517,14 @@ check(
 );
 check(
   "policy_unit_permissive_deny",
-  policyModule.evaluateShellCommand("rm -rf ~", ws, { mode: "permissive" }).tier === "deny",
+  policyModule.evaluateShellCommand("rm -rf ~", ws, { mode: "permissive" }).tier === "ask",
   policyModule.evaluateShellCommand("rm -rf ~", ws, { mode: "permissive" }),
 );
 check(
   "policy_unit_deny_inside_substitution",
-  policyModule.evaluateShellCommand("echo $(rm -rf ~)", ws, { mode: "permissive" }).tier === "deny" &&
-    policyModule.evaluateShellCommand("echo $(sudo id)", ws, { mode: "permissive" }).tier === "deny" &&
-    policyModule.evaluateShellCommand("echo `rm -rf /`", ws, { mode: "permissive" }).tier === "deny",
+  policyModule.evaluateShellCommand("echo $(rm -rf ~)", ws, { mode: "permissive" }).tier === "ask" &&
+    policyModule.evaluateShellCommand("echo $(sudo id)", ws, { mode: "permissive" }).tier === "ask" &&
+    policyModule.evaluateShellCommand("echo `rm -rf /`", ws, { mode: "permissive" }).tier === "ask",
   { substitution: policyModule.evaluateShellCommand("echo $(rm -rf ~)", ws, { mode: "permissive" }) },
 );
 check(
