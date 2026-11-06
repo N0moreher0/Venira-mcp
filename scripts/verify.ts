@@ -926,6 +926,40 @@ const search2 = await call("project_search", {
 const search2Data = JSON.parse((search2 as { content?: { text?: string }[] })?.content?.[0]?.text ?? "{}");
 check("search_hits_invalidate_after_write", search2Data.data?.hits?.length >= 1, search2Data.data?.hits?.length);
 
+// 9a. Backend parity: the ripgrep fast path must return the same hit set as
+// the JS scanner for the same query. The fixture lives in a gitignored dir
+// (.verify-tmp/), so rg must run with --no-ignore to agree with the walker.
+const searchJsClient = new Client({ name: "verify-js-search", version: "0.0.0" }, { capabilities: {} });
+const searchJsTransport = new StdioClientTransport({
+  command: "node",
+  args: ["dist/server.js"],
+  cwd: process.cwd(),
+  env: verifyEnv({ VENIRA_SESSION_ID: `${SESSION_ID}-js-search`, VENIRA_USE_RIPGREP: "0" }, "full"),
+  stderr: "pipe",
+});
+await searchJsClient.connect(searchJsTransport);
+const parityArgs = {
+  query: token,
+  kind: "literal_content",
+  relative_path: dir,
+  glob: "*.txt",
+  limit: 50,
+};
+const rgParity = asEnvelope(await call("project_search", parityArgs));
+const jsParity = asEnvelope(await searchJsClient.callTool({ name: "project_search", arguments: parityArgs }));
+await searchJsClient.close();
+const hitKeys = (env: { data?: { hits?: unknown } }) => {
+  const hits = Array.isArray(env.data?.hits) ? (env.data.hits as Record<string, unknown>[]) : [];
+  return hits.map((h) => `${String(h.relative_path)}:${String(h.line_number)}`).sort();
+};
+const rgKeys = hitKeys(rgParity);
+const jsKeys = hitKeys(jsParity);
+check(
+  "search_rg_js_backend_parity",
+  rgKeys.length > 0 && rgKeys.length === jsKeys.length && rgKeys.every((k, i) => k === jsKeys[i]),
+  { rg: rgKeys, js: jsKeys },
+);
+
 // 10a2. Search relevance ranking — most useful hits surface first:
 // - file name matching the query outranks plain content match
 // - whole-word match outranks substring match
