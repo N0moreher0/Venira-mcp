@@ -52,7 +52,7 @@ Pick your client's shape, copy it, change `VENIRA_WORKSPACE`, and you're done.
         "VENIRA_WORKSPACE": "/absolute/path/to/project",  // ← change this; Windows: "C:\\path\\to\\project"
         "VENIRA_TOOL_MODE": "expert",        // "expert" = 43 tools (all) · "default" = 33 (no PR/CI)
         "VENIRA_OUTPUT_MODE": "full",        // "full" = complete · "compact" = trim >8KB (small models)
-        "VENIRA_SHELL_MODE": "permissive",   // "permissive" = no prompts · "balanced" = ask for writes/net/git push
+        "VENIRA_SHELL_MODE": "permissive",   // "permissive" = ask rules allowed, hard-deny → ask · "balanced" = ask for writes/net/git push
         "VENIRA_SHELL_ENV_PASS_ALL": "0",    // "1" = pass full env to shell (build tools that need it)
         "VENIRA_SHELL_EXIT_EARLY": "1",      // poll returns as soon as exit code is known
         "VENIRA_SHELL_TIMEOUT_POLICY": "soft", // "soft" = warn on timeout · "hard" = kill process tree
@@ -285,7 +285,7 @@ Full reference: ~60 `VENIRA_*` flags — see the env table in the source or `npx
 
 **Conservative by default:**
 - **Workspace lock**: all paths validated inside `VENIRA_WORKSPACE`; `../` escape rejected (`path_escape`).
-- **Shell policy**: hard-deny for catastrophic commands (`rm -rf`, fork bomb, kernel module writes, bootloader tampering, credential theft, container escape, `git push --force`). Ask rules for writes outside workspace, network fetches, package installs, git history rewrites.
+- **Shell policy**: hard-deny for catastrophic system/disk commands (format disk, mount, shutdown/reboot, fork bomb, pipe download to shell, sudo/doas, rm -rf root/home, chmod 777 /, mass Windows drive delete, protected credential files, self-approval). Hard-deny degrades to **ask** in `permissive` mode (operator can approve). Ask rules (writes outside workspace, network, package mutation, git history rewrite, destructive delete, VM/container, taskkill /f, PowerShell -enc, attrib reset, NUL redirect) are **allowed** in `permissive` mode. Deny always wins over ask.
 - **Secrets**: AES-256-GCM encrypted at rest; values never in tool metadata; `secret_env` requires human approval; expired secrets refused.
 - **Provider DLP**: Secretlint scans PR/CI request args and HTTP payloads; detected credentials blocked before sending, withheld from response.
 - **Audit trail**: all ops (including failures) written to SQLite WAL; `project_read_audit` for post-mortems.

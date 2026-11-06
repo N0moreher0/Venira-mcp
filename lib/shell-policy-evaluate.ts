@@ -86,6 +86,19 @@ export function evaluateParsedShellCommand(
       if (rule.id === "protected_file_access" && overrideApplies && override?.name === "ALLOW_ENV_READ") {
         continue;
       }
+      // In permissive / allow_all mode, hard-deny degrades to ask: the
+      // command is not run silently, but the operator can approve it.
+      // Deny still takes priority over ask (this block runs before askRules).
+      if (mode === "permissive") {
+        return {
+          tier: "ask",
+          rule: `ask.deny.${rule.id}`,
+          reason: `${rule.reason} (hard-denied by default; approval required in permissive mode).`,
+          mode,
+          command_hash: hash,
+          ...(deleteHint ? { hint: deleteHint } : {}),
+        };
+      }
       return {
         tier: "deny",
         rule: `deny.${rule.id}`,
@@ -98,6 +111,17 @@ export function evaluateParsedShellCommand(
   }
   for (const rule of policy.deny) {
     if (matchCustomRule(parsed, rule)) {
+      // Operator-declared deny also degrades to ask in permissive mode.
+      if (mode === "permissive") {
+        return {
+          tier: "ask",
+          rule: `ask.deny.${rule.id}`,
+          reason: `${rule.reason ?? "Denied by policy file."} (approval required in permissive mode).`,
+          mode,
+          command_hash: hash,
+          ...(deleteHint ? { hint: deleteHint } : {}),
+        };
+      }
       return {
         tier: "deny",
         rule: rule.id,
@@ -131,7 +155,7 @@ export function evaluateParsedShellCommand(
   }
 
   for (const rule of askRules) {
-    if ((mode !== "permissive" || rule.id === "git_history_rewrite") && rule.test(parsed, cwd)) {
+    if (mode !== "permissive" && rule.test(parsed, cwd)) {
       return {
         tier: "ask",
         rule: `ask.${rule.id}`,

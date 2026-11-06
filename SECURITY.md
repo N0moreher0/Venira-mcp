@@ -120,7 +120,7 @@ directly affected:
 |---|---|---|
 | `VENIRA_UNRESTRICTED` | `"0"` | `"1"` removes the workspace lock. Highest-risk setting. |
 | `VENIRA_DEFAULT_SHELL` | platform default | Pick the least-capable shell that meets your needs. |
-| `VENIRA_SHELL_MODE` | `balanced` | `balanced`, `strict`, or `permissive`; hard-deny rules are not disabled by a mode. |
+| `VENIRA_SHELL_MODE` | `balanced` | `balanced`, `strict`, or `permissive`; in `permissive`, hard-deny degrades to ask and ask rules are allowed. |
 | `VENIRA_SHELL_OVERRIDES` | unset | Operator allowlist for specific named shell exceptions. Each tool call must pass the exact name and a reason; the reason is redacted and audited, but is not proof of human identity. |
 | `VENIRA_DATA_DIR` | Per-user OS data directory | Contains the audit DB, encrypted secrets, approval key and pending approvals. Keep it private and don't point it at a shared directory. |
 | `VENIRA_SESSION_GRANT_RULES` | `cd_outside_workspace` | Additional rules eligible for human-approved session grants. Do not include network or history-rewrite rules unless the environment is disposable. |
