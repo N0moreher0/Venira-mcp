@@ -9,6 +9,7 @@ import * as approvals from "../lib/approvals.js";
 import {
   APPROVAL_PENDING_TTL_MS,
   APPROVAL_WAIT_MAX_MS,
+  approveCommand,
   awaitApprovalGrant,
   buildApprovalPayload,
   parseApprovalWaitMs,
@@ -916,6 +917,7 @@ const ELICIT_TIMEOUT_MS = 5 * 60 * 1000;
 
 type ShellApprovalData = {
   approval_id?: unknown;
+  approval?: { approve_command?: unknown };
   command?: unknown;
   rule?: unknown;
   reason?: unknown;
@@ -932,8 +934,12 @@ function approvalFailure(
   const approvalId = typeof data.approval_id === "string" ? data.approval_id : "";
   const reason = typeof data.reason === "string" ? data.reason : "This command requires approval.";
   const rule = typeof data.rule === "string" ? data.rule : "policy";
+  const command =
+    typeof data.approval?.approve_command === "string"
+      ? data.approval.approve_command
+      : approveCommand(approvalId);
   const hint = approvalId
-    ? `Stop and tell the user: run \`npx venira-mcp --approve ${approvalId}\` in an interactive terminal. Do not loop. After they confirm, retry project_shell_run once with approval_id="${approvalId}".`
+    ? `Stop and tell the user: run \`${command}\` in an interactive terminal. Do not loop. After they confirm, retry project_shell_run once with approval_id="${approvalId}".`
     : undefined;
   return toolResult(
     errorEnvelope(operation, new Error(`[approval_required] ${reason} (rule: ${rule})`), {
@@ -2109,9 +2115,9 @@ async function runExecuteJs(args: Args): Promise<ToolResult> {
                 approval_id: pendingId,
               },
             },
-            note: `A human must run: npx venira-mcp --approve ${pendingId} (then retry with approval_id).`,
+            note: `A human must run: ${pending.approve_command} (then retry with approval_id).`,
           },
-          hint: `Ask the user to run \`npx venira-mcp --approve ${pendingId}\` in an interactive terminal, then retry project_execute_js with approval_id="${pendingId}".`,
+          hint: `Ask the user to run \`${pending.approve_command}\` in an interactive terminal, then retry project_execute_js with approval_id="${pendingId}".`,
         }),
         true,
       );
@@ -3352,7 +3358,7 @@ export function registerProjectTools(server: McpServer): void {
         approval_id: z
           .string()
           .optional()
-          .describe("Approval ID from the approval_required envelope, granted by a human via `npx venira-mcp --approve <id>` or client elicitation. Retry once after they confirm."),
+          .describe("Approval ID from the approval_required envelope, granted by a human running `data.approval.approve_command` or using client elicitation. Retry once after they confirm."),
         approval_wait_ms: z
           .number()
           .int()
@@ -3518,7 +3524,7 @@ export function registerProjectTools(server: McpServer): void {
           approval_id: z
             .string()
             .optional()
-            .describe("Approval id from a previous project_execute_js approval_required response, granted with `npx venira-mcp --approve <id>`."),
+            .describe("Approval id from a previous project_execute_js approval_required response, granted by running `data.approval.approve_command`."),
           approval_wait_ms: z
             .number()
             .int()

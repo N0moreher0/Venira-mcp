@@ -115,7 +115,7 @@ directly affected:
 
 ## Approval model
 
-Shell and JavaScript approval requests return a common `data.approval` payload, including the pending `approval_id`, the reviewed subject, expiry, approve command, and retry arguments. Only a human can grant through the interactive `npx venira-mcp --approve <id>` CLI or MCP client elicitation; grants are HMAC-verified, bound to the exact call, expire after five minutes, and are single-use. The removed `approval_token` and `VENIRA_SHELL_AUTO_APPROVE_TOKEN` paths cannot approve a request; the legacy environment variable is ignored with a warning.
+Shell and JavaScript approval requests return a common `data.approval` payload, including the pending `approval_id`, the reviewed subject, expiry, approve command, and retry arguments. Only a human can grant by running the exact `data.approval.approve_command` from the response in an interactive PowerShell terminal or through MCP client elicitation; grants are HMAC-verified, bound to the exact call, expire after five minutes, and are single-use. The removed `approval_token` and `VENIRA_SHELL_AUTO_APPROVE_TOKEN` paths cannot approve a request; the legacy environment variable is ignored with a warning.
 
 ## Security-related environment variables
 

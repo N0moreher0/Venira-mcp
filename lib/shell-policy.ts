@@ -24,7 +24,7 @@
  * --------------
  * `ask` never runs the command. The caller receives an `approval_required`
  * error with a pending `approval_id` bound to the exact command, shell, cwd,
- * secret_env and rule. Only a human can grant it (`npx venira-mcp --approve <id>`
+ * secret_env and rule. Only a human can grant it (the exact `data.approval.approve_command`
  * in a TTY, or MCP elicitation in the client UI); the agent then retries once with
  * `approval_id`. The grant's scope (`once` or `session`) is chosen by the human,
  * never by the model. A `session` grant only covers rules in
@@ -788,7 +788,7 @@ export function loadShellPolicy(): ShellPolicy {
   if (/^(1|true|yes|on)$/i.test((process.env.VENIRA_SHELL_AUTO_APPROVE_TOKEN ?? "").trim())) {
     console.error(
       "[shell-policy] WARNING: VENIRA_SHELL_AUTO_APPROVE_TOKEN was removed in v1.15 and is ignored. " +
-        "Approvals now always use approval_id granted by a human (npx venira-mcp --approve <id> or client elicitation).",
+        "Approvals now always use approval_id granted by a human (the exact data.approval.approve_command or client elicitation).",
     );
   }
 

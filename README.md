@@ -90,6 +90,52 @@ The examples use four environment variables: workspace, tool set, output size, a
 }
 ```
 
+### Generic MCP JSON example
+
+For clients that accept the common `mcpServers` JSON shape, use the example for the user's operating system as a realistic starting point. Replace the example paths with paths on the user's machine; `VENIRA_DATA_DIR` is optional and can point to any writable directory. Keep this file private if it contains local paths or credentials.
+
+Windows:
+
+```json
+{
+  "mcpServers": {
+    "venira": {
+      "command": "npx",
+      "args": ["--yes", "--package=venira-mcp@latest", "venira-mcp"],
+      "env": {
+        "VENIRA_WORKSPACE": "C:\\Users\\YourName\\Projects\\my-app",
+        "VENIRA_DATA_DIR": "G:\\Snapshots",
+        "VENIRA_TOOL_MODE": "expert",
+        "VENIRA_OUTPUT_MODE": "full",
+        "VENIRA_SECURITY_PROFILE": "balanced"
+      }
+    }
+  }
+}
+```
+
+Linux:
+
+```json
+{
+  "mcpServers": {
+    "venira": {
+      "command": "npx",
+      "args": ["--yes", "--package=venira-mcp@latest", "venira-mcp"],
+      "env": {
+        "VENIRA_WORKSPACE": "/home/yourname/projects/my-app",
+        "VENIRA_DATA_DIR": "/home/yourname/.local/share/venira-mcp",
+        "VENIRA_TOOL_MODE": "expert",
+        "VENIRA_OUTPUT_MODE": "full",
+        "VENIRA_SECURITY_PROFILE": "balanced"
+      }
+    }
+  }
+}
+```
+
+`mcpServers` is a common client configuration shape, but some clients use a different outer key or file format. Preserve the Venira command, args, and environment values when adapting the example. The approval command returned at runtime uses the effective data directory from this configuration, so users and agents should copy `data.approval.approve_command` instead of constructing a path themselves.
+
 **Codex** (`~/.codex/config.toml`):
 
 ```toml
@@ -323,7 +369,7 @@ Full reference: ~60 `VENIRA_*` flags — see the env table in the source or `npx
 Granting a shell or JS approval:
 
 1. The call fails with `[approval_required]` and returns `data.approval_id` (valid for 5 minutes) together with the command or code, the rule and the reason. Shell and JS share one payload, `data.approval`: `{ approval_id, gate, rule, reason, subject_preview, expires_at, approve_command, retry_with: { tool, arguments } }`.
-2. A person runs `npx venira-mcp --approve <approval_id>` in an interactive terminal (it refuses without a TTY), reviews the request and answers `y`. `--yes` skips the prompt. `--session` extends the grant to the same command group until it expires, but only for rules in `VENIRA_SESSION_GRANT_RULES` (built-in: `cd_outside_workspace`).
+2. A person copies `data.approval.approve_command` exactly into an interactive PowerShell terminal (the returned command includes the server data directory and works in Windows PowerShell and PowerShell 7), reviews the request and answers `y`. The CLI refuses without a TTY. `--yes` skips the prompt. `--session` extends the grant to the same command group until it expires, but only for rules in `VENIRA_SESSION_GRANT_RULES` (built-in: `cd_outside_workspace`).
 3. The agent retries the same call with `approval_id`. The grant is HMAC-signed, tied to the session, bound to the exact command / shell / cwd / `secret_env` / rule (or code / argv for JS), and single-use.
 
 Agent helpers:

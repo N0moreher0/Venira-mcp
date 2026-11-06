@@ -358,13 +358,7 @@ export function createCorehost(config: WorkspaceConfig = {}): VeniraCorehost {
           },
         ];
       } else if (code === "approval_required") {
-        next_actions = [
-          {
-            tool: "shell_run",
-            arguments: { command: `npx venira-mcp --approve <approval_id>`, background: false },
-            why: "Grant approval for the pending operation",
-          },
-        ];
+        hint = `${hint} Stop here. A human must run data.approval.approve_command from the approval response in an interactive PowerShell terminal; do not call shell_run to approve it.`;
       }
 
       return {

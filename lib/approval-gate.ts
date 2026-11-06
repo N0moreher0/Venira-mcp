@@ -16,6 +16,7 @@
  */
 import { randomUUID } from "node:crypto";
 import * as approvals from "./approvals.js";
+import { activeDataDir } from "./workspace.js";
 
 export type ApprovalGateName = "shell" | "js";
 
@@ -54,8 +55,14 @@ export function parseApprovalWaitMs(raw: unknown): number {
   return Math.min(Math.floor(n), APPROVAL_WAIT_MAX_MS);
 }
 
+function quoteCliArg(value: string): string {
+  if (process.platform === "win32") return `'${value.replace(/'/g, "''")}'`;
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
 export function approveCommand(approvalId: string): string {
-  return `npx venira-mcp --approve ${approvalId}`;
+  const executable = process.platform === "win32" ? "npx.cmd" : "npx";
+  return `${executable} --yes venira-mcp --data-dir ${quoteCliArg(activeDataDir())} --approve ${approvalId}`;
 }
 
 /** Create the pending record. The caller shapes the response around the result. */

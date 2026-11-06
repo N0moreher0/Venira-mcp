@@ -53,6 +53,7 @@ import {
 } from "./file-ops-helpers.js";
 import * as approvals from "./approvals.js";
 import {
+  approveCommand,
   awaitApprovalGrant,
   buildApprovalPayload,
   parseApprovalWaitMs,
@@ -2129,7 +2130,7 @@ async function opShellRun(
     if (legacyToken && !approvalId) {
       throw new Error(
         `[approval_invalid] approval_token was removed in v1.15 (rule: ${decision.rule}). ` +
-          `Hint: call project_shell_run without it to get an approval_id; a human grants it with \`npx venira-mcp --approve <id>\` (or client elicitation), then retry once with approval_id.`,
+          `Hint: call project_shell_run without it to get an approval_id; a human grants it with \`data.approval.approve_command\` (or client elicitation), then retry once with approval_id.`,
       );
     }
     if (hasSessionApproval(sessionId, decision, approvalKey)) {
@@ -2198,7 +2199,7 @@ async function opShellRun(
                 tool: "project_shell_run",
                 arguments: { ...retryArguments, approval_id: pendingId },
               },
-              note: `A human must run: npx venira-mcp --approve ${pendingId} (then retry once with approval_id). Do not loop or retry before they confirm.`,
+              note: `A human must run: ${pending.approve_command} (then retry once with approval_id). Do not loop or retry before they confirm.`,
             },
           },
         };

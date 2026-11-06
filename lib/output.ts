@@ -339,7 +339,7 @@ const DEFAULT_HINTS: Record<string, string> = {
   feature_disabled:
     "This feature is switched off by the operator, so no approval can enable it and no approval_id will come. Do not retry. Tell the user the hint (which VENIRA_* flag the operator must set) or ask them to do it manually.",
   approval_required:
-    "The call did NOT run: a human must approve it. Stop and tell the user the approval_id and the command `npx venira-mcp --approve <approval_id>` (interactive terminal, or the client dialog when elicitation is on). Do not loop or rephrase. After they confirm, retry the same call once with approval_id. Never invent or reuse an approval_id; the scope (once/session) is chosen by the human, not by you.",
+    "The call did NOT run: a human must approve it. Stop and tell the user the approval_id and the exact command from `data.approval.approve_command` (interactive PowerShell, or the client dialog when elicitation is on). Do not loop or rephrase. After they confirm, retry the same call once with approval_id. Never invent or reuse an approval_id; the scope (once/session) is chosen by the human, not by you.",
   approval_invalid:
     "An approval_id is single-use, bound to the exact command/shell/cwd/secret_env and expires after VENIRA_SHELL_APPROVAL_TTL_MS. approval_token was removed in v1.15. Call the tool again without approval_id to get a fresh approval_required envelope; a human must grant the new id.",
   command_denied:

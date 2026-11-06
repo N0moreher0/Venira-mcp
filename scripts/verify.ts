@@ -13,6 +13,7 @@ import path from "node:path";
 import { startGithubMock } from "./github-mock.js";
 import { startBitbucketMock, startGitlabMock } from "./git-mocks.js";
 import { envFlag } from "../lib/env.js";
+import { approveCommand } from "../lib/approval-gate.js";
 import { rankCandidates } from "../lib/read-plan.js";
 
 const SESSION_ID = `verify-${Date.now()}`;
@@ -663,6 +664,7 @@ check(
 const asked = await call("project_shell_run", { command: "cd ..", shell: shellFor });
 const askedData = asEnvelope(asked);
 const askApprovalId = String(askedData.data?.approval_id ?? "");
+const shellApprovalCommand = String(askedData.data?.approval?.approve_command ?? "");
 
 // S3: By default, approval_token is NOT returned (auto-approval disabled).
 check(
@@ -671,12 +673,30 @@ check(
     !!askApprovalId &&
     typeof askedData.data?.approval_token !== "string" &&
     askedData.data?.rule === "ask.cd_outside_workspace" &&
-    askedData.data?.note?.includes("npx venira-mcp --approve"),
+    askedData.data?.note?.includes(shellApprovalCommand),
   { hasApprovalId: !!askApprovalId, hasToken: typeof askedData.data?.approval_token === "string", code: askedData.error?.code },
 );
 
 // Phase 3: every [approval_required] carries the canonical data.approval payload.
 const shellApproval = (askedData.data?.approval ?? {}) as Record<string, any>;
+const savedApprovalDir = process.env.VENIRA_DATA_DIR;
+const quoteTestDir = path.join(os.tmpdir(), "venira approval's data dir");
+process.env.VENIRA_DATA_DIR = quoteTestDir;
+const quoteTestId = askApprovalId || "test-approval-id";
+const quoteTestCommand = approveCommand(quoteTestId);
+if (savedApprovalDir === undefined) delete process.env.VENIRA_DATA_DIR;
+else process.env.VENIRA_DATA_DIR = savedApprovalDir;
+const resolvedQuoteTestDir = path.resolve(quoteTestDir);
+const expectedQuotedDir = process.platform === "win32"
+  ? "'" + resolvedQuoteTestDir.replace(/'/g, "''") + "'"
+  : "'" + resolvedQuoteTestDir.replace(/'/g, "'\\''") + "'";
+const expectedApprovalCommand = (process.platform === "win32" ? "npx.cmd" : "npx") +
+  " --yes venira-mcp --data-dir " + expectedQuotedDir + " --approve " + quoteTestId;
+check(
+  "approval_command_is_single_copy_paste_with_data_dir",
+  quoteTestCommand === expectedApprovalCommand && shellApprovalCommand === shellApproval.approve_command,
+  quoteTestCommand,
+);
 check(
   "approval_payload_shell_shape",
   shellApproval.approval_id === askApprovalId &&
@@ -934,7 +954,7 @@ check(
 
 // (g) The agent cannot call the approve CLI / approval store through the shell tool.
 const selfApprove = asEnvelope(
-  await call("project_shell_run", { command: `npx venira-mcp --approve ${cliId} --yes`, shell: shellFor }),
+  await call("project_shell_run", { command: `${shellApprovalCommand} --yes`, shell: shellFor }),
 );
 check("policy_deny_self_approval", selfApprove.error?.code === "command_denied", selfApprove);
 
@@ -1808,7 +1828,7 @@ check(
   jsAsk.error?.code === "approval_required" &&
     !!jsApprovalId &&
     jsAsk.data?.rule === "ask.js_exec" &&
-    String(jsAsk.data?.note ?? "").includes("npx venira-mcp --approve"),
+    String(jsAsk.data?.note ?? "").includes(String(jsAsk.data?.approval?.approve_command ?? "")),
   jsAsk,
 );
 const jsPayload = (jsAsk.data?.approval ?? {}) as Record<string, any>;

@@ -10,7 +10,9 @@ import { readOrCreateHexKey, writeFileAtomicSync } from "./keyfile.js";
  *
  * Flow: the server stores a pending record (bound to the exact command/script,
  * shell, cwd, secret_env and rule) and returns its approval_id. A human grants
- * it with `npx venira-mcp --approve <id>` in a real terminal. The grant file
+ * it with the exact `data.approval.approve_command` in a real terminal. That
+ * command carries the active data dir so a separately launched CLI redeems
+ * the pending record created by this server. The grant file
  * carries an HMAC over (id, session, binding, scope, timestamp) keyed by a
  * secret that lives in the data dir, and the server recomputes that HMAC from
  * the *current* call when the id is redeemed. So a grant cannot be forged
