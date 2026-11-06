@@ -137,7 +137,7 @@ check(
   "snapshot_workflow_in_shared_instructions",
   instructions.includes("Snapshot discipline") && instructions.includes("dry_run=1") &&
     instructions.includes("same-size content changes") && instructions.includes("delete_extra=0") &&
-    instructions.includes("before any project_delete_path operation"),
+    instructions.includes("every project_delete_path call"),
   { includes: ["Snapshot discipline", "dry_run=1", "same-size content changes", "delete_extra=0"].map((text) => instructions.includes(text)) },
 );
 await client2.close();
