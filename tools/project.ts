@@ -3199,11 +3199,11 @@ export function registerProjectTools(server: McpServer): void {
     "project_write_file",
     {
       ...config(
-        "Write a file. mode=create errors if it exists; overwrite replaces; append concatenates to the end.",
+        "Write a file. mode=create errors if it exists; overwrite replaces existing contents; append concatenates. Create and verify a scoped project_snapshot before overwriting existing file contents.",
         "Write file",
         {
-          use_when: "create a new file or replace/append a file's contents.",
-          avoid_when: "only a small section needs to change (project_edit_file) to leave the rest intact.",
+          use_when: "create a new file or append content; before mode=overwrite on an existing file, create a scoped project_snapshot, confirm it captured the target, and keep the returned id.",
+          avoid_when: "only a small section needs to change (project_edit_file), or an existing file would be overwritten without a verified pre-write project_snapshot.",
           speed_profile: "fast; clears the read/list/search cache for the affected path.",
           output_kind: "file_written: action, bytes_written, sha256_after.",
           batch_safe: false,
@@ -3213,7 +3213,7 @@ export function registerProjectTools(server: McpServer): void {
       inputSchema: {
         relative_path: path_,
         content: z.string(),
-        mode: z.enum(["create", "overwrite", "append"]).optional(),
+        mode: z.enum(["create", "overwrite", "append"]).optional().describe("overwrite replaces existing contents; create and verify a scoped project_snapshot first. create fails if the path exists; append adds to the end."),
         create_dirs: flag01.optional(),
         expected_sha256: z.string().optional(),
         reason: reason_,
@@ -3229,7 +3229,7 @@ export function registerProjectTools(server: McpServer): void {
         "Edit a file by exact text replacement: one old_text/new_text pair, or edits[] for multiple sections. Supports TOCTOU guard mode (guard=sha256) for atomic read-edit-verify cycle.",
         "Edit file",
         {
-          use_when: "change one or a few text sections whose exact content you know; pair with expected_sha256 to guard against blind overwrites. Use guard=sha256 for atomic read-edit-verify cycle (replaces safe_edit). If editing 2+ files or 2+ sections, create a project_snapshot first so you can rollback in one call.",
+          use_when: "change one or a few text sections whose exact content you know; pair with expected_sha256 to guard against blind overwrites. Use guard=sha256 for atomic read-edit-verify. Before editing 2+ files or 2+ sections, create a scoped project_snapshot and confirm coverage.",
           avoid_when: "the whole file must change (project_write_file), or you have not read the file to know old_text.",
           speed_profile: "fast; clears the read/list/search cache for the affected path.",
           output_kind: "file_written: replacements, sha256_before/after, verified (with guard=sha256).",
@@ -3242,7 +3242,7 @@ export function registerProjectTools(server: McpServer): void {
         old_text: z.string().min(1).optional(),
         new_text: z.string().optional(),
         replace_all: flag01.optional(),
-        edits: z.array(editOp).max(64).optional(),
+        edits: z.array(editOp).max(64).optional().describe("Multiple section replacements in this file. Create a scoped project_snapshot first when applying 2+ edits or when the change is hard to recreate."),
         expected_sha256: z.string().optional(),
         // P2: Fuzzy edit args
         old_text_fuzzy: z.string().optional().describe("P2: Fuzzy-match fallback for old_text (used when exact match fails and VENIRA_EDIT_FUZZY=1)."),
@@ -3263,7 +3263,7 @@ export function registerProjectTools(server: McpServer): void {
         "Apply multiple edit_file operations atomically in one call; aborts after the first failure and restores the pre-batch snapshot when possible.",
         "Edit batch",
         {
-          use_when: "you have 2+ independent edits across one or more files. Consider project_snapshot action=create first so you can rollback the whole batch in one call if something goes wrong.",
+          use_when: "before editing existing files in a multi-edit batch, create a scoped project_snapshot when it spans multiple files/sections or needs rollback after later checks. Batch rollback covers an in-batch failure only; it does not undo a successful batch after tests fail.",
           avoid_when: "a single edit (project_edit_file) or a whole-file rewrite (project_write_file).",
           speed_profile: "depends on item count; each runs edit_file and clears caches.",
           output_kind: "batch: responses[] {ok, response|error}, atomic metadata with executed/skipped indexes and rollback status.",
@@ -3272,7 +3272,7 @@ export function registerProjectTools(server: McpServer): void {
         { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
       ),
       inputSchema: {
-        edits: z.array(z.record(z.string(), z.any())).min(1).max(64).describe("Array of edit_file argument objects. The batch aborts on the first failure and rolls back earlier writes when possible."),
+        edits: z.array(z.record(z.string(), z.any())).min(1).max(64).describe("Array of edit_file arguments. For existing files across multiple edits, create a scoped project_snapshot first if later validation may require full rollback; automatic rollback only handles in-batch failures."),
         max_response_bytes_per_item: z.number().int().min(256).max(1048576).optional(),
       },
     },
@@ -3305,12 +3305,13 @@ export function registerProjectTools(server: McpServer): void {
         `Run a shell command (cwd defaults to ${WORKSPACE}). ` +
           "Asynchronous by default: returns run_id immediately, so poll project_shell_status for the output. " +
           "Pass background=0 (or false) for a foreground run: the call blocks until the command exits and returns the final stdout/stderr. " +
+          "For commands that overwrite/delete existing workspace source files, create and verify a scoped project_snapshot first; prefer project file tools for targeted edits. " +
           "Commands pass a policy gate: risky ones return an approval_required error with a pending approval_id; " +
           "catastrophic ones are denied outright. Named overrides require operator allowlisting and a per-call reason.",
         "Shell run",
         {
           use_when:
-            "build/test/lint/long-running commands. Default (background=1) returns run_id immediately so it never blocks other tools; " +
+            "build/test/lint/long-running commands. For hard-to-reverse workspace file changes, checkpoint first. Default (background=1) returns run_id immediately so it never blocks other tools; " +
             "set background=0 when you need the final output in this call — it blocks until the command exits, and you must not start other work while waiting. " +
             "After approval_required, ask the user to approve the approval_id in an interactive terminal, then retry.",
           avoid_when: "a command that may never finish: use the async default plus project_shell_status/project_shell_cancel.",
@@ -3327,7 +3328,7 @@ export function registerProjectTools(server: McpServer): void {
       ),
       inputSchema: {
         shell: z.enum(["powershell", "cmd", "bash"]).optional(),
-        command: z.string().describe("Command line to execute."),
+        command: z.string().describe("Command line to execute. If it overwrites or deletes existing workspace source files, create and verify a scoped project_snapshot first; use project_write_file/project_edit_file/project_delete_path for targeted file operations."),
         relative_cwd: z.string().optional().describe("Working directory inside the workspace (default: workspace root)."),
         background: backgroundFlag.optional(),
         secret_env: z
@@ -3427,11 +3428,11 @@ export function registerProjectTools(server: McpServer): void {
     "project_create",
     {
       ...config(
-        "Create a directory OR a file in ONE call (merges project_create_directory + project_write_file for the new-file case).",
+        "Create a directory OR a file in ONE call. For an existing file, mode=overwrite replaces its contents: create and verify a scoped project_snapshot first.",
         "Create file or directory",
         {
-          use_when: "create a directory (kind=directory) or a new file (kind=file, content+mode); kept in sync with the Venira native app tool.",
-          avoid_when: "modifying an existing file (project_edit_file); overwriting a file whose contents must be preserved (project_write_file mode=overwrite still works).",
+          use_when: "create a directory or new file; if replacing an existing file, first create a scoped project_snapshot, confirm it captured the target, and keep its id.",
+          avoid_when: "editing an existing file (project_edit_file/project_write_file); never use mode=overwrite unless a pre-write project_snapshot covers the existing contents.",
           speed_profile: "fast; triggers cache invalidation on write / new directory.",
           output_kind: "directory_created or file_written (data kind depends on the op).",
           batch_safe: false,
@@ -3442,7 +3443,7 @@ export function registerProjectTools(server: McpServer): void {
         relative_path: path_,
         kind: z.enum(["file", "directory"]),
         content: z.string().optional(),
-        mode: z.enum(["create", "overwrite", "append"]).optional(),
+        mode: z.enum(["create", "overwrite", "append"]).optional().describe("overwrite replaces existing contents; create and verify a scoped project_snapshot first. create fails if the path exists; append adds to the end."),
         create_dirs: flag01.optional(),
         expected_sha256: z.string().optional(),
         reason: reason_,
@@ -3499,10 +3500,10 @@ export function registerProjectTools(server: McpServer): void {
       "project_execute_js",
       {
         ...config(
-          "Evaluate JavaScript code. Runs `node` in the workspace, capturing stdout/stderr; supports top-level await and `require`. Each call needs human approval by default (`VENIRA_JS_EXEC_APPROVAL=1`): call without `approval_id` to receive one, then retry after the user grants it.",
+          "Evaluate JavaScript code. Runs `node` in the workspace, capturing stdout/stderr; supports top-level await and `require`. For hard-to-reverse workspace file changes, create and verify a scoped project_snapshot first; prefer project file tools for targeted edits. Each call needs human approval by default (`VENIRA_JS_EXEC_APPROVAL=1`): call without `approval_id` to receive one, then retry after the user grants it.",
           "Execute JS",
           {
-            use_when: "you need to run a small JS snippet for computation, file I/O via fs, or prototyping.",
+            use_when: "you need a small JS computation or prototype. Before hard-to-reverse workspace file I/O, create and verify a scoped project_snapshot; prefer project_write_file/project_edit_file for targeted changes.",
             avoid_when: "you need a full shell pipeline (project_shell_run) or a persistent process.",
             speed_profile: "synchronous node exec with timeout (default 30s, cap 10min); output capped at 1 MiB.",
             output_kind: "execute_js: stdout_tail, stderr_tail, exit_code, timed_out, ok. Without approval_id: approval_required + approval_id.",
@@ -3511,7 +3512,7 @@ export function registerProjectTools(server: McpServer): void {
           { destructiveHint: true, openWorldHint: false },
         ),
         inputSchema: {
-          code: z.string().min(1),
+          code: z.string().min(1).describe("JavaScript to evaluate. If it modifies/deletes existing workspace files in a hard-to-reverse way, create and verify a scoped project_snapshot first."),
           timeout_ms: z.number().int().min(1).max(600_000).optional(),
           argv: z.array(z.string()).optional(),
           approval_id: z
