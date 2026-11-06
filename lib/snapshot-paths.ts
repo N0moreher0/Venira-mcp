@@ -129,9 +129,9 @@ export function ensureProjectMeta(storeDir: string, workspace: string): void {
 }
 
 /** Folders the file tools must refuse to read, write, search or delete. Never throws. */
-export function snapshotProtectedRoots(userDataDir: string): string[] {
-  const roots: string[] = [];
-  try { const exact = snapshotExactDir(); if (exact) roots.push(exact); } catch { /* bad env: ignore */ }
-  try { roots.push(snapshotRootDir(userDataDir)); } catch { /* bad env: ignore */ }
-  return roots;
+export function snapshotProtectedRoots(userDataDir: string, workspace: string): string[] {
+  const roots = new Set<string>();
+  try { roots.add(snapshotStoreDir(workspace, userDataDir)); } catch { /* bad env: ignore */ }
+  try { roots.add(snapshotRootDir(userDataDir)); } catch { /* bad env: ignore */ }
+  return [...roots];
 }

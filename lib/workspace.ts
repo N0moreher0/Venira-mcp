@@ -182,7 +182,7 @@ export function isProtectedPath(absPath: string): boolean {
   try {
     if (isInsideDir(canonicalPath, realPathOrSelf(activeDataDir()))) return true;
     // The checkpoint store (shared root and/or exact override) is equally off-limits.
-    for (const snapshotRoot of snapshotProtectedRoots(defaultDataDir())) {
+    for (const snapshotRoot of snapshotProtectedRoots(defaultDataDir(), WORKSPACE)) {
       if (isInsideDir(canonicalPath, realPathOrSelf(snapshotRoot))) return true;
     }
   } catch {
