@@ -53,6 +53,7 @@ Rules
 - Never loop on a non-retryable error (not_found, scope_denied, invalid_request, sensitive_result, audit_unavailable). Read the hint and change the request or tell the user.
 - Output modes: VENIRA_OUTPUT_MODE=full|compact (default full). compact trims payloads over 8 KB; use full when you need complete data.
 - Shell modes: VENIRA_SHELL_MODE=balanced|strict|permissive|off (default balanced). Hard-deny rules stay active in strict/balanced; permissive turns hard-deny into an approval request; off disables all checks (operator opt-in, trusted environments only).
+- Approvals: when project_shell_run or project_execute_js returns approval_required, STOP. Tell the user the approval_id and data.approval.approve_command (a human grants it via \`npx venira-mcp --approve <id>\` or client elicitation); do not loop, poll or try to approve it yourself. After the user confirms, retry once with data.approval.retry_with. Use project_shell_run dry_run=1 to learn beforehand whether a command would be allowed, asked or denied (nothing runs). approval_wait_ms (<=45000) makes the call wait for the human and run in the same call; keep it under the client request timeout. approval_token was removed; use approval_id.
 - Named shell overrides require both an operator allowlist (VENIRA_SHELL_OVERRIDES) and a per-call override name plus non-empty reason; they are narrow and audited.`;
 
 const server = new McpServer(

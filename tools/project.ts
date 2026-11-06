@@ -6,7 +6,15 @@ import { z } from "zod";
 import { envChoice, envFlag, parseBackgroundFlag } from "../lib/env.js";
 import { CoreHost, SHELL_MAX_TIMEOUT_MS, shellPolicySnapshot, SCOPE_TTL_MS } from "../lib/corehost.js";
 import * as approvals from "../lib/approvals.js";
-import { redeemApproval, requestApproval } from "../lib/approval-gate.js";
+import {
+  APPROVAL_PENDING_TTL_MS,
+  APPROVAL_WAIT_MAX_MS,
+  awaitApprovalGrant,
+  buildApprovalPayload,
+  parseApprovalWaitMs,
+  redeemApproval,
+  requestApproval,
+} from "../lib/approval-gate.js";
 import { evaluateToolPolicy } from "../lib/tool-policy.js";
 import { recordMetric, metricsSnapshot } from "../lib/metrics.js";
 import {
@@ -1550,6 +1558,36 @@ async function runCreate(args: Args): Promise<ToolResult> {
 // ---------------------------------------------------------------------------
 // project_health
 // ---------------------------------------------------------------------------
+/** Approval config as the agent should see it, plus operator-facing warnings. */
+function approvalsHealth(): { approvals: Record<string, unknown>; warnings: string[] } {
+  const policy = shellPolicySnapshot().policy;
+  const warnings: string[] = [];
+  if (policy.mode === "off") {
+    warnings.push("shell_mode=off: ALL shell policy checks are bypassed, hard-deny included (secret_env still asks).");
+  } else if (policy.mode === "permissive") {
+    warnings.push("shell_mode=permissive: hard-deny commands ask instead of being refused; ask-rule commands run without approval.");
+  }
+  if (ALLOW_JS_EXEC && !JS_EXEC_APPROVAL) {
+    warnings.push("project_execute_js is enabled without per-call approval (VENIRA_JS_EXEC_APPROVAL=0).");
+  }
+  if (/^(1|true|yes|on)$/i.test((process.env.VENIRA_SHELL_AUTO_APPROVE_TOKEN ?? "").trim())) {
+    warnings.push("VENIRA_SHELL_AUTO_APPROVE_TOKEN is set but was removed in v1.15; it is ignored.");
+  }
+  return {
+    approvals: {
+      shell_mode: policy.mode,
+      policy_source: policy.source,
+      js_exec_enabled: ALLOW_JS_EXEC,
+      js_exec_approval: JS_EXEC_APPROVAL,
+      elicitation: SHELL_ELICIT,
+      session_grant_rules: approvals.sessionGrantRules(),
+      pending_ttl_ms: APPROVAL_PENDING_TTL_MS,
+      max_wait_ms: APPROVAL_WAIT_MAX_MS,
+    },
+    warnings,
+  };
+}
+
 function dataDirFor(exe: string | null): string {
   // `exe` is always null in the standalone (pure-Node, no Rust binary) build — kept as a
   // parameter for call-site compatibility. Must match corehost.ts's ensureAuditDb(), which
@@ -1795,6 +1833,7 @@ async function runHealth(args: Args): Promise<ToolResult> {
         tracked: shellRuns.size,
         policy: shellPolicySnapshot(),
       },
+      ...approvalsHealth(),
       // Checkpoints: manifest-level only (no blob walk, so health stays fast).
       snapshots: await snapshotHealth().catch(() => ({ store: "", checkpoints: 0, logical_bytes: 0 })),
       // Secrets: counts + encryption only; the store path is reported, never values.
@@ -2021,6 +2060,11 @@ async function runExecuteJs(args: Args): Promise<ToolResult> {
         binding,
       });
       const pendingId = pending.approval_id;
+      const waitMs = parseApprovalWaitMs(args.approval_wait_ms);
+      if (waitMs > 0 && (await awaitApprovalGrant(SESSION_ID, pendingId, binding, waitMs))) {
+        // Granted by a human while waiting: redeem through the normal path (single use).
+        return runExecuteJs({ ...args, approval_id: pendingId, approval_wait_ms: 0 });
+      }
       const expiresAt = pending.expires_at;
       const elapsedMs = performance.now() - started;
       return toolResult(
@@ -2035,6 +2079,17 @@ async function runExecuteJs(args: Args): Promise<ToolResult> {
             cwd: WORKSPACE,
             code_preview: redactSecrets(code).slice(0, 2000),
             ...(cliArgs ? { argv: cliArgs } : {}),
+            approval: buildApprovalPayload(
+              "js",
+              pending,
+              { tool: "project_execute_js", rule: JS_EXEC_RULE, reason },
+              redactSecrets(code),
+              {
+                code,
+                ...(cliArgs ? { argv: cliArgs } : {}),
+                ...(typeof args.timeout_ms === "number" ? { timeout_ms: args.timeout_ms } : {}),
+              },
+            ),
             expires_at: expiresAt,
             retry_with: {
               tool: "project_execute_js",
@@ -3284,6 +3339,20 @@ export function registerProjectTools(server: McpServer): void {
           .string()
           .optional()
           .describe("Approval ID from the approval_required envelope, granted by a human via `npx venira-mcp --approve <id>` or client elicitation. Retry once after they confirm."),
+        approval_wait_ms: z
+          .number()
+          .int()
+          .min(0)
+          .max(APPROVAL_WAIT_MAX_MS)
+          .optional()
+          .describe("If the command needs approval, wait up to this many ms (max 45000) for the human to grant it and run in the same call. On timeout you get the normal approval_required response."),
+        dry_run: z
+          .number()
+          .int()
+          .min(0)
+          .max(1)
+          .optional()
+          .describe("1 = evaluate policy only: returns tier, rule and whether approval would be needed. Nothing runs and no approval is created."),
         override: z
           .enum(["ALLOW_GIT_PUSH", "ALLOW_ENV_READ"])
           .optional()
@@ -3436,6 +3505,13 @@ export function registerProjectTools(server: McpServer): void {
             .string()
             .optional()
             .describe("Approval id from a previous project_execute_js approval_required response, granted with `npx venira-mcp --approve <id>`."),
+          approval_wait_ms: z
+            .number()
+            .int()
+            .min(0)
+            .max(APPROVAL_WAIT_MAX_MS)
+            .optional()
+            .describe("Wait up to this many ms (max 45000) for the human to grant the approval and run in the same call."),
         },
       },
       (args) => runExecuteJs(args as Args),

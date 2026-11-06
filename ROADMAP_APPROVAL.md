@@ -110,12 +110,13 @@ Mọi `[approval_required]` trả `data.approval`:
 - [x] 2c Sửa `output.ts` (hint `approval_required`/`approval_invalid`), `diagnostics.ts`, `shell-policy.ts` header comment
 - [x] 2d `install_self` / `reveal`: mã lỗi `[feature_disabled]` (code + hint mặc định + test `install_self_feature_disabled`, `secret_reveal_gated`)
 
-### Phase 3 — Payload và workflow agent (§4.4, §4.6)
-- [ ] `data.approval` chuẩn cho shell + JS
-- [ ] `project_health.approvals` + `warnings`
-- [ ] `dry_run` cho `project_shell_run`
-- [ ] `approval_wait_ms`
-- [ ] Luật agent trong README §9 và `server.ts`
+### Phase 3 — Payload và workflow agent (§4.4, §4.6) ✅ (2026-11-06)
+- [x] `data.approval` chuẩn cho shell + JS (`buildApprovalPayload` trong `lib/approval-gate.ts`; test `approval_payload_shell_shape`, `approval_payload_js_shape`)
+- [x] `project_health.approvals` + `warnings` (`approvalsHealth()` trong `tools/project.ts`; test `health_approvals_section`)
+- [x] `dry_run` cho `project_shell_run` (không chạy, không tạo pending; test `shell_dry_run_*`)
+- [x] `approval_wait_ms` cho shell + JS, kẹp ≤ 45 000 ms (test: grant trong lúc chờ chạy cùng call, single-use, timeout trả pending, clamp)
+- [x] Luật agent trong README §9 (rule 9) và `server.ts` INSTRUCTIONS
+- Kết quả: build + `verify` 440 check + `test:shell-security` + `check:docs` đều xanh.
 
 ### Phase 4 — Cấu hình gọn (P4)
 - [ ] `VENIRA_SECURITY_PROFILE` + bảng mapping, biến lẻ ghi đè

@@ -52,7 +52,13 @@ import {
   normalizeForFuzzy,
 } from "./file-ops-helpers.js";
 import * as approvals from "./approvals.js";
-import { redeemApproval, requestApproval } from "./approval-gate.js";
+import {
+  awaitApprovalGrant,
+  buildApprovalPayload,
+  parseApprovalWaitMs,
+  redeemApproval,
+  requestApproval,
+} from "./approval-gate.js";
 import { WORKSPACE, PLATFORM, resolveWithin, isProtectedPath, activeDataDir, dynamicWorkspaceEnabled, switchWorkspaceRoot, allowedWorkspaceRoots } from "./workspace.js";
 import {
   opSnapshotCreate,
@@ -2061,7 +2067,8 @@ async function opShellRun(
           reason: "Injecting stored secrets into a shell child requires explicit human approval.",
         }
       : evaluatedDecision;
-  recordDecision(decision);
+  const dryRun = [1, true, "1", "true"].includes(args.dry_run as number | boolean | string);
+  if (!dryRun) recordDecision(decision);
   const parsed = parseShellCommand(command);
   const approvalKey = commandKey(parsed);
   // Everything an approval covers: a grant only redeems for this exact call.
@@ -2075,6 +2082,30 @@ async function opShellRun(
   let approver: string | null = decision.rule.startsWith("override.")
     ? `agent:${decision.rule.slice("override.".length)}`
     : null;
+
+  if (dryRun) {
+    const sessionCovered = decision.tier === "ask" && hasSessionApproval(sessionId, decision, approvalKey);
+    return {
+      status: "completed",
+      result: {
+        kind: "shell_dry_run",
+        data: {
+          dry_run: true,
+          command: redactSecrets(command),
+          shell,
+          cwd,
+          tier: decision.tier,
+          rule: decision.rule,
+          reason: decision.reason,
+          mode: decision.mode,
+          would_run: decision.tier === "allow" || sessionCovered,
+          requires_approval: decision.tier === "ask" && !sessionCovered,
+          denied: decision.tier === "deny",
+          note: "Nothing was executed and no approval was requested.",
+        },
+      },
+    };
+  }
 
   if (decision.tier === "deny") {
     throw new Error(
@@ -2109,7 +2140,7 @@ async function opShellRun(
         grantSessionApproval(sessionId, decision, approvalKey);
       }
     } else {
-      const pendingId = requestApproval("shell", sessionId, {
+      const shellSubject = {
         tool: "project_shell_run",
         command: redactSecrets(command),
         shell,
@@ -2118,34 +2149,53 @@ async function opShellRun(
         rule: decision.rule,
         reason: decision.reason,
         binding: approvalBinding,
-      }).approval_id;
-      return {
-        status: "completed",
-        result: {
-          kind: "shell_approval",
-          data: {
-            approval_required: true,
-            approval_id: pendingId,
-            command: redactSecrets(command),
-            shell,
-            cwd,
-            rule: decision.rule,
-            reason: decision.reason,
-            mode: decision.mode,
-            retry_with: {
-              tool: "project_shell_run",
-              arguments: {
-                command,
-                shell,
-                ...(typeof args.relative_cwd === "string" ? { relative_cwd: args.relative_cwd } : {}),
-                ...(secretNames.length > 0 ? { secret_env: secretNames } : {}),
-                approval_id: pendingId,
-              },
-            },
-            note: `A human must run: npx venira-mcp --approve ${pendingId} (then retry once with approval_id). Do not loop or retry before they confirm.`,
-          },
-        },
       };
+      const pending = requestApproval("shell", sessionId, shellSubject);
+      const pendingId = pending.approval_id;
+      const retryArguments: Record<string, unknown> = {
+        command,
+        shell,
+        ...(typeof args.relative_cwd === "string" ? { relative_cwd: args.relative_cwd } : {}),
+        ...(secretNames.length > 0 ? { secret_env: secretNames } : {}),
+      };
+      // Optional: wait for the human inside this call (saves a round-trip).
+      const waitMs = parseApprovalWaitMs(args.approval_wait_ms);
+      const granted = waitMs > 0 && (await awaitApprovalGrant(sessionId, pendingId, approvalBinding, waitMs));
+      if (granted) {
+        const v = redeemApproval("shell", sessionId, pendingId, approvalBinding, "project_shell_run");
+        if (!v.ok) {
+          throw new Error(`[approval_invalid] Approval ${pendingId} ${v.reason}. Hint: ${v.hint}`);
+        }
+        approver = "user:cli";
+        recordApproval("approved");
+        if (v.scope === "session" && approvals.sessionScopeAllowed(decision.rule)) {
+          grantSessionApproval(sessionId, decision, approvalKey);
+        }
+      } else {
+        return {
+          status: "completed",
+          result: {
+            kind: "shell_approval",
+            data: {
+              approval_required: true,
+              approval_id: pendingId,
+              command: redactSecrets(command),
+              shell,
+              cwd,
+              rule: decision.rule,
+              reason: decision.reason,
+              mode: decision.mode,
+              ...(waitMs > 0 ? { waited_ms: waitMs } : {}),
+              approval: buildApprovalPayload("shell", pending, shellSubject, redactSecrets(command), retryArguments),
+              retry_with: {
+                tool: "project_shell_run",
+                arguments: { ...retryArguments, approval_id: pendingId },
+              },
+              note: `A human must run: npx venira-mcp --approve ${pendingId} (then retry once with approval_id). Do not loop or retry before they confirm.`,
+            },
+          },
+        };
+      }
     }
   }
 

@@ -333,9 +333,14 @@ Full reference: ~60 `VENIRA_*` flags — see the env table in the source or `npx
 
 Granting a shell or JS approval:
 
-1. The call fails with `[approval_required]` and returns `data.approval_id` (valid for 5 minutes) together with the command or code, the rule and the reason.
+1. The call fails with `[approval_required]` and returns `data.approval_id` (valid for 5 minutes) together with the command or code, the rule and the reason. Shell and JS share one payload, `data.approval`: `{ approval_id, gate, rule, reason, subject_preview, expires_at, approve_command, retry_with: { tool, arguments } }`.
 2. A person runs `npx venira-mcp --approve <approval_id>` in an interactive terminal (it refuses without a TTY), reviews the request and answers `y`. `--yes` skips the prompt. `--session` extends the grant to the same command group until it expires, but only for rules in `VENIRA_SESSION_GRANT_RULES` (built-in: `cd_outside_workspace`).
 3. The agent retries the same call with `approval_id`. The grant is HMAC-signed, tied to the session, bound to the exact command / shell / cwd / `secret_env` / rule (or code / argv for JS), and single-use.
+
+Agent helpers:
+- `project_shell_run` with `dry_run: 1` returns the tier, rule and `would_run` / `requires_approval` without running anything or creating an approval, so an agent knows beforehand which command will be asked.
+- `approval_wait_ms` (max 45000) on `project_shell_run` / `project_execute_js` keeps the call open while the human approves; a grant that arrives in time runs the command in the same call, otherwise you get the normal `[approval_required]` (the pending `approval_id` stays valid). Keep it below the client's request timeout.
+- `project_health` reports `approvals` (mode, JS gate, elicitation, session rules, TTL, max wait) and `warnings` (for example `shell_mode=off`).
 
 Alternative (off by default, `project_shell_run` only): `VENIRA_SHELL_ELICIT=1` shows a confirmation dialog in MCP clients that support elicitation, and accepting it records the grant for you.
 
@@ -373,6 +378,7 @@ Venira MCP rules:
 6. Do not call project_execute_js unless the user asked for JS; it needs per-call approval.
 7. On failure, follow the envelope's hint. Treat ok:false + retryable:false as final.
 8. Report only what the tool returned.
+9. On [approval_required]: stop, tell the user the approval_id and approve_command, do not loop or approve it yourself; retry once with data.approval.retry_with after they confirm. Use dry_run: 1 to preview a command's tier.
 ```
 
 ## 10. Development
