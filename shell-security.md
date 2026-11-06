@@ -48,7 +48,7 @@ npm run check:docs
 npm run doctor
 ```
 
-Last recorded results (2026-11-06): build passed; verify passed 444 checks, including provider-secret guard, GitHub Device Flow, and shell-security regressions; docs check passed; doctor passed 14/14. CI for a newly committed revision requires that revision to be pushed and run by the configured provider.
+Validation results (2026-11-06): build passed; verify passed 445 checks, including provider-secret guard, GitHub Device Flow, and shell-security regressions; policy corpus passed 270/270; docs check passed; doctor passed 14/14. Remote CI passed on Linux, Windows, and macOS with Node 20/22 (run #178); release workflow #63 published tag `v1.15.0`, GitHub Release, Docker image, and `venira-mcp@1.15.0`. CI for a newly committed revision still requires that revision to be pushed and run by the configured provider.
 
 ## Limits
 
