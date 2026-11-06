@@ -22,7 +22,7 @@ export type GithubMock = {
   requests: MockRequest[];
   /** Authorization header seen by the blob (log download) server. */
   blobAuth: Array<string | null>;
-  state: { dispatches: number; comments: number; merges: number; branchDeletes: number; pullsCreated: number; inlineComments: number; lastInline: any; closes: number; reopens: number; retryOnce: number; waitPolls: Record<number, number> };
+  state: { dispatches: number; comments: number; merges: number; branchDeletes: number; pullsCreated: number; inlineComments: number; lastInline: any; closes: number; reopens: number; retryOnce: number; ciCancels: number; ciRetries: number; ciPostFailures: number; waitPolls: Record<number, number> };
   close: () => Promise<void>;
 };
 
@@ -190,7 +190,7 @@ function listen(server: http.Server): Promise<string> {
 export async function startGithubMock(): Promise<GithubMock> {
   const requests: MockRequest[] = [];
   const blobAuth: Array<string | null> = [];
-  const state = { dispatches: 0, comments: 0, merges: 0, branchDeletes: 0, pullsCreated: 0, inlineComments: 0, lastInline: null as any, closes: 0, reopens: 0, retryOnce: 0, waitPolls: {} as Record<number, number> };
+  const state = { dispatches: 0, comments: 0, merges: 0, branchDeletes: 0, pullsCreated: 0, inlineComments: 0, lastInline: null as any, closes: 0, reopens: 0, retryOnce: 0, ciCancels: 0, ciRetries: 0, ciPostFailures: 0, waitPolls: {} as Record<number, number> };
 
   let blobUrl = "";
 
@@ -398,6 +398,18 @@ export async function startGithubMock(): Promise<GithubMock> {
       }
 
       if (path === `${base}/actions/runs/99` && req.method === "GET") return json(200, RUN);
+      if (path === `${base}/actions/runs/99/cancel` && req.method === "POST") {
+        state.ciCancels += 1;
+        return empty(202);
+      }
+      if (path === `${base}/actions/runs/99/rerun-failed-jobs` && req.method === "POST") {
+        state.ciRetries += 1;
+        return empty(201);
+      }
+      if (path === `${base}/actions/runs/500/cancel` && req.method === "POST") {
+        state.ciPostFailures += 1;
+        return json(500, { message: "synthetic provider failure" });
+      }
 
       // ci_wait: run 100 reaches success on the second status poll; 101 never ends.
       if (path === `${base}/actions/runs/100` && req.method === "GET") {

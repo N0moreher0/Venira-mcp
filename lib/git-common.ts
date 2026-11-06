@@ -69,7 +69,7 @@ export function ciControlRequest(args: Record<string, unknown>): { action: CiCon
 }
 
 export function numericCiRunId(runId: string): string {
-  if (!/^\\d{1,16}$/.test(runId)) {
+  if (!/^\d{1,16}$/.test(runId)) {
     throw new Error("[invalid_request] This provider requires a numeric CI `run_id`.");
   }
   const numeric = Number(runId);

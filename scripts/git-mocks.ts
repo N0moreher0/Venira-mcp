@@ -43,6 +43,10 @@ function helpers(req: http.IncomingMessage, res: http.ServerResponse) {
     });
     res.end(payload);
   };
+  const empty = (status: number) => {
+    res.writeHead(status);
+    res.end();
+  };
   const readBody = (): Promise<any> =>
     new Promise((resolve) => {
       let raw = "";
@@ -57,7 +61,7 @@ function helpers(req: http.IncomingMessage, res: http.ServerResponse) {
         }
       });
     });
-  return { json, text, readBody };
+  return { json, text, readBody, empty };
 }
 export type GitlabMock = {
   apiUrl: string;
@@ -69,6 +73,8 @@ export type GitlabMock = {
     triggers: number;
     closes: number;
     reopens: number;
+    ciCancels: number;
+    ciRetries: number;
     lastInline: any;
   };
   close: () => Promise<void>;
@@ -82,6 +88,8 @@ export async function startGitlabMock(): Promise<GitlabMock> {
     triggers: 0,
     closes: 0,
     reopens: 0,
+    ciCancels: 0,
+    ciRetries: 0,
     lastInline: null as any,
   };
   const project = "/api/v4/projects/acme%2Fdemo";
@@ -240,6 +248,14 @@ export async function startGitlabMock(): Promise<GitlabMock> {
         state.triggers += 1;
         return json(201, { id: 78, status: "created", ref: "main" });
       }
+      if (path === `${project}/pipelines/77/cancel` && req.method === "POST") {
+        state.ciCancels += 1;
+        return json(200, { id: 77, status: "canceled" });
+      }
+      if (path === `${project}/pipelines/77/retry` && req.method === "POST") {
+        state.ciRetries += 1;
+        return json(200, { id: 78, status: "pending" });
+      }
       return json(404, {
         message: `gitlab mock: no route for ${req.method} ${path}`,
       });
@@ -266,6 +282,7 @@ export type BitbucketMock = {
     merges: number;
     triggers: number;
     declines: number;
+    ciStops: number;
     lastInline: any;
   };
   close: () => Promise<void>;
@@ -277,6 +294,7 @@ export async function startBitbucketMock(): Promise<BitbucketMock> {
     merges: 0,
     triggers: 0,
     declines: 0,
+    ciStops: 0,
     lastInline: null as any,
   };
   const repo = "/2.0/repositories/acme/demo";
@@ -316,7 +334,7 @@ export async function startBitbucketMock(): Promise<BitbucketMock> {
       privateToken:
         (req.headers["private-token"] as string | undefined) ?? null,
     });
-    const { json, text, readBody } = helpers(req, res);
+    const { json, text, readBody, empty } = helpers(req, res);
     const handle = async () => {
       if (path === repo && req.method === "GET")
         return json(200, { mainbranch: { name: "main" } });
@@ -392,6 +410,10 @@ export async function startBitbucketMock(): Promise<BitbucketMock> {
       if (path === `${repo}/pipelines` && req.method === "POST") {
         state.triggers += 1;
         return json(201, { uuid: "{pipeline-2}", state: { name: "PENDING" } });
+      }
+      if (path === `${repo}/pipelines/{pipeline-1}/stopPipeline` && req.method === "POST") {
+        state.ciStops += 1;
+        return empty(204);
       }
       return json(404, {
         message: `bitbucket mock: no route for ${req.method} ${path}`,
