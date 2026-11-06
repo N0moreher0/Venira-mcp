@@ -1081,6 +1081,21 @@ function rankHits(hits: Array<Record<string, unknown>>, needle: string): void {
   for (let i = 0; i < scored.length; i += 1) hits[i] = scored[i].hit;
 }
 
+/**
+ * Validate and compile a user-supplied search regex once, before either backend
+ * runs. The complexity guard must not be bypassed by the ripgrep fast path.
+ */
+function compileSearchRegex(query: string, caseSensitive: boolean): RegExp {
+  if (query.length > 512 || /(?:\([^)]*[+*][^)]*\)|\[[^\]]+\][+*])[+*{]/.test(query)) {
+    throw new Error("[resource_limit] Regex too complex");
+  }
+  try {
+    return new RegExp(query, caseSensitive ? "" : "i");
+  } catch (error) {
+    throw new Error(`[invalid_request] Invalid regex: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
 async function opSearch(
   args: Record<string, unknown>,
   root: string,
@@ -1193,10 +1208,22 @@ async function opSearch(
     // would need per-file cluster correlation, so instead each hit file is
     // re-read once (bounded, chunked) and the surrounding lines are sliced,
     // exactly matching the JS path's `context` shape.
+    // Validate regex complexity/invalid syntax before either backend runs.
+    // Without this, rg (which compiles patterns in Rust) would happily serve a
+    // query such as `(a+)+$` and the resource guard would never fire.
+    if (args.regex === true) compileSearchRegex(query, caseSensitive);
+
     if (envFlag("VENIRA_USE_RIPGREP", true) && kind === "literal_content" && !countOnly) {
       if (await ripgrepInstalled()) {
         try {
-          const argList = ["--json", "-n", "--max-filesize=1M", "--color=never"];
+          // Match the JS scanner's view of the tree: rg must not honor
+          // .gitignore/global ignore because the JS walker does not.
+          // Hidden files follow include_hidden, and the same built-in
+          // IGNORED directories are excluded by glob.
+          const argList = ["--json", "-n", "--max-filesize=1M", "--color=never", "--no-ignore", "--no-ignore-vcs"];
+          for (const ign of [".git","node_modules","target","dist","build",".next",".venv","__pycache__",".cache",".turbo","coverage"]) {
+            argList.push("--glob", `!**/${ign}/**`);
+          }
           if (!caseSensitive) argList.push("-i");
           if (wholeWord) argList.push("-w");
           if (includeHidden) argList.push("--hidden");
@@ -1204,7 +1231,16 @@ async function opSearch(
           else { argList.push("-F", "-e", String(query)); }
           if (glob) argList.push("--glob", String(glob));
           if (excludeGlob) argList.push("--glob", `!${excludeGlob}`);
-          argList.push("--max-count", String(limit));
+          // Hidden exclusion goes last: rg applies later globs with higher
+          // precedence, so a caller glob such as `*.ts` cannot re-include a
+          // dotfile when include_hidden=0.
+          if (!includeHidden) {
+            argList.push("--glob", "!**/.*");
+            argList.push("--glob", "!**/.*/**");
+          }
+          // No per-file --max-count and no early global break before ranking:
+          // rg runs multithreaded, so its output order is not stable. Collect
+          // a bounded set, rank, then trim to the caller's limit.
           argList.push(searchRoot);
           const resp = await ripgrepExec(argList, 10000);
 
@@ -1215,6 +1251,9 @@ async function opSearch(
           // [invalid_request] envelope — never a silent empty "no matches".
           if ((resp.status === 0 || resp.status === 1) && !resp.error) {
             const lines = String(resp.stdout ?? "").split(/\r?\n/).filter(Boolean);
+            // Safety cap only: never cut at `limit` before ranking, because
+            // rg's multithreaded output order is not stable.
+            const COLLECT_CAP = Math.max(limit * 10, 1000);
             for (const raw of lines) {
               let rec: any = null;
               try { rec = JSON.parse(raw); } catch { continue; }
@@ -1223,12 +1262,25 @@ async function opSearch(
               const abs = path.isAbsolute(pth) ? pth : path.resolve(root, pth);
               if (isProtectedPath(abs)) continue;
               const rel = path.relative(root, abs).replace(/\\/g, "/");
+              // Mirror collectFiles() exactly: hidden segments and built-in
+              // IGNORED dirs are dropped even if rg's glob handling lets one
+              // through (keeps both backends returning the same hit set).
+              const segments = rel.split("/");
+              if (!includeHidden && segments.some((seg) => seg.startsWith("."))) continue;
+              if (segments.some((seg) => IGNORED.has(seg))) continue;
               const ln = Number(rec.data?.line_number ?? 0);
-              const lineText = String(rec.data?.lines?.text ?? "").replace(/\n$/, "");
+              const lineText = String(rec.data?.lines?.text ?? "").replace(/\r?\n$/, "");
               const snippet = lineText.trim().slice(0, 200);
               hits.push({ relative_path: rel, line_number: ln, snippet });
               totalMatchLines += 1;
-              if (hits.length >= limit) { complete = false; break; }
+              if (hits.length >= COLLECT_CAP) { complete = false; break; }
+            }
+            // Rank first, then trim to the caller's limit, so high-ranked hits
+            // survive regardless of rg's thread ordering.
+            rankHits(hits, needle);
+            if (hits.length > limit) {
+              hits.length = limit;
+              complete = false;
             }
             if (contextLines > 0 && hits.length > 0) {
               const hitsByRel = new Map<string, Hit[]>();
@@ -1248,7 +1300,7 @@ async function opSearch(
                   catch { return; }
                   if (Buffer.byteLength(content, "utf8") > 1_048_576) return;
                   if (content.indexOf("\u0000") >= 0) return;
-                  const lines = content.split("\n");
+                  const lines = content.split(/\r?\n/);
                   for (const hit of hitsByRel.get(rel) ?? []) {
                     const idx = (hit.line_number ?? 0) - 1;
                     if (idx < 0 || idx >= lines.length) continue;
@@ -1259,7 +1311,6 @@ async function opSearch(
                 }));
               }
             }
-            rankHits(hits, needle);
             return {
               status: "completed",
               truncated: !complete,
@@ -1290,11 +1341,7 @@ async function opSearch(
     }
     let contentRe: RegExp | null = null;
     if (useRegex) {
-      if (query.length > 512 || /(?:\([^)]*[+*][^)]*\)|\[[^\]]+\][+*])[+*{]/.test(query)) {
-        throw new Error("[resource_limit] Regex too complex");
-      }
-      try { contentRe = new RegExp(query, caseSensitive ? "" : "i"); }
-      catch (error) { throw new Error(`[invalid_request] Invalid regex: ${error instanceof Error ? error.message : String(error)}`); }
+      contentRe = compileSearchRegex(query, caseSensitive);
     }
 
     const BINARY_EXT = new Set([".png",".jpg",".jpeg",".gif",".webp",".bmp",".ico",".tiff",
@@ -1328,7 +1375,7 @@ async function opSearch(
       if (hits.length >= limit) { complete = false; break; }
       const { rel, content } = entry;
 
-      const lines = content.split("\n");
+      const lines = content.split(/\r?\n/);
       const matchIndices: number[] = [];
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
@@ -1347,7 +1394,9 @@ async function opSearch(
       totalMatchLines += matchIndices.length;
 
       for (const idx of matchIndices) {
-        if (hits.length >= limit) {
+        // Same collection cap as the rg path: collect, rank, then trim so the
+        // two backends agree on which hits survive `limit`.
+        if (hits.length >= Math.max(limit * 10, 1000)) {
           complete = false;
           break;
         }
@@ -1363,6 +1412,10 @@ async function opSearch(
       }
     }
     rankHits(hits, needleConst);
+    if (hits.length > limit) {
+      hits.length = limit;
+      complete = false;
+    }
   }
 
   const filesMatched = new Set(hits.map((h) => h.relative_path)).size;
