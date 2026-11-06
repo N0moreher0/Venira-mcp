@@ -24,7 +24,7 @@ Decision tree
 1. Two or more reads, or mixed read-only steps -> project_read_batch (max 8, sequential + cached). Do not fire many single reads.
 2. One file -> project_read_file; large file -> start_line/end_line or project_read_ranges; follow next_start_line.
 3. Find code -> project_search (kind=literal_content or definition), then project_read_ranges around hits.
-4. Directory tree -> project_list_files (depth 1..3, limit <=200). "What changed lately?" -> project_recent_files.
+4. Directory tree -> project_list_files (depth 1..3, limit <=200). "What changed lately / what did the user or a command just touch?" -> project_recent_files (cheap; make it a habit).
 5. Code structure -> project_outline_symbol / project_file_symbols; usages of one symbol -> project_symbol_references; whole-file dependencies -> project_dependency_graph; "what breaks if I edit this?" -> project_change_impact (files=[...] or symbols=[...], direction=dependents).
 6. Write whole file -> project_write_file; small precise change -> project_edit_file; delete -> project_delete_path (destructive, not undoable).
 7. Before multi-file, cross-file, refactor/rename or otherwise hard-to-reverse work -> create a scoped project_snapshot with a descriptive label, retain its returned id, inspect file_count/truncated/skipped, then proceed. For rollback, run restore with dry_run=1 first; it previews path/size only and cannot detect same-size content changes. Treat all captured files in scope as potentially overwritten; inspect any newer user edits, then restore the exact id with verify=1 and delete_extra=0. Never set delete_extra=1 unless deleting post-checkpoint files is explicitly part of the task. Skip snapshots for a tiny, easy-to-recreate single-file edit.
@@ -38,6 +38,7 @@ Decision tree
 15. Unsure which tool exists -> use the Code Mode tool-discovery helper (findTools; named search in older builds), not a Venira tool.
 
 Rules
+- Make project_recent_files a reflex, not a last resort: call it (limit 10..20) at the start of a task, when resuming or after context loss, before editing a file the user may have changed, and after project_shell_run / a build / a formatter / git to see what really changed. Its session_edits field lists what you already wrote this session. Then feed the top paths straight into project_read_batch. Use it instead of listing a whole tree or re-searching. It is off in VENIRA_PROFILE=core.
 - Prefer Venira for read-heavy/batch work; single tiny native operations are fine either way.
 - Paths are workspace-relative (absolute inside the workspace also works). Never invent @grant paths unless list_files returned them.
 - project_read_batch and project_list_files/search results are cached briefly; mutations invalidate caches automatically.

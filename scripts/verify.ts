@@ -143,11 +143,23 @@ check(
     instructions.includes("every project_delete_path call"),
   { includes: ["Snapshot discipline", "dry_run=1", "same-size content changes", "delete_extra=0"].map((text) => instructions.includes(text)) },
 );
+check(
+  "instructions_teach_recent_files_habit",
+  instructions.includes("project_recent_files") && instructions.includes("at the start of a task") &&
+    instructions.includes("session_edits") && instructions.includes("after project_shell_run"),
+  { includes: ["project_recent_files", "at the start of a task", "session_edits", "after project_shell_run"].map((text) => instructions.includes(text)) },
+);
 await client2.close();
 
 const tools = await client.listTools();
 const expectedCount = tools.tools.length;
 check("tool_count", tools.tools.length === expectedCount, { actual: tools.tools.length, expected: expectedCount });
+const recentFilesTool = tools.tools.find((tool) => tool.name === "project_recent_files");
+check(
+  "recent_files_description_teaches_when_to_use",
+  (recentFilesTool?.description ?? "").includes("session_edits") && (recentFilesTool?.description ?? "").includes("start of a task"),
+  recentFilesTool?.description,
+);
 const directBooleanToolInputs = tools.tools.flatMap((tool) =>
   Object.entries(tool.inputSchema?.properties ?? {})
     .filter(([, schema]) => (schema as { type?: string }).type === "boolean")

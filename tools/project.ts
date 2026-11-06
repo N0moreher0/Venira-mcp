@@ -3148,10 +3148,10 @@ export function registerProjectTools(server: McpServer): void {
     "project_recent_files",
     {
       ...config(
-        "List files modified most recently in the workspace (bounded filesystem scan, skips node_modules/target/.git).",
+        "List files modified most recently in the workspace, newest first, plus session_edits (files you already wrote this session). Cheap orientation call: use it at the start of a task, when resuming, before editing a file the user may have changed, and after shell/build/git steps to see what really changed (bounded filesystem scan, skips node_modules/target/.git).",
         "Recent files",
         {
-          use_when: "you need to know which files just changed, or to pick the next file to read in this session.",
+          use_when: "starting or resuming a task, checking what the user or a command just changed (after shell/build/format/git), re-orienting after context loss, or picking the next files to feed into project_read_batch. Prefer it over listing a whole tree.",
           avoid_when: "you need the full list / by name (project_list_files) or content search (project_search).",
           speed_profile: "medium (filesystem walk); TTL cache 2s, bounded to 4000 files / 300 directories.",
           output_kind: "recent_files: entries[] sorted by mtime desc, scanned_files, truncated.",
