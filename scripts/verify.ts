@@ -133,6 +133,12 @@ const instrTransport = new StdioClientTransport({
 await client2.connect(instrTransport);
 const instructions = client2.getInstructions?.() ?? "";
 check("instructions_present", instructions?.includes("Decision tree") ?? false, { instructionsLength: instructions.length });
+check(
+  "snapshot_workflow_in_shared_instructions",
+  instructions.includes("Snapshot discipline") && instructions.includes("dry_run=1") &&
+    instructions.includes("same-size content changes") && instructions.includes("delete_extra=0"),
+  { includes: ["Snapshot discipline", "dry_run=1", "same-size content changes", "delete_extra=0"].map((text) => instructions.includes(text)) },
+);
 await client2.close();
 
 const tools = await client.listTools();
@@ -161,6 +167,13 @@ check(
 );
 const snapshotTool = tools.tools.find((t) => t.name === "project_snapshot");
 check("tool_snapshot_present", !!snapshotTool, tools.tools.map((t) => t.name));
+const snapshotDescription = snapshotTool?.description ?? "";
+check(
+  "snapshot_tool_teaches_safe_rollback",
+  snapshotDescription.includes("dry_run=1") && snapshotDescription.includes("same-size content changes") &&
+    snapshotDescription.includes("verify=1") && snapshotDescription.includes("delete_extra=0"),
+  snapshotDescription,
+);
 const expectedNewTools = [
   "project_pr_create",
   "project_pr_comment",
@@ -1429,7 +1442,48 @@ await call("project_write_file", {
   content: "tampered by verify\n",
   reason: "VERIFY_REASON_EDIT",
 });
-const snapRestore = asEnvelope(await call("project_snapshot", { action: "restore", id: snapId }));
+const snapDryRun = asEnvelope(await call("project_snapshot", {
+  action: "restore", id: snapId, dry_run: 1, verify: 1, delete_extra: 0, reason: "VERIFY_REASON_DRY_RUN",
+}));
+const dryRunRestored = (snapDryRun.data?.restored ?? []) as Array<{ path?: string }>;
+const dryRunCurrent = await fs.readFile(`${dir}/snap-target.txt`, "utf8");
+check(
+  "snapshot_dry_run_is_preview_only",
+  snapDryRun.ok === true && snapDryRun.data?.dry_run === true &&
+    String(snapDryRun.data?.dry_run_note ?? "").includes("size only") &&
+    dryRunRestored.some((file) => file.path === `${dir}/snap-target.txt`) &&
+    dryRunCurrent.includes("tampered by verify"),
+  { note: snapDryRun.data?.dry_run_note, current_unchanged: dryRunCurrent.includes("tampered by verify") },
+);
+const sameSizeDir = `${dir}/same-size-scope`;
+await fs.mkdir(sameSizeDir, { recursive: true });
+await fs.writeFile(`${sameSizeDir}/target.txt`, "AAAAAA");
+const sameSizeSnapshot = asEnvelope(await call("project_snapshot", {
+  action: "create", paths: [sameSizeDir], label: "same-size dry-run fixture", reason: "VERIFY_REASON_SAME_SIZE_SNAPSHOT",
+}));
+const sameSizeSnapshotId = String(sameSizeSnapshot.data?.id ?? "");
+await fs.writeFile(`${sameSizeDir}/target.txt`, "BBBBBB");
+const snapDryRunSameSize = asEnvelope(await call("project_snapshot", {
+  action: "restore", id: sameSizeSnapshotId, dry_run: 1, verify: 1, delete_extra: 0, reason: "VERIFY_REASON_DRY_RUN_SAME_SIZE",
+}));
+const sameSizeCurrent = await fs.readFile(`${sameSizeDir}/target.txt`, "utf8");
+check(
+  "snapshot_dry_run_documents_same_size_limit",
+  sameSizeSnapshot.ok === true && sameSizeSnapshot.data?.file_count === 1 &&
+    snapDryRunSameSize.ok === true && String(snapDryRunSameSize.data?.dry_run_note ?? "").includes("size only") &&
+    snapDryRunSameSize.data?.unchanged_count === 1 && snapDryRunSameSize.data?.restored_count === 0 &&
+    sameSizeCurrent === "BBBBBB",
+  { note: snapDryRunSameSize.data?.dry_run_note, unchanged_count: snapDryRunSameSize.data?.unchanged_count, current_untouched: sameSizeCurrent === "BBBBBB" },
+);
+const sameSizeRestore = asEnvelope(await call("project_snapshot", {
+  action: "restore", id: sameSizeSnapshotId, verify: 1, delete_extra: 0, reason: "VERIFY_REASON_SAME_SIZE_RESTORE",
+}));
+const sameSizeRestored = await fs.readFile(`${sameSizeDir}/target.txt`, "utf8");
+check("snapshot_restore_same_size_content", sameSizeRestore.ok === true && sameSizeRestored === "AAAAAA", sameSizeRestore);
+await call("project_snapshot", { action: "delete", id: sameSizeSnapshotId, reason: "VERIFY_REASON_SAME_SIZE_CLEANUP" });
+const snapRestore = asEnvelope(await call("project_snapshot", {
+  action: "restore", id: snapId, verify: 1, delete_extra: 0, reason: "VERIFY_REASON_RESTORE",
+}));
 check(
   "snapshot_restore",
   snapRestore.ok === true && snapRestore.kind === "snapshot_restore" && (snapRestore.data?.restored_count ?? 0) >= 8,
