@@ -20,7 +20,8 @@ import { promises as fs, existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { gunzipSync, gzipSync } from "node:zlib";
-import { resolveWithin, activeDataDir, WORKSPACE } from "./workspace.js";
+import { resolveWithin, defaultDataDir, WORKSPACE } from "./workspace.js";
+import { snapshotStoreDir, ensureProjectMeta } from "./snapshot-paths.js";
 import { redactSecrets } from "./shell-policy.js";
 import type { RustResponse } from "./output.js";
 
@@ -97,8 +98,17 @@ const SNAPSHOT_FILE_EXCLUDE_PATTERNS: Array<{ re: RegExp; reason: string }> = [
   { re: /\.d$/i, reason: "excluded:rust_dep" },
 ];
 
+/**
+ * Store folder for this workspace (see snapshot-paths.ts for the layout and
+ * VENIRA_SNAPSHOT_DIR / VENIRA_SNAPSHOT_ROOT precedence).
+ */
 export function snapshotDataDir(): string {
-  return path.join(activeDataDir(), SNAPSHOT_DIR_NAME);
+  return snapshotStoreDir(WORKSPACE, defaultDataDir());
+}
+
+/** Stamp the store with its owning workspace before the first write. */
+function ensureStoreMeta(): void {
+  ensureProjectMeta(snapshotDataDir(), WORKSPACE);
 }
 
 function indexPath(id: string): string {
@@ -250,6 +260,7 @@ async function readManifest(id: string): Promise<SnapshotManifest> {
 }
 
 async function writeManifest(manifest: SnapshotManifest): Promise<void> {
+  ensureStoreMeta();
   const dir = path.join(snapshotDataDir(), "index");
   await fs.mkdir(dir, { recursive: true });
   const payload = gzipSync(Buffer.from(JSON.stringify(manifest), "utf8"), { level: 6 });
@@ -445,6 +456,7 @@ async function storeBlob(absPath: string): Promise<{ sha256: string; size: numbe
   } catch {
     /* blob not stored yet */
   }
+  ensureStoreMeta();
   await fs.mkdir(path.dirname(dest), { recursive: true });
   const tmp = `${dest}.tmp-${crypto.randomBytes(3).toString("hex")}`;
   await fs.writeFile(tmp, buffer);

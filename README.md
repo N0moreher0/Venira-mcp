@@ -104,7 +104,7 @@ Windows:
       "args": ["--yes", "--package=venira-mcp@latest", "venira-mcp"],
       "env": {
         "VENIRA_WORKSPACE": "C:\\Users\\YourName\\Projects\\my-app",
-        "VENIRA_DATA_DIR": "G:\\Snapshots",
+        "VENIRA_DATA_DIR": "C:\\Users\\YourName\\AppData\\Local\\venira",
         "VENIRA_TOOL_MODE": "expert",
         "VENIRA_OUTPUT_MODE": "full",
         "VENIRA_SECURITY_PROFILE": "balanced"
@@ -323,6 +323,9 @@ Full reference: ~60 `VENIRA_*` flags — see the env table in the source or `npx
 | `VENIRA_EDIT_FUZZY` | `"0"` | `"1"` enables fuzzy-match fallback for `old_text` |
 | `VENIRA_NETWORK` | `"1"` | `"0"` = hard kill switch for all provider calls |
 | `VENIRA_DATA_DIR` | per-user OS path | Where audit DB + encrypted secrets live |
+| `VENIRA_SNAPSHOT_ROOT` | `<per-user data dir>/snapshots` | Shared checkpoint root for every project and client; each workspace gets its own sub-folder (absolute path) |
+| `VENIRA_SNAPSHOT_DIR` | unset | Exact checkpoint store for a single project, no sub-folders; wins over `VENIRA_SNAPSHOT_ROOT` (absolute path) |
+| `VENIRA_SNAPSHOT_KEEP` | `20` | Checkpoints kept per project (oldest pruned on create) |
 | `VENIRA_DISABLE_TOOLS` | unset | Comma-separated tool names to hide from `tools/list` |
 | `VENIRA_GIT_PROVIDER` | inferred | `github` / `gitlab` / `bitbucket` |
 | `VENIRA_GIT_TOKEN` | unset | Fallback token when no provider-specific secret found |
@@ -382,6 +385,22 @@ Alternative (off by default, `project_shell_run` only): `VENIRA_SHELL_ELICIT=1` 
 Removed in v1.15: `approval_token` and `VENIRA_SHELL_AUTO_APPROVE_TOKEN`. Passing `approval_token` now returns `[approval_invalid]` with a hint to use `approval_id`; setting the env var only logs a warning and is ignored.
 
 Approvals are a guard rail, not a sandbox: a process running as the same OS user can read the approval key.
+
+**Snapshot store (checkpoints)**
+
+Checkpoints live outside every workspace, in one shared per-user folder, so every MCP client that opens the same project sees the same history:
+
+```
+%LOCALAPPDATA%\venira\snapshots\        (Linux: ~/.local/share/venira/snapshots, macOS: ~/Library/Application Support/venira/snapshots)
+  my-app\              project.json  index\  blobs\
+  my-app-6cb89aac\     a second workspace that is also called "my-app"
+```
+
+- Folder name = workspace folder name. The first workspace to claim a name keeps it (recorded in `project.json`); a different workspace with the same name gets a `-<hash8>` suffix. The same workspace always maps to the same folder, whatever the path casing or 8.3/symlink spelling.
+- Override with `VENIRA_SNAPSHOT_ROOT` (shared root) or `VENIRA_SNAPSHOT_DIR` (exact folder, single project). Both must be absolute paths; a relative one fails with `[config_invalid]`.
+- The file tools (read, write, edit, search, delete) refuse anything under the snapshot root or exact dir, the same way they refuse the data dir. Only `project_snapshot` touches the store.
+- Retention is per project (`VENIRA_SNAPSHOT_KEEP`), so one busy project cannot push out another's checkpoints.
+- Limit: this guard covers the file tools, not the shell. In `balanced` / `strict` a recursive delete of the store asks for approval; in `permissive` and `off` it does not. Keep a separate copy of checkpoints you cannot afford to lose.
 
 **Threats this does NOT protect against**: a malicious prompt can still instruct the agent to run destructive commands. Use a container/VM for untrusted workspaces.
 
@@ -445,6 +464,8 @@ npm run bench:mcp   # end-to-end numbers
 | Everything slow | `project_health` → `queue.depth` and per-op p95 |
 
 ## 12. Changelog (latest)
+
+**Unreleased** — Checkpoints move to a shared per-user store with one sub-folder per project (`VENIRA_SNAPSHOT_ROOT`, `VENIRA_SNAPSHOT_DIR`, name clashes resolved via `project.json` + hash suffix); the file tools now refuse the snapshot store. The default store is no longer `<VENIRA_DATA_DIR>/snapshots`; point `VENIRA_SNAPSHOT_DIR` at the old folder to keep existing checkpoints.
 
 **v1.15.1** (2026-11-06) — Correct the v1.15.0 changelog formatting and align documented hard-deny/ask rule categories with the shipped policy.
 

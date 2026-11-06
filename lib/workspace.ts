@@ -6,6 +6,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { envFlag } from "./env.js";
 import { securityProfileSettings } from "./security-profile.js";
+import { snapshotProtectedRoots } from "./snapshot-paths.js";
 export const PLATFORM = process.platform;
 
 export let WORKSPACE = path.resolve(process.env.VENIRA_WORKSPACE ?? process.cwd());
@@ -180,6 +181,10 @@ export function isProtectedPath(absPath: string): boolean {
   // off-limits to the file tools: the agent must not be able to forge a grant.
   try {
     if (isInsideDir(canonicalPath, realPathOrSelf(activeDataDir()))) return true;
+    // The checkpoint store (shared root and/or exact override) is equally off-limits.
+    for (const snapshotRoot of snapshotProtectedRoots(defaultDataDir())) {
+      if (isInsideDir(canonicalPath, realPathOrSelf(snapshotRoot))) return true;
+    }
   } catch {
     /* fall through */
   }
