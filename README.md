@@ -286,6 +286,13 @@ All tools return the standard envelope (`ok`, `kind`, `data`, `hint`, `elapsed_m
 
 `project_pr_create/comment/merge/list/close/reopen`, `project_ci_status/trigger/logs/wait` — same tool args across providers; token from `project_secret` or env vars.
 
+CI reads are bounded and never hide a cap:
+
+- **Pagination** — status/job/check-run/step lists follow the provider's next-page link (`Link` header on GitHub/GitLab, body `next` on Bitbucket) for at most 5 pages / 200 items, stay on the configured API origin, and never fetch the same page twice. When a cap or the provider total stops the walk, the result says so (`truncated` / `partial`) instead of reporting a partial list as complete.
+- **Verdicts** — a finished Bitbucket pipeline/step is read from `state.result` (not just `COMPLETED`), so a failed run is never shown green.
+- **Logs** — failing steps/jobs are read first; archives and entries are byte-capped (see `VENIRA_GIT_LOG_*`), and a log whose declared size is over the cap is refused before it is downloaded.
+- **`project_ci_wait`** — one bounded long-poll (no polling loop). Returns `summary` (one line), `next_step` (`wait_again` · `merge_or_continue` · `fix_failing_step_then_push` · `read_logs` · `inspect_status`), `failing_jobs` (max 5) and, on failure, a `failure_tail` of the first failing job (numeric ids on GitHub/GitLab, UUID step ids on Bitbucket).
+
 **Secrets (encrypted at rest)**
 
 `project_secret` — store/inspect/remove credentials by name; AES-256-GCM; rotation metadata; expired secrets refused.
@@ -329,6 +336,11 @@ Full reference: ~60 `VENIRA_*` flags — see the env table in the source or `npx
 | `VENIRA_DISABLE_TOOLS` | unset | Comma-separated tool names to hide from `tools/list` |
 | `VENIRA_GIT_PROVIDER` | inferred | `github` / `gitlab` / `bitbucket` |
 | `VENIRA_GIT_TOKEN` | unset | Fallback token when no provider-specific secret found |
+| `VENIRA_GIT_TIMEOUT_MS` | `60000` | Per-request timeout for provider JSON calls (1 000–600 000) |
+| `VENIRA_GIT_RETRIES` | `1` | Retries for safe GET reads only (0–3); POSTs are never replayed |
+| `VENIRA_GIT_LOG_TIMEOUT_MS` | `90000` | Timeout for CI log downloads (1 000–900 000) |
+| `VENIRA_GIT_LOG_ZIP_BYTES` | `33554432` | Max bytes of a CI log archive; larger declared sizes are refused before download |
+| `VENIRA_GIT_LOG_ENTRY_BYTES` / `VENIRA_GIT_LOG_TEXT_BYTES` | `4194304` / `8388608` | Per-entry and total decoded log text caps |
 | `VENIRA_SECRET_ALLOW_REVEAL` | `"0"` | `"1"` allows `reveal=1` to print secret plaintext |
 | `VENIRA_SHELL_OVERRIDES` | unset | Operator allowlist: `ALLOW_GIT_PUSH`, `ALLOW_ENV_READ` |
 | `VENIRA_TRACE` | `"0"` | `"1"` logs every tool call to stderr (debug only) |
@@ -438,10 +450,10 @@ Venira MCP rules:
 ## 10. Development
 
 ```bash
-npm run build       # tsc → dist/
+npm run build       # tsc → dist/  (verify launches dist/server.js, so rebuild before verifying)
 npm run smoke       # in-process sanity check
 npm run doctor      # 13 preflight checks
-npm run verify      # 423 behavioural + security checks
+npm run verify      # 493 behavioural + security checks
 npm run bench:mcp   # end-to-end numbers
 ```
 
@@ -465,7 +477,15 @@ npm run bench:mcp   # end-to-end numbers
 
 ## 12. Changelog (latest)
 
+**Unreleased** — CI provider reliability (Phase E): GitHub and Bitbucket list/log reads now paginate with the same bounded rules as GitLab (5 pages / 200 items, same-origin only, `truncated`/`partial` reported); Bitbucket reads `state.result` so failed runs are no longer shown green; Bitbucket step lists follow the body `next` URL; log reads fetch failing steps first and refuse oversized declared archives early; `project_ci_wait` adds `summary`, `next_step`, `failing_jobs` and now tails the failing Bitbucket step (UUID ids were previously dropped). The existing `VENIRA_GIT_TIMEOUT_MS`, `VENIRA_GIT_RETRIES` and `VENIRA_GIT_LOG_*` limits are now documented in §6.
+
 **Unreleased** — Checkpoints move to a shared per-user store with one sub-folder per project (`VENIRA_SNAPSHOT_ROOT`, `VENIRA_SNAPSHOT_DIR`, name clashes resolved via `project.json` + hash suffix); the file tools now refuse the snapshot store. The default store is no longer `<VENIRA_DATA_DIR>/snapshots`; point `VENIRA_SNAPSHOT_DIR` at the old folder to keep existing checkpoints.
+
+**v1.16.2** (2026-11-07) — Serialize audit-chain writes so concurrent tool calls cannot fork the hash chain; release verification now checks the published artifacts.
+
+**v1.16.1** (2026-11-07) — Release verification confirms the package is actually published to npm; `npm run doctor` reports the real tool count.
+
+**v1.16.0** (2026-11-07) — Adds provider-neutral `project_ci_control` (cancel / retry-failed for GitHub and GitLab; cancel only for Bitbucket); relicenses to GNU AGPLv3; teaches agents the snapshot-before-delete workflow across tool descriptions; adds reproducible MCP benchmark evidence and a paired Codex tool benchmark.
 
 **v1.15.1** (2026-11-06) — Correct the v1.15.0 changelog formatting and align documented hard-deny/ask rule categories with the shipped policy.
 
