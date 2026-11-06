@@ -23,11 +23,12 @@
  * Approval model
  * --------------
  * `ask` never runs the command. The caller receives an `approval_required`
- * error containing a signed, short-lived `approval_token` bound to the exact
- * command text (SHA-256), the rule id and the session. Retrying the same command
- * with that token executes it once. `approval_scope: "session"` upgrades it to a
- * TTL grant for the same rule + command head (e.g. `git push`), which avoids
- * blocking an agent on every poll while staying narrow.
+ * error with a pending `approval_id` bound to the exact command, shell, cwd,
+ * secret_env and rule. Only a human can grant it (`npx venira-mcp --approve <id>`
+ * in a TTY, or MCP elicitation in the client UI); the agent then retries once with
+ * `approval_id`. The grant's scope (`once` or `session`) is chosen by the human,
+ * never by the model. A `session` grant only covers rules in
+ * VENIRA_SESSION_GRANT_RULES, for the same rule + command head (e.g. `git push`).
  *
  * Policy file
  * -----------
@@ -58,7 +59,7 @@ export { tokenize } from "./shell-tokenizer.js";
 // Types
 // ---------------------------------------------------------------------------
 
-export type ShellMode = "strict" | "balanced" | "permissive";
+export type ShellMode = "strict" | "balanced" | "permissive" | "off";
 export type ShellOverride = "ALLOW_GIT_PUSH" | "ALLOW_ENV_READ";
 export type Tier = "allow" | "ask" | "deny";
 
@@ -668,7 +669,7 @@ function readRules(value: unknown, tier: Tier): ShellRule[] {
 
 function normaliseMode(value: string | undefined): ShellMode | null {
   const v = (value ?? "").trim().toLowerCase();
-  if (v === "strict" || v === "balanced" || v === "permissive") return v;
+  if (v === "strict" || v === "balanced" || v === "permissive" || v === "off") return v;
   return null;
 }
 
@@ -738,7 +739,7 @@ export function loadShellPolicy(): ShellPolicy {
   const rawEnvMode = process.env.VENIRA_SHELL_MODE;
   const envMode = normaliseMode(rawEnvMode);
   if (rawEnvMode !== undefined && !envMode) {
-    throw new Error("[config_invalid] VENIRA_SHELL_MODE must be balanced, strict, or permissive.");
+    throw new Error("[config_invalid] VENIRA_SHELL_MODE must be balanced, strict, permissive, or off.");
   }
   if (envMode) policy.mode = envMode;
 
@@ -749,7 +750,7 @@ export function loadShellPolicy(): ShellPolicy {
       const rawFileMode = typeof parsed.mode === "string" ? parsed.mode : undefined;
       const fileMode = normaliseMode(rawFileMode);
       if (rawFileMode !== undefined && !fileMode) {
-        throw new Error("[config_invalid] shell policy mode must be balanced, strict, or permissive.");
+        throw new Error("[config_invalid] shell policy mode must be balanced, strict, permissive, or off.");
       }
       if (fileMode && !envMode) policy.mode = fileMode;
       policy.allow = readRules(parsed.allow, "allow");
@@ -766,6 +767,20 @@ export function loadShellPolicy(): ShellPolicy {
   } else if (file) {
     console.error(`[shell-policy] policy file not found: ${file} (using built-in rules)`);
     policy.source = "builtin (policy file missing)";
+  }
+
+  if (policy.mode === "off") {
+    console.error(
+      "[shell-policy] WARNING: VENIRA_SHELL_MODE=off disables ALL shell policy checks (hard-deny included). " +
+        "Use only in a trusted environment. secret_env still requires approval.",
+    );
+  }
+
+  if (/^(1|true|yes|on)$/i.test((process.env.VENIRA_SHELL_AUTO_APPROVE_TOKEN ?? "").trim())) {
+    console.error(
+      "[shell-policy] WARNING: VENIRA_SHELL_AUTO_APPROVE_TOKEN was removed in v1.15 and is ignored. " +
+        "Approvals now always use approval_id granted by a human (npx venira-mcp --approve <id> or client elicitation).",
+    );
   }
 
   cachedPolicy = policy;
@@ -835,16 +850,14 @@ export function evaluateShellCommand(
 }
 
 // ---------------------------------------------------------------------------
-// Approval tokens and session grants
+// Session grants (fed only by verified human grants: CLI or elicitation)
 // ---------------------------------------------------------------------------
 
-const APPROVAL_SECRET = crypto.randomBytes(32);
 const TTL_MS = (() => {
   const value = Number(process.env.VENIRA_SHELL_APPROVAL_TTL_MS);
   return Number.isFinite(value) && value > 0 ? value : 10 * 60 * 1000;
 })();
 
-const usedTokens = new Map<string, number>();
 const sessionGrants = new Map<string, number>();
 
 function prune(map: Map<string, number>): void {
@@ -852,43 +865,6 @@ function prune(map: Map<string, number>): void {
   for (const [key, expires] of map) {
     if (expires <= now) map.delete(key);
   }
-}
-
-export function issueApprovalToken(
-  sessionId: string,
-  decision: Decision,
-  ttlMs = TTL_MS,
-  binding = "",
-): { token: string; expires_at: number } {
-  const expiresAt = Date.now() + ttlMs;
-  const mac = crypto
-    .createHmac("sha256", APPROVAL_SECRET)
-    .update(`${sessionId}|${decision.rule}|${decision.command_hash}|${binding}|${expiresAt}`)
-    .digest("base64url");
-  return { token: `v1.${expiresAt}.${mac}`, expires_at: expiresAt };
-}
-
-export function verifyApprovalToken(
-  token: string,
-  sessionId: string,
-  decision: Decision,
-  binding = "",
-): { ok: boolean; reason?: string } {
-  const match = /^v1\.(\d+)\.([A-Za-z0-9_-]+)$/.exec(token.trim());
-  if (!match) return { ok: false, reason: "malformed" };
-  const expiresAt = Number(match[1]);
-  if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) return { ok: false, reason: "expired" };
-  const expected = crypto
-    .createHmac("sha256", APPROVAL_SECRET)
-    .update(`${sessionId}|${decision.rule}|${decision.command_hash}|${binding}|${expiresAt}`)
-    .digest("base64url");
-  const a = Buffer.from(match[2]);
-  const b = Buffer.from(expected);
-  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return { ok: false, reason: "signature_mismatch" };
-  if (usedTokens.has(token)) return { ok: false, reason: "already_used" };
-  usedTokens.set(token, expiresAt);
-  prune(usedTokens);
-  return { ok: true };
 }
 
 export function grantSessionApproval(sessionId: string, decision: Decision, key: string, ttlMs = TTL_MS): number {
@@ -910,7 +886,6 @@ export function hasSessionApproval(sessionId: string, decision: Decision, key: s
 
 /** Test hook. */
 export function clearApprovals(): void {
-  usedTokens.clear();
   sessionGrants.clear();
 }
 

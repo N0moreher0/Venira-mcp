@@ -133,8 +133,8 @@ const RULES: Rule[] = [
     cause: "The command matched an `ask` rule in the shell policy (cd outside workspace, pipe-to-shell, sudo, ...).",
     fix: [
       "Prefer a workspace-relative command (omit `cd ..`, use relative_cwd).",
-      "If the command is intended, use the approval flow: the response carries approval_token; resubmit with it.",
-      "For a repeated safe command, request a session grant instead of approving each call.",
+      "If the command is intended, stop and give the user the approval_id from the response plus `npx venira-mcp --approve <approval_id>`; after they confirm, retry the same call once with approval_id (never loop).",
+      "A session grant is chosen by the human at approval time (`--approve <id> --session`) and only covers rules in VENIRA_SESSION_GRANT_RULES.",
     ],
   },
   {

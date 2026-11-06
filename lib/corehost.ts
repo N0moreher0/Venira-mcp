@@ -35,14 +35,12 @@ import {
   evaluateShellCommand,
   grantSessionApproval,
   hasSessionApproval,
-  issueApprovalToken,
   parseShellCommand,
   recordApproval,
   recordDecision,
   redactSecrets,
   shellStats,
   shellOverrideMatches,
-  verifyApprovalToken,
   isShellOverride,
   type Decision,
   type ShellOverride,
@@ -54,6 +52,7 @@ import {
   normalizeForFuzzy,
 } from "./file-ops-helpers.js";
 import * as approvals from "./approvals.js";
+import { redeemApproval, requestApproval } from "./approval-gate.js";
 import { WORKSPACE, PLATFORM, resolveWithin, isProtectedPath, activeDataDir, dynamicWorkspaceEnabled, switchWorkspaceRoot, allowedWorkspaceRoots } from "./workspace.js";
 import {
   opSnapshotCreate,
@@ -2087,31 +2086,21 @@ async function opShellRun(
   for (const name of secretNames) assertSecretUsable(name);
 
   if (decision.tier === "ask") {
-    const token = typeof args.approval_token === "string" ? args.approval_token.trim() : "";
+    const legacyToken = typeof args.approval_token === "string" ? args.approval_token.trim() : "";
     const approvalId = typeof args.approval_id === "string" ? args.approval_id.trim() : "";
-    const wantSession = args.approval_scope === "session";
-    if (token) {
-    const verdict = verifyApprovalToken(token, sessionId, decision, `${shell}|${cwd}|${secretNames.slice().sort().join(",")}`);
-      if (!verdict.ok) {
-        throw new Error(
-          `[approval_invalid] Approval token ${verdict.reason ?? "rejected"} (rule: ${decision.rule}). ` +
-            `Hint: tokens are single-use and expire; call project_shell_run again without a token to receive a fresh approval_required envelope.`,
-        );
-      }
-      approver = "user:token";
-      recordApproval("approved");
-      if (wantSession && approvals.sessionScopeAllowed(decision.rule)) grantSessionApproval(sessionId, decision, approvalKey);
-    } else if (hasSessionApproval(sessionId, decision, approvalKey)) {
+    if (legacyToken && !approvalId) {
+      throw new Error(
+        `[approval_invalid] approval_token was removed in v1.15 (rule: ${decision.rule}). ` +
+          `Hint: call project_shell_run without it to get an approval_id; a human grants it with \`npx venira-mcp --approve <id>\` (or client elicitation), then retry once with approval_id.`,
+      );
+    }
+    if (hasSessionApproval(sessionId, decision, approvalKey)) {
       approver = "user:session";
       recordApproval("approved");
     } else if (approvalId) {
-      const v = approvals.verifyApprovalGrant(approvalId, sessionId, approvalBinding);
+      const v = redeemApproval("shell", sessionId, approvalId, approvalBinding, "project_shell_run");
       if (!v.ok) {
-        const hint =
-          v.reason === "binding_mismatch" || v.reason === "bad_signature"
-            ? `This approval was granted for a different command, shell, cwd or secret_env. Call project_shell_run again without approval_id to get a new approval_id for this exact command.`
-            : `Run \`npx venira-mcp --approve ${approvalId}\` in a terminal first, then retry with approval_id="${approvalId}".`;
-        throw new Error(`[approval_invalid] Approval ${approvalId} ${v.reason ?? "rejected"}. Hint: ${hint}`);
+        throw new Error(`[approval_invalid] Approval ${approvalId} ${v.reason}. Hint: ${v.hint}`);
       }
       approver = "user:cli";
       recordApproval("approved");
@@ -2119,30 +2108,17 @@ async function opShellRun(
       if (v.scope === "session" && approvals.sessionScopeAllowed(decision.rule)) {
         grantSessionApproval(sessionId, decision, approvalKey);
       }
-      approvals.consumeApproval(approvalId);
     } else {
-      const autoToken =
-        decision.rule !== "ask.secret_env_injection" &&
-        envFlag("VENIRA_SHELL_AUTO_APPROVE_TOKEN", false);
-      const issued = autoToken
-        ? issueApprovalToken(sessionId, decision, undefined, `${shell}|${cwd}|${secretNames.slice().sort().join(",")}`)
-        : null;
-      const pendingId = crypto.randomUUID();
-      approvals.createPendingApproval({
-        approval_id: pendingId,
-        session_id: sessionId,
+      const pendingId = requestApproval("shell", sessionId, {
+        tool: "project_shell_run",
         command: redactSecrets(command),
         shell,
         cwd,
-        secret_env: secretNames.slice(),
+        secretEnv: secretNames,
         rule: decision.rule,
         reason: decision.reason,
-        tool: "project_shell_run",
         binding: approvalBinding,
-        expires_at: issued?.expires_at ?? Date.now() + 5 * 60 * 1000,
-        status: "pending",
-        created_at: Date.now(),
-      });
+      }).approval_id;
       return {
         status: "completed",
         result: {
@@ -2156,7 +2132,6 @@ async function opShellRun(
             rule: decision.rule,
             reason: decision.reason,
             mode: decision.mode,
-            ...(issued ? { approval_token: issued.token, expires_at: issued.expires_at } : {}),
             retry_with: {
               tool: "project_shell_run",
               arguments: {
@@ -2164,18 +2139,10 @@ async function opShellRun(
                 shell,
                 ...(typeof args.relative_cwd === "string" ? { relative_cwd: args.relative_cwd } : {}),
                 ...(secretNames.length > 0 ? { secret_env: secretNames } : {}),
-                ...(issued ? { approval_token: issued.token } : { approval_id: pendingId }),
+                approval_id: pendingId,
               },
             },
-            ...(!issued
-              ? {
-                  note: `A human must run: npx venira-mcp --approve ${pendingId} (then retry with approval_id).${
-                    decision.rule === "ask.secret_env_injection"
-                      ? " Secret injection cannot use automatic approval tokens."
-                      : " Or set VENIRA_SHELL_AUTO_APPROVE_TOKEN=1 to enable legacy behavior."
-                  }`,
-                }
-              : {}),
+            note: `A human must run: npx venira-mcp --approve ${pendingId} (then retry once with approval_id). Do not loop or retry before they confirm.`,
           },
         },
       };
@@ -2595,7 +2562,7 @@ async function opSecret(args: Record<string, unknown>): Promise<RustResponse> {
       }
       if (!envFlag("VENIRA_SECRET_ALLOW_REVEAL", false)) {
         throw new Error(
-          "[reveal_denied] Plaintext reveal is disabled on this host. " +
+          "[feature_disabled] Plaintext reveal is disabled on this host (operator flag, not a per-call approval). " +
             "Hint: inject the value via project_shell_run secret_env instead; set VENIRA_SECRET_ALLOW_REVEAL=1 only if the user explicitly wants the value printed.",
         );
       }

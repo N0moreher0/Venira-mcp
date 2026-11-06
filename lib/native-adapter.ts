@@ -330,7 +330,7 @@ export function createCorehost(config: WorkspaceConfig = {}): VeniraCorehost {
         "unsupported",
         "approval_required",
         "approval_invalid",
-        "secret_expired",
+        "feature_disabled",
         "auth_missing",
         "auth_failed",
         "forbidden",

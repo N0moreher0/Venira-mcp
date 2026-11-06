@@ -71,9 +71,10 @@ export function evaluateParsedShellCommand(
   if (parsed.empty) {
     return { tier: "allow", rule: "empty", reason: "Nothing to execute.", mode, command_hash: hash };
   }
-  // Permissive mode: run everything, no checks, no approvals, no denials.
-  if (mode === "permissive") {
-    return { tier: "allow", rule: "permissive.pass", reason: "Permissive mode: shell policy checks are bypassed.", mode, command_hash: hash };
+  // Off mode: explicit, audited, trusted-environment-only bypass (ROADMAP_APPROVAL I3).
+  // `permissive` is NOT a bypass: hard-deny degrades to ask below.
+  if (mode === "off") {
+    return { tier: "allow", rule: "off.pass", reason: "Off mode: shell policy checks are bypassed (operator opt-in).", mode, command_hash: hash };
   }
   const overrideApplies =
     override?.enabled === true &&

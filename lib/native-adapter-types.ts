@@ -39,7 +39,7 @@ export interface WorkspaceConfig {
   dataDir?: string;
   unrestricted?: boolean;
   permissionMode?: "manual" | "best_effort" | "allow_all";
-  shellMode?: "balanced" | "strict" | "permissive";
+  shellMode?: "balanced" | "strict" | "permissive" | "off";
   outputMode?: "full" | "compact";
   shellExitEarly?: boolean;
   allowJsExec?: boolean;

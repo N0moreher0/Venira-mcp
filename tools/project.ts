@@ -1,11 +1,12 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { promises as fs, readFileSync } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import { envChoice, envFlag, parseBackgroundFlag } from "../lib/env.js";
 import { CoreHost, SHELL_MAX_TIMEOUT_MS, shellPolicySnapshot, SCOPE_TTL_MS } from "../lib/corehost.js";
 import * as approvals from "../lib/approvals.js";
+import { redeemApproval, requestApproval } from "../lib/approval-gate.js";
 import { evaluateToolPolicy } from "../lib/tool-policy.js";
 import { recordMetric, metricsSnapshot } from "../lib/metrics.js";
 import {
@@ -904,7 +905,6 @@ const SHELL_ELICIT = envFlag("VENIRA_SHELL_ELICIT", false);
 const ELICIT_TIMEOUT_MS = 5 * 60 * 1000;
 
 type ShellApprovalData = {
-  approval_token?: unknown;
   approval_id?: unknown;
   command?: unknown;
   rule?: unknown;
@@ -919,15 +919,12 @@ function approvalFailure(
   requestId: string,
   elapsedMs: number,
 ): ToolResult {
-  const token = typeof data.approval_token === "string" ? data.approval_token : "";
   const approvalId = typeof data.approval_id === "string" ? data.approval_id : "";
   const reason = typeof data.reason === "string" ? data.reason : "This command requires approval.";
   const rule = typeof data.rule === "string" ? data.rule : "policy";
-  const hint = token
-    ? `Ask the user to confirm "${String(data.command ?? "").slice(0, 200)}". If they approve, retry project_shell_run with approval_token="${token}".`
-    : approvalId
-      ? `Ask the user to run \`npx venira-mcp --approve ${approvalId}\` in an interactive terminal, then retry project_shell_run with approval_id="${approvalId}".`
-      : undefined;
+  const hint = approvalId
+    ? `Stop and tell the user: run \`npx venira-mcp --approve ${approvalId}\` in an interactive terminal. Do not loop. After they confirm, retry project_shell_run once with approval_id="${approvalId}".`
+    : undefined;
   return toolResult(
     errorEnvelope(operation, new Error(`[approval_required] ${reason} (rule: ${rule})`), {
       requestId,
@@ -942,7 +939,7 @@ function approvalFailure(
 /**
  * Optional MCP elicitation (`VENIRA_SHELL_ELICIT=1`). Clients that do not
  * advertise the `elicitation` capability are skipped, so the caller still gets
- * the `approval_required` envelope and a usable token.
+ * the `approval_required` envelope with an `approval_id` for the CLI flow.
  */
 async function elicitShellApproval(
   server: McpServer,
@@ -1012,9 +1009,9 @@ async function runShell(args: Args, server: McpServer): Promise<ToolResult> {
             }
           }
         }
-        const retry: Args = { ...args, approval_token: data?.approval_token, approval_id: data?.approval_id };
+        const retry: Args = { ...args, approval_id: data?.approval_id };
+        delete (retry as Record<string, unknown>).approval_token;
         delete (retry as Record<string, unknown>).approval_scope;
-        if (verdict.remember && data?.approval_token) retry.approval_scope = "session";
         ({ response } = await executeCached("shell_run", retry));
         data = response.result?.data as ShellApprovalData | undefined;
         cached = false;
@@ -2008,29 +2005,23 @@ async function runExecuteJs(args: Args): Promise<ToolResult> {
     const binding = jsExecBinding(code, cliArgs);
     const approvalId = typeof args.approval_id === "string" ? args.approval_id.trim() : "";
     if (!approvalId) {
-      const pendingId = randomUUID();
-      const createdAt = Date.now();
-      const expiresAt = createdAt + 5 * 60 * 1000;
       const reason =
         "project_execute_js runs arbitrary JavaScript outside shell policy and the protected-path guard.";
-      approvals.createPendingApproval({
-        approval_id: pendingId,
-        session_id: SESSION_ID,
+      const pending = requestApproval("js", SESSION_ID, {
+        tool: "project_execute_js",
         // The approver must see exactly what they are approving, so the code is
         // stored as written (the data dir is per-user, 0700). Redaction belongs
         // in the tool response/transcript, not in the human's review copy.
         command: code.slice(0, 8000),
         shell: "node",
         cwd: WORKSPACE,
-        secret_env: [],
+        secretEnv: [],
         rule: JS_EXEC_RULE,
         reason,
-        tool: "project_execute_js",
         binding,
-        expires_at: expiresAt,
-        status: "pending",
-        created_at: createdAt,
       });
+      const pendingId = pending.approval_id;
+      const expiresAt = pending.expires_at;
       const elapsedMs = performance.now() - started;
       return toolResult(
         errorEnvelope("execute_js", new Error(`[approval_required] ${reason} (rule: ${JS_EXEC_RULE})`), {
@@ -2061,22 +2052,17 @@ async function runExecuteJs(args: Args): Promise<ToolResult> {
         true,
       );
     }
-    const verdict = approvals.verifyApprovalGrant(approvalId, SESSION_ID, binding);
+    const verdict = redeemApproval("js", SESSION_ID, approvalId, binding, "project_execute_js");
     if (!verdict.ok) {
       const elapsedMs = performance.now() - started;
-      const hint =
-        verdict.reason === "binding_mismatch" || verdict.reason === "bad_signature"
-          ? "This approval was granted for different code or argv. Call project_execute_js again without approval_id to get a new approval_id for this exact snippet."
-          : `Run \`npx venira-mcp --approve ${approvalId}\` in a terminal first, then retry with approval_id="${approvalId}".`;
       return toolResult(
-        errorEnvelope("execute_js", new Error(`[approval_invalid] Approval ${approvalId} ${verdict.reason ?? "rejected"}. Hint: ${hint}`), {
+        errorEnvelope("execute_js", new Error(`[approval_invalid] Approval ${approvalId} ${verdict.reason}. Hint: ${verdict.hint}`), {
           requestId,
           elapsedMs,
         }),
         true,
       );
     }
-    approvals.consumeApproval(approvalId);
   }
 
   try {
@@ -2909,7 +2895,7 @@ async function runInstallSelf(args: Args): Promise<ToolResult> {
       errorEnvelope(
         "install_self",
         new Error(
-          "[approval_required] Self-install is disabled by default. Set VENIRA_ALLOW_SELF_INSTALL=1 and retry, or ask the user to run it manually. " +
+          "[feature_disabled] Self-install is disabled on this host (operator flag, not a per-call approval: no approval_id will be issued). Ask the user to run it manually, or the operator to set VENIRA_ALLOW_SELF_INSTALL=1. " +
             "Hint: this writes to another client's config file outside the workspace.",
         ),
         { requestId, elapsedMs: 0 },
@@ -3293,11 +3279,11 @@ export function registerProjectTools(server: McpServer): void {
         approval_token: z
           .string()
           .optional()
-          .describe("Single-use token from a previous approval_required envelope. Never invent or reuse one."),
+          .describe("REMOVED in v1.15: passing it returns an error. Use approval_id instead."),
         approval_id: z
           .string()
           .optional()
-          .describe("Approval ID from npx venira-mcp --approve <id>. Use this instead of approval_token when auto-approval is disabled."),
+          .describe("Approval ID from the approval_required envelope, granted by a human via `npx venira-mcp --approve <id>` or client elicitation. Retry once after they confirm."),
         override: z
           .enum(["ALLOW_GIT_PUSH", "ALLOW_ENV_READ"])
           .optional()
@@ -3311,7 +3297,7 @@ export function registerProjectTools(server: McpServer): void {
         approval_scope: z
           .enum(["once", "session"])
           .optional()
-          .describe("Legacy token-only compatibility. With approval_id, scope is chosen by the human at approval time (`--approve <id> --session`) and this field is ignored."),
+          .describe("Ignored: scope (once/session) is chosen by the human at approval time (`--approve <id> --session`), never by the model."),
       },
     },
     (args) => runShell(args, server),
