@@ -2312,6 +2312,18 @@ async function opShellRun(
       clearTimeout(run.timer);
       run.timer = null;
     }
+    // A surviving grandchild (seen on Windows after a tree kill) can keep the
+    // stdio pipes open, so 'close' never fires and a foreground caller would
+    // block until the MCP request itself times out. Give the pipes a short
+    // grace period to drain, then destroy them and release the caller.
+    const CLOSE_GRACE_MS = 3000;
+    const stuckPipeTimer = setTimeout(() => {
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+      resolveClosed();
+    }, CLOSE_GRACE_MS);
+    stuckPipeTimer.unref?.();
+    child.once("close", () => clearTimeout(stuckPipeTimer));
   });
   // 'close' fires after stdio has flushed; a foreground caller must wait for it
   // or the last stdout/stderr chunk can be lost.
@@ -2348,7 +2360,21 @@ async function opShellRun(
       if (policy === "hard") {
         // hard: kill the whole process tree at the deadline.
         recordApproval("timed_out");
-        killTree(run.process);
+        const timedOutChild = run.process;
+        killTree(timedOutChild);
+        // Watchdog: if taskkill/SIGKILL did not end the process, force it so a
+        // foreground call cannot wait on 'close' indefinitely.
+        const killWatchdog = setTimeout(() => {
+          if (!run.running) return;
+          try { timedOutChild?.kill("SIGKILL"); } catch { /* already gone */ }
+          timedOutChild?.stdout?.destroy();
+          timedOutChild?.stderr?.destroy();
+          run.running = false;
+          run.finished_at = Date.now();
+          run.exit_code = run.exit_code ?? -1;
+          resolveClosed();
+        }, 5000);
+        killWatchdog.unref?.();
       } else {
         // soft: only warn; the command keeps running and can still be polled/cancelled.
         recordApproval("timeout_warn");
