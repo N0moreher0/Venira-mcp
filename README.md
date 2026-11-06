@@ -272,14 +272,27 @@ Full reference: ~60 `VENIRA_*` flags — see the env table in the source or `npx
 | `VENIRA_WORKSPACE` | `process.cwd()` | Workspace root; all paths resolve against it |
 | `VENIRA_TOOL_MODE` | `default` | `default` (33 tools) or `expert` (43 tools) |
 | `VENIRA_OUTPUT_MODE` | `full` | `full` or `compact` (trim payloads > 8 KB) |
+| `VENIRA_PROFILE` | `full` | `full` or `core` (disables dependency graph / change impact) |
 | `VENIRA_UNRESTRICTED` | `"0"` | `"1"` disables workspace lock (never in production) |
-| `VENIRA_SHELL_MODE` | `balanced` | `balanced`/`strict`/`permissive` shell policy |
-| `VENIRA_ALLOW_JS_EXEC` | `"0"` | `"1"` enables `project_execute_js` |
+| `VENIRA_SHELL_MODE` | `balanced` | `balanced` / `strict` / `permissive` shell policy |
+| `VENIRA_SHELL_EXIT_EARLY` | `"1"` | `"1"` pollers return as soon as exit code is known |
+| `VENIRA_SHELL_TIMEOUT_POLICY` | `"soft"` | `"soft"` warns on timeout · `"hard"` kills process tree |
+| `VENIRA_SHELL_ENV_PASS_ALL` | `"0"` | `"1"` passes full host env to shell (build tools that need it) |
+| `VENIRA_ALLOW_JS_EXEC` | `"1"` | `"1"` enables `project_execute_js` |
+| `VENIRA_JS_EXEC_APPROVAL` | `"0"` | `"0"` auto-approve · `"1"` human approval per JS call |
+| `VENIRA_USE_RIPGREP` | `"1"` | `"1"` uses ripgrep if installed (faster on big repos) |
+| `VENIRA_CACHE_ALL` | `"1"` | `"1"` TTL caches on · `"0"` always-fresh (slower) |
+| `VENIRA_EDIT_FUZZY` | `"0"` | `"1"` enables fuzzy-match fallback for `old_text` |
 | `VENIRA_NETWORK` | `"1"` | `"0"` = hard kill switch for all provider calls |
 | `VENIRA_DATA_DIR` | per-user OS path | Where audit DB + encrypted secrets live |
 | `VENIRA_DISABLE_TOOLS` | unset | Comma-separated tool names to hide from `tools/list` |
-| `VENIRA_GIT_PROVIDER` | inferred | `github`/`gitlab`/`bitbucket` |
+| `VENIRA_GIT_PROVIDER` | inferred | `github` / `gitlab` / `bitbucket` |
 | `VENIRA_GIT_TOKEN` | unset | Fallback token when no provider-specific secret found |
+| `VENIRA_SECRET_ALLOW_REVEAL` | `"0"` | `"1"` allows `reveal=1` to print secret plaintext |
+| `VENIRA_SHELL_OVERRIDES` | unset | Operator allowlist: `ALLOW_GIT_PUSH`, `ALLOW_ENV_READ` |
+| `VENIRA_TRACE` | `"0"` | `"1"` logs every tool call to stderr (debug only) |
+| `VENIRA_PERMISSION_MODE` | `allow_all` | Grants chat-terminal scope when no Project |
+| `VENIRA_SESSION_ID` | auto | Set for test/verify runs to separate audit rows |
 
 ## 7. Security model
 
