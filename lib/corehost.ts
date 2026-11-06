@@ -269,6 +269,10 @@ function auditInsert(row: AuditRow): void {
       );
     }
     const columns = auditColumns;
+    // Serialize hash lookup + insert across multiple MCP server processes that
+    // share the same SQLite audit database. IMMEDIATE acquires the write lock
+    // before reading the chain tip, preventing sibling processes from forking it.
+    const writeAuditRow = db.transaction(() => {
     let prevHash = lastAuditPrevHash;
     if (columns.has("prev_hash") || columns.has("row_hash")) {
       try {
@@ -332,6 +336,8 @@ function auditInsert(row: AuditRow): void {
         lastAuditPrevId = row?.mx ?? lastAuditPrevId;
       } catch { /* ignore */ }
     }
+    });
+    writeAuditRow.immediate();
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     if (auditStrict()) throw new Error(`[audit_unavailable] audit write failed: ${msg}`);
