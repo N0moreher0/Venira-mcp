@@ -3958,14 +3958,14 @@ export function registerProjectTools(server: McpServer): void {
     "project_snapshot",
     {
       ...config(
-        "Checkpoint/rollback for the workspace: snapshot the current bytes before a large edit chain, then restore in one call. Content-addressed and deduplicated (only changed files cost new space).",
+        "Checkpoint/rollback for the workspace: create a labeled, scoped snapshot before multi-file or hard-to-reverse edits; keep its returned id. For rollback, preview with restore dry_run=1 (size-based preview only; it cannot detect same-size content changes), inspect newer user edits, then restore that exact id with verify=1 and delete_extra=0. Content-addressed and deduplicated.",
         "Workspace checkpoint",
         {
           use_when:
-            "before a multi-file refactor/rename: action=create (paths defaults to ['.']) then action=restore id=<id> if the change goes wrong. Example: create snapshot → edit 3 files → tests fail → restore snapshot in one call instead of re-editing each file manually.",
-          avoid_when: "only one file changed and can be re-edited, or you already committed everything and don't need a safety net.",
+            "before multi-file, cross-file, refactor/rename or hard-to-reverse edits: create with a descriptive label, scope paths to the affected area, retain the exact returned id, and confirm required files were captured. For rollback, run restore dry_run=1 to preview path/size changes (same-size content differences are not detected); inspect files with newer user edits, then restore the exact id with verify=1 and delete_extra=0. Example: checkpoint → edit 3 files → tests fail → inspect scope → restore.",
+          avoid_when: "a tiny, easily recreated single-file edit, generated build output, or a commit already provides the needed recovery point; do not restore over newer user changes without inspecting them.",
           speed_profile:
-            "create walks/hashes the captured files (skips .git/node_modules/dist, symlinks, huge files); repeats only store new blobs. restore is atomic per file, concurrency 4, sha256-verified by default.",
+            "create walks/hashes the captured files (skips .git/node_modules/dist, symlinks, huge files); repeats only store new blobs. restore is atomic per file, concurrency 4, SHA-256 verified by default; dry_run previews path/size only, not same-size content changes.",
           output_kind:
             "snapshot_create: id, label, file_count, total_bytes, new_blob_bytes, skipped[], truncated; " +
             "snapshot_list: checkpoints[]; snapshot_restore: restored_count/restored[], deleted_count, skipped[]; snapshot_delete: deleted, bytes_freed.",
@@ -3985,18 +3985,18 @@ export function registerProjectTools(server: McpServer): void {
           .array(z.string())
           .max(64)
           .optional()
-          .describe("Paths to capture (default ['.']); restore accepts a subset to filter files."),
+          .describe("Capture affected paths (default ['.'] only when scope is unclear); restore accepts a subset to filter files."),
         exclude: z.array(z.string()).max(64).optional().describe("Extra directory/file names to skip."),
         respect_default_excludes: flag01
           .optional()
           .describe("1 skips standard generated/cache directories (default); 0 disables those exclusions."),
         max_files: z.number().int().min(1).max(20000).optional(),
         max_total_bytes: z.number().int().min(1).max(512 * 1024 * 1024).optional(),
-        dry_run: flag01.optional().describe("restore only: 1 reports changes without writing; 0 writes the restore."),
+        dry_run: flag01.optional().describe("restore only: 1 previews path/size changes without writing (same-size content changes are not detected); inspect current user edits before applying."),
         verify: flag01.optional().describe("restore only: 1 verifies each blob before writing (default); 0 disables verification."),
         delete_extra: flag01
           .optional()
-          .describe("restore only: 1 also deletes files inside captured dirs not in the checkpoint (capped at 500); 0 keeps them."),
+          .describe("restore only: 1 also deletes files inside captured dirs not in the checkpoint (capped at 500); default/0 keeps them. Use 1 only when deletion is explicitly intended."),
         limit: z.number().int().min(1).max(100).optional().describe("list only: max checkpoints to return (default 20)."),
         reason: reason_,
       },
