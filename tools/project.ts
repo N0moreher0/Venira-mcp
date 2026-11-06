@@ -2840,15 +2840,19 @@ async function runPlanReadBatch(args: Args): Promise<ToolResult> {  const starte
       const res = (await execute("search", { query, kind: "file_name", limit: 8 })) as RustResponse;
       return ((res.result?.data as { hits?: unknown[] } | undefined)?.hits ?? []) as Array<{ relative_path?: unknown }>;
     };
-    const hits = await run(keyword);
-    if (hits.length > 0) return hits;
     const swapped = keyword.includes("_") ? keyword.replace(/_/g, "-") : keyword.replace(/-/g, "_");
-    if (swapped === keyword) return hits;
-    try {
-      return await run(swapped);
-    } catch {
-      return hits;
+    // Filename search is case-sensitive on some hosts: task keywords such as
+    // GitHub must also find the repository's lowercase git-github.ts.
+    const queries = [...new Set([keyword, keyword.toLowerCase(), swapped, swapped.toLowerCase()])];
+    for (const query of queries) {
+      try {
+        const hits = await run(query);
+        if (hits.length > 0) return hits;
+      } catch {
+        /* try the next bounded spelling variant */
+      }
     }
+    return [];
   };
 
   for (const keyword of includeSearch ? keywords.slice(0, 3) : []) {
