@@ -71,6 +71,10 @@ export function evaluateParsedShellCommand(
   if (parsed.empty) {
     return { tier: "allow", rule: "empty", reason: "Nothing to execute.", mode, command_hash: hash };
   }
+  // Permissive mode: run everything, no checks, no approvals, no denials.
+  if (mode === "permissive") {
+    return { tier: "allow", rule: "permissive.pass", reason: "Permissive mode: shell policy checks are bypassed.", mode, command_hash: hash };
+  }
   const overrideApplies =
     override?.enabled === true &&
     override.reason.trim().length > 0 &&
