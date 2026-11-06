@@ -1,7 +1,7 @@
 # venira-mcp
 
 Fast, workspace-scoped MCP server for coding agents (OpenCode, Claude Desktop, any MCP client).
-Two tool modes — **Default** (33 coding tools + shell/JS, no CI/CD) · **Expert** (43 tools: default + CI/CD).
+Two tool modes — **Default** (32 coding tools + shell, no CI/CD) · **Expert** (42 tools: default + CI/CD). Setting `VENIRA_ALLOW_JS_EXEC=1` adds `project_execute_js` (33 / 43).
 Pure Node, 1 native dependency (better-sqlite3), no GUI, no external binary.
 
 ## 1. Setup
@@ -52,12 +52,12 @@ Pick your client's shape, copy it, change `VENIRA_WORKSPACE`, and you're done.
         "VENIRA_WORKSPACE": "/absolute/path/to/project",  // ← change this; Windows: "C:\\path\\to\\project"
         "VENIRA_TOOL_MODE": "expert",        // "expert" = 43 tools (all) · "default" = 33 (no PR/CI)
         "VENIRA_OUTPUT_MODE": "full",        // "full" = complete · "compact" = trim >8KB (small models)
-        "VENIRA_SHELL_MODE": "permissive",   // "permissive" = ask rules allowed, hard-deny → ask · "balanced" = ask for writes/net/git push
+        "VENIRA_SHELL_MODE": "permissive",   // "balanced" (default) = ask unless known-safe · "strict" = ask unless on the read-only allowlist · "permissive" = ask-rule commands run, but hard-deny commands become an approval request · "off" = NO shell checks (trusted machines only)
         "VENIRA_SHELL_ENV_PASS_ALL": "0",    // "1" = pass full env to shell (build tools that need it)
         "VENIRA_SHELL_EXIT_EARLY": "1",      // poll returns as soon as exit code is known
         "VENIRA_SHELL_TIMEOUT_POLICY": "soft", // "soft" = warn on timeout · "hard" = kill process tree
-        "VENIRA_ALLOW_JS_EXEC": "1",         // enable project_execute_js
-        "VENIRA_JS_EXEC_APPROVAL": "0",      // "0" = auto-approve · "1" = human approval per JS call
+        "VENIRA_ALLOW_JS_EXEC": "1",         // "1" = register project_execute_js (default "0": tool not registered)
+        "VENIRA_JS_EXEC_APPROVAL": "0",      // "1" (default) = human approval per JS call · "0" = no approval (trusted automation only)
         "VENIRA_USE_RIPGREP": "1",           // use ripgrep if installed (faster on big repos)
         "VENIRA_CACHE_ALL": "1",            // "1" = TTL caches on · "0" = always-fresh (slower)
         "VENIRA_EDIT_FUZZY": "0",           // "1" = fuzzy match fallback · "0" = exact only
@@ -136,14 +136,17 @@ VENIRA_USE_RIPGREP = "1"
 VENIRA_CACHE_ALL = "1"
 ```
 
+> ⚠️ **About the sample values above.** `VENIRA_SHELL_MODE=permissive` lets ask-rule commands run without a prompt (hard-deny commands such as `sudo` still need your approval); `VENIRA_SHELL_MODE=off` would disable the shell policy completely. `VENIRA_JS_EXEC_APPROVAL=0` removes the per-call approval for `project_execute_js`. That is fine on a trusted single-user machine; for a shared or untrusted workspace use `balanced` (the default) and leave `VENIRA_JS_EXEC_APPROVAL` unset. §7 explains how approvals work.
+
 > **Quick reference — what to change vs what to leave alone:**
 >
 > | Variable | Change when | Default |
 > |---|---|---|
 > | `VENIRA_WORKSPACE` | **Always** — absolute project path | — |
 > | `VENIRA_TOOL_MODE` | No PR/CI needed | `default` |
-> | `VENIRA_SHELL_MODE` | Shared/public repo | `balanced` |
-> | `VENIRA_JS_EXEC_APPROVAL` | Want human approval per JS call | `1` |
+> | `VENIRA_SHELL_MODE` | Want more prompts (`strict`), fewer prompts (`permissive`), or none at all (`off` = shell checks fully off) | `balanced` |
+> | `VENIRA_ALLOW_JS_EXEC` | Need `project_execute_js` | `0` |
+> | `VENIRA_JS_EXEC_APPROVAL` | Trusted automation only (`0` skips the per-call approval) | `1` |
 > | `VENIRA_NETWORK` | Offline repo | `1` |
 > | `VENIRA_UNRESTRICTED` | **Never in production** | `0` |
 ## 3. Benchmark (per-op, p50)
@@ -189,10 +192,10 @@ Two tool modes set which tools the client sees. Set via `VENIRA_TOOL_MODE` env v
 
 | Mode | Tools | Includes |
 |---|---|---|
-| `default` | **33** (32 w/o JS) | Read/write/edit/search, code intel, snapshots, shell + JS exec, `project_delete_path` — **no** CI/CD |
-| `expert` | **43** (42 w/o JS) | Everything in default + `project_pr_*`, `project_ci_*` |
+| `default` | **32** (33 with `VENIRA_ALLOW_JS_EXEC=1`) | Read/write/edit/search, code intel, snapshots, shell, `project_delete_path`, optional JS exec — **no** CI/CD |
+| `expert` | **42** (43 with `VENIRA_ALLOW_JS_EXEC=1`) | Everything in default + `project_pr_*`, `project_ci_*` |
 
-`project_delete_path` is always available; shell `rm -rf` / `rd /s` / `Remove-Item -Recurse -Force` are hard-denied everywhere.
+`project_delete_path` is always available. In `balanced` / `strict` mode, shell `rm -rf /` / `~` and Windows drive-wide deletes are hard-denied, and recursive/force deletes (`Remove-Item -Recurse -Force`, `rd /s /q`, `del /f /q`) need approval. `permissive` mode applies no shell checks at all.
 
 ## 5. Tools quick reference
 
@@ -270,16 +273,16 @@ Full reference: ~60 `VENIRA_*` flags — see the env table in the source or `npx
 | Variable | Default | What it does |
 |---|---|---|
 | `VENIRA_WORKSPACE` | `process.cwd()` | Workspace root; all paths resolve against it |
-| `VENIRA_TOOL_MODE` | `default` | `default` (33 tools) or `expert` (43 tools) |
+| `VENIRA_TOOL_MODE` | `default` | `default` (32 tools) or `expert` (42 tools); +1 with `VENIRA_ALLOW_JS_EXEC=1` |
 | `VENIRA_OUTPUT_MODE` | `full` | `full` or `compact` (trim payloads > 8 KB) |
 | `VENIRA_PROFILE` | `full` | `full` or `core` (disables dependency graph / change impact) |
 | `VENIRA_UNRESTRICTED` | `"0"` | `"1"` disables workspace lock (never in production) |
-| `VENIRA_SHELL_MODE` | `balanced` | `balanced` / `strict` / `permissive` shell policy |
+| `VENIRA_SHELL_MODE` | `balanced` | Shell policy: `balanced` asks unless known-safe · `strict` asks unless on the read-only allowlist · `permissive` runs ask-rule commands and unclassified commands without a prompt; hard-deny commands become an approval request · `off` disables all checks |
 | `VENIRA_SHELL_EXIT_EARLY` | `"1"` | `"1"` pollers return as soon as exit code is known |
 | `VENIRA_SHELL_TIMEOUT_POLICY` | `"soft"` | `"soft"` warns on timeout · `"hard"` kills process tree |
 | `VENIRA_SHELL_ENV_PASS_ALL` | `"0"` | `"1"` passes full host env to shell (build tools that need it) |
-| `VENIRA_ALLOW_JS_EXEC` | `"1"` | `"1"` enables `project_execute_js` |
-| `VENIRA_JS_EXEC_APPROVAL` | `"0"` | `"0"` auto-approve · `"1"` human approval per JS call |
+| `VENIRA_ALLOW_JS_EXEC` | `"0"` | `"1"` registers `project_execute_js` |
+| `VENIRA_JS_EXEC_APPROVAL` | `"1"` | `"1"` human approval per JS call · `"0"` no approval (trusted automation only) |
 | `VENIRA_USE_RIPGREP` | `"1"` | `"1"` uses ripgrep if installed (faster on big repos) |
 | `VENIRA_CACHE_ALL` | `"1"` | `"1"` TTL caches on · `"0"` always-fresh (slower) |
 | `VENIRA_EDIT_FUZZY` | `"0"` | `"1"` enables fuzzy-match fallback for `old_text` |
@@ -291,18 +294,54 @@ Full reference: ~60 `VENIRA_*` flags — see the env table in the source or `npx
 | `VENIRA_SECRET_ALLOW_REVEAL` | `"0"` | `"1"` allows `reveal=1` to print secret plaintext |
 | `VENIRA_SHELL_OVERRIDES` | unset | Operator allowlist: `ALLOW_GIT_PUSH`, `ALLOW_ENV_READ` |
 | `VENIRA_TRACE` | `"0"` | `"1"` logs every tool call to stderr (debug only) |
-| `VENIRA_PERMISSION_MODE` | `allow_all` | Grants chat-terminal scope when no Project |
+| `VENIRA_PERMISSION_MODE` | `allow_all` | Permission mode passed when the session scope opens (`manual` / `best_effort` / `allow_all`); shown in `project_health` |
 | `VENIRA_SESSION_ID` | auto | Set for test/verify runs to separate audit rows |
+| `VENIRA_SHELL_ELICIT` | `"0"` | `"1"` asks the person through an MCP confirmation dialog (client must support elicitation) |
+| `VENIRA_SESSION_GRANT_RULES` | built-in: `cd_outside_workspace` | Extra ask-rule ids (comma-separated) that may be approved with `--approve --session` |
+| `VENIRA_ALLOW_SELF_INSTALL` | `"0"` | `"1"` lets `project_install_self` write other clients' config files |
+| `VENIRA_SHELL_POLICY_FILE` | unset | Path to a JSON shell policy file (allow/ask/deny rules); never read from the workspace automatically |
+| `VENIRA_TOOL_POLICY_JSON` / `VENIRA_TOOL_POLICY_FILE` | unset | Per-tool policy rules, inline JSON or a file (see `lib/tool-policy.ts`) |
 
 ## 7. Security model
 
 **Conservative by default:**
 - **Workspace lock**: all paths validated inside `VENIRA_WORKSPACE`; `../` escape rejected (`path_escape`).
-- **Shell policy**: hard-deny for catastrophic system/disk commands (format disk, mount, shutdown/reboot, fork bomb, pipe download to shell, sudo/doas, rm -rf root/home, chmod 777 /, mass Windows drive delete, protected credential files, self-approval). Hard-deny degrades to **ask** in `permissive` mode (operator can approve). Ask rules (writes outside workspace, network, package mutation, git history rewrite, destructive delete, VM/container, taskkill /f, PowerShell -enc, attrib reset, NUL redirect) are **allowed** in `permissive` mode. Deny always wins over ask.
+- **Shell policy** (`VENIRA_SHELL_MODE`): every `project_shell_run` command is classified `allow`, `ask` or `deny`.
+  - `balanced` (default): hard-deny rules refuse the command; ask rules need approval; routine dev-workspace commands run; anything unclassified needs approval.
+  - `strict`: like `balanced`, but only a read-only / workspace-local allowlist runs without approval.
+  - `permissive`: ask rules and unclassified commands run without a prompt, but a hard-deny match is **not** silently allowed — it becomes an approval request (`ask.deny.<rule>`). Good default for a trusted single-user machine.
+  - `off`: **the shell policy is disabled** — every command runs, nothing is asked or denied (only `secret_env` injection still asks). Prints a startup warning; use only in a trusted environment. Previous `permissive` behaviour (v1.14.4) = `off`.
+  - Hard-deny (12 rules): disk destroy, filesystem mount/overwrite, shutdown/reboot, fork bomb, pipe download to shell, privilege escalation (sudo/doas/runas), `rm -rf` of `/` or `~`, `chmod 777 /`, Windows drive-wide and wildcard mass delete, self-approval (touching the approve CLI or approval store), protected credential/key files.
+  - Ask (21 rules): command substitution, reads/writes/`cd` outside the workspace, network access, package mutation, git history rewrite, container/VM control and state, process control and `taskkill /f`, secret dumps, dynamic execution and wrapper commands, `find -delete/-exec`, destructive recursive/force deletes (`Remove-Item -Recurse -Force`, `rd /s /q`, `del /f /q`; prefer `project_delete_path`), PowerShell `-EncodedCommand`, attribute reset, infinite writes to NUL, unresolved file arguments.
+  - Deny always wins over ask.
 - **Secrets**: AES-256-GCM encrypted at rest; values never in tool metadata; `secret_env` requires human approval; expired secrets refused.
 - **Provider DLP**: Secretlint scans PR/CI request args and HTTP payloads; detected credentials blocked before sending, withheld from response.
 - **Audit trail**: all ops (including failures) written to SQLite WAL; `project_read_audit` for post-mortems.
 - **Token transport**: provider token in `Authorization` header only; dropped on cross-origin redirect.
+
+**Approvals — what needs a human, and how it is granted**
+
+| Gate | Triggers when | Switch (default) |
+|---|---|---|
+| Shell `deny` | A hard-deny rule matches: refused outright, no approval possible | — (hard-deny becomes an approval request in `permissive`; not applied in `off`) |
+| Shell `ask` | An ask rule matches, or the command is unclassified in `balanced` / `strict` | `VENIRA_SHELL_MODE` (`balanced`) |
+| Secret injection | `project_shell_run` with `secret_env` | always asks, in every mode |
+| `project_execute_js` | Every call | `VENIRA_ALLOW_JS_EXEC` (`0`: tool not registered) · `VENIRA_JS_EXEC_APPROVAL` (`1`) |
+| Secret plaintext | `project_secret` with `reveal=1` | `VENIRA_SECRET_ALLOW_REVEAL` (`0`) |
+| Self-install | `project_install_self` writes another client's config | `VENIRA_ALLOW_SELF_INSTALL` (`0`) |
+| Named shell override | `ALLOW_GIT_PUSH` / `ALLOW_ENV_READ` | `VENIRA_SHELL_OVERRIDES` (unset), plus `override` and a `reason` on the call |
+
+Granting a shell or JS approval:
+
+1. The call fails with `[approval_required]` and returns `data.approval_id` (valid for 5 minutes) together with the command or code, the rule and the reason.
+2. A person runs `npx venira-mcp --approve <approval_id>` in an interactive terminal (it refuses without a TTY), reviews the request and answers `y`. `--yes` skips the prompt. `--session` extends the grant to the same command group until it expires, but only for rules in `VENIRA_SESSION_GRANT_RULES` (built-in: `cd_outside_workspace`).
+3. The agent retries the same call with `approval_id`. The grant is HMAC-signed, tied to the session, bound to the exact command / shell / cwd / `secret_env` / rule (or code / argv for JS), and single-use.
+
+Alternative (off by default, `project_shell_run` only): `VENIRA_SHELL_ELICIT=1` shows a confirmation dialog in MCP clients that support elicitation, and accepting it records the grant for you.
+
+Removed in v1.15: `approval_token` and `VENIRA_SHELL_AUTO_APPROVE_TOKEN`. Passing `approval_token` now returns `[approval_invalid]` with a hint to use `approval_id`; setting the env var only logs a warning and is ignored.
+
+Approvals are a guard rail, not a sandbox: a process running as the same OS user can read the approval key.
 
 **Threats this does NOT protect against**: a malicious prompt can still instruct the agent to run destructive commands. Use a container/VM for untrusted workspaces.
 

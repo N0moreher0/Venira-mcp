@@ -407,8 +407,10 @@ try {
 if (originalOutputMode === undefined) delete process.env.VENIRA_OUTPUT_MODE;
 else process.env.VENIRA_OUTPUT_MODE = originalOutputMode;
 check("output_mode_rejects_summary", invalidOutputModeMessage.includes("full, compact"), invalidOutputModeMessage);
-const originalShellMode = process.env.VENIRA_SHELL_MODE;
-process.env.VENIRA_SHELL_MODE = "off";
+// Pin in-process policy tests to the default mode, independent of the operator's shell env
+// (a parent VENIRA_SHELL_MODE=permissive made unit checks without explicit mode fail).
+const originalShellMode: string | undefined = "balanced";
+process.env.VENIRA_SHELL_MODE = "yolo";
 policyModule.resetShellPolicyCache();
 let invalidModeMessage = "";
 try {
@@ -419,7 +421,19 @@ try {
 if (originalShellMode === undefined) delete process.env.VENIRA_SHELL_MODE;
 else process.env.VENIRA_SHELL_MODE = originalShellMode;
 policyModule.resetShellPolicyCache();
-check("shell_mode_rejects_off", invalidModeMessage.includes("balanced, strict, or permissive"), invalidModeMessage);
+check("shell_mode_rejects_unknown", invalidModeMessage.includes("balanced, strict, permissive, or off"), invalidModeMessage);
+process.env.VENIRA_SHELL_MODE = "off";
+policyModule.resetShellPolicyCache();
+let offModeMessage = "";
+try {
+  policyModule.loadShellPolicy();
+} catch (error) {
+  offModeMessage = error instanceof Error ? error.message : String(error);
+}
+if (originalShellMode === undefined) delete process.env.VENIRA_SHELL_MODE;
+else process.env.VENIRA_SHELL_MODE = originalShellMode;
+policyModule.resetShellPolicyCache();
+check("shell_mode_accepts_off", offModeMessage === "", offModeMessage);
 const originalOverrides = process.env.VENIRA_SHELL_OVERRIDES;
 delete process.env.VENIRA_SHELL_OVERRIDES;
 const selfGrantedGitPush = policyModule.evaluateShellCommand("git push origin main", ws, {
@@ -527,6 +541,17 @@ check(
     policyModule.evaluateShellCommand("echo `rm -rf /`", ws, { mode: "permissive" }).tier === "ask",
   { substitution: policyModule.evaluateShellCommand("echo $(rm -rf ~)", ws, { mode: "permissive" }) },
 );
+{
+  const permSudo = policyModule.evaluateShellCommand("sudo id", ws, { mode: "permissive" });
+  const permSelfApproval = policyModule.evaluateShellCommand("cat approval.key", ws, { mode: "permissive" });
+  const offSudo = policyModule.evaluateShellCommand("sudo id", ws, { mode: "off" });
+  const balancedSudo = policyModule.evaluateShellCommand("sudo id", ws, { mode: "balanced" });
+  const strictSudo = policyModule.evaluateShellCommand("sudo id", ws, { mode: "strict" });
+  check("policy_unit_permissive_sudo_asks", permSudo.tier === "ask" && permSudo.rule === "ask.deny.privilege_escalation", permSudo);
+  check("policy_unit_permissive_self_approval_asks", permSelfApproval.tier === "ask" && permSelfApproval.rule.startsWith("ask.deny."), permSelfApproval);
+  check("policy_unit_off_allows_sudo", offSudo.tier === "allow" && offSudo.rule === "off.pass", offSudo);
+  check("policy_unit_balanced_strict_deny_sudo", balancedSudo.tier === "deny" && strictSudo.tier === "deny", { balancedSudo, strictSudo });
+}
 check(
   "policy_unit_node_script_ask",
   policyModule.evaluateShellCommand("node scripts/untrusted.js", ws, { mode: "balanced" }).tier === "ask" &&
@@ -1611,7 +1636,9 @@ check(
 const secretReveal = asEnvelope(
   await call("project_secret", { action: "get", name: SECRET_NAME, reveal: 1 }),
 );
-check("secret_reveal_gated", secretReveal.error?.code === "reveal_denied", secretReveal);
+check("secret_reveal_gated", secretReveal.error?.code === "feature_disabled", secretReveal);
+const installSelfOff = asEnvelope(await call("project_install_self", { harness: "opencode" }));
+check("install_self_feature_disabled", installSelfOff.error?.code === "feature_disabled", installSelfOff);
 
 const secretList = asEnvelope(await call("project_secret", { action: "list" }));
 check(

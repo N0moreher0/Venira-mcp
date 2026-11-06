@@ -1,0 +1,107 @@
+/**
+ * One approval core shared by every gated tool (shell, JS exec).
+ *
+ * Model: Gate -> Request -> Grant -> Redeem.
+ *   - Gate:    the caller decides a call needs a human (policy `ask`, JS exec).
+ *   - Request: `requestApproval` stores a pending record bound to the exact call.
+ *   - Grant:   only a human writes it (CLI `--approve` in a TTY, or client
+ *              elicitation). Nothing in this module can grant.
+ *   - Redeem:  `redeemApproval` verifies the HMAC grant against the same binding,
+ *              and consumes it (single use).
+ *
+ * Storage, HMAC and TTL checks stay in `approvals.ts`; this module only removes
+ * the duplicated request/redeem/hint logic from the shell and JS call sites.
+ * Gate-specific parts (what the binding covers, what the human sees) are passed
+ * in by the caller.
+ */
+import { randomUUID } from "node:crypto";
+import * as approvals from "./approvals.js";
+
+export type ApprovalGateName = "shell" | "js";
+
+/** How long a pending approval stays valid. */
+export const APPROVAL_PENDING_TTL_MS = 5 * 60 * 1000;
+
+export interface ApprovalSubject {
+  /** Tool the agent retries after the human grants (e.g. `project_shell_run`). */
+  tool: string;
+  /** What the human reviews: the command, or the JS source. */
+  command: string;
+  shell: string;
+  cwd: string;
+  secretEnv: string[];
+  rule: string;
+  reason: string;
+  /** `approvals.bindingHash(...)` of the real call this approval covers. */
+  binding: string;
+}
+
+export interface ApprovalRequest {
+  approval_id: string;
+  created_at: number;
+  expires_at: number;
+  approve_command: string;
+}
+
+export function approveCommand(approvalId: string): string {
+  return `npx venira-mcp --approve ${approvalId}`;
+}
+
+/** Create the pending record. The caller shapes the response around the result. */
+export function requestApproval(_gate: ApprovalGateName, sessionId: string, subject: ApprovalSubject): ApprovalRequest {
+  const approvalId = randomUUID();
+  const createdAt = Date.now();
+  const expiresAt = createdAt + APPROVAL_PENDING_TTL_MS;
+  approvals.createPendingApproval({
+    approval_id: approvalId,
+    session_id: sessionId,
+    command: subject.command,
+    shell: subject.shell,
+    cwd: subject.cwd,
+    secret_env: subject.secretEnv.slice(),
+    rule: subject.rule,
+    reason: subject.reason,
+    tool: subject.tool,
+    binding: subject.binding,
+    expires_at: expiresAt,
+    status: "pending",
+    created_at: createdAt,
+  });
+  return { approval_id: approvalId, created_at: createdAt, expires_at: expiresAt, approve_command: approveCommand(approvalId) };
+}
+
+export type RedeemResult =
+  | { ok: true; scope: approvals.ApprovalScope }
+  | { ok: false; reason: string; hint: string };
+
+const MISMATCH_HINT: Record<ApprovalGateName, (tool: string) => string> = {
+  shell: (tool) =>
+    `This approval was granted for a different command, shell, cwd or secret_env. Call ${tool} again without approval_id to get a new approval_id for this exact command.`,
+  js: (tool) =>
+    `This approval was granted for different code or argv. Call ${tool} again without approval_id to get a new approval_id for this exact snippet.`,
+};
+
+/**
+ * Verify the grant for `approvalId` against `binding` and consume it.
+ * The scope comes from the human's grant, never from the model's arguments;
+ * the caller decides whether a `session` scope feeds a session-allow.
+ */
+export function redeemApproval(
+  gate: ApprovalGateName,
+  sessionId: string,
+  approvalId: string,
+  binding: string,
+  tool: string,
+): RedeemResult {
+  const verdict = approvals.verifyApprovalGrant(approvalId, sessionId, binding);
+  if (!verdict.ok) {
+    const reason = verdict.reason ?? "rejected";
+    const hint =
+      reason === "binding_mismatch" || reason === "bad_signature"
+        ? MISMATCH_HINT[gate](tool)
+        : `Run \`${approveCommand(approvalId)}\` in a terminal first, then retry with approval_id="${approvalId}".`;
+    return { ok: false, reason, hint };
+  }
+  approvals.consumeApproval(approvalId);
+  return { ok: true, scope: verdict.scope ?? "once" };
+}

@@ -336,10 +336,12 @@ const DEFAULT_HINTS: Record<string, string> = {
   host_timeout: "The backend did not answer in time; check project_health, then retry once.",
   host_unavailable: "The backend is unavailable; it restarts on the next call. Retry once.",
   internal: "Unexpected error; check project_health and the server stderr log.",
+  feature_disabled:
+    "This feature is switched off by the operator, so no approval can enable it and no approval_id will come. Do not retry. Tell the user the hint (which VENIRA_* flag the operator must set) or ask them to do it manually.",
   approval_required:
-    "Ask the user to confirm. If they approve, retry project_shell_run with the approval_token from data (add approval_scope=\"session\" to approve this command group for a while). Never invent or reuse a token.",
+    "The call did NOT run: a human must approve it. Stop and tell the user the approval_id and the command `npx venira-mcp --approve <approval_id>` (interactive terminal, or the client dialog when elicitation is on). Do not loop or rephrase. After they confirm, retry the same call once with approval_id. Never invent or reuse an approval_id; the scope (once/session) is chosen by the human, not by you.",
   approval_invalid:
-    "Tokens are single-use, bound to the exact command and expire after VENIRA_SHELL_APPROVAL_TTL_MS. Call project_shell_run without a token to get a fresh approval_required envelope.",
+    "An approval_id is single-use, bound to the exact command/shell/cwd/secret_env and expires after VENIRA_SHELL_APPROVAL_TTL_MS. approval_token was removed in v1.15. Call the tool again without approval_id to get a fresh approval_required envelope; a human must grant the new id.",
   command_denied:
     "The policy refuses this command in every mode. Do not retry or rephrase to bypass it; ask the user to run it manually if it is genuinely required.",
 };
