@@ -3282,16 +3282,16 @@ export function registerProjectTools(server: McpServer): void {
   server.registerTool(
     "project_delete_path",
     {
-      ...config("Delete a file or directory (directories require recursive=1).", "Delete path", {
-        use_when: "a file/directory must be deleted entirely; the path is confirmed.",
-        avoid_when: "you only need to change the content (write/edit). This op is not undoable.",
+      ...config("Delete a file or directory (directories require recursive=1). Create and verify a scoped snapshot before using this irreversible tool; do not delete if the checkpoint is incomplete.", "Delete path", {
+        use_when: "only after creating a scoped project_snapshot for the exact target, confirming file_count/truncated/skipped cover the intended files, and keeping its id for recovery.",
+        avoid_when: "the target is ambiguous or a pre-delete snapshot is missing, truncated, or skipped the target. This op is not undoable; capture and verify a checkpoint first.",
         speed_profile: "fast; clears the read/list/search cache.",
         output_kind: "path_deleted: entries_deleted, bytes_deleted.",
         batch_safe: false,
       }, { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false }),
       inputSchema: {
-        relative_path: path_,
-        recursive: flag01.optional(),
+        relative_path: path_.describe("Exact workspace path to delete. Create a scoped project_snapshot first and confirm this target is captured; do not delete if it is skipped or the checkpoint is truncated."),
+        recursive: flag01.optional().describe("For recursive directory deletion, set 1 only after confirming the target and creating a scoped project_snapshot; required for directory deletion."),
         reason: reason_,
       },
     },
