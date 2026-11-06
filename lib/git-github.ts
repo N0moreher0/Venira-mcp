@@ -9,6 +9,7 @@ import { gitFetch, gitJson } from "./git-http.js";
 import { requireToken, type GitContext } from "./git-config.js";
 import {
   ciControlRequest,
+  listWithPriority,
   logBufferToText,
   numericCiRunId,
   ok,
@@ -17,11 +18,13 @@ import {
   positiveInt,
   prNumberFrom,
   requireText,
+  skippedLogEntries,
   tailBytes,
   tailLines,
   text,
   type Resp,
 } from "./git-common.js";
+import { fetchPaged } from "./git-paging.js";
 import { currentBranch } from "./git-repo.js";
 import type { GitDialect } from "./git-dialect.js";
 
@@ -379,12 +382,17 @@ export const githubDialect: GitDialect = {
           `[invalid_request] \`ref\` must be a branch name or commit sha (letters, digits, . _ / -), got "${targetRef}".`,
         );
       }
-      const perPage = positiveInt(args.limit, 20, 50);
-      const { json } = await gitJson(ctx, "GET", `${base}/commits/${targetRef}/check-runs?per_page=${perPage}`, {
+      const limit = positiveInt(args.limit, 20, 50);
+      // Read every page (bounded) before deciding `overall`: a failing check on
+      // page 2 must not be reported as "success" because page 1 was green.
+      const paged = await fetchPaged<any>(ctx, `${base}/commits/${targetRef}/check-runs?per_page=100`, {
+        pick: (json) => (Array.isArray(json?.check_runs) ? json.check_runs : []),
+        total: (json) => json?.total_count,
         allowAnonymous: true,
       });
-      const checkRuns = ((json?.check_runs ?? []) as any[]).map(summarizeCheckRun);
-      const overall = overallFromChecks(checkRuns);
+      const allChecks = paged.items.map(summarizeCheckRun);
+      const overall = overallFromChecks(allChecks);
+      const checkRuns = listWithPriority(allChecks, limit);
       return ok(
         "ci_status",
         {
@@ -395,31 +403,54 @@ export const githubDialect: GitDialect = {
           ref: targetRef,
           pr: prNumber,
           check_runs: checkRuns,
-          check_runs_total: json?.total_count ?? checkRuns.length,
+          check_runs_total: paged.total ?? allChecks.length,
+          ...(paged.truncated ? { partial: true } : {}),
         },
         {
+          truncated: paged.truncated,
           hint:
-            checkRuns.length === 0
+            allChecks.length === 0
               ? "No check-runs for this ref (the repo may not use checks, or the ref has no pushed commit). Hint: use branch/workflow to read Actions runs instead."
-              : undefined,
+              : paged.truncated
+                ? `Only ${allChecks.length} of ${paged.total ?? "more"} check-runs were read, so overall may be incomplete. Hint: look at the remaining checks on the provider.`
+                : checkRuns.length < allChecks.length
+                  ? `Showing ${checkRuns.length} of ${allChecks.length} check-runs (failing and running first). Hint: raise limit (max 50).`
+                  : undefined,
         },
       );
     }
 
     if (runId > 0) {
       const { json } = await gitJson(ctx, "GET", `${base}/actions/runs/${Math.floor(runId)}`, { allowAnonymous: true });
-      const jobsRes = await gitJson(ctx, "GET", `${base}/actions/runs/${Math.floor(runId)}/jobs?per_page=50`, {
+      // Matrix runs can exceed one page of jobs; the failing job the agent needs
+      // next (project_ci_wait -> log tail) may be on page 2.
+      const pagedJobs = await fetchPaged<any>(ctx, `${base}/actions/runs/${Math.floor(runId)}/jobs?per_page=100`, {
+        pick: (body) => (Array.isArray(body?.jobs) ? body.jobs : []),
+        total: (body) => body?.total_count,
         allowAnonymous: true,
       });
-      const jobs = ((jobsRes.json?.jobs ?? []) as any[]).map(summarizeJob);
-      return ok("ci_status", {
-        repo: `${ctx.repo.owner}/${ctx.repo.name}`,
-        provider: ctx.provider,
-        overall: overallFrom([summarizeRun(json)]),
-        run: summarizeRun(json),
-        jobs,
-        jobs_total: jobs.length,
-      });
+      const jobs = listWithPriority(pagedJobs.items.map(summarizeJob), 50);
+      return ok(
+        "ci_status",
+        {
+          repo: `${ctx.repo.owner}/${ctx.repo.name}`,
+          provider: ctx.provider,
+          overall: overallFrom([summarizeRun(json)]),
+          run: summarizeRun(json),
+          jobs,
+          jobs_total: pagedJobs.total ?? pagedJobs.items.length,
+          ...(pagedJobs.truncated ? { partial: true } : {}),
+        },
+        {
+          truncated: pagedJobs.truncated,
+          hint:
+            pagedJobs.truncated
+              ? `Only ${pagedJobs.items.length} of ${pagedJobs.total ?? "more"} jobs were read. Hint: open the run on GitHub for the rest.`
+              : jobs.length < pagedJobs.items.length
+                ? `Showing ${jobs.length} of ${pagedJobs.items.length} jobs (failing and running first).`
+                : undefined,
+        },
+      );
     }
 
     const limit = positiveInt(args.limit, 10, 50);
@@ -554,7 +585,9 @@ export const githubDialect: GitDialect = {
 
     const byBytes = tailBytes(text, maxBytes);
     const byLines = tailLines(byBytes.text, wantLines);
-    const truncated = byBytes.dropped > 0 || byLines.dropped > 0;
+    const trimmed = byBytes.dropped > 0 || byLines.dropped > 0;
+    const skipped = skippedLogEntries(entries);
+    const truncated = trimmed || skipped.count > 0;
     const keptLines = byLines.text ? byLines.text.split(/\r?\n/).length : 0;
 
     return ok(
@@ -570,12 +603,19 @@ export const githubDialect: GitDialect = {
         truncated,
         dropped_lines: byLines.dropped,
         dropped_bytes: byBytes.dropped,
+        skipped_entries: skipped.count,
         max_bytes: maxBytes,
         tail_lines: wantLines,
       },
       {
         truncated,
-        hint: truncated ? "Output trimmed to the tail. Hint: pass job_id to isolate a failing job, or raise max_bytes." : undefined,
+        hint:
+          [
+            trimmed ? "Output trimmed to the tail. Hint: pass job_id to isolate a failing job, or raise max_bytes." : null,
+            skipped.hint,
+          ]
+            .filter(Boolean)
+            .join(" ") || undefined,
       },
     );
   },

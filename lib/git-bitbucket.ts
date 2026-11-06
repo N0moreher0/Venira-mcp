@@ -13,17 +13,20 @@ import { gitFetch, gitJson } from "./git-http.js";
 import { requireToken, type GitContext } from "./git-config.js";
 import {
   ciControlRequest,
+  listWithPriority,
   logBufferToText,
   ok,
   overallFrom,
   positiveInt,
   prNumberFrom,
   requireText,
+  skippedLogEntries,
   tailBytes,
   tailLines,
   text,
   type Resp,
 } from "./git-common.js";
+import { fetchPaged, relativeApiPath } from "./git-paging.js";
 import { currentBranch } from "./git-repo.js";
 import type { GitDialect } from "./git-dialect.js";
 
@@ -85,13 +88,33 @@ const PIPELINE_STATE: Record<string, { status: string; conclusion: string | null
   ERROR: { status: "completed", conclusion: "failure" },
   STOPPED: { status: "completed", conclusion: "cancelled" },
   HALTED: { status: "completed", conclusion: "cancelled" },
+  EXPIRED: { status: "completed", conclusion: "timed_out" },
+  NOT_RUN: { status: "completed", conclusion: "skipped" },
   RUNNING: { status: "in_progress", conclusion: null },
+  IN_PROGRESS: { status: "in_progress", conclusion: null },
   PENDING: { status: "in_progress", conclusion: null },
+  READY: { status: "in_progress", conclusion: null },
   PAUSED: { status: "in_progress", conclusion: null },
 };
 
+/**
+ * Bitbucket reports a finished pipeline/step as `state.name = "COMPLETED"` with
+ * the verdict in `state.result.name` (SUCCESSFUL | FAILED | ERROR | STOPPED |
+ * EXPIRED), and a running one as `IN_PROGRESS` with `state.stage.name`
+ * (RUNNING | PAUSED | HALTED). Reading only `state.name` turns every finished
+ * pipeline into "COMPLETED" -> success, so a failed run would look green.
+ * A bare verdict in `state.name` (older/other payloads, the verify mock) is
+ * still understood.
+ */
+function bitbucketStateName(state: any): string {
+  const name = String(typeof state === "string" ? state : (state?.name ?? "")).toUpperCase();
+  if (name === "COMPLETED") return String(state?.result?.name ?? "").toUpperCase() || "COMPLETED";
+  if (name === "IN_PROGRESS") return String(state?.stage?.name ?? "").toUpperCase() || "IN_PROGRESS";
+  return name;
+}
+
 function summarizePipeline(p: any): Record<string, unknown> {
-  const state = String(p?.state?.name ?? p?.state ?? "").toUpperCase();
+  const state = bitbucketStateName(p?.state);
   const mapped = PIPELINE_STATE[state] ?? { status: "completed", conclusion: state.toLowerCase() || null };
   const target = p?.target ?? {};
   return {
@@ -110,7 +133,7 @@ function summarizePipeline(p: any): Record<string, unknown> {
 }
 
 function summaryStep(step: any): Record<string, unknown> {
-  const state = String(step?.state?.name ?? step?.state ?? "").toUpperCase();
+  const state = bitbucketStateName(step?.state);
   const mapped = PIPELINE_STATE[state] ?? { status: "completed", conclusion: null };
   return {
     id: step?.uuid ?? null,
@@ -140,11 +163,20 @@ function pipelineUuid(value: unknown, label: string): string {
   return raw;
 }
 
-async function pipelineSteps(ctx: GitContext, uuid: string): Promise<any[]> {
-  const res = await gitJson(ctx, "GET", `${repoPath(ctx)}/pipelines/${encodeURIComponent(uuid)}/steps/?pagelen=50`, {
+/** Steps of one pipeline, all pages (bounded). Bitbucket puts the next page URL in the body (`next`). */
+async function pipelineSteps(ctx: GitContext, uuid: string) {
+  return fetchPaged<any>(ctx, `${repoPath(ctx)}/pipelines/${encodeURIComponent(uuid)}/steps/?pagelen=100`, {
+    pick: (json) => (Array.isArray(json?.values) ? json.values : []),
+    next: (json, _res, current) =>
+      typeof json?.next === "string" && json.next ? relativeApiPath(new URL(json.next, current), ctx.api_base) : null,
+    total: (json) => json?.size,
     allowAnonymous: true,
   });
-  return (Array.isArray(res.json?.values) ? res.json.values : []) as any[];
+}
+
+function stepFailed(step: any): boolean {
+  const state = bitbucketStateName(step?.state);
+  return state === "FAILED" || state === "ERROR";
 }
 
 async function fetchStepLog(ctx: GitContext, pipeline: string, step: string): Promise<Buffer> {
@@ -301,7 +333,12 @@ export const bitbucketDialect: GitDialect = {
     }
     const limit = positiveInt(args.limit, 20, 100);
     const query = new URLSearchParams({ pagelen: String(limit), sort: "-updated_on" });
-    query.set("state", state === "open" ? "OPEN" : state === "closed" ? "ALL" : "ALL");
+    if (state === "open") query.set("state", "OPEN");
+    else if (state === "closed") {
+      // Ask the API for the closed states instead of fetching `ALL` and filtering
+      // client-side: a page full of open PRs would otherwise hide the closed ones.
+      for (const closed of ["MERGED", "DECLINED", "SUPERSEDED"]) query.append("state", closed);
+    } else query.set("state", "ALL");
     const head = text(args, "head");
     const base = text(args, "base");
     const clauses: string[] = [];
@@ -349,15 +386,29 @@ export const bitbucketDialect: GitDialect = {
       const { json } = await gitJson(ctx, "GET", `${repoPath(ctx)}/pipelines/${encodeURIComponent(pipeline)}`, {
         allowAnonymous: true,
       });
-      const steps = (await pipelineSteps(ctx, pipeline)).map(summaryStep);
-      return ok("ci_status", {
-        repo: `${ctx.repo.owner}/${ctx.repo.name}`,
-        provider: ctx.provider,
-        overall: overallFrom([summarizePipeline(json)]),
-        run: summarizePipeline(json),
-        jobs: steps,
-        jobs_total: steps.length,
-      });
+      const stepsPaged = await pipelineSteps(ctx, pipeline);
+      const allSteps = stepsPaged.items.map(summaryStep);
+      const steps = listWithPriority(allSteps, 50);
+      return ok(
+        "ci_status",
+        {
+          repo: `${ctx.repo.owner}/${ctx.repo.name}`,
+          provider: ctx.provider,
+          overall: overallFrom([summarizePipeline(json)]),
+          run: summarizePipeline(json),
+          jobs: steps,
+          jobs_total: stepsPaged.total ?? allSteps.length,
+          ...(stepsPaged.truncated ? { partial: true } : {}),
+        },
+        {
+          truncated: stepsPaged.truncated,
+          hint: stepsPaged.truncated
+            ? `Only ${allSteps.length} of ${stepsPaged.total ?? "more"} steps were read. Hint: open the pipeline on Bitbucket for the rest.`
+            : steps.length < allSteps.length
+              ? `Showing ${steps.length} of ${allSteps.length} steps (failing and running first).`
+              : undefined,
+        },
+      );
     }
 
     const limit = positiveInt(args.limit, 10, 50);
@@ -489,27 +540,47 @@ export const bitbucketDialect: GitDialect = {
       entries = parsed.entries;
       source = `step:${stepId}`;
     } else {
-      const steps = await pipelineSteps(ctx, pipelineId);
-      const chosen = steps.slice(0, 3);
+      const stepsPaged = await pipelineSteps(ctx, pipelineId);
+      const all = stepsPaged.items;
+      // Failing steps first: the first three steps of a long pipeline are usually
+      // the green ones. With nothing failing, take the most recent started steps.
+      const failing = all.filter(stepFailed);
+      const started = all.filter((item) => item?.started_on);
+      const chosen = failing.length > 0 ? failing.slice(0, 3) : (started.length > 0 ? started : all).slice(-3);
       const parts: string[] = [];
       for (const item of chosen) {
         const id = String(item?.uuid ?? "");
         if (!id) continue;
-        const buffer = await fetchStepLog(ctx, pipelineId, id);
+        let buffer: Buffer;
+        try {
+          buffer = await fetchStepLog(ctx, pipelineId, id);
+        } catch (error) {
+          // A step that never started has no log (404): note it, keep the others.
+          if (error instanceof Error && error.message.startsWith("[not_found]")) {
+            entries.push({ name: `step-${id}`, bytes: 0, skipped: "log not available (404)" });
+            continue;
+          }
+          throw error;
+        }
         const parsed = logBufferToText(buffer, `step-${id}`, ctx.log_entry_bytes, ctx.log_text_bytes);
-        parts.push(`##### ${item?.name ?? id} (${item?.state?.name ?? "?"}) #####\n${parsed.text}`);
+        parts.push(`##### ${item?.name ?? id} (${bitbucketStateName(item?.state) || "?"}) #####\n${parsed.text}`);
         entries.push(...parsed.entries);
       }
       text = parts.join("\n\n");
       source = `pipeline:${pipelineId}`;
-      if (steps.length > chosen.length) {
-        entries.push({ name: "(truncated)", bytes: 0, skipped: `${steps.length - chosen.length} more steps not downloaded` });
+      if (all.length > chosen.length) {
+        entries.push({ name: "(truncated)", bytes: 0, skipped: `${all.length - chosen.length} more steps not downloaded` });
+      }
+      if (stepsPaged.truncated) {
+        entries.push({ name: "(truncated)", bytes: 0, skipped: "step list incomplete (page cap)" });
       }
     }
 
     const byBytes = tailBytes(text, maxBytes);
     const byLines = tailLines(byBytes.text, wantLines);
-    const truncated = byBytes.dropped > 0 || byLines.dropped > 0;
+    const trimmed = byBytes.dropped > 0 || byLines.dropped > 0;
+    const skipped = skippedLogEntries(entries);
+    const truncated = trimmed || skipped.count > 0;
     return ok(
       "ci_logs",
       {
@@ -523,10 +594,17 @@ export const bitbucketDialect: GitDialect = {
         truncated,
         dropped_lines: byLines.dropped,
         dropped_bytes: byBytes.dropped,
+        skipped_entries: skipped.count,
         max_bytes: maxBytes,
         tail_lines: wantLines,
       },
-      { truncated, hint: truncated ? "Output trimmed to the tail. Hint: raise max_bytes or fetch one step." : undefined },
+      {
+        truncated,
+        hint:
+          [trimmed ? "Output trimmed to the tail. Hint: raise max_bytes or fetch one step." : null, skipped.hint]
+            .filter(Boolean)
+            .join(" ") || undefined,
+      },
     );
   },
 };

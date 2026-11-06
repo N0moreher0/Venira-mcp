@@ -17,6 +17,7 @@ import {
   positiveInt,
   prNumberFrom,
   requireText,
+  skippedLogEntries,
   tailBytes,
   tailLines,
   text,
@@ -572,7 +573,9 @@ export const gitlabDialect: GitDialect = {
 
     const byBytes = tailBytes(text, maxBytes);
     const byLines = tailLines(byBytes.text, wantLines);
-    const truncated = byBytes.dropped > 0 || byLines.dropped > 0;
+    const trimmed = byBytes.dropped > 0 || byLines.dropped > 0;
+    const skipped = skippedLogEntries(entries);
+    const truncated = trimmed || skipped.count > 0;
     return ok(
       "ci_logs",
       {
@@ -586,10 +589,11 @@ export const gitlabDialect: GitDialect = {
         truncated,
         dropped_lines: byLines.dropped,
         dropped_bytes: byBytes.dropped,
+        skipped_entries: skipped.count,
         max_bytes: maxBytes,
         tail_lines: wantLines,
       },
-      { truncated, hint: truncated ? "Output trimmed to the tail. Hint: pass job_id to isolate a failing job, or raise max_bytes." : undefined },
+      { truncated, hint: [trimmed ? "Output trimmed to the tail. Hint: pass job_id to isolate a failing job, or raise max_bytes." : null, skipped.hint].filter(Boolean).join(" ") || undefined },
     );
   },
 };

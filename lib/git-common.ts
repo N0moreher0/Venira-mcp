@@ -125,6 +125,42 @@ export function overallFromChecks(checks: Array<Record<string, unknown>>): strin
 }
 
 // ---------------------------------------------------------------------------
+// Bounded listings
+// ---------------------------------------------------------------------------
+
+const NOT_GREEN = new Set([
+  "failure",
+  "failed",
+  "timed_out",
+  "cancelled",
+  "canceled",
+  "startup_failure",
+  "action_required",
+  "error",
+  "neutral",
+]);
+
+function ciRank(item: Record<string, unknown>): number {
+  if (NOT_GREEN.has(String(item.conclusion))) return 0;
+  if (item.status !== "completed") return 1;
+  return 2;
+}
+
+/**
+ * Keep provider order while everything fits in `limit`. Only when the list has
+ * to be cut do failing and still-running items move to the front, so the cut
+ * can never hide the item the verdict (`overall`) was derived from.
+ */
+export function listWithPriority<T extends Record<string, unknown>>(items: T[], limit: number): T[] {
+  if (items.length <= limit) return items;
+  return items
+    .map((item, index) => ({ item, index, rank: ciRank(item) }))
+    .sort((a, b) => a.rank - b.rank || a.index - b.index)
+    .slice(0, limit)
+    .map((entry) => entry.item);
+}
+
+// ---------------------------------------------------------------------------
 // ZIP (GitHub run logs, Bitbucket step logs may be plain text)
 // ---------------------------------------------------------------------------
 
@@ -141,9 +177,11 @@ function findZipEocd(buf: Buffer): number {
 /**
  * Minimal ZIP reader: central directory → local header → raw/deflate payload.
  * Only what provider log archives use; unsupported (zip64/encrypted) entries
- * are skipped rather than guessed.
+ * are skipped rather than guessed. `totalMaxBytes` bounds the *cumulative*
+ * inflated size so an archive of many individually-small entries cannot burn
+ * CPU/memory (decompression-bomb guard); later entries are skipped, not guessed.
  */
-export function readZipEntries(buf: Buffer, entryMaxBytes: number): ZipEntry[] {
+export function readZipEntries(buf: Buffer, entryMaxBytes: number, totalMaxBytes = Number.POSITIVE_INFINITY): ZipEntry[] {
   const eocd = findZipEocd(buf);
   if (eocd < 0) throw new Error("[provider_error] Log archive is not a valid ZIP (no end-of-central-directory record).");
   const count = buf.readUInt16LE(eocd + 10);
@@ -154,6 +192,7 @@ export function readZipEntries(buf: Buffer, entryMaxBytes: number): ZipEntry[] {
   if (cdOffset > buf.length) throw new Error("[provider_error] Log archive central directory is out of range.");
 
   const entries: ZipEntry[] = [];
+  let inflated = 0;
   let cursor = cdOffset;
   for (let i = 0; i < count; i += 1) {
     if (cursor + 46 > buf.length || buf.readUInt32LE(cursor) !== 0x02014b50) break;
@@ -184,6 +223,11 @@ export function readZipEntries(buf: Buffer, entryMaxBytes: number): ZipEntry[] {
       entries.push(entry);
       continue;
     }
+    if (inflated + uncompSize > totalMaxBytes) {
+      entry.skipped = `inflate budget exhausted (${totalMaxBytes} bytes)`;
+      entries.push(entry);
+      continue;
+    }
     if (localOffset + 30 > buf.length || buf.readUInt32LE(localOffset) !== 0x04034b50) {
       entry.skipped = "bad local header";
       entries.push(entry);
@@ -205,6 +249,7 @@ export function readZipEntries(buf: Buffer, entryMaxBytes: number): ZipEntry[] {
     } catch (error) {
       entry.skipped = `inflate failed: ${error instanceof Error ? error.message : String(error)}`;
     }
+    inflated += entry.data.length;
     entries.push(entry);
   }
   return entries;
@@ -221,20 +266,43 @@ export function logBufferToText(
   if (buffer.subarray(0, 2).toString("latin1") !== "PK") {
     return { text: buffer.toString("utf8"), entries: [{ name: `${label}.log`, bytes: buffer.length }] };
   }
-  const parsed = readZipEntries(buffer, entryMaxBytes);
+  const parsed = readZipEntries(buffer, entryMaxBytes, Math.max(textMaxBytes, entryMaxBytes));
   const parts: string[] = [];
+  let used = 0;
   for (const entry of parsed) {
     if (entry.skipped || entry.data.length === 0) {
       entries.push({ name: entry.name, bytes: entry.data.length, ...(entry.skipped ? { skipped: entry.skipped } : {}) });
       continue;
     }
     const chunk = `##### ${entry.name} #####\n${entry.data.toString("utf8")}`;
-    if (Buffer.byteLength(parts.join("\n\n"), "utf8") + Buffer.byteLength(chunk, "utf8") > textMaxBytes) {
+    const chunkBytes = Buffer.byteLength(chunk, "utf8") + (parts.length > 0 ? 2 : 0);
+    if (used + chunkBytes > textMaxBytes) {
       entries.push({ name: entry.name, bytes: entry.data.length, skipped: "output cap" });
       continue;
     }
     parts.push(chunk);
+    used += chunkBytes;
     entries.push({ name: entry.name, bytes: entry.data.length });
   }
   return { text: parts.join("\n\n"), entries };
+}
+
+/**
+ * Entries that were left out of a log (too large, over the output cap, inflate
+ * budget, unsupported, or steps never downloaded). A failing step can be the
+ * one that got skipped, so callers must surface this instead of returning an
+ * innocent-looking empty/short text.
+ */
+export function skippedLogEntries(entries: Array<Record<string, unknown>>): { count: number; names: string[]; hint: string | null } {
+  const skipped = entries.filter((entry) => typeof entry.skipped === "string" && entry.skipped.length > 0);
+  if (skipped.length === 0) return { count: 0, names: [], hint: null };
+  const names = skipped.slice(0, 5).map((entry) => String(entry.name ?? "?"));
+  const reasons = [...new Set(skipped.map((entry) => String(entry.skipped).replace(/\s*\(.*\)$/, "")))].join(", ");
+  return {
+    count: skipped.length,
+    names,
+    hint:
+      `${skipped.length} log entr${skipped.length === 1 ? "y was" : "ies were"} skipped (${reasons}): ${names.join(", ")}${skipped.length > names.length ? ", ..." : ""}. ` +
+      `Hint: fetch the failing job/step on its own, or raise VENIRA_GIT_LOG_ENTRY_BYTES / VENIRA_GIT_LOG_TEXT_BYTES.`,
+  };
 }

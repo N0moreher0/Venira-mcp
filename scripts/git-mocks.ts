@@ -435,6 +435,38 @@ export async function startBitbucketMock(): Promise<BitbucketMock> {
           "step line 1\nFAIL demo.test.ts:42: expected 1 to be 2\n",
         );
       }
+      // E.3: real Bitbucket state shape (COMPLETED + result) and a paginated step list.
+      if (path === `${repo}/pipelines/{pipeline-paged}` && req.method === "GET") {
+        return json(200, {
+          ...pipeline,
+          uuid: "{pipeline-paged}",
+          state: { name: "COMPLETED", type: "pipeline_state_completed", result: { name: "FAILED", type: "pipeline_state_completed_failed" } },
+        });
+      }
+      if (path === `${repo}/pipelines/{pipeline-paged}/steps` && req.method === "GET") {
+        const stepState = (result: string) => ({
+          name: "COMPLETED",
+          type: "pipeline_step_state_completed",
+          result: { name: result, type: `pipeline_step_state_completed_${result.toLowerCase()}` },
+        });
+        const steps = [
+          { uuid: "{step-green-01}", name: "build", started_on: "2026-10-29T04:20:05Z", state: stepState("SUCCESSFUL") },
+          { uuid: "{step-green-02}", name: "lint", started_on: "2026-10-29T04:21:05Z", state: stepState("SUCCESSFUL") },
+          { uuid: "{step-red-0003}", name: "test", started_on: "2026-10-29T04:22:05Z", state: stepState("FAILED") },
+        ];
+        const pageNo = Number(url.searchParams.get("page") ?? 1);
+        const next = `http://${req.headers.host}/2.0/repositories/acme/demo/pipelines/%7Bpipeline-paged%7D/steps/?page=2&pagelen=100`;
+        // Two steps on page 1, the failing one on page 2 (the next page URL lives in the body).
+        return pageNo === 1
+          ? json(200, { values: steps.slice(0, 2), size: 3, page: 1, pagelen: 2, next })
+          : json(200, { values: steps.slice(2), size: 3, page: 2, pagelen: 2 });
+      }
+      if (path === `${repo}/pipelines/{pipeline-paged}/steps/{step-red-0003}/log` && req.method === "GET") {
+        return text(200, "test line 1\nRED-FAIL-LINE demo.test.ts:7\n");
+      }
+      if (path === `${repo}/pipelines/{pipeline-paged}/steps/{step-green-01}/log` && req.method === "GET") {
+        return text(200, "green-log build ok\n");
+      }
       if (path === `${repo}/pipelines` && req.method === "POST") {
         state.triggers += 1;
         return json(201, { uuid: "{pipeline-2}", state: { name: "PENDING" } });

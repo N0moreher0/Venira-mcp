@@ -11,10 +11,11 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { startGithubMock } from "./github-mock.js";
+import { startGithubMock, zipStored } from "./github-mock.js";
 import { startBitbucketMock, startGitlabMock } from "./git-mocks.js";
 import { envFlag } from "../lib/env.js";
 import { approveCommand } from "../lib/approval-gate.js";
+import { logBufferToText, skippedLogEntries } from "../lib/git-common.js";
 import { rankCandidates } from "../lib/read-plan.js";
 
 const SESSION_ID = `verify-${Date.now()}`;
@@ -3162,6 +3163,166 @@ for (const faultCase of bbFaultCases) {
 bitbucketMock.state.fault = null;
 const bbRecovered = await providerCall(bb, "project_ci_status", { ref: "fault-recovered" });
 check("bitbucket_ci_recovers_after_faults", bbRecovered.ok === true && bbRecovered.data?.runs?.[0]?.id === "{pipeline-1}", bbRecovered);
+
+// E.3: Bitbucket body-`next` pagination, real COMPLETED+result state shape, failing step first in logs.
+console.log("[verify] checking E.3 bitbucket pagination + failing-step logs...");
+const bbPagedRun = await providerCall(bb, "project_ci_status", { run_id: "{pipeline-paged}" });
+check(
+  "bitbucket_ci_steps_paginated_via_body_next",
+  bbPagedRun.ok === true &&
+    bbPagedRun.data?.jobs_total === 3 &&
+    bbPagedRun.data?.jobs?.length === 3 &&
+    bbPagedRun.data?.jobs?.[2]?.id === "{step-red-0003}" &&
+    bbPagedRun.data?.jobs?.[2]?.conclusion === "failure" &&
+    bbPagedRun.data?.partial === undefined,
+  bbPagedRun,
+);
+check(
+  "bitbucket_ci_real_state_shape_failure_is_not_green",
+  bbPagedRun.data?.overall === "failure" &&
+    bbPagedRun.data?.run?.conclusion === "failure" &&
+    bbPagedRun.data?.jobs?.[0]?.conclusion === "success",
+  bbPagedRun.data,
+);
+const bbPagedLogs = await providerCall(bb, "project_ci_logs", { run_id: "{pipeline-paged}" });
+check(
+  "bitbucket_ci_logs_pick_failing_step_first",
+  bbPagedLogs.ok === true &&
+    String(bbPagedLogs.data?.text ?? "").includes("RED-FAIL-LINE") &&
+    !String(bbPagedLogs.data?.text ?? "").includes("green-log") &&
+    bbPagedLogs.data?.skipped_entries === 1 &&
+    bbPagedLogs.data?.truncated === true,
+  bbPagedLogs,
+);
+check(
+  "bitbucket_ci_steps_second_page_requested",
+  bitbucketMock.requests.filter((request) => request.path.endsWith("{pipeline-paged}/steps")).length >= 2,
+  bitbucketMock.requests.filter((request) => request.path.includes("{pipeline-paged}")).map((request) => request.path),
+);
+
+// E.4: ci_wait gives one concise summary + next step, and reads the failing Bitbucket step (UUID job id).
+console.log("[verify] checking E.4 ci_wait summary + failing-step tail...");
+const bbWait = await providerCall(bb, "project_ci_wait", { run_id: "{pipeline-paged}", timeout_ms: 5000 });
+check(
+  "ci_wait_summary_and_next_step_on_failure",
+  bbWait.ok === true &&
+    bbWait.data?.terminal === true &&
+    bbWait.data?.overall === "failure" &&
+    typeof bbWait.data?.summary === "string" &&
+    /failed/i.test(bbWait.data.summary) &&
+    bbWait.data.summary.includes("test") &&
+    bbWait.data?.next_step === "fix_failing_step_then_push" &&
+    bbWait.data?.failing_jobs?.[0]?.id === "{step-red-0003}",
+  bbWait.data,
+);
+check(
+  "ci_wait_bitbucket_uuid_job_tail_is_failing_step_only",
+  bbWait.data?.failure_tail?.job_id === "{step-red-0003}" &&
+    String(bbWait.data?.failure_tail?.text ?? "").includes("RED-FAIL-LINE") &&
+    !String(bbWait.data?.failure_tail?.text ?? "").includes("green-log"),
+  bbWait.data?.failure_tail,
+);
+
+// E.3: GitHub bounded pagination + oversized logs (small caps so the fixtures stay tiny).
+console.log("[verify] checking E.3 github pagination + oversized logs...");
+const gh = await providerClient({
+  VENIRA_GIT_PROVIDER: "github",
+  VENIRA_GIT_API_URL: githubMock.apiUrl,
+  VENIRA_GIT_REPO: "acme/demo",
+  VENIRA_GIT_TOKEN: "verify-github-token",
+  VENIRA_GIT_RETRIES: "0",
+  VENIRA_GIT_LOG_ZIP_BYTES: "4096",
+  VENIRA_GIT_LOG_ENTRY_BYTES: "2048",
+  VENIRA_GIT_LOG_TIMEOUT_MS: "5000",
+});
+const ghPaged = await providerCall(gh, "project_ci_status", { ref: "paged-checks" });
+check(
+  "github_ci_check_runs_paginated_overall_sees_page2",
+  ghPaged.ok === true &&
+    ghPaged.data?.overall === "failure" &&
+    ghPaged.data?.check_runs_total === 130 &&
+    ghPaged.data?.check_runs?.length === 20 &&
+    ghPaged.data?.check_runs?.[0]?.conclusion === "failure" &&
+    ghPaged.data?.partial === undefined,
+  ghPaged,
+);
+const ghJobs = await providerCall(gh, "project_ci_status", { run_id: 300 });
+check(
+  "github_ci_jobs_paginated_failure_on_page2",
+  ghJobs.ok === true &&
+    ghJobs.data?.jobs_total === 120 &&
+    ghJobs.data?.jobs?.length === 50 &&
+    ghJobs.data?.jobs?.[0]?.name === "matrix-117" &&
+    ghJobs.data?.jobs?.[0]?.conclusion === "failure" &&
+    ghJobs.data?.partial === undefined,
+  ghJobs,
+);
+const endlessHits = () => githubMock.requests.filter((request) => request.path.includes("/commits/endless-checks/check-runs")).length;
+const endlessBefore = endlessHits();
+const ghEndless = await providerCall(gh, "project_ci_status", { ref: "endless-checks" });
+check(
+  "github_ci_pagination_is_bounded",
+  ghEndless.ok === true &&
+    ghEndless.data?.partial === true &&
+    endlessHits() - endlessBefore === 5 &&
+    String(ghEndless.hint ?? "").includes("incomplete"),
+  { hits: endlessHits() - endlessBefore, partial: ghEndless.data?.partial, hint: ghEndless.hint },
+);
+const blobHitsBefore = githubMock.blobAuth.length;
+const ghForeign = await providerCall(gh, "project_ci_status", { ref: "foreign-next" });
+check(
+  "github_ci_pagination_never_follows_cross_origin_next",
+  ghForeign.ok === true && ghForeign.data?.check_runs?.length === 1 && githubMock.blobAuth.length === blobHitsBefore,
+  { blobHits: githubMock.blobAuth.length - blobHitsBefore, data: ghForeign.data },
+);
+const hugeStart = Date.now();
+const ghHugeDeclared = await providerCall(gh, "project_ci_logs", { run_id: 302 });
+check(
+  "github_ci_logs_oversized_declared_aborts_early",
+  ghHugeDeclared.ok === false &&
+    ghHugeDeclared.error?.code === "resource_limit" &&
+    Date.now() - hugeStart < 4000 &&
+    JSON.stringify(ghHugeDeclared).includes("VENIRA_GIT_LOG_ZIP_BYTES"),
+  { ms: Date.now() - hugeStart, response: ghHugeDeclared },
+);
+const chunkedStart = Date.now();
+const ghHugeChunked = await providerCall(gh, "project_ci_logs", { run_id: 303 });
+check(
+  "github_ci_logs_oversized_stream_aborts_early",
+  ghHugeChunked.ok === false && ghHugeChunked.error?.code === "resource_limit" && Date.now() - chunkedStart < 4000,
+  { ms: Date.now() - chunkedStart, response: ghHugeChunked },
+);
+const ghSkipped = await providerCall(gh, "project_ci_logs", { run_id: 304 });
+check(
+  "github_ci_logs_skipped_entries_are_reported",
+  ghSkipped.ok === true &&
+    ghSkipped.data?.skipped_entries === 1 &&
+    ghSkipped.data?.truncated === true &&
+    String(ghSkipped.data?.text ?? "").includes("BUILD finished") &&
+    JSON.stringify(ghSkipped.data?.entries ?? []).includes("entry too large") &&
+    /skipped/.test(String(ghSkipped.hint ?? "")),
+  ghSkipped,
+);
+await gh.close();
+
+// E.3: cumulative inflate budget + output cap are reported, not silent.
+const budgetZip = zipStored([
+  { name: "a.txt", data: Buffer.alloc(1000, "a") },
+  { name: "b.txt", data: Buffer.alloc(1000, "b") },
+  { name: "c.txt", data: Buffer.alloc(1000, "c") },
+]);
+const budgetParsed = logBufferToText(budgetZip, "budget", 2048, 1500);
+const budgetSkips = skippedLogEntries(budgetParsed.entries);
+check(
+  "log_zip_inflate_budget_and_output_cap_reported",
+  budgetParsed.entries.length === 3 &&
+    budgetSkips.count === 2 &&
+    budgetParsed.entries[1]?.skipped === "output cap" &&
+    String(budgetParsed.entries[2]?.skipped ?? "").includes("inflate budget") &&
+    Buffer.byteLength(budgetParsed.text, "utf8") <= 1500 &&
+    !!budgetSkips.hint,
+  budgetParsed.entries,
+);
 await bb.close();
 
 // 11d-bis. Diagnostics + read planning (deterministic, no model call).

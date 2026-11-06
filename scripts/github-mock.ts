@@ -214,6 +214,11 @@ export async function startGithubMock(): Promise<GithubMock> {
   const jobText = Buffer.from(
     Array.from({ length: 30 }, (_, i) => `job step ${i}`).join("\n") + "\nFAIL demo.test.ts:42\n",
   );
+  // E.3: an archive with one entry over the 2048 B entry cap the E.3 verify client uses.
+  const skippedZip = zipStored([
+    { name: "build/1_build.txt", data: Buffer.from("build ok\nBUILD finished\n") },
+    { name: "test/2_test.txt", data: Buffer.alloc(3000, "x") },
+  ]);
 
   // Blob server: a *different origin*, like GitHub's pre-signed storage URL.
   const blobServer = http.createServer((req, res) => {
@@ -227,6 +232,28 @@ export async function startGithubMock(): Promise<GithubMock> {
     if (path === "/job.log") {
       res.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
       res.end(jobText);
+      return;
+    }
+    // E.3 oversized-log fixtures.
+    if (path === "/huge-declared.zip") {
+      // Declares far more than any sane cap and sends nothing: a client that does not
+      // look at Content-Length would sit here until its timeout.
+      res.writeHead(200, { "content-type": "application/zip", "content-length": String(64 * 1024 * 1024) });
+      res.flushHeaders();
+      return;
+    }
+    if (path === "/huge-chunked.zip") {
+      // No Content-Length: the client has to notice the cap while streaming and hang up.
+      res.writeHead(200, { "content-type": "application/zip" });
+      const timer = setInterval(() => {
+        res.write(Buffer.alloc(8192));
+      }, 5);
+      res.on("close", () => clearInterval(timer));
+      return;
+    }
+    if (path === "/skipped.zip") {
+      res.writeHead(200, { "content-type": "application/zip", "content-length": String(skippedZip.length) });
+      res.end(skippedZip);
       return;
     }
     res.writeHead(404).end("not found");
@@ -372,6 +399,77 @@ export async function startGithubMock(): Promise<GithubMock> {
           html_url: `https://github.com/acme/demo/pull/7#discussion_r${2000 + state.inlineComments}`,
           created_at: "2026-10-29T02:11:00Z",
         });
+      }
+
+      // E.3 fixtures: `total_count` + `Link: <...>; rel="next"` like api.github.com.
+      const sendPaged = (key: string, all: unknown[], size: number, nextForever = false): void => {
+        const pageNo = Math.max(1, Number(url.searchParams.get("page") ?? 1));
+        const pageItems = all.slice((pageNo - 1) * size, pageNo * size);
+        const more = nextForever || pageNo * size < all.length;
+        const payload = Buffer.from(JSON.stringify({ total_count: nextForever ? 100000 : all.length, [key]: pageItems }), "utf8");
+        const next = new URL(`http://${req.headers.host}${path}`);
+        for (const [name, value] of url.searchParams) next.searchParams.set(name, value);
+        next.searchParams.set("page", String(pageNo + 1));
+        res.writeHead(200, {
+          "content-type": "application/json",
+          "content-length": String(payload.length),
+          "x-ratelimit-remaining": "999",
+          ...(more ? { link: `<${next.toString()}>; rel="next"` } : {}),
+        });
+        res.end(payload);
+      };
+      const perPageOf = () => Math.min(100, Number(url.searchParams.get("per_page") ?? 30));
+      const checkAt = (i: number, failAt: number) => ({
+        id: 9000 + i,
+        name: `check-${i + 1}`,
+        status: "completed",
+        conclusion: i === failAt ? "failure" : "success",
+        html_url: `https://github.com/acme/demo/runs/${9000 + i}`,
+        app: { name: "GitHub Actions" },
+        output: { title: "ok" },
+      });
+      // 130 checks over two pages; the only failure (#121) is on page 2.
+      if (/^\/repos\/acme\/demo\/commits\/paged-checks\/check-runs$/u.test(path) && req.method === "GET") {
+        return sendPaged("check_runs", Array.from({ length: 130 }, (_, i) => checkAt(i, 120)), perPageOf());
+      }
+      // A server that always advertises another (tiny) page: the walk must stop at the page cap.
+      if (/^\/repos\/acme\/demo\/commits\/endless-checks\/check-runs$/u.test(path) && req.method === "GET") {
+        return sendPaged("check_runs", Array.from({ length: 500 }, (_, i) => checkAt(i, -1)), 10, true);
+      }
+      // `next` pointing at another origin must never be followed (the token would travel with it).
+      if (/^\/repos\/acme\/demo\/commits\/foreign-next\/check-runs$/u.test(path) && req.method === "GET") {
+        const payload = Buffer.from(JSON.stringify({ total_count: 1, check_runs: [checkAt(0, -1)] }), "utf8");
+        res.writeHead(200, {
+          "content-type": "application/json",
+          "content-length": String(payload.length),
+          link: `<${blobUrl}/stolen?page=2>; rel="next"`,
+        });
+        res.end(payload);
+        return;
+      }
+      if (path === `${base}/actions/runs/300` && req.method === "GET") {
+        return json(200, { ...RUN, id: 300, run_number: 20, status: "completed", conclusion: "failure", html_url: "https://github.com/acme/demo/actions/runs/300" });
+      }
+      // Matrix run: 120 jobs over two pages; the only failure (#117) is on page 2.
+      if (path === `${base}/actions/runs/300/jobs` && req.method === "GET") {
+        const jobs = Array.from({ length: 120 }, (_, i) => ({
+          id: 3000 + i,
+          name: `matrix-${i + 1}`,
+          status: "completed",
+          conclusion: i === 116 ? "failure" : "success",
+          started_at: "2026-10-29T02:00:05Z",
+          completed_at: "2026-10-29T02:02:00Z",
+          html_url: `https://github.com/acme/demo/runs/${3000 + i}`,
+          runner_name: "ubuntu-latest",
+        }));
+        return sendPaged("jobs", jobs, perPageOf());
+      }
+      for (const [logRunId, blobName] of [[302, "huge-declared.zip"], [303, "huge-chunked.zip"], [304, "skipped.zip"]] as const) {
+        if (path === `${base}/actions/runs/${logRunId}/logs` && req.method === "GET") {
+          res.writeHead(302, { location: `${blobUrl}/${blobName}` });
+          res.end();
+          return;
+        }
       }
 
       // Branch-protection checks (check-runs API).

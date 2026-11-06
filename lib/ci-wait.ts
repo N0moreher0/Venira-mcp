@@ -103,15 +103,60 @@ function summarizeRun(data: Record<string, any>): Record<string, unknown> | null
   return null;
 }
 
-function failingJobId(data: Record<string, any>): number | undefined {
-  if (!Array.isArray(data.jobs)) return undefined;
-  for (const job of data.jobs as Array<Record<string, unknown>>) {
-    if (FAILURE_CONCLUSIONS.has(String(job.conclusion))) {
-      const id = Number(job.id);
-      if (Number.isFinite(id) && id > 0) return Math.floor(id);
-    }
+/** Numeric job ids (GitHub/GitLab) stay numbers; Bitbucket step UUIDs ("{...}") stay strings. */
+function normalizeJobId(value: unknown): number | string | undefined {
+  if (typeof value === "number") return Number.isFinite(value) && value > 0 ? Math.floor(value) : undefined;
+  if (typeof value !== "string") return undefined;
+  const raw = value.trim();
+  if (!raw) return undefined;
+  if (/^\d+$/.test(raw)) {
+    const n = Number(raw);
+    return Number.isSafeInteger(n) && n > 0 ? n : undefined;
   }
-  return undefined;
+  return raw;
+}
+
+function failingJobs(data: Record<string, any>): Array<{ id: number | string; name: string | null }> {
+  if (!Array.isArray(data.jobs)) return [];
+  const out: Array<{ id: number | string; name: string | null }> = [];
+  for (const job of data.jobs as Array<Record<string, unknown>>) {
+    if (!FAILURE_CONCLUSIONS.has(String(job.conclusion))) continue;
+    const id = normalizeJobId(job.id);
+    if (id === undefined) continue;
+    out.push({ id, name: typeof job.name === "string" ? job.name : null });
+  }
+  return out;
+}
+
+function failingJobId(data: Record<string, any>): number | string | undefined {
+  return failingJobs(data)[0]?.id;
+}
+
+/** One concise line an agent can act on without reading the full status payload. */
+function buildSummary(input: {
+  overall: string;
+  terminal: boolean;
+  run: Record<string, unknown> | null;
+  failed: Array<{ id: number | string; name: string | null }>;
+  jobsTotal?: number;
+  waitedMs: number;
+  hasTail: boolean;
+}): string {
+  const label = input.run?.name ? String(input.run.name) : "CI";
+  const branch = input.run?.branch ? ` on ${String(input.run.branch)}` : "";
+  const secs = Math.round(input.waitedMs / 1000);
+  if (!input.terminal) return `${label}${branch} is ${input.overall} after ${secs}s.`;
+  if (input.overall === "success") return `${label}${branch} passed${input.jobsTotal ? ` (${input.jobsTotal} jobs)` : ""}.`;
+  if (input.overall === "failure") {
+    const names = input.failed
+      .slice(0, 3)
+      .map((job) => job.name ?? String(job.id))
+      .join(", ");
+    const more = input.failed.length > 3 ? ` +${input.failed.length - 3} more` : "";
+    const where = names ? ` Failing: ${names}${more}.` : "";
+    return `${label}${branch} failed.${where}${input.hasTail ? " Log tail attached." : ""}`;
+  }
+  return `${label}${branch} ended as ${input.overall}.`;
 }
 
 async function failureTail(
@@ -130,7 +175,7 @@ async function failureTail(
   const jobId = failingJobId(data);
   try {
     const response = await opCiLogs({
-      run_id: Number.isFinite(numericRunId) && numericRunId > 0 ? Math.floor(numericRunId) : runId,
+      run_id: /^\d+$/.test(String(runId)) && Number.isFinite(numericRunId) && numericRunId > 0 ? Math.floor(numericRunId) : runId,
       ...(jobId !== undefined ? { job_id: jobId } : {}),
       tail_lines: tailLines,
       max_bytes: 256 * 1024,
@@ -231,7 +276,31 @@ export async function opCiWait(args: Record<string, unknown>): Promise<Resp> {
     if (statusArgs[key] !== undefined) selector[key] = statusArgs[key];
   }
 
+  const failed = overall === "failure" ? failingJobs(data) : [];
+  const jobsTotal = Array.isArray(data.jobs) ? Number(data.jobs_total ?? data.jobs.length) : undefined;
+  const summary = buildSummary({
+    overall,
+    terminal,
+    run,
+    failed,
+    jobsTotal,
+    waitedMs,
+    hasTail: Boolean(tail),
+  });
+  const nextStep = !terminal
+    ? "wait_again"
+    : overall === "success"
+      ? "merge_or_continue"
+      : overall === "failure"
+        ? tail
+          ? "fix_failing_step_then_push"
+          : "read_logs"
+        : "inspect_status";
+
   const resultData: Record<string, unknown> = {
+    summary,
+    next_step: nextStep,
+    ...(failed.length > 0 ? { failing_jobs: failed.slice(0, 5), failing_jobs_total: failed.length } : {}),
     repo,
     ...(provider ? { provider } : {}),
     ...(source ? { source } : {}),
@@ -246,7 +315,7 @@ export async function opCiWait(args: Record<string, unknown>): Promise<Resp> {
     polls,
     selector,
     run,
-    ...(Array.isArray(data.jobs) ? { jobs_total: data.jobs.length } : {}),
+    ...(Array.isArray(data.jobs) ? { jobs_total: data.jobs_total ?? data.jobs.length } : {}),
     ...(Array.isArray(data.check_runs) ? { check_runs_total: data.check_runs_total ?? data.check_runs.length } : {}),
     ci_status: data,
     ...(tail ? { failure_tail: tail } : {}),

@@ -153,6 +153,19 @@ function agentFor(ctx: GitContext, url: URL): https.Agent | undefined {
 // One request (no redirect handling)
 // ---------------------------------------------------------------------------
 
+function formatLimit(maxBytes: number): string {
+  if (maxBytes >= 1024 * 1024) return `${Math.round(maxBytes / 1024 / 1024)}MB`;
+  return `${Math.max(1, Math.round(maxBytes / 1024))}KB`;
+}
+
+function resourceLimitError(url: URL, maxBytes: number): Error {
+  return new Error(
+    `[resource_limit] Response from ${url.pathname} exceeded ${formatLimit(maxBytes)}. ` +
+      `Hint: pass job_id (GitHub/GitLab) or a step id (Bitbucket) to fetch one job's log, ` +
+      `or raise VENIRA_GIT_LOG_ZIP_BYTES (logs) / VENIRA_GIT_MAX_BYTES (JSON).`,
+  );
+}
+
 function requestOnce(
   ctx: GitContext,
   method: string,
@@ -178,11 +191,24 @@ function requestOnce(
       (response: http.IncomingMessage) => {
         const chunks: Buffer[] = [];
         let total = 0;
-        let overflow = false;
+        // Stop reading the moment the cap is crossed (or declared up front):
+        // draining a multi-GB log only to discard it wastes bandwidth, memory
+        // time and holds the socket until the timeout.
+        const abortOversized = () => {
+          chunks.length = 0;
+          done(() => reject(resourceLimitError(url, maxBytes)));
+          response.destroy();
+        };
+        const declared = Number(response.headers["content-length"]);
+        if (Number.isFinite(declared) && declared > maxBytes) {
+          abortOversized();
+          return;
+        }
         response.on("data", (chunk: Buffer) => {
+          if (settled) return;
           total += chunk.length;
           if (total > maxBytes) {
-            overflow = true;
+            abortOversized();
             return;
           }
           chunks.push(chunk);
@@ -192,15 +218,6 @@ function requestOnce(
         );
         response.on("end", () =>
           done(() => {
-            if (overflow) {
-              reject(
-                new Error(
-                  `[resource_limit] Response from ${url.pathname} exceeded ${Math.round(maxBytes / 1024 / 1024)}MB. ` +
-                    `Hint: pass job_id to fetch a single job, or lower max_bytes.`,
-                ),
-              );
-              return;
-            }
             resolve({
               status: response.statusCode ?? 0,
               headers: response.headers as RawHeaders,
