@@ -9,7 +9,9 @@
 import { gitFetch, gitJson } from "./git-http.js";
 import { requireToken, type GitContext } from "./git-config.js";
 import {
+  ciControlRequest,
   logBufferToText,
+  numericCiRunId,
   ok,
   overallFrom,
   positiveInt,
@@ -404,6 +406,27 @@ export const gitlabDialect: GitDialect = {
       },
       { hint: runs.length === 0 ? "No pipelines matched. Hint: pass ref=<branch>, or trigger one with project_ci_trigger." : undefined },
     );
+  },
+
+  async ciControl(ctx, args) {
+    const { action, runId: rawRunId } = ciControlRequest(args);
+    const runId = numericCiRunId(rawRunId);
+    requireToken(ctx);
+    const endpoint = action === "cancel"
+      ? `${projectPath(ctx)}/pipelines/${runId}/cancel`
+      : `${projectPath(ctx)}/pipelines/${runId}/retry`;
+    const { json } = await gitJson(ctx, "POST", endpoint, { body: {} });
+    return ok("ci_control", {
+      repo: `${ctx.repo.owner}/${ctx.repo.name}`,
+      provider: ctx.provider,
+      action,
+      run_id: runId,
+      request_submitted: true,
+      ...(json?.id !== undefined ? { pipeline_id: json.id } : {}),
+      ...(typeof json?.status === "string" ? { status: pipelineStatus(json.status).status, conclusion: pipelineStatus(json.status).conclusion } : {}),
+    }, { hint: action === "cancel"
+      ? "Cancellation requested. Check project_ci_status to confirm the pipeline state."
+      : "Retry requested for failed or canceled jobs. Check project_ci_status for the new pipeline state." });
   },
 
   async ciTrigger(ctx, args) {

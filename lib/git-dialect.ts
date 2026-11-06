@@ -12,6 +12,7 @@ export interface GitDialect {
   prClose(ctx: GitContext, args: Record<string, unknown>): Promise<Resp>;
   prReopen(ctx: GitContext, args: Record<string, unknown>): Promise<Resp>;
   ciStatus(ctx: GitContext, args: Record<string, unknown>): Promise<Resp>;
+  ciControl(ctx: GitContext, args: Record<string, unknown>): Promise<Resp>;
   ciTrigger(ctx: GitContext, args: Record<string, unknown>): Promise<Resp>;
   ciLogs(ctx: GitContext, args: Record<string, unknown>): Promise<Resp>;
 }

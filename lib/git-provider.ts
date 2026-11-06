@@ -86,6 +86,10 @@ export async function opCiStatus(args: Record<string, unknown>): Promise<Resp> {
   return runProvider(args, "ci_status", (ctx, dialect) => dialect.ciStatus(ctx, args));
 }
 
+export async function opCiControl(args: Record<string, unknown>): Promise<Resp> {
+  return runProvider(args, "ci_control", (ctx, dialect) => dialect.ciControl(ctx, args));
+}
+
 export async function opCiTrigger(args: Record<string, unknown>): Promise<Resp> {
   return runProvider(args, "ci_trigger", (ctx, dialect) => dialect.ciTrigger(ctx, args));
 }
