@@ -32,13 +32,17 @@ function normalizeRule(rule: string): string {
   return rule.trim().replace(/^(ask|deny)\./, "");
 }
 
-export function sessionScopeAllowed(rule: string): boolean {
+/** Effective rules that a human may approve for the whole session. */
+export function sessionGrantRules(): string[] {
   const extra = (process.env.VENIRA_SESSION_GRANT_RULES ?? "")
     .split(",")
     .map((r) => normalizeRule(r))
     .filter(Boolean);
-  const allowed = new Set([...DEFAULT_SESSION_RULES, ...extra]);
-  return allowed.has(normalizeRule(rule));
+  return [...new Set([...DEFAULT_SESSION_RULES, ...extra])];
+}
+
+export function sessionScopeAllowed(rule: string): boolean {
+  return sessionGrantRules().includes(normalizeRule(rule));
 }
 
 function dataDir(): string {

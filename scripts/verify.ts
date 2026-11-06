@@ -590,6 +590,22 @@ check(
   { hasApprovalId: !!askApprovalId, hasToken: typeof askedData.data?.approval_token === "string", code: askedData.error?.code },
 );
 
+// Phase 3: every [approval_required] carries the canonical data.approval payload.
+const shellApproval = (askedData.data?.approval ?? {}) as Record<string, any>;
+check(
+  "approval_payload_shell_shape",
+  shellApproval.approval_id === askApprovalId &&
+    shellApproval.gate === "shell" &&
+    shellApproval.rule === "ask.cd_outside_workspace" &&
+    typeof shellApproval.reason === "string" &&
+    typeof shellApproval.subject_preview === "string" &&
+    typeof shellApproval.expires_at === "number" &&
+    String(shellApproval.approve_command ?? "").includes(askApprovalId) &&
+    shellApproval.retry_with?.tool === "project_shell_run" &&
+    shellApproval.retry_with?.arguments?.approval_id === askApprovalId,
+  shellApproval,
+);
+
 // Import approvals module for writeApprovalGrant
 const approvals = await import("../lib/approvals.js");
 const { writeApprovalGrant } = approvals;
@@ -710,6 +726,106 @@ const sessAgain = asEnvelope(await call("project_shell_run", { command: "cd ..",
 check("policy_session_grant", sessFirst.ok === true && sessAgain.ok === true, { sessFirst, sessAgain });
 const sessOther = asEnvelope(await call("project_shell_run", { command: "cd ../..", shell: shellFor }));
 check("policy_session_grant_scoped", sessOther.error?.code === "approval_required", sessOther);
+
+// Phase 3 (a): dry_run reports the tier without running or creating an approval.
+const approvalsDirPath = path.join(verifyDataDir, "approvals");
+const approvalFilesBeforeDry = (await fs.readdir(approvalsDirPath)).length;
+const dryAllow = asEnvelope(await call("project_shell_run", { command: "git status", shell: shellFor, dry_run: 1 }));
+check(
+  "shell_dry_run_allow",
+  dryAllow.ok === true &&
+    dryAllow.kind === "shell_dry_run" &&
+    dryAllow.data?.dry_run === true &&
+    dryAllow.data?.tier === "allow" &&
+    dryAllow.data?.would_run === true &&
+    dryAllow.data?.requires_approval === false,
+  dryAllow,
+);
+const dryAsk = asEnvelope(
+  await call("project_shell_run", { command: "curl https://example.invalid/dry", shell: shellFor, dry_run: 1 }),
+);
+check(
+  "shell_dry_run_ask",
+  dryAsk.ok === true &&
+    dryAsk.data?.tier === "ask" &&
+    dryAsk.data?.would_run === false &&
+    dryAsk.data?.requires_approval === true &&
+    typeof dryAsk.data?.rule === "string",
+  dryAsk,
+);
+check(
+  "shell_dry_run_creates_no_pending",
+  (await fs.readdir(approvalsDirPath)).length === approvalFilesBeforeDry,
+  { before: approvalFilesBeforeDry },
+);
+
+// Phase 3 (b): approval_wait_ms. A human grant that lands during the wait runs in the same call.
+{
+  const { parseApprovalWaitMs, APPROVAL_WAIT_MAX_MS } = await import("../lib/approval-gate.js");
+  check(
+    "approval_wait_ms_clamped",
+    parseApprovalWaitMs(1e9) === APPROVAL_WAIT_MAX_MS &&
+      parseApprovalWaitMs(-5) === 0 &&
+      parseApprovalWaitMs("abc") === 0 &&
+      parseApprovalWaitMs(undefined) === 0 &&
+      parseApprovalWaitMs(1200) === 1200,
+    null,
+  );
+  const filesBeforeWait = new Set(await fs.readdir(approvalsDirPath));
+  const waitCall = call("project_shell_run", {
+    command: "cd ../..",
+    shell: shellFor,
+    approval_wait_ms: 10000,
+    background: 0,
+  });
+  let waitId = "";
+  for (let i = 0; i < 60 && !waitId; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const fresh = (await fs.readdir(approvalsDirPath)).find((f) => f.endsWith(".json") && !filesBeforeWait.has(f));
+    if (fresh) waitId = fresh.replace(/\.json$/, "");
+  }
+  if (waitId) approvals.writeApprovalGrant(waitId);
+  const waitRes = asEnvelope(await waitCall);
+  check("approval_wait_grant_runs_in_same_call", !!waitId && waitRes.ok === true, { waitId, waitRes });
+  const waitReuse = asEnvelope(
+    await call("project_shell_run", { command: "cd ../..", shell: shellFor, approval_id: waitId }),
+  );
+  check("approval_wait_grant_single_use", waitReuse.error?.code === "approval_invalid", waitReuse);
+
+  const tWait = Date.now();
+  const waitTimeout = asEnvelope(
+    await call("project_shell_run", {
+      command: "curl https://example.invalid/wait",
+      shell: shellFor,
+      approval_wait_ms: 700,
+    }),
+  );
+  const waitedMs = Date.now() - tWait;
+  check(
+    "approval_wait_timeout_returns_pending",
+    waitTimeout.error?.code === "approval_required" &&
+      !!waitTimeout.data?.approval_id &&
+      waitTimeout.data?.waited_ms === 700 &&
+      waitedMs >= 600,
+    { waitedMs, waitTimeout },
+  );
+}
+
+// Phase 3 (d): project_health exposes approvals + warnings.
+{
+  const healthApprovals = asEnvelope(await call("project_health", { include_audit: 0 }));
+  const ap = (healthApprovals.data?.approvals ?? {}) as Record<string, any>;
+  check(
+    "health_approvals_section",
+    typeof ap.shell_mode === "string" &&
+      typeof ap.js_exec_enabled === "boolean" &&
+      typeof ap.pending_ttl_ms === "number" &&
+      ap.max_wait_ms === 45000 &&
+      Array.isArray(ap.session_grant_rules) &&
+      Array.isArray(healthApprovals.data?.warnings),
+    healthApprovals.data?.approvals,
+  );
+}
 
 // (e) Session scope is refused for sensitive rules (network access).
 const netId = await askFor("curl https://example.invalid/x");
@@ -1566,6 +1682,17 @@ check(
     jsAsk.data?.rule === "ask.js_exec" &&
     String(jsAsk.data?.note ?? "").includes("npx venira-mcp --approve"),
   jsAsk,
+);
+const jsPayload = (jsAsk.data?.approval ?? {}) as Record<string, any>;
+check(
+  "approval_payload_js_shape",
+  jsPayload.approval_id === jsApprovalId &&
+    jsPayload.gate === "js" &&
+    jsPayload.rule === "ask.js_exec" &&
+    String(jsPayload.approve_command ?? "").includes(jsApprovalId) &&
+    jsPayload.retry_with?.tool === "project_execute_js" &&
+    jsPayload.retry_with?.arguments?.approval_id === jsApprovalId,
+  jsPayload,
 );
 writeApprovalGrant(jsApprovalId);
 const jsWrongCode = asEnvelope(
