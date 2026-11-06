@@ -52,6 +52,7 @@ import {
   STRICT_ALLOW,
 } from "./shell-policy-rules.js";
 import { evaluateParsedShellCommand, type AskRule, type HardDenyRule } from "./shell-policy-evaluate.js";
+import { resolveSecurityProfile, securityProfileIsExplicit, securityProfileSettings } from "./security-profile.js";
 
 export { tokenize } from "./shell-tokenizer.js";
 
@@ -741,6 +742,10 @@ export function loadShellPolicy(): ShellPolicy {
   if (rawEnvMode !== undefined && !envMode) {
     throw new Error("[config_invalid] VENIRA_SHELL_MODE must be balanced, strict, permissive, or off.");
   }
+  // VENIRA_SECURITY_PROFILE sets the baseline; VENIRA_SHELL_MODE (and a policy file mode) override it.
+  const profile = resolveSecurityProfile();
+  const profileExplicit = securityProfileIsExplicit();
+  if (profileExplicit) policy.mode = securityProfileSettings(profile).shellMode;
   if (envMode) policy.mode = envMode;
 
   const file = process.env.VENIRA_SHELL_POLICY_FILE;
@@ -771,7 +776,7 @@ export function loadShellPolicy(): ShellPolicy {
 
   if (policy.mode === "off") {
     console.error(
-      "[shell-policy] WARNING: VENIRA_SHELL_MODE=off disables ALL shell policy checks (hard-deny included). " +
+      "[shell-policy] WARNING: shell mode off (VENIRA_SECURITY_PROFILE=off or VENIRA_SHELL_MODE=off) disables ALL shell policy checks (hard-deny included). " +
         "Use only in a trusted environment. secret_env still requires approval.",
     );
   }

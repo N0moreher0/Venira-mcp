@@ -218,6 +218,11 @@ async function main() {
     results.push(await check("config_cache_reported", hData.data?.cache !== undefined, hData.data?.cache));
     results.push(await check("config_trace_reported", hData.data?.trace !== undefined, hData.data?.trace));
     results.push(await check("config_shell_reported", hData.data?.shell !== undefined, hData.data?.shell));
+    const approvalsInfo = hData.data?.approvals as { security_profile?: string; shell_mode?: string } | undefined;
+    results.push(await check("config_security_profile_reported", typeof approvalsInfo?.security_profile === "string", approvalsInfo));
+    if (approvalsInfo?.security_profile === "off") {
+      results.push(warn("security profile is `off`: shell checks and per-call JS approval are disabled (trusted environments only)", { security_profile: "off", shell_mode: approvalsInfo.shell_mode }));
+    }
 
     // P1: read_audit tool reachable and returns an envelope (audit_unavailable is acceptable)
     const auditRes = await client3.callTool({ name: "project_read_audit", arguments: { limit: 1 } });

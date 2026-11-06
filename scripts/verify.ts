@@ -434,6 +434,63 @@ if (originalShellMode === undefined) delete process.env.VENIRA_SHELL_MODE;
 else process.env.VENIRA_SHELL_MODE = originalShellMode;
 policyModule.resetShellPolicyCache();
 check("shell_mode_accepts_off", offModeMessage === "", offModeMessage);
+{
+  // Phase 4: VENIRA_SECURITY_PROFILE baseline + advanced override precedence.
+  const profileMod = await import("../lib/security-profile.js");
+  const savedMode = process.env.VENIRA_SHELL_MODE;
+  const savedProfile = process.env.VENIRA_SECURITY_PROFILE;
+  const modeFor = (profile: string | undefined, shellMode?: string): string => {
+    if (profile === undefined) delete process.env.VENIRA_SECURITY_PROFILE;
+    else process.env.VENIRA_SECURITY_PROFILE = profile;
+    if (shellMode === undefined) delete process.env.VENIRA_SHELL_MODE;
+    else process.env.VENIRA_SHELL_MODE = shellMode;
+    policyModule.resetShellPolicyCache();
+    try {
+      return policyModule.loadShellPolicy().mode;
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
+  };
+  const profileModes = {
+    unset: modeFor(undefined),
+    strict: modeFor("strict"),
+    balanced: modeFor("balanced"),
+    trusted: modeFor("trusted"),
+    off: modeFor("off"),
+    overridden: modeFor("trusted", "strict"),
+    invalid: modeFor("yolo"),
+  };
+  if (savedProfile === undefined) delete process.env.VENIRA_SECURITY_PROFILE;
+  else process.env.VENIRA_SECURITY_PROFILE = savedProfile;
+  if (savedMode === undefined) delete process.env.VENIRA_SHELL_MODE;
+  else process.env.VENIRA_SHELL_MODE = savedMode;
+  policyModule.resetShellPolicyCache();
+  check(
+    "security_profile_maps_shell_mode",
+    profileModes.unset === "balanced" &&
+      profileModes.strict === "strict" &&
+      profileModes.balanced === "balanced" &&
+      profileModes.trusted === "permissive" &&
+      profileModes.off === "off",
+    profileModes,
+  );
+  check("security_profile_shell_mode_overrides", profileModes.overridden === "strict", profileModes);
+  check(
+    "security_profile_rejects_unknown",
+    profileModes.invalid.includes("[config_invalid]") && profileModes.invalid.includes("strict, balanced, trusted, off"),
+    profileModes,
+  );
+  check(
+    "security_profile_js_approval_table",
+    profileMod.securityProfileSettings("strict").jsExecApproval === true &&
+      profileMod.securityProfileSettings("balanced").jsExecApproval === true &&
+      profileMod.securityProfileSettings("trusted").jsExecApproval === true &&
+      profileMod.securityProfileSettings("off").jsExecApproval === false &&
+      profileMod.resolveSecurityProfile(undefined) === "balanced" &&
+      profileMod.resolveSecurityProfile(" Trusted ") === "trusted",
+    profileMod.SECURITY_PROFILE_TABLE,
+  );
+}
 const originalOverrides = process.env.VENIRA_SHELL_OVERRIDES;
 delete process.env.VENIRA_SHELL_OVERRIDES;
 const selfGrantedGitPush = policyModule.evaluateShellCommand("git push origin main", ws, {
