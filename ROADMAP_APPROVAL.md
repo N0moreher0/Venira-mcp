@@ -125,9 +125,9 @@ Mọi `[approval_required]` trả `data.approval`:
 
 ### Phase 5 — Docs, test, release
 - [x] Sync `SECURITY.md`, `shell-security.md`, `TODO.md`, and README changelog with profile and approval behavior
-- [ ] Local `build` + `verify` + `check:docs` + `doctor` all green on the v1.15.0 candidate; then record results
+- [x] Local `npm run build`, `npm run verify` (444 checks, including `test:shell-security`), `npm run check:docs`, and `npm run doctor` (14/14) pass on the v1.15.0 candidate
 - [x] Prepare the v1.15.0 candidate and synchronize `package.json`, `package-lock.json`, and `lib/version.ts`
-- [ ] Remote CI, release tag, and package publication (requires push and an authorized release run)
+- [ ] Remote CI, release tag, and package publication (the local commits have not been pushed or published)
 
 ## 6. Ma trận test tối thiểu
 
