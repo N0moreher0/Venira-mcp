@@ -2551,7 +2551,7 @@ async function runHybridSearch(args: Args): Promise<ToolResult> {
   }
 
   // Tag hits. Definition sites are detected per file with the same parser-lite
-  // used by project_outline_symbol / project_file_symbols, bounded to files that
+  // used by project_outline_symbol, bounded to files that
   // actually produced hits.
   const definitionLines = new Map<string, Set<number>>();
   if (identifier !== null && hits.length > 0) {
@@ -2621,7 +2621,7 @@ async function runSymbolReferences(args: Args): Promise<ToolResult> {
   }
   const scope = args.scope === "file" ? "file" : "workspace";
   // For "file" scope, search only the file that the symbol lives in (approximation:
-  // the caller should pair this with project_file_symbols first). For "workspace",
+  // the caller should pair this with project_outline_symbol first). For "workspace",
   // do a bounded content search for the identifier.
   let references: Array<{ relative_path: string; line_number: number; context: string }> = [];
   let searchCacheHit = false;
@@ -2790,7 +2790,7 @@ async function runExplainError(args: Args): Promise<ToolResult> {
       ? {}
       : {
           hint:
-            "No known signature matched. Hint: read the failing file:line with project_read_ranges, then narrow the loop " +
+            "No known signature matched. Hint: read the failing file:line with project_read_file, then narrow the loop " +
             "(one test / one command) before changing code.",
         }),
   };
@@ -3693,7 +3693,7 @@ export function registerProjectTools(server: McpServer): void {
         "Symbol references",
         {
           use_when: "you need to know where a symbol is used before renaming/refactoring it.",
-          avoid_when: "you only need its declaration (project_file_symbols) or an arbitrary string (project_search).",
+          avoid_when: "you only need its declaration (project_outline_symbol) or an arbitrary string (project_search).",
           speed_profile: "fast for scope=file; medium for scope=workspace (single search call).",
           output_kind: "symbol_references: count, references[] {relative_path, line_number, context}.",
           batch_safe: true,
@@ -3890,7 +3890,7 @@ export function registerProjectTools(server: McpServer): void {
           use_when:
             "a command, test, build or provider call failed and you want the fastest route to the fix (feed it the stderr tail or the CI log tail).",
           avoid_when:
-            "you already know the cause and only need the file contents (use project_read_file / project_read_ranges).",
+            "you already know the cause and only need the file contents (use project_read_file, which also accepts ranges).",
           speed_profile: "pure local rules, < 1 ms; no network and no model call.",
           output_kind:
             "explain_error: matched, summary, error_line, language, diagnoses[] {rule_id, title, likely_cause, suggested_fix[], retry_hint?, next_actions[]}, next_actions[].",

@@ -149,6 +149,12 @@ check(
     instructions.includes("session_edits") && instructions.includes("after project_shell_run"),
   { includes: ["project_recent_files", "at the start of a task", "session_edits", "after project_shell_run"].map((text) => instructions.includes(text)) },
 );
+const removedToolNames = ["project_read_ranges", "project_file_symbols", "project_create_directory"];
+check(
+  "instructions_do_not_reference_removed_tools",
+  removedToolNames.every((name) => !instructions.includes(name)),
+  removedToolNames.filter((name) => instructions.includes(name)),
+);
 await client2.close();
 
 const tools = await client.listTools();

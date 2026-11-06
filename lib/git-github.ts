@@ -197,7 +197,7 @@ export const githubDialect: GitDialect = {
     const line = Number(args.line);
     if (!Number.isFinite(line) || line <= 0) {
       throw new Error(
-        "[invalid_request] `line` must be a positive line number when `path` is set. Hint: use project_read_ranges to confirm the line.",
+        "[invalid_request] `line` must be a positive line number when `path` is set. Hint: use project_read_file to confirm the line.",
       );
     }
     const side = (text(args, "side") || "RIGHT").toUpperCase();

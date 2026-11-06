@@ -274,7 +274,7 @@ const RULES: Rule[] = [
     cause: "The compiler rejected a type. Fix the type at the source, not with `as any`.",
     fix: [
       "Read the reported file:line; the error often comes from a widened/narrowed type one call away.",
-      "Check the symbol's declaration with project_file_symbols or project_symbol_references.",
+      "Check the symbol's declaration with project_outline_symbol or project_symbol_references.",
       "Re-run the project's type-check (npm run build / tsc --noEmit) after the fix.",
     ],
     actions: (ctx) => [

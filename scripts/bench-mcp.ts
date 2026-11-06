@@ -120,7 +120,7 @@ out.health_ok = JSON.parse(String(
   (health.result as { content?: { text?: string }[] })?.content?.[0]?.text ?? "{}",
 )).ok === true;
 
-const ranges = await call("project_read_ranges", {
+const ranges = await call("project_read_file", {
   relative_path: "server.ts",
   ranges: [{ start_line: 1, end_line: 10 }, { start_line: 20, end_line: 30 }],
 });
