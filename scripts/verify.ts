@@ -136,7 +136,8 @@ check("instructions_present", instructions?.includes("Decision tree") ?? false, 
 check(
   "snapshot_workflow_in_shared_instructions",
   instructions.includes("Snapshot discipline") && instructions.includes("dry_run=1") &&
-    instructions.includes("same-size content changes") && instructions.includes("delete_extra=0"),
+    instructions.includes("same-size content changes") && instructions.includes("delete_extra=0") &&
+    instructions.includes("before any project_delete_path operation"),
   { includes: ["Snapshot discipline", "dry_run=1", "same-size content changes", "delete_extra=0"].map((text) => instructions.includes(text)) },
 );
 await client2.close();
@@ -173,6 +174,18 @@ check(
   snapshotDescription.includes("dry_run=1") && snapshotDescription.includes("same-size content changes") &&
     snapshotDescription.includes("verify=1") && snapshotDescription.includes("delete_extra=0"),
   snapshotDescription,
+);
+const deletePathTool = tools.tools.find((t) => t.name === "project_delete_path");
+const deletePathDescription = deletePathTool?.description ?? "";
+const deleteRecursiveDescription = String((deletePathTool?.inputSchema?.properties?.recursive as { description?: string } | undefined)?.description ?? "");
+check(
+  "delete_path_teaches_snapshot_first",
+  deletePathDescription.includes("project_snapshot") &&
+    deletePathDescription.includes("before using this irreversible tool") &&
+    deletePathDescription.includes("do not delete") &&
+    deleteRecursiveDescription.includes("snapshot") &&
+    deleteRecursiveDescription.includes("recursive"),
+  { description: deletePathDescription, recursive: deleteRecursiveDescription },
 );
 const expectedNewTools = [
   "project_pr_create",
