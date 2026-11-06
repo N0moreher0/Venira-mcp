@@ -280,6 +280,7 @@ const EXTERNAL_OPS = new Set([
   "pr_close",
   "pr_reopen",
   "ci_status",
+  "ci_control",
   "ci_trigger",
   "ci_logs",
   "ci_wait",
@@ -1955,6 +1956,7 @@ const TOOL_MODE_EXCLUDES: Record<ToolMode, string[]> = {
     "project_ci_trigger",
     "project_ci_logs",
     "project_ci_wait",
+    "project_ci_control",
     "project_pr_create",
     "project_pr_comment",
     "project_pr_merge",
@@ -4197,7 +4199,7 @@ export function registerProjectTools(server: McpServer): void {
   );
 
   // -------------------------------------------------------------------------
-  // CI provider: GitHub Actions status / trigger / logs
+  // CI provider: GitHub Actions status / control / trigger / logs
   // -------------------------------------------------------------------------
 
   server.registerTool(
@@ -4240,6 +4242,34 @@ export function registerProjectTools(server: McpServer): void {
       },
     },
     (args) => runOne("ci_status", args as Args),
+  );
+
+  server.registerTool(
+    "project_ci_control",
+    {
+      ...config(
+        "Cancel one CI run, or retry failed jobs when the provider supports it. Requires an explicit run_id and audit reason; Bitbucket Cloud supports cancel but not retry.",
+        "Control CI run",
+        {
+          use_when: "you explicitly want to stop a run or retry only its failed jobs; read project_ci_status first to confirm the target run.",
+          avoid_when: "the run id is ambiguous, the user has not requested a remote CI write, or you need a new run on a different ref (use project_ci_trigger).",
+          speed_profile: "one provider API call; POST is never automatically retried.",
+          output_kind: "ci_control: repo, provider, action, run_id, request_submitted; check project_ci_status to confirm the asynchronous result.",
+          batch_safe: false,
+        },
+        { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+      ),
+      inputSchema: {
+        action: z.enum(["cancel", "retry_failed"]).describe("Cancel the selected run, or retry only failed/canceled jobs if supported."),
+        run_id: z
+          .union([z.number().int().positive(), z.string().trim().min(1).max(80)])
+          .describe("Exact provider run ID from project_ci_status; Bitbucket uses a pipeline UUID."),
+        repo: repoArg,
+        provider: providerArg,
+        reason: z.string().trim().min(1).max(400).describe("Why this CI action is needed; recorded in the audit trail, secrets redacted."),
+      },
+    },
+    (args) => runOne("ci_control", args as Args),
   );
 
   server.registerTool(

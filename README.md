@@ -415,4 +415,6 @@ Full history: see `git log` in the repo.
 
 ## License
 
-Dual-licensed **MIT OR Apache-2.0** — [`LICENSE-MIT`](./LICENSE-MIT) · [`LICENSE-APACHE`](./LICENSE-APACHE)
+Licensed under the **GNU Affero General Public License v3.0 (AGPLv3)** — see [`LICENSE`](./LICENSE).
+
+Free for developers, individual use, and open-source projects. Embedding Venira into proprietary closed-source services or commercial agent platforms requires a commercial license from the author.

@@ -8,7 +8,9 @@
 import { gitFetch, gitJson } from "./git-http.js";
 import { requireToken, type GitContext } from "./git-config.js";
 import {
+  ciControlRequest,
   logBufferToText,
+  numericCiRunId,
   ok,
   overallFrom,
   overallFromChecks,
@@ -444,6 +446,25 @@ export const githubDialect: GitDialect = {
       },
       { hint: runs.length === 0 ? "No runs matched. Hint: pass branch/workflow, or trigger one with project_ci_trigger." : undefined },
     );
+  },
+
+  async ciControl(ctx, args) {
+    requireToken(ctx);
+    const { action, runId: rawRunId } = ciControlRequest(args);
+    const runId = numericCiRunId(rawRunId);
+    const endpoint = action === "cancel"
+      ? `${basePath(ctx)}/actions/runs/${runId}/cancel`
+      : `${basePath(ctx)}/actions/runs/${runId}/rerun-failed-jobs`;
+    await gitJson(ctx, "POST", endpoint, { body: {} });
+    return ok("ci_control", {
+      repo: `${ctx.repo.owner}/${ctx.repo.name}`,
+      provider: ctx.provider,
+      action,
+      run_id: runId,
+      request_submitted: true,
+    }, { hint: action === "cancel"
+      ? "Cancellation requested. Check project_ci_status to confirm the run state."
+      : "Retry requested for failed jobs. Check project_ci_status for the new attempt." });
   },
 
   async ciTrigger(ctx, args) {

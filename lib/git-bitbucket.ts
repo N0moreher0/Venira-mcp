@@ -12,6 +12,7 @@
 import { gitFetch, gitJson } from "./git-http.js";
 import { requireToken, type GitContext } from "./git-config.js";
 import {
+  ciControlRequest,
   logBufferToText,
   ok,
   overallFrom,
@@ -387,6 +388,26 @@ export const bitbucketDialect: GitDialect = {
       },
       { hint: runs.length === 0 ? "No pipelines matched. Hint: pass ref=<branch>, or trigger one with project_ci_trigger." : undefined },
     );
+  },
+
+  async ciControl(ctx, args) {
+    const { action, runId: rawRunId } = ciControlRequest(args);
+    if (action === "retry_failed") {
+      throw new Error(
+        "[unsupported] Bitbucket Cloud does not expose a retry endpoint for an existing pipeline. " +
+          "Hint: use project_ci_trigger with the same ref and custom pipeline selector to start a new run.",
+      );
+    }
+    const runId = pipelineUuid(rawRunId, "run_id");
+    requireToken(ctx);
+    await gitJson(ctx, "POST", `${repoPath(ctx)}/pipelines/${encodeURIComponent(runId)}/stopPipeline`, { body: {} });
+    return ok("ci_control", {
+      repo: `${ctx.repo.owner}/${ctx.repo.name}`,
+      provider: ctx.provider,
+      action,
+      run_id: runId,
+      request_submitted: true,
+    }, { hint: "Stop requested. Check project_ci_status to confirm the pipeline state." });
   },
 
   async ciTrigger(ctx, args) {

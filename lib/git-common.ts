@@ -46,6 +46,39 @@ export function ok(kind: string, data: unknown, extra: { hint?: string; truncate
   };
 }
 
+export type CiControlAction = "cancel" | "retry_failed";
+
+export function ciControlRequest(args: Record<string, unknown>): { action: CiControlAction; runId: string } {
+  const action = text(args, "action");
+  if (action !== "cancel" && action !== "retry_failed") {
+    throw new Error('[invalid_request] `action` must be "cancel" or "retry_failed".');
+  }
+  requireText(args, "reason", 'pass a short reason for the audited CI action.');
+  const raw = args.run_id;
+  if (typeof raw === "number") {
+    if (!Number.isSafeInteger(raw) || raw <= 0) {
+      throw new Error("[invalid_request] `run_id` must be a positive safe integer or provider run ID.");
+    }
+    return { action, runId: String(raw) };
+  }
+  const runId = typeof raw === "string" ? raw.trim() : "";
+  if (!runId || runId.length > 80) {
+    throw new Error("[invalid_request] `run_id` is required and must be at most 80 characters.");
+  }
+  return { action, runId };
+}
+
+export function numericCiRunId(runId: string): string {
+  if (!/^\\d{1,16}$/.test(runId)) {
+    throw new Error("[invalid_request] This provider requires a numeric CI `run_id`.");
+  }
+  const numeric = Number(runId);
+  if (!Number.isSafeInteger(numeric) || numeric <= 0) {
+    throw new Error("[invalid_request] `run_id` must be a positive safe integer.");
+  }
+  return String(numeric);
+}
+
 export function positiveInt(value: unknown, fallback: number, max: number): number {
   const n = Number(value);
   if (!Number.isFinite(n) || n <= 0) return fallback;

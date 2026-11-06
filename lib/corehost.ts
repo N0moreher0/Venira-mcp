@@ -68,6 +68,7 @@ import {
   sanitizeReason,
 } from "./snapshots.js";
 import {
+  opCiControl,
   opCiLogs,
   opCiStatus,
   opCiTrigger,
@@ -2770,6 +2771,7 @@ const operations: Record<string, OperationHandler> = {
   pr_close: opPrClose,
   pr_reopen: opPrReopen,
   ci_status: opCiStatus,
+  ci_control: opCiControl,
   ci_trigger: opCiTrigger,
   ci_logs: opCiLogs,
   ci_wait: opCiWait,
@@ -2819,6 +2821,9 @@ function describeExternalOp(operation: string, args: Record<string, unknown>): s
       break;
     case "ci_trigger":
       summary = `POST /actions/workflows/${str("workflow")}/dispatches repo=${repo} ref=${str("ref") || "(current)"}`;
+      break;
+    case "ci_control":
+      summary = `POST /ci/${str("action")} repo=${repo} run=${String(args.run_id ?? "?")}`;
       break;
     case "ci_logs":
       summary = `GET /actions/logs repo=${repo} run=${String(args.run_id ?? "-")} job=${String(args.job_id ?? "-")}`;

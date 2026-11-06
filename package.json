@@ -44,7 +44,7 @@
   "bugs": {
     "url": "https://github.com/N0moreher0/Venira-mcp/issues"
   },
-  "license": "MIT OR Apache-2.0",
+  "license": "AGPL-3.0-only",
   "type": "module",
   "main": "dist/server.js",
   "exports": {
@@ -61,8 +61,7 @@
     "dist/",
     "bin/",
     "README.md",
-    "LICENSE-MIT",
-    "LICENSE-APACHE",
+    "LICENSE",
     "opencode.example.json",
     "CONTRIBUTING.md"
   ],
