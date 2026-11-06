@@ -256,16 +256,16 @@ jobs:
           RELEASE_TAG: ${{ steps.tag.outputs.tag }}
         run: |
           EXPECTED="${RELEASE_TAG#v}"
-          for attempt in $(seq 1 30); do
+          for attempt in $(seq 1 60); do
             if ACTUAL=$(npm view "venira-mcp@$EXPECTED" version 2>/dev/null) && [ "$ACTUAL" = "$EXPECTED" ]; then
               echo "Confirmed venira-mcp@$ACTUAL is available on npm."
               echo "Users can now run: npx venira-mcp"
               exit 0
             fi
-            echo "Waiting for venira-mcp@$EXPECTED to become visible on npm (attempt $attempt/30)..."
+            echo "Waiting for venira-mcp@$EXPECTED to become visible on npm (attempt $attempt/60)..."
             sleep 10
           done
-          echo "::error::npm accepted the publish request, but venira-mcp@$EXPECTED did not become visible within 5 minutes."
+          echo "::error::npm accepted the publish request, but venira-mcp@$EXPECTED did not become visible within 10 minutes."
           npm view venira-mcp dist-tags versions --json || true
           exit 1
 
