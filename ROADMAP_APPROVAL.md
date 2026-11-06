@@ -129,7 +129,7 @@ Mọi `[approval_required]` trả `data.approval`:
 - [x] Prepare v1.15.0 and synchronize `package.json`, `package-lock.json`, and `lib/version.ts`
 - [x] Remote CI passed on Linux/Windows/macOS with Node 20/22; release workflow #63 succeeded for commit `ff744f0`
 - [x] Publish tag `v1.15.0`, GitHub Release, npm package `venira-mcp@1.15.0` (registry HTTP 200), and Docker release
-- [x] Final audit corrected the released changelog formatting and hard-deny/ask rule counts; publish documentation patch `v1.15.1` (CI #179, release #64, npm registry HTTP 200)
+- [x] Final audit corrected the released changelog formatting and hard-deny/ask rule counts; publish documentation patch `v1.15.1` (release CI #179 and release #64, npm registry HTTP 200); final roadmap commit CI #180 attempt 2 passed on all seven jobs
 
 ## 6. Ma trận test tối thiểu
 
