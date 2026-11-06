@@ -374,6 +374,19 @@ const HARD_DENY: HardDenyRule[] = [
       /approvals[\\/]+[^\s"']*\.(granted|json)\b/i.test(raw),
   },
   {
+    id: "powershell_encoded_command",
+    reason: "PowerShell encoded commands (-enc/-e/-ec/-encodedcommand) are a common obfuscation technique used in attacks.",
+    test: (parsed, raw) =>
+      // Keep this check independent of host shell parsing: cross-platform CI
+      // may parse a PowerShell command differently when the host shell is bash.
+      /(?:powershell|pwsh).*-(?:e|ec|enc|encodedcommand)/i.test(raw) ||
+      parsed.segments.some((segment) => {
+        if (segment.command !== "powershell" && segment.command !== "pwsh") return false;
+        const flags = segment.argv.map((a) => a.toLowerCase());
+        return flags.some((f) => ["-e", "-ec", "-enc", "-encodedcommand"].includes(f));
+      }),
+  },
+  {
     id: "protected_file_access",
     reason: "This reads or writes a protected secret store, audit database, or credential file.",
     test: (parsed) => {
@@ -581,16 +594,7 @@ const ASK_RULES: AskRule[] = [
     reason: "Force-killing processes can terminate critical system processes or applications.",
     test: (_p, raw) => /\btaskkill\b[^\n]*\/f/i.test(raw) || /\btaskkill\b[^\n]*--force/i.test(raw),
   },
-  {
-    id: "powershell_encoded_command",
-    reason: "PowerShell encoded commands (-enc/-e/-ec/-encodedcommand) are a common obfuscation technique used in attacks.",
-    test: (parsed) =>
-      parsed.segments.some((segment) => {
-        if (segment.command !== "powershell" && segment.command !== "pwsh") return false;
-        const flags = segment.argv.map((a) => a.toLowerCase());
-        return flags.some((f) => ["-e", "-ec", "-enc", "-encodedcommand"].includes(f));
-      }),
-  },
+
   {
     id: "windows_attribute_reset",
     reason: "This attempts to remove hidden/system/read-only attributes, which can bypass certain protections.",
