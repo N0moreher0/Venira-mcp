@@ -125,9 +125,10 @@ Mọi `[approval_required]` trả `data.approval`:
 
 ### Phase 5 — Docs, test, release
 - [x] Sync `SECURITY.md`, `shell-security.md`, `TODO.md`, and README changelog with profile and approval behavior
-- [x] Local `npm run build`, `npm run verify` (444 checks, including `test:shell-security`), `npm run check:docs`, and `npm run doctor` (14/14) pass on the v1.15.0 candidate
-- [x] Prepare the v1.15.0 candidate and synchronize `package.json`, `package-lock.json`, and `lib/version.ts`
-- [ ] Remote CI, release tag, and package publication (the local commits have not been pushed or published)
+- [x] Local `npm run build`, `npm run verify` (445 checks, including `test:shell-security`), `npm run test:policy-corpus` (270/270), `npm run check:docs`, and `npm run doctor` (14/14) pass
+- [x] Prepare v1.15.0 and synchronize `package.json`, `package-lock.json`, and `lib/version.ts`
+- [x] Remote CI passed on Linux/Windows/macOS with Node 20/22; release workflow #63 succeeded for commit `ff744f0`
+- [x] Publish tag `v1.15.0`, GitHub Release, npm package `venira-mcp@1.15.0` (registry HTTP 200), and Docker release
 
 ## 6. Ma trận test tối thiểu
 
