@@ -24,6 +24,8 @@ section*.txt
 /set-secret.js
 /wait-ci.js
 /verify2.err
+/docs/
+/mcp.json
 
 # Build output
 dist/
