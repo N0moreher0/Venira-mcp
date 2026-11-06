@@ -76,6 +76,7 @@
     "smoke": "tsx scripts/smoke.ts",
     "bench": "tsx scripts/bench.ts",
     "bench:mcp": "tsx scripts/bench-mcp.ts",
+    "bench:tools": "npm run build && tsx scripts/bench-tools.ts",
     "verify": "npm run test:provider-secret-guard && npm run test:github-device-flow && npm run test:shell-security && tsx scripts/verify.ts",
     "doctor": "tsx scripts/doctor.ts",
     "test:github-device-flow": "tsx scripts/test-github-device-flow.ts",
