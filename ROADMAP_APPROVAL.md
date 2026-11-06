@@ -124,9 +124,10 @@ Mọi `[approval_required]` trả `data.approval`:
 - [x] README: config mẫu 4 biến, bảng profile và `Advanced` overrides
 
 ### Phase 5 — Docs, test, release
-- [ ] `SECURITY.md`, `shell-security.md`, `TODO.md`, README changelog
-- [ ] `build` + `verify` + `test:shell-security` + `doctor` xanh, CI xanh
-- [ ] Release v1.15.0, đồng bộ `lib/version.ts` với `package.json`
+- [x] Sync `SECURITY.md`, `shell-security.md`, `TODO.md`, and README changelog with profile and approval behavior
+- [ ] Local `build` + `verify` + `check:docs` + `doctor` all green on the v1.15.0 candidate; then record results
+- [x] Prepare the v1.15.0 candidate and synchronize `package.json`, `package-lock.json`, and `lib/version.ts`
+- [ ] Remote CI, release tag, and package publication (requires push and an authorized release run)
 
 ## 6. Ma trận test tối thiểu
 
@@ -152,6 +153,6 @@ Mọi `[approval_required]` trả `data.approval`:
 
 ## 8. Quyết định
 
-Đã chốt (2026-11-06): `permissive` trở về deny→ask · `off` là mode riêng · bỏ token legacy · một lõi approval dùng chung.
+Đã chốt (2026-11-06): `permissive` trở về deny→ask · `off` là mode riêng · bỏ token legacy · một lõi approval dùng chung · tên profile là `trusted`.
 
-Còn mở: tên profile (`trusted` hay tên khác) · `VENIRA_SHELL_ELICIT` tự bật khi client hỗ trợ elicitation · giới hạn `approval_wait_ms` theo timeout của từng client.
+Còn mở: `VENIRA_SHELL_ELICIT` tự bật khi client hỗ trợ elicitation · giới hạn `approval_wait_ms` theo timeout của từng client.

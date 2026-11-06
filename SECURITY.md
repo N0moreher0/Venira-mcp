@@ -84,10 +84,9 @@ directly affected:
   post-hoc record.
 - **Agent / sandbox escape (e.g. "harness"-style escapes)** — agents that
   can write files or run shell can, in an over-permissive sandbox,
-  escalate. If you run this server inside a sandbox, treat
-  `project_shell_run` as the highest-risk tool and consider dropping
-  `VENIRA_DEFAULT_SHELL` to a restricted profile, or running the whole
-  server in a container (see `DOCKER.md`).
+  escalate. Treat `project_shell_run` as the highest-risk tool. Choose
+  `VENIRA_SECURITY_PROFILE=strict` or `balanced` for a more restrictive
+  approval posture, or run the whole server in a container (see `DOCKER.md`).
 - **npm supply-chain (install-time code execution)** — malicious or
   typosquatted dependencies running lifecycle scripts at install time.
   This is why the project pins its native dependency's script allowlist
@@ -98,9 +97,9 @@ directly affected:
 
 1. **Lock the workspace.** Leave `VENIRA_UNRESTRICTED` unset (or `0`).
    Only set it to `1` in a fully disposable environment.
-2. **Contain the shell.** If you don't need arbitrary commands, set
-   `VENIRA_DEFAULT_SHELL` to a restricted shell, or run the server in a
-   container and accept that shell commands execute *inside* it.
+2. **Contain the shell.** Choose `VENIRA_SECURITY_PROFILE=strict` for the
+   read-only allowlist, or `balanced` to require approval for ask-rule and
+   unclassified commands. Use a container when you need an OS-level boundary.
 3. **Keep shell overrides off by default.** If one is necessary, enable only the named
    exception and review its per-call reason and `policy_rule` in the audit trail.
 4. **Review the audit trail.** Periodically query `project_tool_audit`
@@ -114,13 +113,19 @@ directly affected:
    (`.zip` / `.tgz` / Docker image) — SHA-256 values are published in
    every GitHub Release body.
 
+## Approval model
+
+Shell and JavaScript approval requests return a common `data.approval` payload, including the pending `approval_id`, the reviewed subject, expiry, approve command, and retry arguments. Only a human can grant through the interactive `npx venira-mcp --approve <id>` CLI or MCP client elicitation; grants are HMAC-verified, bound to the exact call, expire after five minutes, and are single-use. The removed `approval_token` and `VENIRA_SHELL_AUTO_APPROVE_TOKEN` paths cannot approve a request; the legacy environment variable is ignored with a warning.
+
 ## Security-related environment variables
 
 | Variable | Default | Security note |
 |---|---|---|
 | `VENIRA_UNRESTRICTED` | `"0"` | `"1"` removes the workspace lock. Highest-risk setting. |
-| `VENIRA_DEFAULT_SHELL` | platform default | Pick the least-capable shell that meets your needs. |
-| `VENIRA_SHELL_MODE` | `balanced` | `balanced`, `strict`, or `permissive`; in `permissive`, hard-deny degrades to ask and ask rules are allowed. |
+| `VENIRA_SECURITY_PROFILE` | `balanced` | `strict` is most restrictive; `balanced` is recommended; `trusted` lets ask-rule and unclassified commands run and turns hard-deny into approval; `off` disables shell checks and per-call JS approval. |
+| `VENIRA_SHELL_MODE` | Profile mapping | Advanced override: `strict`, `balanced`, `permissive`, or `off`. |
+| `VENIRA_JS_EXEC_APPROVAL` | Profile mapping | Advanced override for per-call JS approval. |
+| `VENIRA_ALLOW_JS_EXEC` | `"0"` | `"1"` registers `project_execute_js`; still governed by the profile or JS override. |
 | `VENIRA_SHELL_OVERRIDES` | unset | Operator allowlist for specific named shell exceptions. Each tool call must pass the exact name and a reason; the reason is redacted and audited, but is not proof of human identity. |
 | `VENIRA_DATA_DIR` | Per-user OS data directory | Contains the audit DB, encrypted secrets, approval key and pending approvals. Keep it private and don't point it at a shared directory. |
 | `VENIRA_SESSION_GRANT_RULES` | `cd_outside_workspace` | Additional rules eligible for human-approved session grants. Do not include network or history-rewrite rules unless the environment is disposable. |

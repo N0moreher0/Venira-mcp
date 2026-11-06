@@ -110,7 +110,7 @@ VENIRA_SECURITY_PROFILE = "balanced"
 |---|---|---|---|
 | `strict` | `strict` | Required | Read-only and workspace-local allowlist runs without approval |
 | `balanced` (default) | `balanced` | Required | Recommended general-purpose setting |
-| `trusted` | `permissive` | Required | Ask-rule commands run; hard-deny commands require approval |
+| `trusted` | `permissive` | Required | Ask-rule and unclassified commands run; hard-deny commands require approval |
 | `off` | `off` | Disabled | Trusted environments only; prints a warning and audits shell commands |
 
 `VENIRA_SHELL_MODE` and `VENIRA_JS_EXEC_APPROVAL` are advanced overrides and take precedence over the profile. `VENIRA_ALLOW_JS_EXEC=1` separately registers the JavaScript tool; it remains disabled by default.
@@ -392,7 +392,7 @@ npm run bench:mcp   # end-to-end numbers
 
 ## 12. Changelog (latest)
 
-**v1.14.0** (2026-11-05) — Rust support in dependency graph; per-mode tools; TOCTOU guard;
+**v1.15.0 (unreleased)** — Unified shell/JS approvals with human-granted, single-use `approval_id`; removes `approval_token` and `VENIRA_SHELL_AUTO_APPROVE_TOKEN`; adds `VENIRA_SECURITY_PROFILE` (`strict`, `balanced`, `trusted`, `off`), advanced overrides, shell dry-run, and approval health reporting. This release changes the approval flow for clients that used the legacy token.\n\n**v1.14.0** (2026-11-05) — Rust support in dependency graph; per-mode tools; TOCTOU guard;
 search relevance ranking; tool consolidation (`project_read_ranges`→`project_read_file`,
 `project_create_directory`→`project_create`, `project_file_symbols`→`project_outline_symbol`,
 `project_safe_edit`→`project_edit_file`); `project_delete_path` in both modes; shell hard-deny
