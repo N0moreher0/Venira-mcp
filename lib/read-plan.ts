@@ -171,8 +171,8 @@ function pathStems(relativePath: string): string[] {
 
 /** A hit from a file-name search is worth more than a content hit (it is the target). */
 export const NAME_HIT_POINTS = 3;
-/** A candidate whose path contains a task keyword is likely the file to edit. */
-const PATH_MATCH_POINTS = 4;
+/** A matching source path should beat several incidental broad-keyword hits. */
+const PATH_MATCH_POINTS = 8;
 const MAX_PAIRS_PER_CANDIDATE = 2;
 /** Docs keep only a fraction of their hits unless the task asks for prose. */
 const DOC_HIT_WEIGHT = 0.3;

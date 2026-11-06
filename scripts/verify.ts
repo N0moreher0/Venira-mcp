@@ -13,6 +13,7 @@ import path from "node:path";
 import { startGithubMock } from "./github-mock.js";
 import { startBitbucketMock, startGitlabMock } from "./git-mocks.js";
 import { envFlag } from "../lib/env.js";
+import { rankCandidates } from "../lib/read-plan.js";
 
 const SESSION_ID = `verify-${Date.now()}`;
 const originalDataDir = process.env.VENIRA_DATA_DIR;
@@ -2901,6 +2902,20 @@ check(
     ) &&
     planTask.data?.steps?.[0]?.tool === "project_read_batch",
   planTask.data,
+);
+const rankedByPath = rankCandidates(
+  [
+    { relative_path: "lib/approval-gate.ts", reason: "search:retry", hits: 6 },
+    { relative_path: "lib/git-github.ts", reason: "search:GitHub", hits: 2 },
+  ],
+  ["GitHub", "retry"],
+  "add retry handling to the GitHub client",
+  2,
+);
+check(
+  "plan_path_match_beats_incidental_hits",
+  rankedByPath[0]?.relative_path === "lib/git-github.ts",
+  rankedByPath,
 );
 const planHint = asEnvelope(
   await call("project_plan_read_batch", {
