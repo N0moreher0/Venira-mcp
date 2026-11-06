@@ -174,7 +174,7 @@ function veniraMcpEntry(opts: { workspace?: string; dataDir?: string }): {
   const environment: Record<string, string> = {
     VENIRA_WORKSPACE: workspace,
     VENIRA_UNRESTRICTED: "0",
-    VENIRA_SHELL_MODE: "balanced",
+    VENIRA_SECURITY_PROFILE: "balanced",
     VENIRA_PERMISSION_MODE: "allow_all",
     VENIRA_OUTPUT_MODE: "full",
   };

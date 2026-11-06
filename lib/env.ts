@@ -1,3 +1,5 @@
+import { resolveSecurityProfile } from "./security-profile.js";
+
 export function envFlag(name: string, defaultValue: boolean, value = process.env[name]): boolean {
   if (value === undefined) return defaultValue;
   if (value === "0") return false;
@@ -62,6 +64,7 @@ const BOOLEAN_ENV_NAMES = [
 ] as const;
 
 export function validateBooleanEnvironment(): void {
+  resolveSecurityProfile(); // throws [config_invalid] on an unknown VENIRA_SECURITY_PROFILE
   for (const name of BOOLEAN_ENV_NAMES) {
     if (process.env[name] !== undefined) envFlag(name, false);
   }

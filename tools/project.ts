@@ -65,6 +65,7 @@ import {
   type InstallResult,
 } from "../lib/self-install.js";
 import { explainErrorText } from "../lib/diagnostics.js";
+import { resolveSecurityProfile, securityProfileIsExplicit } from "../lib/security-profile.js";
 import {
   NAME_HIT_POINTS,
   buildReadPlan,
@@ -1562,6 +1563,10 @@ async function runCreate(args: Args): Promise<ToolResult> {
 function approvalsHealth(): { approvals: Record<string, unknown>; warnings: string[] } {
   const policy = shellPolicySnapshot().policy;
   const warnings: string[] = [];
+  const securityProfile = resolveSecurityProfile();
+  if (securityProfile === "off") {
+    warnings.push("security_profile=off: shell checks and per-call JS approval are disabled. Use only in a trusted environment.");
+  }
   if (policy.mode === "off") {
     warnings.push("shell_mode=off: ALL shell policy checks are bypassed, hard-deny included (secret_env still asks).");
   } else if (policy.mode === "permissive") {
@@ -1575,6 +1580,8 @@ function approvalsHealth(): { approvals: Record<string, unknown>; warnings: stri
   }
   return {
     approvals: {
+      security_profile: securityProfile,
+      security_profile_explicit: securityProfileIsExplicit(),
       shell_mode: policy.mode,
       policy_source: policy.source,
       js_exec_enabled: ALLOW_JS_EXEC,

@@ -118,10 +118,10 @@ Mọi `[approval_required]` trả `data.approval`:
 - [x] Luật agent trong README §9 (rule 9) và `server.ts` INSTRUCTIONS
 - Kết quả: build + `verify` 440 check + `test:shell-security` + `check:docs` đều xanh.
 
-### Phase 4 — Cấu hình gọn (P4)
-- [ ] `VENIRA_SECURITY_PROFILE` + bảng mapping, biến lẻ ghi đè
-- [ ] `self-install.ts` ghi profile thay vì nhiều biến; `doctor` kiểm profile + cảnh báo `off`
-- [ ] README: config mẫu ≤ 5 biến, bảng "Advanced"
+### Phase 4 — Cấu hình gọn (P4) ✅ (2026-11-06)
+- [x] `VENIRA_SECURITY_PROFILE` + bảng mapping, biến lẻ ghi đè (`lib/security-profile.ts`, `shell-policy.ts`, `workspace.ts`)
+- [x] `self-install.ts` ghi profile thay vì nhiều biến; `doctor` kiểm profile + cảnh báo `off`
+- [x] README: config mẫu 4 biến, bảng profile và `Advanced` overrides
 
 ### Phase 5 — Docs, test, release
 - [ ] `SECURITY.md`, `shell-security.md`, `TODO.md`, README changelog

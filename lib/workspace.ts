@@ -5,6 +5,7 @@
 import path from "node:path";
 import fs from "node:fs";
 import { envFlag } from "./env.js";
+import { securityProfileSettings } from "./security-profile.js";
 export const PLATFORM = process.platform;
 
 export let WORKSPACE = path.resolve(process.env.VENIRA_WORKSPACE ?? process.cwd());
@@ -66,7 +67,7 @@ export const ALLOW_JS_EXEC = envFlag("VENIRA_ALLOW_JS_EXEC", false);
  * policy and the protected-path guard, so each call needs a human grant by
  * default. Set `VENIRA_JS_EXEC_APPROVAL=0` only for trusted automation.
  */
-export const JS_EXEC_APPROVAL = envFlag("VENIRA_JS_EXEC_APPROVAL", true);
+export const JS_EXEC_APPROVAL = envFlag("VENIRA_JS_EXEC_APPROVAL", securityProfileSettings().jsExecApproval);
 
 export const PROTECTED_BASENAMES = new Set([
   "approval.key",
