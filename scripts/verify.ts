@@ -172,6 +172,7 @@ const expectedNewTools = [
   "project_ci_trigger",
   "project_ci_logs",
   "project_ci_wait",
+  "project_ci_control",
   "project_dependency_graph",
   "project_change_impact",
   "project_secret",
@@ -1057,6 +1058,7 @@ check(
   "tool_mode_expert_full",
   expertList.tools.length === tools.tools.length + 1 &&
     expertList.tools.some((t) => t.name === "project_ci_wait") &&
+    expertList.tools.some((t) => t.name === "project_ci_control") &&
     expertList.tools.some((t) => t.name === "project_shell_run") &&
     expertList.tools.some((t) => t.name === "project_execute_js") &&
     expertList.tools.some((t) => t.name === "project_dependency_graph"),
@@ -1077,6 +1079,7 @@ const defaultList = await defaultClient.listTools();
 check(
   "tool_mode_default_coding_focused",
   !defaultList.tools.some((t) => t.name === "project_ci_wait") &&
+    !defaultList.tools.some((t) => t.name === "project_ci_control") &&
     !defaultList.tools.some((t) => t.name === "project_pr_create") &&
     defaultList.tools.some((t) => t.name === "project_delete_path") &&
     defaultList.tools.some((t) => t.name === "project_shell_run") &&
@@ -2213,6 +2216,74 @@ check(
   ciTrigger,
 );
 
+console.log("[verify] checking CI control...");
+const ciCancel = asEnvelope(await call("project_ci_control", {
+  action: "cancel", run_id: 99, reason: "stop stale test run",
+}));
+check(
+  "github_ci_cancel_accepted",
+  ciCancel.ok === true &&
+    ciCancel.data?.action === "cancel" &&
+    ciCancel.data?.run_id === "99" &&
+    ciCancel.data?.request_submitted === true &&
+    githubMock.state.ciCancels === 1 &&
+    !JSON.stringify(ciCancel).includes("verify-github-token"),
+  ciCancel,
+);
+const ciRetryFailed = asEnvelope(await call("project_ci_control", {
+  action: "retry_failed", run_id: "99", reason: "retry transient test failure",
+}));
+check(
+  "github_ci_retry_failed_accepted",
+  ciRetryFailed.ok === true &&
+    ciRetryFailed.data?.action === "retry_failed" &&
+    ciRetryFailed.data?.run_id === "99" &&
+    ciRetryFailed.data?.request_submitted === true &&
+    githubMock.state.ciRetries === 1,
+  ciRetryFailed,
+);
+
+async function ciControlRejected(args: Record<string, unknown>): Promise<boolean> {
+  try {
+    const raw = await call("project_ci_control", args) as { isError?: boolean };
+    const envelope = asEnvelope(raw);
+    return raw.isError === true || envelope.ok === false;
+  } catch {
+    return true;
+  }
+}
+const invalidCiControlBefore = githubMock.state.ciCancels + githubMock.state.ciRetries + githubMock.state.ciPostFailures;
+const ciBadAction = await ciControlRejected({ action: "force", run_id: 99, reason: "test" });
+const ciMissingRun = await ciControlRejected({ action: "cancel", reason: "test" });
+const ciMissingReason = await ciControlRejected({ action: "cancel", run_id: 99 });
+const ciBlankReason = await ciControlRejected({ action: "cancel", run_id: 99, reason: "   " });
+const ciPathRun = asEnvelope(await call("project_ci_control", {
+  action: "cancel", run_id: "../99/cancel", reason: "reject path-like run id",
+}));
+const ciUnsafeRun = asEnvelope(await call("project_ci_control", {
+  action: "cancel", run_id: String(Number.MAX_SAFE_INTEGER + 1), reason: "reject unsafe numeric run id",
+}));
+const ciLongRun = await ciControlRejected({ action: "cancel", run_id: "9".repeat(81), reason: "reject oversized id" });
+check(
+  "ci_control_invalid_inputs_rejected_without_network",
+  ciBadAction && ciMissingRun && ciMissingReason && ciBlankReason && ciLongRun &&
+    ciPathRun.error?.code === "invalid_request" &&
+    ciUnsafeRun.error?.code === "invalid_request" &&
+    githubMock.state.ciCancels + githubMock.state.ciRetries + githubMock.state.ciPostFailures === invalidCiControlBefore,
+  { ciBadAction, ciMissingRun, ciMissingReason, ciBlankReason, ciPathRun, ciUnsafeRun, ciLongRun },
+);
+
+const ciPostFailure = asEnvelope(await call("project_ci_control", {
+  action: "cancel", run_id: 500, reason: "verify failed POST is not replayed",
+}));
+check(
+  "ci_control_post_failure_not_retried",
+  ciPostFailure.ok === false &&
+    githubMock.state.ciPostFailures === 1 &&
+    githubMock.requests.filter((request) => request.method === "POST" && request.path === "/repos/acme/demo/actions/runs/500/cancel").length === 1,
+  { error: ciPostFailure.error, requests: githubMock.state.ciPostFailures },
+);
+
 const ciLogs = asEnvelope(await call("project_ci_logs", { run_id: 99 }));
 check(
   "ci_logs_run_zip",
@@ -2794,6 +2865,34 @@ const glRun = await providerCall(gl, "project_ci_status", { run_id: 77 });
 check("gitlab_ci_run", glRun.ok === true && glRun.data?.run?.id === 77 && glRun.data?.jobs?.length === 2 && glRun.data?.overall === "failure", glRun);
 const glTrigger = await providerCall(gl, "project_ci_trigger", { ref: "main", inputs: { suite: "full" } });
 check("gitlab_ci_trigger", glTrigger.ok === true && glTrigger.data?.triggered === true && glTrigger.data?.pipeline_id === 78, glTrigger);
+const glCancel = await providerCall(gl, "project_ci_control", { action: "cancel", run_id: "77", reason: "stop stale GitLab pipeline" });
+check(
+  "gitlab_ci_cancel",
+  glCancel.ok === true &&
+    glCancel.data?.action === "cancel" &&
+    glCancel.data?.run_id === "77" &&
+    glCancel.data?.status === "completed" &&
+    glCancel.data?.conclusion === "cancelled" &&
+    gitlabMock.state.ciCancels === 1,
+  glCancel,
+);
+const glRetry = await providerCall(gl, "project_ci_control", { action: "retry_failed", run_id: 77, reason: "retry transient GitLab jobs" });
+check(
+  "gitlab_ci_retry_failed",
+  glRetry.ok === true &&
+    glRetry.data?.action === "retry_failed" &&
+    glRetry.data?.pipeline_id === 78 &&
+    glRetry.data?.status === "in_progress" &&
+    gitlabMock.state.ciRetries === 1,
+  glRetry,
+);
+const glBadRun = await providerCall(gl, "project_ci_control", { action: "cancel", run_id: "77/../88", reason: "reject malformed GitLab id" });
+check(
+  "gitlab_ci_control_rejects_non_numeric_run_id",
+  glBadRun.ok === false && glBadRun.error?.code === "invalid_request" &&
+    !gitlabMock.requests.some((request) => request.method === "POST" && request.path.includes("/pipelines/77/../88/")),
+  glBadRun,
+);
 const glJobLogs = await providerCall(gl, "project_ci_logs", { job_id: 7 });
 check("gitlab_ci_logs_job", glJobLogs.ok === true && String(glJobLogs.data?.text ?? "").includes("FAIL src/demo.test.ts:42"), glJobLogs.data?.text);
 const glRunLogs = await providerCall(gl, "project_ci_logs", { run_id: 77, tail_lines: 2 });
@@ -2845,6 +2944,32 @@ const bbRun = await providerCall(bb, "project_ci_status", { run_id: "{pipeline-1
 check("bitbucket_ci_run", bbRun.ok === true && bbRun.data?.jobs?.length === 1 && bbRun.data?.overall === "failure", bbRun);
 const bbTrigger = await providerCall(bb, "project_ci_trigger", { ref: "main" });
 check("bitbucket_ci_trigger", bbTrigger.ok === true && bbTrigger.data?.triggered === true && bbTrigger.data?.workflow === "default", bbTrigger);
+const bbCancel = await providerCall(bb, "project_ci_control", { action: "cancel", run_id: "{pipeline-1}", reason: "stop stale Bitbucket pipeline" });
+check(
+  "bitbucket_ci_cancel_204",
+  bbCancel.ok === true &&
+    bbCancel.data?.action === "cancel" &&
+    bbCancel.data?.run_id === "{pipeline-1}" &&
+    bbCancel.data?.request_submitted === true &&
+    bitbucketMock.state.ciStops === 1,
+  bbCancel,
+);
+const bbRequestsBeforeUnsupportedRetry = bitbucketMock.requests.length;
+const bbRetryUnsupported = await providerCall(bb, "project_ci_control", { action: "retry_failed", run_id: "{pipeline-1}", reason: "retry failed step" });
+check(
+  "bitbucket_ci_retry_explicitly_unsupported",
+  bbRetryUnsupported.ok === false &&
+    bbRetryUnsupported.error?.code === "unsupported" &&
+    bitbucketMock.requests.length === bbRequestsBeforeUnsupportedRetry,
+  bbRetryUnsupported,
+);
+const bbBadUuid = await providerCall(bb, "project_ci_control", { action: "cancel", run_id: "{x}", reason: "reject malformed Bitbucket UUID" });
+check(
+  "bitbucket_ci_control_rejects_short_uuid",
+  bbBadUuid.ok === false && bbBadUuid.error?.code === "invalid_request" &&
+    bitbucketMock.state.ciStops === 1,
+  bbBadUuid,
+);
 const bbStepId = String((bbRun.data?.jobs?.[0] as { id?: unknown } | undefined)?.id ?? "{step-1}");
 const bbLogs = await providerCall(bb, "project_ci_logs", { run_id: "{pipeline-1}", job_id: bbStepId });
 check("bitbucket_ci_logs_step", bbLogs.ok === true && String(bbLogs.data?.text ?? "").includes("FAIL demo.test.ts:42"), bbLogs.data?.text);
