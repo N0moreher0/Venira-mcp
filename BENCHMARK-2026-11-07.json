@@ -1,0 +1,361 @@
+{
+  "schema_version": 1,
+  "measured_local_date": "2026-11-07 Asia/Bangkok",
+  "environment": {
+    "os": "Windows 11 build 26200",
+    "cpu": "Intel Core i5-1035G1 @ 1.00GHz",
+    "logical_processors": 8,
+    "ram_gib": 11.8,
+    "node": "v24.20.0",
+    "powershell": "5.1.26100.8655",
+    "venira": "1.15.1"
+  },
+  "live_codex_tool_path": {
+    "runs_per_phase": 20,
+    "timing": "Wall-clock around exposed tool calls; each native exec_command starts a fresh PowerShell process; Venira MCP connection stays persistent.",
+    "cache_miss": "Clear Venira read/search in-process cache before each MCP sample; OS filesystem cache remains warm.",
+    "warm": "Prime both paths; repeat without clearing Venira cache. Native command remains a fresh PowerShell process per sample.",
+    "order": "Alternating order within each paired sample.",
+    "parity": {
+      "read_batch_8_files": "20/20 pairs; exact normalized file text matched",
+      "workspace_literal_search": "20/20 pairs; exact path:line hits matched; 49 hits",
+      "mismatches": 0
+    },
+    "stats_definition": "p50 is the conventional median (average of middle two for n=20); p95 uses nearest-rank.",
+    "results": {
+      "read_batch_8_files": {
+        "cache_miss": {
+          "venira_ms": {
+            "p50": 53.5,
+            "p95": 72,
+            "min": 46,
+            "max": 73
+          },
+          "exec_command_ms": {
+            "p50": 962,
+            "p95": 1121,
+            "min": 737,
+            "max": 1137
+          },
+          "median_ratio_native_over_venira": 17.98
+        },
+        "warm": {
+          "venira_ms": {
+            "p50": 39,
+            "p95": 60,
+            "min": 29,
+            "max": 74
+          },
+          "exec_command_ms": {
+            "p50": 1103.5,
+            "p95": 1549,
+            "min": 926,
+            "max": 1776
+          },
+          "median_ratio_native_over_venira": 28.29
+        }
+      },
+      "workspace_literal_search": {
+        "cache_miss": {
+          "venira_ms": {
+            "p50": 118.5,
+            "p95": 188,
+            "min": 85,
+            "max": 232
+          },
+          "exec_command_ms": {
+            "p50": 1034.5,
+            "p95": 1507,
+            "min": 789,
+            "max": 1743
+          },
+          "median_ratio_native_over_venira": 8.73
+        },
+        "warm": {
+          "venira_ms": {
+            "p50": 34.5,
+            "p95": 152,
+            "min": 23,
+            "max": 188
+          },
+          "exec_command_ms": {
+            "p50": 1018,
+            "p95": 1383,
+            "min": 715,
+            "max": 1570
+          },
+          "median_ratio_native_over_venira": 29.51
+        }
+      }
+    },
+    "raw_samples_ms": {
+      "read_batch_8_files": {
+        "cache_miss": {
+          "venira": [
+            56,
+            72,
+            53,
+            46,
+            49,
+            51,
+            59,
+            50,
+            52,
+            56,
+            59,
+            73,
+            52,
+            57,
+            56,
+            58,
+            50,
+            54,
+            51,
+            53
+          ],
+          "exec_command": [
+            737,
+            840,
+            788,
+            818,
+            762,
+            827,
+            1013,
+            858,
+            896,
+            905,
+            947,
+            1035,
+            1057,
+            977,
+            1014,
+            1137,
+            995,
+            988,
+            1121,
+            1068
+          ]
+        },
+        "warm": {
+          "venira": [
+            41,
+            37,
+            38,
+            35,
+            36,
+            34,
+            33,
+            46,
+            48,
+            44,
+            40,
+            60,
+            48,
+            34,
+            29,
+            30,
+            47,
+            42,
+            36,
+            74
+          ],
+          "exec_command": [
+            1549,
+            1776,
+            1115,
+            1242,
+            1026,
+            943,
+            926,
+            1294,
+            1165,
+            1184,
+            1092,
+            1432,
+            1251,
+            987,
+            1076,
+            1068,
+            1005,
+            1052,
+            1039,
+            1182
+          ]
+        }
+      },
+      "workspace_literal_search": {
+        "cache_miss": {
+          "venira": [
+            135,
+            103,
+            177,
+            232,
+            177,
+            109,
+            121,
+            138,
+            157,
+            129,
+            132,
+            85,
+            87,
+            96,
+            96,
+            114,
+            101,
+            101,
+            116,
+            188
+          ],
+          "exec_command": [
+            924,
+            1040,
+            1344,
+            1365,
+            1196,
+            1177,
+            970,
+            1029,
+            874,
+            969,
+            854,
+            789,
+            972,
+            1066,
+            944,
+            914,
+            1121,
+            1070,
+            1743,
+            1507
+          ]
+        },
+        "warm": {
+          "venira": [
+            43,
+            152,
+            41,
+            26,
+            27,
+            93,
+            26,
+            23,
+            24,
+            77,
+            25,
+            26,
+            26,
+            102,
+            30,
+            54,
+            64,
+            188,
+            26,
+            39
+          ],
+          "exec_command": [
+            1383,
+            1288,
+            1202,
+            992,
+            978,
+            1044,
+            902,
+            759,
+            787,
+            715,
+            773,
+            878,
+            1127,
+            1119,
+            1570,
+            1077,
+            889,
+            930,
+            1156,
+            1046
+          ]
+        }
+      }
+    }
+  },
+  "local_component_benchmark": {
+    "generated_at_utc": "2026-11-06T17:19:11.461Z",
+    "command": "npm run bench:tools -- --runs=100",
+    "runs_per_phase": 100,
+    "comparison": "Persistent local MCP stdio client vs native PowerShell operations executed inside one PowerShell process; cache_miss clears only Venira in-process cache; OS file cache stays warm; semantic parity MATCH in every case.",
+    "rows": [
+      {
+        "workload": "read_file package.json first 25 lines",
+        "phase": "cache_miss",
+        "venira_mcp_e2e_p50_ms": 3.24,
+        "powershell_operation_p50_ms": 0.97,
+        "parity": "MATCH"
+      },
+      {
+        "workload": "read_file package.json first 25 lines",
+        "phase": "warm",
+        "venira_mcp_e2e_p50_ms": 1.08,
+        "powershell_operation_p50_ms": 0.97,
+        "parity": "MATCH"
+      },
+      {
+        "workload": "read_batch 3 files",
+        "phase": "cache_miss",
+        "venira_mcp_e2e_p50_ms": 7.92,
+        "powershell_operation_p50_ms": 2.64,
+        "parity": "MATCH"
+      },
+      {
+        "workload": "read_batch 3 files",
+        "phase": "warm",
+        "venira_mcp_e2e_p50_ms": 1.38,
+        "powershell_operation_p50_ms": 2.64,
+        "parity": "MATCH"
+      },
+      {
+        "workload": "get_file_info",
+        "phase": "cache_miss",
+        "venira_mcp_e2e_p50_ms": 1.91,
+        "powershell_operation_p50_ms": 1.37,
+        "parity": "MATCH"
+      },
+      {
+        "workload": "get_file_info",
+        "phase": "warm",
+        "venira_mcp_e2e_p50_ms": 0.8,
+        "powershell_operation_p50_ms": 1.37,
+        "parity": "MATCH"
+      },
+      {
+        "workload": "list_files lib",
+        "phase": "cache_miss",
+        "venira_mcp_e2e_p50_ms": 2.14,
+        "powershell_operation_p50_ms": 3.25,
+        "parity": "MATCH"
+      },
+      {
+        "workload": "list_files lib",
+        "phase": "warm",
+        "venira_mcp_e2e_p50_ms": 0.83,
+        "powershell_operation_p50_ms": 3.25,
+        "parity": "MATCH"
+      },
+      {
+        "workload": "literal search in lib/corehost.ts",
+        "phase": "cache_miss",
+        "venira_mcp_e2e_p50_ms": 38.12,
+        "powershell_operation_p50_ms": 39.64,
+        "parity": "MATCH"
+      },
+      {
+        "workload": "literal search in lib/corehost.ts",
+        "phase": "warm",
+        "venira_mcp_e2e_p50_ms": 1.32,
+        "powershell_operation_p50_ms": 39.64,
+        "parity": "MATCH"
+      }
+    ]
+  },
+  "interpretation": "The live-tool benchmark includes fresh PowerShell process startup on the native side and a persistent MCP session on the Venira side. It is a practical agent-tool-path comparison, not a raw filesystem benchmark. Component timings show that raw PowerShell operations can be faster for simple reads; Venira's benefit is strongest for repeated warm list/search operations and tool calls that avoid starting a fresh shell. This is one Windows machine and one run; results are not a general performance guarantee."
+}
