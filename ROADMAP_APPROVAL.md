@@ -156,4 +156,4 @@ Mọi `[approval_required]` trả `data.approval`:
 
 Đã chốt (2026-11-06): `permissive` trở về deny→ask · `off` là mode riêng · bỏ token legacy · một lõi approval dùng chung · tên profile là `trusted`.
 
-Còn mở: `VENIRA_SHELL_ELICIT` tự bật khi client hỗ trợ elicitation · giới hạn `approval_wait_ms` theo timeout của từng client.
+Đã chốt (2026-11-06): `VENIRA_SHELL_ELICIT` tiếp tục opt-in; client capability chỉ cho biết có hỗ trợ dialog, không thể thay cho ý định bật prompt của operator. `approval_wait_ms` giữ trần 45 giây; protocol không cung cấp request timeout của client cho server để tự hiệu chỉnh an toàn. Client có timeout ngắn hơn nên đặt giá trị thấp hơn.

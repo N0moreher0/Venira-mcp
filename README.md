@@ -292,8 +292,8 @@ Full reference: ~60 `VENIRA_*` flags — see the env table in the source or `npx
   - `strict`: like `balanced`, but only a read-only / workspace-local allowlist runs without approval.
   - `permissive` (the `trusted` profile): ask-rule commands run without a prompt; a hard-deny match becomes an approval request (`ask.deny.<rule>`).
   - `off`: **the shell policy is disabled** — every command runs, nothing is asked or denied (only `secret_env` injection still asks). Prints a startup warning; use only in a trusted environment. Previous `permissive` behaviour (v1.14.4) = `off`.
-  - Hard-deny (12 rules): disk destroy, filesystem mount/overwrite, shutdown/reboot, fork bomb, pipe download to shell, privilege escalation (sudo/doas/runas), `rm -rf` of `/` or `~`, `chmod 777 /`, Windows drive-wide and wildcard mass delete, self-approval (touching the approve CLI or approval store), protected credential/key files.
-  - Ask (21 rules): command substitution, reads/writes/`cd` outside the workspace, network access, package mutation, git history rewrite, container/VM control and state, process control and `taskkill /f`, secret dumps, dynamic execution and wrapper commands, `find -delete/-exec`, destructive recursive/force deletes (`Remove-Item -Recurse -Force`, `rd /s /q`, `del /f /q`; prefer `project_delete_path`), PowerShell `-EncodedCommand`, attribute reset, infinite writes to NUL, unresolved file arguments.
+  - Hard-deny (13 rules): disk destroy, filesystem mount/overwrite, shutdown/reboot, fork bomb, pipe download to shell, privilege escalation (sudo/doas/runas), `rm -rf` of `/` or `~`, `chmod 777 /`, Windows drive-wide and wildcard mass delete, encoded PowerShell commands, self-approval (touching the approve CLI or approval store), protected credential/key files.
+  - Ask (20 rules): command substitution, reads/writes/`cd` outside the workspace, network access, package mutation, git history rewrite, container/VM control and state, process control and `taskkill /f`, secret dumps, dynamic execution and wrapper commands, `find -delete/-exec`, destructive recursive/force deletes (`Remove-Item -Recurse -Force`, `rd /s /q`, `del /f /q`; prefer `project_delete_path`), attribute reset, infinite writes to NUL, unresolved file arguments.
   - Deny always wins over ask.
 - **Secrets**: AES-256-GCM encrypted at rest; values never in tool metadata; `secret_env` requires human approval; expired secrets refused.
 - **Provider DLP**: Secretlint scans PR/CI request args and HTTP payloads; detected credentials blocked before sending, withheld from response.
@@ -392,7 +392,11 @@ npm run bench:mcp   # end-to-end numbers
 
 ## 12. Changelog (latest)
 
-**v1.15.0 (unreleased)** — Unified shell/JS approvals with human-granted, single-use `approval_id`; removes `approval_token` and `VENIRA_SHELL_AUTO_APPROVE_TOKEN`; adds `VENIRA_SECURITY_PROFILE` (`strict`, `balanced`, `trusted`, `off`), advanced overrides, shell dry-run, and approval health reporting. This release changes the approval flow for clients that used the legacy token.\n\n**v1.14.0** (2026-11-05) — Rust support in dependency graph; per-mode tools; TOCTOU guard;
+**v1.15.1** (2026-11-06) — Correct the v1.15.0 changelog formatting and align documented hard-deny/ask rule categories with the shipped policy.
+
+**v1.15.0** (2026-11-06) — Unified shell/JS approvals with human-granted, single-use `approval_id`; removes `approval_token` and `VENIRA_SHELL_AUTO_APPROVE_TOKEN`; adds `VENIRA_SECURITY_PROFILE` (`strict`, `balanced`, `trusted`, `off`), advanced overrides, shell dry-run, and approval health reporting. This release changes the approval flow for clients that used the legacy token.
+
+**v1.14.0** (2026-11-05) — Rust support in dependency graph; per-mode tools; TOCTOU guard;
 search relevance ranking; tool consolidation (`project_read_ranges`→`project_read_file`,
 `project_create_directory`→`project_create`, `project_file_symbols`→`project_outline_symbol`,
 `project_safe_edit`→`project_edit_file`); `project_delete_path` in both modes; shell hard-deny
