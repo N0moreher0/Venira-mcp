@@ -146,24 +146,32 @@ Measured: Windows + Node 24, standalone build, 2026-11-01.
 > Batch: 8 reads as one batch call (16.6 ms) vs 8× individual (~76 ms) — the round-trip saving
 > that makes the agent loop fast.
 
-### Case study: Venira MCP vs Codex `exec_command`
+### Agent tool-path benchmark: Venira MCP vs Codex `exec_command`
 
-Measured on Windows in the Codex desktop workspace on 2026-11-06. Each case ran five
-sequential rounds. Venira's relevant cache was cleared before each round. The native
-comparison used Codex `exec_command`, starting a fresh PowerShell or ripgrep process for
-each round; timings therefore include process startup and tool-call overhead.
+Measured on 2026-11-07 on one Windows 11 build 26200 machine (Intel Core i5-1035G1,
+8 logical processors, 11.8 GiB RAM, Node v24.20.0). Each workload used 20 paired
+samples per phase, alternating call order. Venira used the persistent MCP connection;
+each native `exec_command` call launched a fresh PowerShell process. Cache-miss samples
+cleared Venira's in-process cache; warm samples reused it. The OS filesystem cache stayed
+warm.
 
-| Workload | Venira MCP | Codex `exec_command` | Median ratio |
-|---|---:|---:|---:|
-| Read the first 80 lines of 8 files in one batch | median 276 ms (159–3,148 ms) | median 5,430 ms (2,881–6,098 ms) | 19.7× |
-| Literal search for `VENIRA_WORKSPACE` | median 225 ms (168–293 ms) | median 2,098 ms (1,649–2,641 ms) | 9.3× |
+| Workload | Phase | Venira p50 / p95 | `exec_command` p50 / p95 | Ratio of p50s |
+|---|---|---:|---:|---:|
+| Read first lines of 8 files in one batch | Cache miss | 53.5 / 72 ms | 962 / 1,121 ms | 17.98× |
+| Read first lines of 8 files in one batch | Warm | 39 / 60 ms | 1,103.5 / 1,549 ms | 28.29× |
+| Search `VENIRA_WORKSPACE` across the workspace (49 hits) | Cache miss | 118.5 / 188 ms | 1,034.5 / 1,507 ms | 8.73× |
+| Search `VENIRA_WORKSPACE` across the workspace (49 hits) | Warm | 34.5 / 152 ms | 1,018 / 1,383 ms | 29.51× |
 
-Both search methods reported 45 matching lines. The batch read returned roughly 33.5k
-characters through Venira and 29.0k through PowerShell; response formatting differs, so
-these are end-to-end tool comparisons rather than isolated filesystem benchmarks. The
-five-round sample is small and includes one 3.1 s Venira outlier; results should not be
-read as a general performance guarantee. The earlier 8.3× single-file result is omitted
-here because this larger case study focuses on batch reads and workspace search.
+Both workloads matched exactly in all 20 pairs: normalized text for the 8-file batch and
+sorted file/line locations for search. These are practical agent tool-path timings, not
+raw filesystem timings. A separate 100-sample component benchmark shows native
+PowerShell can be faster for simple uncached reads; the largest Venira gains are on warm
+list/search and avoiding a fresh shell process. The p95 estimates are rough with 20
+samples, and results from this one machine are not a general performance guarantee.
+
+See the [full methodology and results](./BENCHMARK-2026-11-07.md) and
+[raw samples](./BENCHMARK-2026-11-07.json). Reproduce the component benchmark from the
+repository root with `npm run bench:tools -- --runs=100`.
 
 ## 4. Two tool modes
 
