@@ -29,6 +29,58 @@ function projectPath(ctx: GitContext): string {
   return `/projects/${encodeURIComponent(`${ctx.repo.owner}/${ctx.repo.name}`)}`;
 }
 
+const CI_MAX_PAGES = 5;
+
+/** Turn an absolute provider URL into a path relative to `api_base` (gitFetch prepends api_base). Cross-origin / out-of-base URLs are refused. */
+function relativeApiPath(target: URL, apiBase: string): string | null {
+  const base = new URL(apiBase);
+  if (target.origin !== base.origin) return null;
+  const prefix = base.pathname.replace(/\/+$/, "");
+  if (prefix && target.pathname !== prefix && !target.pathname.startsWith(`${prefix}/`)) return null;
+  return `${target.pathname.slice(prefix.length) || "/"}${target.search}`;
+}
+
+function nextPage(headers: Record<string, string | string[] | undefined>, currentUrl: URL, apiBase: string): string | null {
+  const raw = headers.link;
+  const links = Array.isArray(raw) ? raw.join(",") : raw ?? "";
+  for (const part of links.split(",")) {
+    const match = part.match(/<([^>]+)>\s*;\s*rel="?next"?/i);
+    if (!match) continue;
+    return relativeApiPath(new URL(match[1], currentUrl), apiBase);
+  }
+  return null;
+}
+
+async function gitlabPages(ctx: GitContext, initialPath: string, maxItems = 200): Promise<any[]> {
+  const cap = Math.max(1, Math.min(200, maxItems));
+  const items: any[] = [];
+  const seen = new Set<string>();
+  let path = initialPath;
+  for (let page = 0; page < CI_MAX_PAGES; page += 1) {
+    if (seen.has(path)) break;
+    seen.add(path);
+    const res = await gitFetch(ctx, path, { allowAnonymous: true });
+    let json: any = null;
+    try { json = res.buffer.length ? JSON.parse(res.buffer.toString("utf8")) : null; } catch { json = null; }
+    if (Array.isArray(json)) items.push(...json);
+    else if (Array.isArray(json?.values)) items.push(...json.values);
+    if (items.length >= cap) break;
+    const current = new URL(res.url);
+    let next = nextPage(res.headers, current, ctx.api_base);
+    if (!next) {
+      const rawNext = res.headers["x-next-page"];
+      const nextNumber = (Array.isArray(rawNext) ? rawNext[0] : rawNext)?.trim();
+      if (nextNumber && /^\d+$/.test(nextNumber)) {
+        current.searchParams.set("page", nextNumber);
+        next = relativeApiPath(current, ctx.api_base);
+      }
+    }
+    if (!next) break;
+    path = next;
+  }
+  return items.slice(0, cap);
+}
+
 const defaultBranchCache = new Map<string, { at: number; branch: string }>();
 const DEFAULT_BRANCH_TTL_MS = 5 * 60 * 1000;
 
@@ -361,10 +413,7 @@ export const gitlabDialect: GitDialect = {
     if (runId > 0) {
       if (!Number.isFinite(runId)) throw new Error("[invalid_request] `run_id` must be a numeric pipeline id.");
       const { json } = await gitJson(ctx, "GET", `${base}/pipelines/${Math.floor(runId)}`, { allowAnonymous: true });
-      const jobsRes = await gitJson(ctx, "GET", `${base}/pipelines/${Math.floor(runId)}/jobs?per_page=50`, {
-        allowAnonymous: true,
-      });
-      const jobs = ((jobsRes.json ?? []) as any[]).map(summarizeJob);
+      const jobs = (await gitlabPages(ctx, `${base}/pipelines/${Math.floor(runId)}/jobs?per_page=50`)).map(summarizeJob);
       return ok("ci_status", {
         repo: `${ctx.repo.owner}/${ctx.repo.name}`,
         provider: ctx.provider,
@@ -389,8 +438,7 @@ export const gitlabDialect: GitDialect = {
     const query = new URLSearchParams({ per_page: String(limit) });
     if (ref) query.set("ref", ref);
     if (text(args, "branch")) query.set("ref", text(args, "branch"));
-    const { json } = await gitJson(ctx, "GET", `${base}/pipelines?${query.toString()}`, { allowAnonymous: true });
-    const runs = (Array.isArray(json) ? json : []).map(summarizePipeline);
+    const runs = (await gitlabPages(ctx, `${base}/pipelines?${query.toString()}`, limit)).map(summarizePipeline);
     return ok(
       "ci_status",
       {
@@ -504,10 +552,7 @@ export const gitlabDialect: GitDialect = {
       entries = parsed.entries;
     } else {
       if (!Number.isFinite(runId)) throw new Error("[invalid_request] `run_id` must be a numeric pipeline id.");
-      const jobsRes = await gitJson(ctx, "GET", `${base}/pipelines/${Math.floor(runId)}/jobs?per_page=50`, {
-        allowAnonymous: true,
-      });
-      const jobs = (Array.isArray(jobsRes.json) ? jobsRes.json : []) as any[];
+      const jobs = await gitlabPages(ctx, `${base}/pipelines/${Math.floor(runId)}/jobs?per_page=50`);
       const failed = jobs.filter((job) => ["failed", "canceled", "cancelled"].includes(String(job?.status)));
       const chosen = (failed.length ? failed : jobs).slice(0, 3);
       source = `run:${Math.floor(runId)}`;

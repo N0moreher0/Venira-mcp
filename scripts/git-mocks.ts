@@ -28,6 +28,7 @@ function helpers(req: http.IncomingMessage, res: http.ServerResponse) {
     res.writeHead(status, {
       "content-type": "application/json",
       "content-length": String(payload.length),
+      ...(res.getHeaders() as Record<string, string | number | string[]>),
     });
     res.end(payload);
   };
@@ -63,6 +64,16 @@ function helpers(req: http.IncomingMessage, res: http.ServerResponse) {
     });
   return { json, text, readBody, empty };
 }
+/** One-shot failure injected into the next matching `/pipelines` request (verify-only fault injection). */
+export type MockFault = {
+  status: number;
+  headers?: Record<string, string>;
+  body?: unknown;
+  /** How many matching requests still receive the fault. */
+  remaining: number;
+  /** Restrict to one HTTP method (default: any). */
+  method?: string;
+};
 export type GitlabMock = {
   apiUrl: string;
   requests: Seen[];
@@ -76,6 +87,7 @@ export type GitlabMock = {
     ciCancels: number;
     ciRetries: number;
     lastInline: any;
+    fault: MockFault | null;
   };
   close: () => Promise<void>;
 };
@@ -91,6 +103,7 @@ export async function startGitlabMock(): Promise<GitlabMock> {
     ciCancels: 0,
     ciRetries: 0,
     lastInline: null as any,
+    fault: null as MockFault | null,
   };
   const project = "/api/v4/projects/acme%2Fdemo";
   const mr = {
@@ -122,6 +135,16 @@ export async function startGitlabMock(): Promise<GitlabMock> {
     });
     const { json, text, readBody } = helpers(req, res);
     const handle = async () => {
+      if (
+        state.fault &&
+        state.fault.remaining > 0 &&
+        path.includes("/pipelines") &&
+        (!state.fault.method || state.fault.method === req.method)
+      ) {
+        state.fault.remaining -= 1;
+        for (const [name, value] of Object.entries(state.fault.headers ?? {})) res.setHeader(name, value);
+        return json(state.fault.status, state.fault.body ?? { message: `injected ${state.fault.status}` });
+      }
       if (path === project && req.method === "GET")
         return json(200, { default_branch: "main" });
       if (path === `${project}/merge_requests` && req.method === "POST") {
@@ -190,18 +213,11 @@ export async function startGitlabMock(): Promise<GitlabMock> {
         });
       }
       if (path === `${project}/pipelines` && req.method === "GET") {
-        return json(200, [
-          {
-            id: 77,
-            status: "failed",
-            ref: "verify-branch",
-            sha: "0123456789abcdef0123456789abcdef01234567",
-            source: "push",
-            web_url: "https://gitlab.example/acme/demo/-/pipelines/77",
-            created_at: "2026-10-29T03:20:00Z",
-            updated_at: "2026-10-29T03:24:00Z",
-          },
-        ]);
+        if (url.searchParams.get("page") === "2") {
+          return json(200, [{ id: 76, status: "success", ref: "verify-branch", sha: "abcdef0123456789abcdef0123456789abcdef01", source: "push", web_url: "https://gitlab.example/acme/demo/-/pipelines/76", created_at: "2026-10-29T03:10:00Z", updated_at: "2026-10-29T03:12:00Z" }]);
+        }
+        res.setHeader("X-Next-Page", "2");
+        return json(200, [{ id: 77, status: "failed", ref: "verify-branch", sha: "0123456789abcdef0123456789abcdef01234567", source: "push", web_url: "https://gitlab.example/acme/demo/-/pipelines/77", created_at: "2026-10-29T03:20:00Z", updated_at: "2026-10-29T03:24:00Z" }]);
       }
       if (path === `${project}/pipelines/77` && req.method === "GET") {
         return json(200, {
@@ -284,6 +300,7 @@ export type BitbucketMock = {
     declines: number;
     ciStops: number;
     lastInline: any;
+    fault: MockFault | null;
   };
   close: () => Promise<void>;
 };
@@ -296,6 +313,7 @@ export async function startBitbucketMock(): Promise<BitbucketMock> {
     declines: 0,
     ciStops: 0,
     lastInline: null as any,
+    fault: null as MockFault | null,
   };
   const repo = "/2.0/repositories/acme/demo";
   const pull = {
@@ -336,6 +354,16 @@ export async function startBitbucketMock(): Promise<BitbucketMock> {
     });
     const { json, text, readBody, empty } = helpers(req, res);
     const handle = async () => {
+      if (
+        state.fault &&
+        state.fault.remaining > 0 &&
+        path.includes("/pipelines") &&
+        (!state.fault.method || state.fault.method === req.method)
+      ) {
+        state.fault.remaining -= 1;
+        for (const [name, value] of Object.entries(state.fault.headers ?? {})) res.setHeader(name, value);
+        return json(state.fault.status, state.fault.body ?? { message: `injected ${state.fault.status}` });
+      }
       if (path === repo && req.method === "GET")
         return json(200, { mainbranch: { name: "main" } });
       if (path === `${repo}/pullrequests` && req.method === "POST") {

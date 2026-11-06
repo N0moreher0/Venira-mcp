@@ -5,6 +5,7 @@
  *
  * Fix the session so audit rows belong to this run only.
  */
+import "./clean-env.js"; // must stay first: drops inherited VENIRA_* before lib modules read env
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { promises as fs } from "node:fs";
@@ -2945,7 +2946,7 @@ check("gitlab_pr_merge", glMerge.ok === true && glMerge.data?.merged === true &&
 const glCi = await providerCall(gl, "project_ci_status", { ref: "verify-branch" });
 check(
   "gitlab_ci_status",
-  glCi.ok === true && glCi.data?.provider === "gitlab" && glCi.data?.source === "pipelines" && glCi.data?.overall === "failure" && glCi.data?.runs?.[0]?.id === 77,
+  glCi.ok === true && glCi.data?.provider === "gitlab" && glCi.data?.source === "pipelines" && glCi.data?.overall === "failure" && glCi.data?.runs?.[0]?.id === 77 && glCi.data?.runs?.[1]?.id === 76 && gitlabMock.requests.some((request) => request.path.includes("page=2")),
   glCi,
 );
 const glRun = await providerCall(gl, "project_ci_status", { run_id: 77 });
@@ -2989,6 +2990,73 @@ check(
   gitlabMock.requests.some((request) => request.path.includes("/merge_requests") && request.privateToken === "verify-gitlab-token"),
   gitlabMock.requests.slice(0, 3),
 );
+// E.5: provider failure mapping, Retry-After, token hygiene on redirects, and read-only retries.
+const glFaultCases: Array<{ label: string; status: number; headers: Record<string, string>; code: string }> = [
+  { label: "401", status: 401, headers: {}, code: "auth_failed" },
+  { label: "403", status: 403, headers: {}, code: "forbidden" },
+  { label: "404", status: 404, headers: {}, code: "not_found" },
+  { label: "429", status: 429, headers: { "Retry-After": "7" }, code: "rate_limited" },
+];
+const glPipelineHits = () => gitlabMock.requests.filter((request) => request.path.includes("/pipelines")).length;
+for (const faultCase of glFaultCases) {
+  gitlabMock.state.fault = { status: faultCase.status, headers: faultCase.headers, remaining: 1 };
+  const hitsBefore = glPipelineHits();
+  const faulted = await providerCall(gl, "project_ci_status", { ref: `fault-${faultCase.label}` });
+  check(
+    `gitlab_ci_error_${faultCase.label}`,
+    faulted.ok === false &&
+      faulted.error?.code === faultCase.code &&
+      glPipelineHits() - hitsBefore === 1 &&
+      !JSON.stringify(faulted).includes("verify-gitlab-token"),
+    faulted,
+  );
+  if (faultCase.status === 429) {
+    check("gitlab_ci_rate_limit_retry_after_seconds", /retry after 7s/.test(String(faulted.hint ?? "")), { hint: faulted.hint, error: faulted.error });
+  }
+}
+gitlabMock.state.fault = null;
+const glRecovered = await providerCall(gl, "project_ci_status", { ref: "fault-recovered" });
+check("gitlab_ci_recovers_after_faults", glRecovered.ok === true && glRecovered.data?.runs?.[0]?.id === 77, glRecovered);
+
+// A cross-origin redirect must not carry the GitLab token to the new host.
+gitlabMock.state.fault = {
+  status: 302,
+  headers: { Location: `${bitbucketMock.apiUrl}/redirect-target` },
+  remaining: 1,
+  method: "GET",
+};
+const bbSeenBeforeRedirect = bitbucketMock.requests.length;
+const glRedirected = await providerCall(gl, "project_ci_status", { ref: "fault-redirect" });
+const redirectHit = bitbucketMock.requests.slice(bbSeenBeforeRedirect).find((request) => request.path.endsWith("/redirect-target"));
+check(
+  "gitlab_redirect_strips_private_token",
+  redirectHit !== undefined && redirectHit.privateToken === null && redirectHit.auth === null,
+  { redirectHit, error: glRedirected.error },
+);
+gitlabMock.state.fault = null;
+
+// Safe reads are retried after a 503; writes (POST) are never replayed.
+const glRetrying = await providerClient({
+  VENIRA_GIT_PROVIDER: "gitlab",
+  VENIRA_GIT_API_URL: gitlabMock.apiUrl,
+  VENIRA_GIT_REPO: "acme/demo",
+  VENIRA_GIT_TOKEN: "verify-gitlab-token",
+  VENIRA_GIT_RETRIES: "2",
+});
+gitlabMock.state.fault = { status: 503, remaining: 1, method: "GET" };
+const glRetriedRead = await providerCall(glRetrying, "project_ci_status", { ref: "fault-retry-read" });
+check("gitlab_ci_safe_read_retried_after_503", glRetriedRead.ok === true && gitlabMock.state.fault.remaining === 0, glRetriedRead);
+gitlabMock.state.fault = { status: 503, remaining: 5, method: "POST" };
+const glCancelPosts = () => gitlabMock.requests.filter((request) => request.method === "POST" && request.path.includes("/cancel")).length;
+const glCancelPostsBefore = glCancelPosts();
+const glFailedCancel = await providerCall(glRetrying, "project_ci_control", { action: "cancel", run_id: 77, reason: "verify POST is never replayed" });
+check(
+  "gitlab_ci_control_post_not_replayed_on_503",
+  glFailedCancel.ok === false && glCancelPosts() - glCancelPostsBefore === 1 && gitlabMock.state.ciCancels === 1,
+  glFailedCancel,
+);
+gitlabMock.state.fault = null;
+await glRetrying.close();
 await gl.close();
 
 const bb = await providerClient({
@@ -3067,6 +3135,33 @@ check(
   ),
   bitbucketMock.requests.slice(0, 2).map((r) => r.auth),
 );
+// E.5: Bitbucket failure mapping + Retry-After as an HTTP-date.
+const bbFaultCases: Array<{ label: string; status: number; headers: Record<string, string>; code: string }> = [
+  { label: "401", status: 401, headers: {}, code: "auth_failed" },
+  { label: "403", status: 403, headers: {}, code: "forbidden" },
+  { label: "404", status: 404, headers: {}, code: "not_found" },
+  { label: "429", status: 429, headers: { "Retry-After": new Date(Date.now() + 30_000).toUTCString() }, code: "rate_limited" },
+];
+const bbPipelineHits = () => bitbucketMock.requests.filter((request) => request.path.includes("/pipelines")).length;
+for (const faultCase of bbFaultCases) {
+  bitbucketMock.state.fault = { status: faultCase.status, headers: faultCase.headers, remaining: 1 };
+  const hitsBefore = bbPipelineHits();
+  const faulted = await providerCall(bb, "project_ci_status", { ref: `fault-${faultCase.label}` });
+  check(
+    `bitbucket_ci_error_${faultCase.label}`,
+    faulted.ok === false &&
+      faulted.error?.code === faultCase.code &&
+      bbPipelineHits() - hitsBefore === 1 &&
+      !JSON.stringify(faulted).includes("verify-bb-token"),
+    faulted,
+  );
+  if (faultCase.status === 429) {
+    check("bitbucket_ci_rate_limit_retry_after_http_date", /retry after (2[5-9]|30)s/.test(String(faulted.hint ?? "")), { hint: faulted.hint, error: faulted.error });
+  }
+}
+bitbucketMock.state.fault = null;
+const bbRecovered = await providerCall(bb, "project_ci_status", { ref: "fault-recovered" });
+check("bitbucket_ci_recovers_after_faults", bbRecovered.ok === true && bbRecovered.data?.runs?.[0]?.id === "{pipeline-1}", bbRecovered);
 await bb.close();
 
 // 11d-bis. Diagnostics + read planning (deterministic, no model call).

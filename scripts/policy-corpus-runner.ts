@@ -1,3 +1,4 @@
+import "./clean-env.js"; // must stay first: inherited VENIRA_UNRESTRICTED/SHELL_MODE would skew the policy results
 import { evaluateShellCommand } from "../lib/shell-policy.js";
 import { readFile } from "node:fs/promises";
 import path from "node:path";

@@ -243,6 +243,16 @@ function requestOnce(
 // Error mapping
 // ---------------------------------------------------------------------------
 
+/** Retry-After as delta-seconds or HTTP-date → whole seconds (0 when absent/unparseable), capped at 24 h. */
+function parseRetryAfter(value: string | null): number {
+  if (!value) return 0;
+  const trimmed = value.trim();
+  if (/^\d+$/.test(trimmed)) return Math.min(Number(trimmed), 86_400);
+  const at = Date.parse(trimmed);
+  if (!Number.isFinite(at)) return 0;
+  return Math.max(0, Math.min(86_400, Math.ceil((at - Date.now()) / 1000)));
+}
+
 export function apiError(ctx: GitContext, status: number, body: string, headers: RawHeaders, target: string): Error {
   const provider = providerLabel(ctx.provider);
   let message = "";
@@ -274,9 +284,9 @@ export function apiError(ctx: GitContext, status: number, body: string, headers:
   if (status === 403 || status === 429) {
     const remaining = headerValue(headers, "x-ratelimit-remaining") ?? headerValue(headers, "ratelimit-remaining");
     const reset = Number(headerValue(headers, "x-ratelimit-reset") ?? headerValue(headers, "ratelimit-reset") ?? 0);
-    const retry = Number(headerValue(headers, "retry-after") ?? 0);
+    const retry = parseRetryAfter(headerValue(headers, "retry-after"));
     if ((remaining !== null && remaining === "0") || status === 429) {
-      const when = reset ? new Date(reset * 1000).toISOString() : retry ? `in ${retry}s` : "later";
+      const when = reset ? new Date(reset * 1000).toISOString() : retry ? `${retry}s` : "later";
       return new Error(
         `[rate_limited] ${provider} API rate limit reached (${target}). Hint: retry after ${when}, or use a token with a higher limit.`,
       );
