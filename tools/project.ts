@@ -13,7 +13,6 @@ import {
 import { evaluateToolPolicy } from "../lib/tool-policy.js";
 import { recordMetric } from "../lib/metrics.js";
 import {
-  batchEnvelope,
   buildEnvelope,
   errorEnvelope,
   newRequestId,
@@ -41,13 +40,8 @@ import { runExecuteJs } from "./project-jsexec.js";
 import { runReadAudit } from "./project-audit.js";
 import { runRecentFiles, type RecentFilesDeps } from "./project-recent.js";
 import { dataDirFor, runHealth, type HealthDeps } from "./project-health.js";
-import {
-  computeHybridSearch,
-  fitHybridToBudget,
-  runHybridSearch,
-  type HybridDeps,
-  type HybridSymbolCache,
-} from "./project-hybrid.js";
+import { runHybridSearch, type HybridDeps } from "./project-hybrid.js";
+import { runEditBatch, runReadBatch, type BatchDeps } from "./project-batch.js";
 import { SESSION_ID } from "../lib/session.js";
 import {
   detectAllHarnesses,
@@ -1089,228 +1083,15 @@ async function runOne(operation: string, args: Args, options?: { line_numbers?: 
   }
 }
 
-/**
- * Numeric 0/1 flags accepted by the batchable read ops. The standalone tools coerce these
- * through the `flag01` zod transform (1 -> true), but `project_read_batch` takes
- * `arguments` as an untyped record, so without this step the host receives the raw number
- * and silently ignores it (e.g. `regex: 1` searched for the pattern as plain text and
- * `"A|B"` returned no matches).
- */
-const BATCH_FLAG_KEYS = new Set([
-  "regex",
-  "case_sensitive",
-  "whole_word",
-  "include_hidden",
-  "count_only",
-  "hybrid",
-  "include_ignored",
-  "line_numbers",
-]);
-
-function normalizeBatchFlags(args: Args): Args {
-  const out: Args = { ...args };
-  for (const key of BATCH_FLAG_KEYS) {
-    const value = out[key];
-    if (typeof value === "number") out[key] = value === 1;
-    else if (value === "1" || value === "true") out[key] = true;
-    else if (value === "0" || value === "false") out[key] = false;
-  }
-  return out;
-}
-
 // project_search hybrid mode lives in ./project-hybrid.ts; it reaches the backend search through
 // the shared response cache owned by this module.
 const hybridDeps: HybridDeps = {
   execute: (operation, args) => executeCached(operation, args),
 };
 
-async function runReadBatch(
-  requests: { operation: string; arguments: Args }[],
-  maxItemBytes: number,
-): Promise<ToolResult> {
-  const started = performance.now();
-  const requestId = newRequestId();
-  const responses: unknown[] = [];
-  let totalBytes = 0;
-  let budgetExhausted = false;
-  // One symbol cache per batch call: hybrid items that hit the same files parse each file once.
-  const symbolCache: HybridSymbolCache = new Map();
-
-  for (const request of requests) {
-    if (budgetExhausted) {
-      responses.push({
-        ok: false,
-        error: {
-          code: "resource_limit",
-          message: "Item not executed: batch response budget exhausted.",
-          retryable: false,
-        },
-        hint: "Split the batch into smaller calls.",
-      });
-      continue;
-    }
-
-    const itemStarted = performance.now();
-    try {
-      const itemArgs = normalizeBatchFlags(request.arguments as Args);
-      // Same routing rule as the standalone project_search tool: hybrid only applies to literal_content.
-      const useHybrid = request.operation === "search" && itemArgs.hybrid === true && itemArgs.kind === "literal_content";
-      const execution = useHybrid
-        ? await computeHybridSearch(itemArgs, hybridDeps, symbolCache)
-        : await executeCached(request.operation, itemArgs);
-      const { cached } = execution;
-      let response = execution.response;
-      const itemRequestId = newRequestId();
-      const itemElapsedMs = performance.now() - itemStarted;
-      const render = (candidate: RustResponse) =>
-        buildEnvelope(request.operation, candidate, { requestId: itemRequestId, elapsedMs: itemElapsedMs, cached });
-      let envelope = render(response);
-      let size = stringify(envelope).length;
-      if (size > maxItemBytes && useHybrid) {
-        // Hybrid over-fetches up to 200 hits: keep the largest prefix that fits instead of failing the item.
-        const fitted = fitHybridToBudget(response, maxItemBytes, (candidate) => stringify(render(candidate)).length);
-        if (fitted) {
-          response = fitted;
-          envelope = render(response);
-          size = stringify(envelope).length;
-        }
-      }
-      if (size > maxItemBytes) {
-        recordMetric(request.operation, performance.now() - itemStarted, false);
-        responses.push({
-          ok: false,
-          error: {
-            code: "resource_limit",
-            message: `Item response exceeds max_response_bytes_per_item (${size} > ${maxItemBytes} bytes).`,
-            retryable: false,
-          },
-          hint: "Request this item alone with a smaller max_bytes/limit or a narrower line range.",
-        });
-        continue;
-      }
-      if (totalBytes + size > MAX_BATCH_RESPONSE_BYTES) {
-        budgetExhausted = true;
-        recordMetric(request.operation, performance.now() - itemStarted, false);
-        responses.push({
-          ok: false,
-          error: {
-            code: "resource_limit",
-            message: "Batch response size limit reached; this item was not included.",
-            retryable: false,
-          },
-          hint: "Split the batch or request items individually.",
-        });
-        continue;
-      }
-      totalBytes += size;
-      recordMetric(request.operation, performance.now() - itemStarted, true);
-      responses.push({ ok: true, response: envelope });
-    } catch (error) {
-      recordMetric(request.operation, performance.now() - itemStarted, false);
-      const failure = parseToolError(error);
-      responses.push({
-        ok: false,
-        error: { code: failure.code, message: failure.message, retryable: failure.retryable },
-        ...(failure.hint ? { hint: failure.hint } : {}),
-      });
-    }
-  }
-
-  const elapsedMs = performance.now() - started;
-  recordMetric("read_batch", elapsedMs, true);
-  return toolResult(
-    batchEnvelope(requestId, responses, elapsedMs, {
-      total_bytes_returned: totalBytes,
-      max_response_bytes_per_item: maxItemBytes,
-    }),
-  );
-}
-
-async function runEditBatch(args: Args): Promise<ToolResult> {
-  const started = performance.now();
-  const requestId = newRequestId();
-  const items = Array.isArray(args.edits) ? (args.edits as Args[]) : [];
-  const maxItemBytes = Number(args.max_response_bytes_per_item ?? 1_048_576);
-  const responses: unknown[] = [];
-  let totalBytes = 0;
-  // Transactional: capture affected files before applying edits.
-  const distinctPaths = [...new Set(items.map((i) => String(i?.relative_path ?? "")).filter(Boolean))];
-  let snapshotId: string | undefined;
-  if (distinctPaths.length > 0) {
-    try {
-      const snap = await executeCached("snapshot_create", { action: "create", paths: distinctPaths, label: "edit_batch", reason: "edit_batch" });
-      snapshotId = String((snap.response?.result?.data as { id?: unknown } | undefined)?.id ?? "");
-      if (!snapshotId) snapshotId = undefined;
-    } catch {
-      snapshotId = undefined;
-    }
-  }
-  let failed = false;
-  const executed: number[] = [];
-  const skipped: number[] = [];
-  let rollbackAttempted = false;
-  let rollbackSucceeded = false;
-  for (const item of items) {
-    const itemStarted = performance.now();
-    try {
-      const { response, cached } = await executeCached("edit_file", item);
-      const envelope = buildEnvelope("edit_file", response, { requestId: newRequestId(), elapsedMs: performance.now() - itemStarted, cached });
-      const size = stringify(envelope).length;
-      if (size > maxItemBytes) {
-        recordMetric("edit_file", performance.now() - itemStarted, false);
-        responses.push({ ok: false, error: { code: "resource_limit", message: "Item response exceeds item limit.", retryable: false } });
-        continue;
-      }
-      if (totalBytes + size > MAX_BATCH_RESPONSE_BYTES) {
-        recordMetric("edit_file", performance.now() - itemStarted, false);
-        responses.push({ ok: false, error: { code: "resource_limit", message: "Batch budget exhausted.", retryable: false } });
-        continue;
-      }
-      totalBytes += size;
-      recordMetric("edit_file", performance.now() - itemStarted, true);
-      responses.push({ ok: true, response: envelope });
-      executed.push(responses.length - 1);
-    } catch (error) {
-      failed = true;
-      recordMetric("edit_file", performance.now() - itemStarted, false);
-      const failure = parseToolError(error);
-      responses.push({ ok: false, error: { code: failure.code, message: failure.message, retryable: failure.retryable } });
-      if (snapshotId) {
-        rollbackAttempted = true;
-        try {
-          await executeCached("snapshot_restore", { action: "restore", id: snapshotId });
-          rollbackSucceeded = true;
-        } catch (restoreError) {
-          console.error(`[venira-coding] edit_batch rollback failed: ${restoreError instanceof Error ? restoreError.message : String(restoreError)}`);
-        }
-      }
-      for (let skippedIndex = responses.length; skippedIndex < items.length; skippedIndex += 1) {
-        skipped.push(skippedIndex);
-        responses.push({
-          ok: false,
-          error: {
-            code: "batch_aborted",
-            message: "Not executed because an earlier edit failed; the batch was rolled back when possible.",
-            retryable: true,
-          },
-        });
-      }
-      break;
-    }
-  }
-  const elapsedMs = performance.now() - started;
-  recordMetric("edit_batch", elapsedMs, !failed || rollbackSucceeded);
-  return toolResult(batchEnvelope(requestId, responses, elapsedMs, {
-    total_bytes_returned: totalBytes,
-    atomic: true,
-    failed,
-    executed,
-    skipped,
-    rollback_attempted: rollbackAttempted,
-    rollback_succeeded: rollbackSucceeded,
-    ...(snapshotId ? { snapshot_id: snapshotId } : {}),
-  }));
-}
+// project_read_batch / project_edit_batch live in ./project-batch.ts; same cached executor plus the
+// batch response budget (also used by this module's caches).
+const batchDeps: BatchDeps = { ...hybridDeps, maxBatchResponseBytes: MAX_BATCH_RESPONSE_BYTES };
 
 async function runReadRanges(args: Args): Promise<ToolResult> {
   const started = performance.now();
@@ -2329,7 +2110,7 @@ export function registerProjectTools(server: McpServer): void {
       },
     },
     ({ requests, max_response_bytes_per_item }) =>
-      runReadBatch(requests, max_response_bytes_per_item ?? MAX_BATCH_ITEM_BYTES),
+      runReadBatch(requests, max_response_bytes_per_item ?? MAX_BATCH_ITEM_BYTES, batchDeps),
   );
 
   server.registerTool(
@@ -2413,7 +2194,7 @@ export function registerProjectTools(server: McpServer): void {
         max_response_bytes_per_item: z.number().int().min(256).max(1048576).optional(),
       },
     },
-    (args) => runEditBatch(args as Args),
+    (args) => runEditBatch(args as Args, batchDeps),
   );
 
   server.registerTool(
