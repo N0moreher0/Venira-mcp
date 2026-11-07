@@ -1103,6 +1103,35 @@ async function runOne(operation: string, args: Args, options?: { line_numbers?: 
   }
 }
 
+/**
+ * Numeric 0/1 flags accepted by the batchable read ops. The standalone tools coerce these
+ * through the `flag01` zod transform (1 -> true), but `project_read_batch` takes
+ * `arguments` as an untyped record, so without this step the host receives the raw number
+ * and silently ignores it (e.g. `regex: 1` searched for the pattern as plain text and
+ * `"A|B"` returned no matches).
+ */
+const BATCH_FLAG_KEYS = new Set([
+  "regex",
+  "case_sensitive",
+  "whole_word",
+  "include_hidden",
+  "count_only",
+  "hybrid",
+  "include_ignored",
+  "line_numbers",
+]);
+
+function normalizeBatchFlags(args: Args): Args {
+  const out: Args = { ...args };
+  for (const key of BATCH_FLAG_KEYS) {
+    const value = out[key];
+    if (typeof value === "number") out[key] = value === 1;
+    else if (value === "1" || value === "true") out[key] = true;
+    else if (value === "0" || value === "false") out[key] = false;
+  }
+  return out;
+}
+
 async function runReadBatch(
   requests: { operation: string; arguments: Args }[],
   maxItemBytes: number,
@@ -1112,6 +1141,8 @@ async function runReadBatch(
   const responses: unknown[] = [];
   let totalBytes = 0;
   let budgetExhausted = false;
+  // One symbol cache per batch call: hybrid items that hit the same files parse each file once.
+  const symbolCache: HybridSymbolCache = new Map();
 
   for (const request of requests) {
     if (budgetExhausted) {
@@ -1129,13 +1160,29 @@ async function runReadBatch(
 
     const itemStarted = performance.now();
     try {
-      const { response, cached } = await executeCached(request.operation, request.arguments as Args);
-      const envelope = buildEnvelope(request.operation, response, {
-        requestId: newRequestId(),
-        elapsedMs: performance.now() - itemStarted,
-        cached,
-      });
-      const size = stringify(envelope).length;
+      const itemArgs = normalizeBatchFlags(request.arguments as Args);
+      // Same routing rule as the standalone project_search tool: hybrid only applies to literal_content.
+      const useHybrid = request.operation === "search" && itemArgs.hybrid === true && itemArgs.kind === "literal_content";
+      const execution = useHybrid
+        ? await computeHybridSearch(itemArgs, symbolCache)
+        : await executeCached(request.operation, itemArgs);
+      const { cached } = execution;
+      let response = execution.response;
+      const itemRequestId = newRequestId();
+      const itemElapsedMs = performance.now() - itemStarted;
+      const render = (candidate: RustResponse) =>
+        buildEnvelope(request.operation, candidate, { requestId: itemRequestId, elapsedMs: itemElapsedMs, cached });
+      let envelope = render(response);
+      let size = stringify(envelope).length;
+      if (size > maxItemBytes && useHybrid) {
+        // Hybrid over-fetches up to 200 hits: keep the largest prefix that fits instead of failing the item.
+        const fitted = fitHybridToBudget(response, maxItemBytes, (candidate) => stringify(render(candidate)).length);
+        if (fitted) {
+          response = fitted;
+          envelope = render(response);
+          size = stringify(envelope).length;
+        }
+      }
       if (size > maxItemBytes) {
         recordMetric(request.operation, performance.now() - itemStarted, false);
         responses.push({
@@ -2518,6 +2565,44 @@ function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+/** Per-batch cache of parsed symbols (path -> symbols, or null when the file is unreadable). */
+type HybridSymbolCache = Map<string, ReturnType<typeof extractSymbols> | null>;
+
+/**
+ * Largest prefix of a hybrid search response's hits that fits `maxItemBytes`, or null when not even one
+ * hit fits. `measure` returns the serialized size of a candidate response exactly as it would be sent.
+ */
+function fitHybridToBudget(
+  response: RustResponse,
+  maxItemBytes: number,
+  measure: (candidate: RustResponse) => number,
+): RustResponse | null {
+  const data = (response.result?.data ?? {}) as { hits?: unknown[] };
+  const hits = Array.isArray(data.hits) ? data.hits : [];
+  const build = (keep: number): RustResponse => ({
+    ...response,
+    truncated: true,
+    result: {
+      kind: "search",
+      data: { ...data, hits: hits.slice(0, keep), complete: false, trimmed_to_item_budget: true },
+    },
+  });
+  let lo = 1;
+  let hi = hits.length - 1;
+  let best: RustResponse | null = null;
+  while (lo <= hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    const candidate = build(mid);
+    if (measure(candidate) <= maxItemBytes) {
+      best = candidate;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return best;
+}
+
 type HybridHit = Record<string, unknown> & {
   relative_path?: unknown;
   line_number?: unknown;
@@ -2526,9 +2611,11 @@ type HybridHit = Record<string, unknown> & {
   confidence: "exact_match" | "text_match";
 };
 
-async function runHybridSearch(args: Args): Promise<ToolResult> {
-  const started = performance.now();
-  const requestId = newRequestId();
+/**
+ * Core of the hybrid search, shared by `project_search` (hybrid: 1) and by `search` items inside
+ * `project_read_batch`. Returns the merged response so each caller builds its own envelope.
+ */
+async function computeHybridSearch(args: Args, symbolCache?: HybridSymbolCache): Promise<Execution> {
   const query = String(args.query ?? "");
   const queryTrimmed = query.trim();
   const identifier = IDENTIFIER_RE.test(queryTrimmed) ? queryTrimmed : null;
@@ -2568,9 +2655,13 @@ async function runHybridSearch(args: Args): Promise<ToolResult> {
     await Promise.allSettled(
       files.map(async (rel) => {
         try {
-          const text = await readTextFile(rel);
-          if (text === null) return;
-          const symbols = extractSymbols(text);
+          let symbols = symbolCache?.get(rel);
+          if (symbols === undefined) {
+            const text = await readTextFile(rel);
+            symbols = text === null ? null : extractSymbols(text);
+            symbolCache?.set(rel, symbols);
+          }
+          if (symbols === null) return;
           const lines = new Set<number>();
           for (const sym of symbols) {
             if (sym.name === identifier) lines.add(sym.line);
@@ -2616,9 +2707,16 @@ async function runHybridSearch(args: Args): Promise<ToolResult> {
     truncated,
     result: { kind: "search", data: mergedData },
   };
+  return { response: merged, cached: execution.cached };
+}
+
+async function runHybridSearch(args: Args): Promise<ToolResult> {
+  const started = performance.now();
+  const requestId = newRequestId();
+  const { response, cached } = await computeHybridSearch(args);
   const elapsedMs = performance.now() - started;
   recordMetric("search", elapsedMs, true);
-  return toolResult(buildEnvelope("search", merged, { requestId, elapsedMs, cached: execution.cached }));
+  return toolResult(buildEnvelope("search", response, { requestId, elapsedMs, cached }));
 }
 
 async function runSymbolReferences(args: Args): Promise<ToolResult> {
@@ -3182,7 +3280,7 @@ export function registerProjectTools(server: McpServer): void {
     "project_read_batch",
     {
       ...config(
-        "Run up to 8 READ-ONLY ops (list_files, read_file, get_file_info, search) in one call; read/info use the cache so repeats are very fast.",
+        "Run up to 8 READ-ONLY ops (list_files, read_file, get_file_info, search) in one call; read/info use the cache so repeats are very fast. Each item takes the same arguments as the standalone tool, including numeric 0/1 flags (e.g. search regex, case_sensitive, hybrid).",
         "Batch read",
         {
           use_when: "you need to read 2+ files/ops in the same step (reading context, scanning several files).",

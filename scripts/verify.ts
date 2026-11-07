@@ -280,6 +280,29 @@ await call("project_read_batch", {
 });
 results.batch_cached_ms = +(performance.now() - started).toFixed(1);
 
+// 3b. Regression: numeric 0/1 flags must work inside project_read_batch (they used to be
+// passed through as raw numbers and ignored, so regex alternation returned no matches).
+console.log("[verify] checking batch flag coercion...");
+await fs.writeFile(`${dir}/batch-flags.txt`, "alpha one\nbeta two\nGAMMA three\n");
+const flagBatch = JSON.parse(
+  textOf(
+    await call("project_read_batch", {
+      requests: [
+        { operation: "search", arguments: { kind: "literal_content", query: "alpha|beta", regex: 1, relative_path: dir } },
+        { operation: "search", arguments: { kind: "literal_content", query: "alpha|beta", regex: 0, relative_path: dir } },
+        { operation: "search", arguments: { kind: "literal_content", query: "gamma", case_sensitive: 1, relative_path: dir } },
+        { operation: "search", arguments: { kind: "literal_content", query: "gamma", case_sensitive: 0, relative_path: dir } },
+      ],
+    }),
+  ),
+);
+const flagHits = (i: number): number =>
+  ((flagBatch.data?.responses?.[i]?.response?.data?.hits ?? []) as unknown[]).length;
+check("batch_flag_regex_on_matches_alternation", flagBatch.ok && flagHits(0) >= 2, flagBatch);
+check("batch_flag_regex_off_is_literal", flagBatch.ok && flagHits(1) === 0, flagBatch);
+check("batch_flag_case_sensitive_on_no_match", flagBatch.ok && flagHits(2) === 0, flagBatch);
+check("batch_flag_case_sensitive_off_matches", flagBatch.ok && flagHits(3) >= 1, flagBatch);
+
 // 4. Cache invalidation external write
 console.log("[verify] checking cache invalidation external...");
 async function runRead(p: string) {
@@ -1423,6 +1446,83 @@ const scopedMiss = asEnvelope(
   await call("project_search", { query: "McpServer", kind: "literal_content", relative_path: dir, hybrid: 1, limit: 5 }),
 );
 check("search_hybrid_scope_widened_on_empty", scopedMiss.data?.scope_widened === true, scopedMiss.data);
+
+// 10c-2. Hybrid search inside project_read_batch (same routing rule as the standalone tool).
+const hybBatch = asEnvelope(
+  await call("project_read_batch", {
+    requests: [
+      { operation: "search", arguments: { query: "CoreHost", kind: "literal_content", relative_path: ".", glob: "*.ts", hybrid: 1, limit: 8 } },
+      { operation: "search", arguments: { query: "McpServer", kind: "literal_content", relative_path: dir, hybrid: 1, limit: 5 } },
+      { operation: "search", arguments: { query: "CoreHost", kind: "literal_content", relative_path: ".", glob: "*.ts", hybrid: 0, limit: 8 } },
+      { operation: "search", arguments: { query: "project.ts", kind: "file_name", hybrid: 1, limit: 5 } },
+    ],
+  }),
+);
+const hybItem = (i: number): { hits?: Array<Record<string, unknown>>; hybrid?: boolean; scope_widened?: boolean } | undefined =>
+  hybBatch.data?.responses?.[i]?.response?.data;
+check(
+  "batch_hybrid_returns_tagged_hits",
+  hybBatch.ok === true &&
+    hybItem(0)?.hybrid === true &&
+    (hybItem(0)?.hits?.length ?? 0) > 0 &&
+    (hybItem(0)?.hits ?? []).every((hit) => typeof hit.source === "string" && typeof hit.confidence === "string") &&
+    (hybItem(0)?.hits ?? []).some((hit) => hit.source === "symbol_index"),
+  hybItem(0)?.hits?.slice(0, 4),
+);
+check("batch_hybrid_scope_widened_on_empty", hybItem(1)?.scope_widened === true, hybItem(1));
+check(
+  "batch_hybrid_off_stays_untagged",
+  (hybItem(2)?.hits?.length ?? 0) > 0 && hybItem(2)?.hybrid === undefined && (hybItem(2)?.hits ?? []).every((hit) => hit.source === undefined),
+  hybItem(2)?.hits?.slice(0, 2),
+);
+check(
+  "batch_hybrid_ignored_for_non_literal_kind",
+  hybBatch.data?.responses?.[3]?.ok === true && hybItem(3)?.hybrid === undefined,
+  hybItem(3),
+);
+
+// 10c-3. Batch hybrid follow-ups: shared per-batch symbol cache + trimming to the per-item byte limit.
+type HybridBatchData = { hits?: Array<Record<string, unknown>>; complete?: boolean; hybrid?: boolean; trimmed_to_item_budget?: boolean };
+const hybSharedBatch = asEnvelope(
+  await call("project_read_batch", {
+    requests: [
+      { operation: "search", arguments: { query: "CoreHost", kind: "literal_content", relative_path: ".", glob: "*.ts", hybrid: 1, limit: 8 } },
+      { operation: "search", arguments: { query: "CoreHost", kind: "literal_content", relative_path: ".", glob: "*.ts", hybrid: 1, limit: 5 } },
+    ],
+  }),
+);
+const hybSharedItem = (i: number): HybridBatchData | undefined => hybSharedBatch.data?.responses?.[i]?.response?.data;
+const hybSharedTags = (i: number): string[] =>
+  (hybSharedItem(i)?.hits ?? []).map((hit) => `${hit.relative_path}:${hit.line_number}:${hit.source}:${hit.confidence}`);
+check(
+  "batch_hybrid_shared_cache_tags_consistent",
+  hybSharedBatch.ok === true &&
+    hybSharedTags(1).length === 5 &&
+    hybSharedTags(1).join("|") === hybSharedTags(0).slice(0, 5).join("|") &&
+    hybSharedTags(0).some((tag) => tag.includes(":symbol_index:")),
+  { first: hybSharedTags(0).slice(0, 5), second: hybSharedTags(1) },
+);
+check(
+  "batch_hybrid_untrimmed_when_fits",
+  hybSharedItem(0)?.trimmed_to_item_budget === undefined && hybSharedItem(1)?.trimmed_to_item_budget === undefined,
+  { first: hybSharedItem(0)?.trimmed_to_item_budget, second: hybSharedItem(1)?.trimmed_to_item_budget },
+);
+const hybTrimBatch = asEnvelope(
+  await call("project_read_batch", {
+    max_response_bytes_per_item: 4096,
+    requests: [{ operation: "search", arguments: { query: "import", kind: "literal_content", relative_path: ".", glob: "*.ts", hybrid: 1, limit: 200 } }],
+  }),
+);
+const hybTrimItem = hybTrimBatch.data?.responses?.[0]?.response?.data as HybridBatchData | undefined;
+check(
+  "batch_hybrid_trims_to_item_budget",
+  hybTrimBatch.data?.responses?.[0]?.ok === true &&
+    hybTrimItem?.trimmed_to_item_budget === true &&
+    hybTrimItem?.complete === false &&
+    (hybTrimItem?.hits?.length ?? 0) >= 1 &&
+    (hybTrimItem?.hits ?? []).every((hit) => typeof hit.source === "string" && typeof hit.confidence === "string"),
+  { ok: hybTrimBatch.data?.responses?.[0]?.ok, error: hybTrimBatch.data?.responses?.[0]?.error, hits: hybTrimItem?.hits?.length, complete: hybTrimItem?.complete, trimmed: hybTrimItem?.trimmed_to_item_budget },
+);
 
 // 10d. Hybrid search fixture matrix — definition detection end-to-end per language.
 const hybridFixture = [
