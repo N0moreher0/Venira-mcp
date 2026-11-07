@@ -1,0 +1,488 @@
+/**
+ * corehost content-search op (opSearch + ripgrep fast path + hit ranking).
+ * Extracted from corehost.ts; behaviour is unchanged.
+ */
+import { spawn } from "node:child_process";
+import { promises as fs } from "node:fs";
+import path from "node:path";
+import { resolveInWorkspace, type RustResponse } from "./corehost-common.js";
+import { isProtectedPath } from "./workspace.js";
+import { envFlag } from "./env.js";
+
+
+let ripgrepAvailableCache: boolean | null = null;
+async function ripgrepInstalled(): Promise<boolean> {
+  if (ripgrepAvailableCache !== null) return ripgrepAvailableCache;
+  try {
+    const result = await new Promise<boolean>((resolve) => {
+      const child = spawn("rg", ["--version"], { timeout: 5000 });
+      let timer: NodeJS.Timeout | null = setTimeout(() => {
+        try { child.kill("SIGKILL"); } catch { /* ignored */ }
+        resolve(false);
+      }, 5000);
+      child.on("exit", (code: number | null) => {
+        if (timer) { clearTimeout(timer); timer = null; }
+        resolve(code === 0);
+      });
+      child.on("error", () => {
+        if (timer) { clearTimeout(timer); timer = null; }
+        resolve(false);
+      });
+      child.stdout?.resume();
+      child.stderr?.resume();
+    });
+    ripgrepAvailableCache = result;
+  } catch {
+    ripgrepAvailableCache = false;
+  }
+  return ripgrepAvailableCache;
+}
+
+function ripgrepExec(args: string[], timeoutMs: number): Promise<{ status: number | null; stdout: string; stderr: string; error?: any; }> {
+  return new Promise((resolve) => {
+    const child = spawn("rg", args, { timeout: timeoutMs });
+    let stdout = "";
+    let stderr = "";
+    let done = false;
+    const timer = setTimeout(() => {
+      if (done) return;
+      done = true;
+      try { child.kill("SIGKILL"); } catch { /* ignored */ }
+      resolve({ status: null, stdout, stderr, error: { code: "ETIMEDOUT" } });
+    }, timeoutMs);
+    child.stdout?.setEncoding("utf8");
+    child.stderr?.setEncoding("utf8");
+    child.stdout?.on("data", (d: string) => { stdout += d; });
+    child.stderr?.on("data", (d: string) => { stderr += d; });
+    child.on("error", (e: any) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      resolve({ status: null, stdout, stderr, error: e });
+    });
+    child.on("exit", (code: number | null) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      resolve({ status: code, stdout, stderr });
+    });
+  });
+}
+
+function escapeRegExpLiteral(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Score a search hit so the most useful results surface first — agents
+ * usually only read the first few hits, so ranking matters more than raw
+ * ripgrep order (which is filesystem order).
+ *
+ * Scoring (higher = better):
+ *   - whole-word match      +40   (identifier found as a standalone token)
+ *   - prefix match          +20   (line starts with the query)
+ *   - file-name match       +30   (query appears in the file name)
+ *   - shallow depth         +10   (files closer to workspace root)
+ *   - early line            +10   (line number < 10)
+ * Case-insensitive matching throughout; `needle` is pre-lowercased and
+ * `wordRe` is precompiled by the caller (rankHits) — the query text itself
+ * may contain regex metacharacters, so it is never interpolated raw.
+ */
+function scoreHit(hit: Record<string, unknown>, needle: string, rel: string, wordRe: RegExp): number {
+  let score = 0;
+  const snippet = String(hit.snippet ?? "").toLowerCase();
+  const lineLower = snippet;
+  // whole-word: needle bounded by non-identifier chars on both sides
+  if (wordRe.test(lineLower)) score += 40;
+  else if (lineLower.includes(needle)) score += 15; // substring fallback
+  if (lineLower.startsWith(needle)) score += 20; // prefix (definition-like)
+  const base = path.basename(rel).toLowerCase();
+  if (base.includes(needle)) score += 30;
+  else if (rel.toLowerCase().includes(needle)) score += 15;
+  const depth = rel.split("/").length;
+  score += Math.max(0, 10 - depth); // shallow files first
+  const ln = Number(hit.line_number ?? 0);
+  if (ln > 0 && ln <= 10) score += 10; // early line
+  return score;
+}
+
+/**
+ * Sort hits so the most relevant are first, then stable by (path, line).
+ * Scores are computed once and carried through the sort (no double work).
+ */
+function rankHits(hits: Array<Record<string, unknown>>, needle: string): void {
+  const wordRe = new RegExp(
+    `(?:^|[^A-Za-z0-9_$])${escapeRegExpLiteral(needle)}(?:[^A-Za-z0-9_$]|$)`,
+    "i",
+  );
+  const scored = hits.map((hit) => ({
+    hit,
+    rel: String(hit.relative_path ?? "").toLowerCase(),
+    line: Number(hit.line_number ?? 0),
+    score: scoreHit(hit, needle, String(hit.relative_path ?? ""), wordRe),
+  }));
+  scored.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    if (a.rel !== b.rel) return a.rel < b.rel ? -1 : 1;
+    return a.line - b.line;
+  });
+  for (let i = 0; i < scored.length; i += 1) hits[i] = scored[i].hit;
+}
+
+/**
+ * Validate and compile a user-supplied search regex once, before either backend
+ * runs. The complexity guard must not be bypassed by the ripgrep fast path.
+ */
+function compileSearchRegex(query: string, caseSensitive: boolean): RegExp {
+  if (query.length > 512 || /(?:\([^)]*[+*][^)]*\)|\[[^\]]+\][+*])[+*{]/.test(query)) {
+    throw new Error("[resource_limit] Regex too complex");
+  }
+  try {
+    return new RegExp(query, caseSensitive ? "" : "i");
+  } catch (error) {
+    throw new Error(`[invalid_request] Invalid regex: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+export async function opSearch(
+  args: Record<string, unknown>,
+  root: string,
+): Promise<RustResponse> {
+  const query = args.query as string;
+  const kind = (args.kind as string) ?? "literal_content";
+  const searchRoot = resolveInWorkspace(args.relative_path as string, root);
+  // Hidden files are searched by default (parity with the JS walker; agents
+  // legitimately search `.github/`, `.vscode/`). Pass include_hidden=0 to skip
+  // dotfiles (rg-style). Protected secrets are always excluded either way.
+  const includeHidden = args.include_hidden === undefined
+    ? true
+    : args.include_hidden === true || args.include_hidden === 1;
+  const wholeWord = args.whole_word === true || args.whole_word === 1;
+  if (isProtectedPath(searchRoot)) {
+    throw new Error(`[sensitive_result] Path is protected by policy: ${args.relative_path}. Hint: do not search protected files.`);
+  }
+  const glob = args.glob as string | undefined;
+  const excludeGlob = args.exclude_glob as string | undefined;
+  const caseSensitive = args.case_sensitive !== false;
+  const limit = Math.min(200, (args.limit as number | undefined) ?? 200);
+  const contextLines = Math.min(20, (args.context_lines as number | undefined) ?? 0);
+  const countOnly = args.count_only === true;
+
+  // Simple glob-to-regex (supports *, ?, [seq])
+  function globToRegex(g: string): RegExp {
+    if (g.length > 256) {
+      throw new Error("[resource_limit] glob is too long; limit it to 256 characters.");
+    }
+    let re = "";
+    for (const ch of g) {
+      if (ch === "*") re += ".*";
+      else if (ch === "?") re += ".";
+      else if (ch === "[") re += "[";
+      else if (ch === "]") re += "]";
+      else re += ch.replace(/[.+^${}()|\\]/g, "\\$&");
+    }
+    return new RegExp(`^${re}$`);
+  }
+
+  const includeRe = glob ? globToRegex(glob) : null;
+  const excludeRe = excludeGlob ? globToRegex(excludeGlob) : null;
+
+  const IGNORED = new Set([
+    ".git", "node_modules", "target", "dist", "build",
+    ".next", ".venv", "__pycache__", ".cache", ".turbo", "coverage",
+  ]);
+
+  type Hit = {
+    relative_path: string;
+    line_number?: number;
+    snippet?: string;
+    context?: string[];
+  };
+  const hits: Hit[] = [];
+  const diagnostics: string[] = [];
+  let complete = true;
+  let totalMatchLines = 0;
+
+  async function collectFiles(dir: string): Promise<string[]> {
+    const files: string[] = [];
+    async function walk(d: string): Promise<void> {
+      let entries;
+      try {
+        entries = await fs.readdir(d, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const entry of entries) {
+        if (entry.isSymbolicLink()) continue;
+        // Hidden files/dot-directories are skipped unless include_hidden=1.
+        // IGNORED (node_modules/target/…) and isProtectedPath always apply.
+        if (!includeHidden && entry.name.startsWith(".")) continue;
+        const abs = path.join(d, entry.name);
+        if (entry.isDirectory()) {
+          if (IGNORED.has(entry.name)) continue;
+          await walk(abs);
+        } else if (entry.isFile()) {
+          if (isProtectedPath(abs)) continue;
+          files.push(abs);
+        }
+      }
+    }
+    await walk(dir);
+    return files;
+  }
+
+  const needle = caseSensitive ? query : query.toLowerCase();
+
+  if (kind === "file_name" || kind === "directory_name") {
+    const files = await collectFiles(searchRoot);
+    for (const abs of files) {
+      if (hits.length >= limit) { complete = false; break; }
+      const basename = path.basename(abs);
+      const match = caseSensitive ? basename.includes(query) : basename.toLowerCase().includes(needle);
+      if (!match) continue;
+      if (kind === "file_name" && (await fs.stat(abs)).isDirectory()) continue;
+      if (kind === "directory_name" && !(await fs.stat(abs)).isDirectory()) continue;
+      const rel = path.relative(root, abs).replace(/\\/g, "/");
+      hits.push({ relative_path: rel });
+      totalMatchLines += 1;
+    }
+  } else {
+    // literal_content, regex, definition — Phase 1 (bounded parallel
+    // chunked reads) + Phase 2 (binary-ext + null-byte guards).
+    // Ripgrep-backed fast path if available (safe spawn, no shell).
+    // Include/exclude globs map to `rg --glob` (a negated glob for exclude);
+    // they no longer silently disable this path on huge workspaces.
+    // context_lines are NOT taken from rg's `-C` output — context records
+    // would need per-file cluster correlation, so instead each hit file is
+    // re-read once (bounded, chunked) and the surrounding lines are sliced,
+    // exactly matching the JS path's `context` shape.
+    // Validate regex complexity/invalid syntax before either backend runs.
+    // Without this, rg (which compiles patterns in Rust) would happily serve a
+    // query such as `(a+)+$` and the resource guard would never fire.
+    if (args.regex === true) compileSearchRegex(query, caseSensitive);
+
+    if (envFlag("VENIRA_USE_RIPGREP", true) && kind === "literal_content" && !countOnly) {
+      if (await ripgrepInstalled()) {
+        try {
+          // Match the JS scanner's view of the tree: rg must not honor
+          // .gitignore/global ignore because the JS walker does not.
+          // Hidden files follow include_hidden, and the same built-in
+          // IGNORED directories are excluded by glob.
+          const argList = ["--json", "-n", "--max-filesize=1M", "--color=never", "--no-ignore", "--no-ignore-vcs"];
+          for (const ign of [".git","node_modules","target","dist","build",".next",".venv","__pycache__",".cache",".turbo","coverage"]) {
+            argList.push("--glob", `!**/${ign}/**`);
+          }
+          if (!caseSensitive) argList.push("-i");
+          if (wholeWord) argList.push("-w");
+          if (includeHidden) argList.push("--hidden");
+          if (args.regex === true) { argList.push("-e", String(query)); }
+          else { argList.push("-F", "-e", String(query)); }
+          if (glob) argList.push("--glob", String(glob));
+          if (excludeGlob) argList.push("--glob", `!${excludeGlob}`);
+          // Hidden exclusion goes last: rg applies later globs with higher
+          // precedence, so a caller glob such as `*.ts` cannot re-include a
+          // dotfile when include_hidden=0.
+          if (!includeHidden) {
+            argList.push("--glob", "!**/.*");
+            argList.push("--glob", "!**/.*/**");
+          }
+          // No per-file --max-count and no early global break before ranking:
+          // rg runs multithreaded, so its output order is not stable. Collect
+          // a bounded set, rank, then trim to the caller's limit.
+          argList.push(searchRoot);
+          const resp = await ripgrepExec(argList, 10000);
+
+          // Only clean exits (0 = matches, 1 = no matches) are served by the
+          // fast path. Exit 2 (rg-internal error, e.g. an invalid regex that
+          // survived JSON parsing) or any spawn error falls through to the JS
+          // scanner, which either serves the query or throws the proper
+          // [invalid_request] envelope — never a silent empty "no matches".
+          if ((resp.status === 0 || resp.status === 1) && !resp.error) {
+            const lines = String(resp.stdout ?? "").split(/\r?\n/).filter(Boolean);
+            // Safety cap only: never cut at `limit` before ranking, because
+            // rg's multithreaded output order is not stable.
+            const COLLECT_CAP = Math.max(limit * 10, 1000);
+            for (const raw of lines) {
+              let rec: any = null;
+              try { rec = JSON.parse(raw); } catch { continue; }
+              if (rec?.type !== "match") continue;
+              const pth = String(rec.data?.path?.text ?? "");
+              const abs = path.isAbsolute(pth) ? pth : path.resolve(root, pth);
+              if (isProtectedPath(abs)) continue;
+              const rel = path.relative(root, abs).replace(/\\/g, "/");
+              // Mirror collectFiles() exactly: hidden segments and built-in
+              // IGNORED dirs are dropped even if rg's glob handling lets one
+              // through (keeps both backends returning the same hit set).
+              const segments = rel.split("/");
+              if (!includeHidden && segments.some((seg) => seg.startsWith("."))) continue;
+              if (segments.some((seg) => IGNORED.has(seg))) continue;
+              const ln = Number(rec.data?.line_number ?? 0);
+              const lineText = String(rec.data?.lines?.text ?? "").replace(/\r?\n$/, "");
+              const snippet = lineText.trim().slice(0, 200);
+              hits.push({ relative_path: rel, line_number: ln, snippet });
+              totalMatchLines += 1;
+              if (hits.length >= COLLECT_CAP) { complete = false; break; }
+            }
+            // Rank first, then trim to the caller's limit, so high-ranked hits
+            // survive regardless of rg's thread ordering.
+            rankHits(hits, needle);
+            if (hits.length > limit) {
+              hits.length = limit;
+              complete = false;
+            }
+            if (contextLines > 0 && hits.length > 0) {
+              const hitsByRel = new Map<string, Hit[]>();
+              for (const hit of hits) {
+                const list = hitsByRel.get(hit.relative_path) ?? [];
+                list.push(hit);
+                hitsByRel.set(hit.relative_path, list);
+              }
+              const distinct = [...hitsByRel.keys()];
+              for (let ci = 0; ci < distinct.length; ci += 16) {
+                const chunk = distinct.slice(ci, ci + 16);
+                await Promise.all(chunk.map(async (rel) => {
+                  const abs = path.resolve(root, rel);
+                  if (isProtectedPath(abs)) return;
+                  let content: string;
+                  try { content = await fs.readFile(abs, "utf8"); }
+                  catch { return; }
+                  if (Buffer.byteLength(content, "utf8") > 1_048_576) return;
+                  if (content.indexOf("\u0000") >= 0) return;
+                  const lines = content.split(/\r?\n/);
+                  for (const hit of hitsByRel.get(rel) ?? []) {
+                    const idx = (hit.line_number ?? 0) - 1;
+                    if (idx < 0 || idx >= lines.length) continue;
+                    const start = Math.max(0, idx - contextLines);
+                    const end = Math.min(lines.length, idx + contextLines + 1);
+                    hit.context = lines.slice(start, end);
+                  }
+                }));
+              }
+            }
+            return {
+              status: "completed",
+              truncated: !complete,
+              result: {
+                kind: "search",
+                data: {
+                  hits,
+                  complete,
+                  diagnostics,
+                  total_match_lines: totalMatchLines,
+                  files_matched: new Set(hits.map((h) => h.relative_path)).size,
+                  hint: hits.length === 0 ? "No matches. Broaden the search: drop glob/relative_path, set regex=0, or use kind=file_name." : undefined,
+                },
+              },
+            };
+          }
+        } catch {
+          // fall through to JS scanning
+        }
+      }
+    }
+
+    const files = await collectFiles(searchRoot);
+    const useRegex = args.regex === true;
+    let wordRe: RegExp | null = null;
+    if (wholeWord) {
+      wordRe = new RegExp(`(?:^|[^A-Za-z0-9_$])${escapeRegExpLiteral(needle)}(?:[^A-Za-z0-9_$]|$)`, caseSensitive ? "" : "i");
+    }
+    let contentRe: RegExp | null = null;
+    if (useRegex) {
+      contentRe = compileSearchRegex(query, caseSensitive);
+    }
+
+    const BINARY_EXT = new Set([".png",".jpg",".jpeg",".gif",".webp",".bmp",".ico",".tiff",
+      ".woff",".woff2",".ttf",".otf",".eot",".svg",".pdf",".zip",".gz",".tgz",".7z",".rar",".tar",
+      ".mp3",".mp4",".mov",".avi",".mkv",".webm",".exe",".dll",".so",".dylib",".o",".a",
+      ".wasm",".pyc",".class",".jar"]);
+
+    type FileEntry = { abs: string; rel: string; content: string };
+    const entries: Array<FileEntry | null> = [];
+    const READ_CHUNK = 16;
+    for (let ci = 0; ci < files.length; ci += READ_CHUNK) {
+      const chunk = files.slice(ci, ci + READ_CHUNK);
+      const results = await Promise.all(chunk.map(async (abs): Promise<FileEntry | null> => {
+        const rel = path.relative(root, abs).replace(/\\/g, "/");
+        if (includeRe && !includeRe.test(rel)) return null;
+        if (excludeRe && excludeRe.test(rel)) return null;
+        if (BINARY_EXT.has(path.extname(rel).toLowerCase())) return null;
+        let content: string;
+        try { content = await fs.readFile(abs, "utf8"); }
+        catch { return null; }
+        if (Buffer.byteLength(content, "utf8") > 1_048_576) return null;
+        if (content.indexOf("\u0000") >= 0) return null;
+        return { abs, rel, content };
+      }));
+      entries.push(...results);
+    }
+
+    const needleConst = needle;
+    for (const entry of entries) {
+      if (!entry) continue;
+      if (hits.length >= limit) { complete = false; break; }
+      const { rel, content } = entry;
+
+      const lines = content.split(/\r?\n/);
+      const matchIndices: number[] = [];
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const lineLower = caseSensitive ? line : line.toLowerCase();
+        const match = useRegex
+          ? (contentRe as RegExp).test(line)
+          : kind === "definition"
+            ? /^\s*(?:export\s+)?(?:function|class|const|let|var|type|interface|struct|fn|impl|trait|enum)\s+/.test(line) &&
+              (wordRe ? wordRe.test(lineLower) : lineLower.includes(needleConst))
+            : wordRe
+              ? wordRe.test(lineLower)
+              : lineLower.includes(needleConst);
+        if (match) matchIndices.push(i);
+      }
+      if (matchIndices.length === 0) continue;
+      totalMatchLines += matchIndices.length;
+
+      for (const idx of matchIndices) {
+        // Same collection cap as the rg path: collect, rank, then trim so the
+        // two backends agree on which hits survive `limit`.
+        if (hits.length >= Math.max(limit * 10, 1000)) {
+          complete = false;
+          break;
+        }
+        const snippet = lines[idx].trim().slice(0, 200);
+        const hit: Hit = { relative_path: rel, line_number: idx + 1 };
+        if (!countOnly) hit.snippet = snippet;
+        if (contextLines > 0 && !countOnly) {
+          const start = Math.max(0, idx - contextLines);
+          const end = Math.min(lines.length, idx + contextLines + 1);
+          hit.context = lines.slice(start, end);
+        }
+        hits.push(hit);
+      }
+    }
+    rankHits(hits, needleConst);
+    if (hits.length > limit) {
+      hits.length = limit;
+      complete = false;
+    }
+  }
+
+  const filesMatched = new Set(hits.map((h) => h.relative_path)).size;
+
+  return {
+    status: "completed",
+    result: {
+      kind: "search",
+      data: {
+        hits,
+        complete,
+        diagnostics,
+        total_match_lines: totalMatchLines,
+        files_matched: filesMatched,
+        hint:
+          hits.length === 0
+            ? "No matches. Broaden the search: drop glob/relative_path, set regex=0, or use kind=file_name."
+            : undefined,
+      },
+    },
+  };
+}
