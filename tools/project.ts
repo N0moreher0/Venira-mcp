@@ -441,9 +441,6 @@ async function executeCached(operation: string, args: Args): Promise<Execution> 
   let ok = true;
 
   try {
-    const _decision = evaluateToolPolicy(operation, args);
-    if (_decision?.tier === "deny") throw new Error(`[command_denied] ${_decision.reason} (rule: ${_decision.tool})`);
-    if (_decision?.tier === "ask") throw new Error(`[approval_required] ${_decision.reason}`);
     // Tool-level policy: deny → throw (non-retryable), ask → throw an
     // approval_required envelope.  When VENIRA_TOOL_POLICY_FILE is unset this
     // is a no-op and the shell policy in lib/corehost.ts still applies.
