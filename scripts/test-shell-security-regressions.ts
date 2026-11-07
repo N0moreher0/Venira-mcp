@@ -81,6 +81,12 @@ try {
     assert.equal(hookBypassPush.envelope.data?.run_id, undefined, command);
   }
 
+  // A recursive force-delete aimed at one workspace file still requires approval.
+  const targetedRmRf = await callShell("rm -rf -- ./rmrf-probe-file.txt");
+  assert.equal((targetedRmRf.result as { isError?: boolean }).isError, true);
+  assert.equal(targetedRmRf.envelope.error?.code, "approval_required");
+  assert.equal(targetedRmRf.envelope.data?.run_id, undefined);
+  assert.equal(typeof targetedRmRf.envelope.data?.approval_id, "string");
   const selfEnabledOverride = await callTool(client, {
     name: "project_shell_run",
     arguments: {

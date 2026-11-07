@@ -17,50 +17,42 @@
 
 ### P0 — Security evidence and correctness
 
-1. **Shell policy adversarial coverage**
-   - Add table-driven bypass cases for path and shell parsing, including PowerShell/cmd quoting and escape forms, alternate path spellings, and write-then-run sequences.
-   - Track each confirmed gap with a stable case ID; separate observed behavior from enforced behavior.
-   - Research whether commands targeting a just-written executable should require approval; measure false asks before changing policy.
-2. **Approval lifecycle tests**
-   - Verify expiry, cross-session isolation, replay prevention, and concurrent consumption. Decide and document TTL behavior.
-3. **Protected-path and snapshot-path regression tests**
-   - Cover protected-root cache invalidation and symlink/junction changes; add tests for snapshot path validation and store protection.
-4. **Configuration posture**
-   - Add a shared posture calculation and health reporting for risky flag combinations. Decide whether warnings alone are sufficient before adding any fail-closed behavior.
-5. **Shell policy parsers**
+1. **Shell policy adversarial coverage** (in progress)
+   - Added `test:shell-policy-adversarial`: 83 table-driven cases with stable ids covering root/home delete spellings (`//`, `/./`, `~/`, `"$HOME"`, `${HOME}`, `-fr`, `-r -f`, `--recursive --force`), quoting/escapes, command paths and wrappers for privilege escalation, protected-file globs/character classes, and write-then-run sequences. Every hard-deny case asserts `deny` in balanced and `ask` in permissive; non-regressions cover workspace `rm`, broad globs and safe commands.
+   - Hardened `root_delete` and `privilege_escalation` to evaluate parsed segments (not just raw regex), added PowerShell `Start-Process -Verb RunAs`, made protected-file glob matching specificity-aware (`*.env` and `.e[n]v` deny; `cat *`/`cat *.json` do not), gated `tsx`/`ts-node` like `node`, and added a filesystem-root hard deny (`rm -rf /`, `rm -rf C:\`, `Remove-Item -Recurse -Force $HOME`, …) so a broad destructive delete cannot run in `permissive` via the Windows `Remove-Item` family.
+   - Remaining: research whether targets written earlier in the same session should need approval; measure false asks before changing policy. Add a stable case id for every newly reported spelling. Resolved this session: interpreter/script execution (`bash ./probe.sh`, `pwsh -File …`, `node ./probe.js`, `cmd /c *.bat`, `tsx ./probe.ts`) now has stable cases `policy_adv_just_written_executable_*` and is classified as dynamic execution / unclassified → `ask` in balanced; write-then-run was already covered by `policy_adv_write_then_run_requires_approval`. No policy change was needed, so just-written targets still require approval; permissive remains operator opt-in. Only "measure false asks" remains open.
+2. **Shell policy parsers** (in progress)
    - Separate POSIX, PowerShell, and cmd parsing while preserving Windows backslashes and current safe behavior.
+   - Landed so far: `lib/shell-dialect.ts` (`posix` / `powershell` / `cmd` resolver), `ParsedCommand.dialect`, `parseShellCommand(raw, { shell })`, `evaluateShellCommand(..., { shell })` and `shellOverrideMatches(..., shell)`; the tool layer now threads the selected shell into the policy gate and override checks.
+   - Adversarial coverage added for per-dialect classification (`policy_adv_dialect_*`); full suites stay green. Full cross-dialect parser rewrite (PowerShell verb-noun parameter model, cmd batch flags) remains open.
+   - This session landed the cmd.exe delegation layer: `cmd /c <command>` (and `/k`) is unwrapped at parse time to the inner command (`del /f /s /q …`, `git push`, `npm publish`, `powershell -enc …`) while script targets (`*.bat`, `*.ps1`, …) keep the dynamic-execution gate; destructive-delete flag matching no longer uses a leading word boundary that never matched `-Recurse`, `-Force`, `/f`, `/s`, `/q`. New adversarial cases cover the unwrap (`policy_adv_dialect_cmd`). This session also hardened interpreter script execution: interpreter + script file (`bash ./probe.sh`, `python3 ./probe.py`) now classifies as dynamic execution via `policy_adv_just_written_executable_*`. The exhaustive cross-dialect grammar (PowerShell verb-noun parameter model, cmd batch flags) remains open.
 
 ### P1 — Installation, context and policy controls
 
-6. **Audit-store installation fallback**
+3. **Audit-store installation fallback** (in progress)
    - Make native SQLite optional with a documented fallback, add a clean-install smoke job, and include Node 24 in CI after validating compatibility.
-7. **Tool-schema budget**
-   - Measure schemas by profile, set explicit size budgets, and add a check that fails on regressions.
-8. **Risky configuration enforcement**
-   - Decide the policy contract first; only then consider requiring an explicit acknowledgement for dangerous combinations.
-9. **Environment registry and configuration matrix**
-   - Maintain one source of truth for supported environment variables and test meaningful combinations rather than relying on scattered docs.
-10. **Maintainability refactor**
+   - Started: native `better-sqlite3` now loads lazily via `createRequire` in `lib/corehost.ts` with a type-only import, so a missing native binding degrades to the existing no-op/fail-closed path instead of crashing module load. Tests still green. Remaining: clean-install smoke job + Node 24 CI validation + documented fallback behaviour.
+6. **Maintainability refactor**
    - Split the oversized `tools/project.ts`, `lib/corehost.ts`, and `scripts/verify.ts` along stable responsibilities, preserving public contracts and tests.
 
 ### P2 — Deeper assurance and operational improvements
 
-11. **Property-based shell-policy fuzzing**
+7. **Property-based shell-policy fuzzing**
     - Add deterministic transformations/seeds first; every discovered issue becomes a regression case.
-12. **Coverage reporting**
+8. **Coverage reporting**
     - Measure relevant security modules repeatedly; report actual numbers before setting thresholds or making coverage claims.
-13. **Isolation guides**
+9. **Isolation guides**
     - Document Docker, WSL, and Windows Sandbox setups, including mounts, network controls, and their limits.
-14. **Snapshot lifecycle**
+10. **Snapshot lifecycle**
     - Resolve remaining open items: protection of the snapshot store from shell side effects, off-machine backup/mirroring, and migration guidance for older checkpoints.
-15. **Glama catalog synchronization**
+11. **Glama catalog synchronization**
     - Refresh the public mirror and add a release checklist item so it does not drift again.
 
 ## Demand-gated provider work
 
-16. **Azure DevOps CI provider**
+12. **Azure DevOps CI provider**
     - Do not implement without a concrete user workflow. If demand exists, run a read-only spike first covering status, timeline-to-failure mapping, bounded logs, continuation tokens, partial success, and rate-limit headers. Only proceed if the spike validates API semantics and scope.
-17. **GitLab OAuth**
+13. **GitLab OAuth**
     - Current decision: no OAuth until a real workflow makes PATs unacceptable and a maintainer accepts ownership of the OAuth app. If both gates pass, verify device-flow support against gitlab.com and one self-managed instance; design refresh rotation/concurrency before implementation.
     - Bitbucket OAuth remains deferred unless Atlassian adds device flow or a user accepts BYO-client/callback setup.
 
@@ -81,10 +73,8 @@ These are not commitments; prioritize only with demonstrated demand:
 
 ## Decisions to resolve before implementation
 
-- Should risky configuration only warn, or require explicit acknowledgement?
 - What schema size budget is useful for Default/Core/Expert?
 - Should the default profile change in a future major release? Require measured adoption and context data.
-- Should approval grants have a user-visible TTL?
 - Which provider/capability has real demand next?
 
 ## Release and status rules

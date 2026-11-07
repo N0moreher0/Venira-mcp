@@ -248,6 +248,40 @@ tools.tools.forEach((t) => {
   check(`description_${t.name}_has_avoid_when`, hasAvoidWhen ?? !!meta?.venira?.avoid_when, undefined);
 });
 
+// 1b. Tool schema budget: serialized inputSchema JSON size per tool and total.
+// The MCP SDK converts zod shapes to JSON schemas; a runaway description or
+// nested schema blows the client context. Budgets are explicit so any growth
+// fails verification instead of silently inflating the tool list. Both the
+// default and expert tool profiles are measured (expert is the worst case).
+// Measured 2026-11: expert=68178 B, default=47269 B, worst per tool=4422 B.
+// Budgets keep ~6% headroom on totals (~13% per tool); raise them deliberately
+// in the same change that adds tool surface, never silently.
+const TOOL_SCHEMA_MAX_BYTES = 5000;
+const EXPERT_TOOL_LIST_MAX_BYTES = 72000;
+const DEFAULT_TOOL_LIST_MAX_BYTES = 50000;
+const toolSchemaBytes = (tool: { name: string; description?: string; inputSchema?: { properties?: unknown; required?: unknown; [k: string]: unknown } }) =>
+  Buffer.byteLength(JSON.stringify({ name: tool.name, description: tool.description, inputSchema: tool.inputSchema }), "utf8");
+const expertSchemaBytes = tools.tools.map((t) => ({ name: t.name, bytes: toolSchemaBytes(t) }));
+const budgetDefaultTransport = new StdioClientTransport({
+  command: "node",
+  args: ["dist/server.js"],
+  cwd: process.cwd(),
+  env: verifyEnv({ VENIRA_TOOL_MODE: "default" }, "full"),
+  stderr: "pipe",
+});
+const budgetDefaultClient = new Client({ name: "verify-default-tools", version: "0.0.0" }, { capabilities: {} });
+await budgetDefaultClient.connect(budgetDefaultTransport);
+const budgetDefaultTools = await budgetDefaultClient.listTools();
+await budgetDefaultClient.close();
+const defaultSchemaBytes = budgetDefaultTools.tools.map((t) => ({ name: t.name, bytes: toolSchemaBytes(t) }));
+const worstPerTool = Math.max(...expertSchemaBytes.concat(defaultSchemaBytes).map((entry) => entry.bytes));
+check("tool_schema_budget_per_tool", worstPerTool <= TOOL_SCHEMA_MAX_BYTES, { worstPerTool });
+const expertListBytes = expertSchemaBytes.reduce((sum, t) => sum + t.bytes, 0);
+const defaultListBytes = defaultSchemaBytes.reduce((sum, t) => sum + t.bytes, 0);
+check("tool_schema_budget_expert_total", expertListBytes <= EXPERT_TOOL_LIST_MAX_BYTES, { expertListBytes });
+check("tool_schema_budget_default_total", defaultListBytes <= DEFAULT_TOOL_LIST_MAX_BYTES, { defaultListBytes });
+console.log(`[verify] tool schema bytes: expert=${expertListBytes} default=${defaultListBytes} worst_per_tool=${worstPerTool}`);
+
 // 2. First batch (cold)
 console.log("[verify] checking cold batch...");
 let started = performance.now();
@@ -971,6 +1005,20 @@ check(
       Array.isArray(ap.session_grant_rules) &&
       Array.isArray(healthApprovals.data?.warnings),
     healthApprovals.data?.approvals,
+  );
+  const posture = (healthApprovals.data?.posture ?? {}) as Record<string, any>;
+  check(
+    "health_posture_section",
+    typeof posture.level === "string" &&
+      Array.isArray(posture.findings) &&
+      posture.fail_closed === false &&
+      typeof posture.summary === "string",
+    posture,
+  );
+  check(
+    "health_posture_default_is_clean",
+    posture.level === "ok" && posture.findings.length === 0,
+    posture,
   );
 }
 

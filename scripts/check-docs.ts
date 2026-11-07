@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { scanRuntimeEnvNames } from "./env-source-scan.js";
 const readme = fs.readFileSync("README.md", "utf8");
 let failed = false;
 if (readme.includes("37 workspace-scoped tools")) {
@@ -48,26 +49,9 @@ for (const phrase of [
   }
 }
 
-// Env table: every VENIRA_* variable documented in the first column must still exist in the source.
-const sourceRoots = ["lib", "tools", "scripts", "server.ts"];
-const skipDirs = new Set(["node_modules", "dist", ".git"]);
-function collectSource(p: string, out: string[]): void {
-  if (!fs.existsSync(p)) return;
-  const stat = fs.statSync(p);
-  if (stat.isFile()) {
-    if (/\.(ts|mjs|js)$/.test(p)) out.push(p);
-    return;
-  }
-  for (const name of fs.readdirSync(p)) {
-    if (!skipDirs.has(name)) collectSource(`${p}/${name}`, out);
-  }
-}
-const sourceFiles: string[] = [];
-for (const root of sourceRoots) collectSource(root, sourceFiles);
-const source = sourceFiles
-  .filter((f) => !f.endsWith("check-docs.ts"))
-  .map((f) => fs.readFileSync(f, "utf8"))
-  .join("\n");
+// Env table: every VENIRA_* variable documented in the first column must still exist in the runtime source
+// (same scanner as test-env-registry.ts, so docs, registry and source agree on what "source" means).
+const runtimeNames = scanRuntimeEnvNames();
 const documented = new Set<string>();
 for (const line of readme.split(/\r?\n/)) {
   if (!line.startsWith("| `VENIRA_")) continue;
@@ -75,8 +59,8 @@ for (const line of readme.split(/\r?\n/)) {
   for (const m of firstCell.matchAll(/`(VENIRA_[A-Z0-9_]+)`/g)) documented.add(m[1]);
 }
 for (const name of documented) {
-  if (!source.includes(name)) {
-    console.error(`README documents ${name}, but it does not appear in the source.`);
+  if (!runtimeNames.has(name)) {
+    console.error(`README documents ${name}, but it is not in the runtime source.`);
     failed = true;
   }
 }

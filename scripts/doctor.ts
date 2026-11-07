@@ -222,8 +222,24 @@ async function main() {
     results.push(await check("config_shell_reported", hData.data?.shell !== undefined, hData.data?.shell));
     const approvalsInfo = hData.data?.approvals as { security_profile?: string; shell_mode?: string } | undefined;
     results.push(await check("config_security_profile_reported", typeof approvalsInfo?.security_profile === "string", approvalsInfo));
-    if (approvalsInfo?.security_profile === "off") {
-      results.push(warn("security profile is `off`: shell checks and per-call JS approval are disabled (trusted environments only)", { security_profile: "off", shell_mode: approvalsInfo.shell_mode }));
+    const posture = hData.data?.posture as
+      | { level?: string; findings?: Array<{ id?: string; severity?: string; summary?: string }>; summary?: string }
+      | undefined;
+    results.push(
+      await check(
+        "config_posture_reported",
+        typeof posture?.level === "string" && Array.isArray(posture?.findings),
+        posture,
+      ),
+    );
+    const actionable = (posture?.findings ?? []).filter((finding) => finding.severity !== "info");
+    if (actionable.length > 0) {
+      results.push(
+        warn(
+          `configuration posture: ${posture?.summary ?? "risky settings detected"} (${actionable.map((f) => f.id).join(", ")})`,
+          { findings: actionable },
+        ),
+      );
     }
 
     // P1: read_audit tool reachable and returns an envelope (audit_unavailable is acceptable)

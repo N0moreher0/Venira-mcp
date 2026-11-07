@@ -115,7 +115,11 @@ directly affected:
 
 ## Approval model
 
-Shell and JavaScript approval requests return a common `data.approval` payload, including the pending `approval_id`, the reviewed subject, expiry, approve command, and retry arguments. Only a human can grant by running the exact `data.approval.approve_command` from the response in an interactive PowerShell terminal or through MCP client elicitation; grants are HMAC-verified, bound to the exact call, expire after five minutes, and are single-use. The removed `approval_token` and `VENIRA_SHELL_AUTO_APPROVE_TOKEN` paths cannot approve a request; the legacy environment variable is ignored with a warning.
+Shell and JavaScript approval requests return a common `data.approval` payload, including the pending `approval_id`, the reviewed subject, expiry, approve command, and retry arguments. Only a human can grant by running the exact `data.approval.approve_command` from the response in an interactive PowerShell terminal or through MCP client elicitation; grants are HMAC-verified, bound to the exact call, expire after five minutes, and are single-use. Consumption is an atomic claim: if two retries race with the same id, exactly one runs. The pending record's displayed command/shell/cwd/secret_env must match the signed binding, so tampering with the record invalidates it. A `--session` grant is in-memory, lasts 10 minutes by default (`VENIRA_SHELL_APPROVAL_TTL_MS`), and is cleared by a server restart. The removed `approval_token` and `VENIRA_SHELL_AUTO_APPROVE_TOKEN` paths cannot approve a request; the legacy environment variable is ignored with a warning.
+
+## Configuration posture
+
+`project_health` (and `doctor`) report a shared `posture` object with a `level` (`ok` / `info` / `warning` / `critical`), deterministic findings carrying stable ids such as `workspace.unrestricted`, `profile.off`, `shell.mode_off`, `shell.mode_permissive`, `js.exec_without_approval`, `combo.unrestricted_open_shell`, `combo.unrestricted_unapproved_js`, `approval.session_grant_risky_rule`, `self_install.enabled`, `secret.reveal_enabled` and `git.plain_http_allowed`. Findings are warnings only (`fail_closed: false`): an invalid profile/mode/boolean already fails closed at startup, while the combinations above are valid operator choices. Making them refusals would break existing trusted/off deployments; revisit only with measured demand for an acknowledgement gate.
 
 ## Security-related environment variables
 
@@ -129,6 +133,7 @@ Shell and JavaScript approval requests return a common `data.approval` payload, 
 | `VENIRA_SHELL_OVERRIDES` | unset | Operator allowlist for specific named shell exceptions. Each tool call must pass the exact name and a reason; the reason is redacted and audited, but is not proof of human identity. |
 | `VENIRA_DATA_DIR` | Per-user OS data directory | Contains the audit DB, encrypted secrets, approval key and pending approvals. Keep it private and don't point it at a shared directory. |
 | `VENIRA_SESSION_GRANT_RULES` | `cd_outside_workspace` | Additional rules eligible for human-approved session grants. Do not include network or history-rewrite rules unless the environment is disposable. |
+| `VENIRA_SHELL_APPROVAL_TTL_MS` | `600000` (10 min) | Lifetime of an in-memory `--session` grant. Pending approvals are always fixed at 5 minutes. |
 | `VENIRA_SESSION_ID` | auto | Set it in tests so audit rows are separable. |
 
 Boolean environment flags and boolean-like MCP tool arguments accept only numeric `0` or `1`. Invalid legacy spellings fail explicitly; provider workflow input booleans are data and are not changed.

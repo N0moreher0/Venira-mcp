@@ -1,0 +1,492 @@
+/**
+ * Environment variable registry: the single source of truth for every
+ * `VENIRA_*` variable the server, CLI scripts or tests read.
+ *
+ * Why it exists: variables used to be described in four unrelated places (the
+ * startup boolean list in `env.ts`, the README tables, `config-posture.ts` and
+ * ad-hoc `envInt(...)` calls), so a new variable could ship undocumented and a
+ * typo such as `VENIRA_SECURITY_PROFLE` was silently ignored.
+ *
+ * Contract (enforced by `npm run check:docs` and `npm run test:env-registry`):
+ *   - every `VENIRA_*` name found in runtime source is registered here;
+ *   - every registered non-test variable is still referenced by runtime source;
+ *   - a variable is either documented in the README tables (`documented: true`)
+ *     or carries a `reason` explaining why it is not;
+ *   - removed variables stay registered so setting one produces a clear warning
+ *     instead of "unknown variable".
+ *
+ * Keep this file dependency-free: `env.ts` imports it, and `env.ts` is imported
+ * almost everywhere, so any import here risks a cycle.
+ */
+
+export type EnvKind = "flag" | "int" | "enum" | "string" | "path" | "list";
+export type EnvStatus = "supported" | "internal" | "test" | "removed";
+export type EnvArea =
+  | "security"
+  | "tools"
+  | "shell"
+  | "workspace"
+  | "cache"
+  | "audit"
+  | "snapshot"
+  | "git"
+  | "secrets"
+  | "observability"
+  | "test";
+
+export interface EnvVarSpec {
+  name: string;
+  kind: EnvKind;
+  status: EnvStatus;
+  area: EnvArea;
+  description: string;
+  /** Human-readable effective default; omitted when it is derived (for example from the security profile). */
+  default?: string;
+  /** Accepted values for `enum` (compared trimmed and lower-cased). */
+  choices?: readonly string[];
+  /** Empty string is accepted and treated like "unset". */
+  allowEmpty?: boolean;
+  /** Listed in a README environment-variable table. */
+  documented: boolean;
+  /** Required when `documented` is false: why the variable is intentionally not in the README. */
+  reason?: string;
+  /** Required for `removed`: what to do instead (appended to the startup warning). */
+  removedNote?: string;
+}
+
+type Extra = Partial<Pick<EnvVarSpec, "default" | "choices" | "allowEmpty" | "reason" | "removedNote">>;
+
+const spec =
+  (kind: EnvKind, area: EnvArea) =>
+  (name: string, description: string, documented: boolean, extra: Extra = {}): EnvVarSpec => ({
+    name,
+    kind,
+    status: "supported",
+    area,
+    description,
+    documented,
+    ...extra,
+  });
+
+const NOT_DOC = "advanced tuning; listed in the README advanced-tuning table" as const;
+
+// ---------------------------------------------------------------------------
+// security / approvals
+// ---------------------------------------------------------------------------
+const secFlag = spec("flag", "security");
+const secEnum = spec("enum", "security");
+const secList = spec("list", "security");
+const secPath = spec("path", "security");
+const secInt = spec("int", "security");
+const secStr = spec("string", "security");
+
+// ---------------------------------------------------------------------------
+// tools / output
+// ---------------------------------------------------------------------------
+const toolFlag = spec("flag", "tools");
+const toolEnum = spec("enum", "tools");
+const toolInt = spec("int", "tools");
+const toolList = spec("list", "tools");
+const toolStr = spec("string", "tools");
+const toolPath = spec("path", "tools");
+
+// ---------------------------------------------------------------------------
+// shell
+// ---------------------------------------------------------------------------
+const shFlag = spec("flag", "shell");
+const shEnum = spec("enum", "shell");
+const shInt = spec("int", "shell");
+const shList = spec("list", "shell");
+const shStr = spec("string", "shell");
+
+// ---------------------------------------------------------------------------
+// workspace / data
+// ---------------------------------------------------------------------------
+const wsFlag = spec("flag", "workspace");
+const wsList = spec("list", "workspace");
+const wsPath = spec("path", "workspace");
+
+// ---------------------------------------------------------------------------
+// cache / audit / snapshot
+// ---------------------------------------------------------------------------
+const cacheFlag = spec("flag", "cache");
+const cacheInt = spec("int", "cache");
+const auditFlag = spec("flag", "audit");
+const auditInt = spec("int", "audit");
+const snapInt = spec("int", "snapshot");
+const snapPath = spec("path", "snapshot");
+
+// ---------------------------------------------------------------------------
+// git providers
+// ---------------------------------------------------------------------------
+const gitFlag = spec("flag", "git");
+const gitInt = spec("int", "git");
+const gitStr = spec("string", "git");
+const gitList = spec("list", "git");
+const gitEnum = spec("enum", "git");
+
+// ---------------------------------------------------------------------------
+// secrets / observability
+// ---------------------------------------------------------------------------
+const secretFlag = spec("flag", "secrets");
+const secretEnum = spec("enum", "secrets");
+const obsFlag = spec("flag", "observability");
+const obsPath = spec("path", "observability");
+
+const internal = (
+  kind: EnvKind,
+  area: EnvArea,
+  name: string,
+  description: string,
+  reason: string,
+): EnvVarSpec => ({ name, kind, status: "internal", area, description, documented: false, reason });
+
+const testOnly = (name: string, description: string): EnvVarSpec => ({
+  name,
+  kind: "string",
+  status: "test",
+  area: "test",
+  description,
+  documented: false,
+  reason: "test-only fixture variable",
+});
+
+const removed = (name: string, kind: EnvKind, description: string, removedNote: string): EnvVarSpec => ({
+  name,
+  kind,
+  status: "removed",
+  area: "security",
+  description,
+  documented: false,
+  reason: "removed; kept so setting it produces a clear warning",
+  removedNote,
+});
+
+export const ENV_REGISTRY: readonly EnvVarSpec[] = [
+  // --- security / approvals ------------------------------------------------
+  secEnum("VENIRA_SECURITY_PROFILE", "Approval posture preset: shell policy plus JavaScript approval defaults.", true, {
+    default: "balanced",
+    choices: ["strict", "balanced", "trusted", "off"],
+    allowEmpty: true,
+  }),
+  secEnum("VENIRA_SHELL_MODE", "Advanced override of the shell policy mode; wins over the security profile.", true, {
+    choices: ["strict", "balanced", "permissive", "off"],
+  }),
+  secFlag("VENIRA_JS_EXEC_APPROVAL", "Require human approval for each `project_execute_js` call.", true),
+  secFlag("VENIRA_ALLOW_JS_EXEC", "Register the `project_execute_js` tool.", true, { default: "0" }),
+  secFlag("VENIRA_UNRESTRICTED", "Disable the workspace lock (absolute paths outside the workspace allowed).", true, {
+    default: "0",
+  }),
+  secList("VENIRA_SESSION_GRANT_RULES", "Extra shell rule ids a human may approve for a whole session.", true),
+  secInt("VENIRA_SHELL_APPROVAL_TTL_MS", "Lifetime of a session-wide shell grant.", true, { default: "600000" }),
+  secFlag("VENIRA_SHELL_ELICIT", "Ask the MCP client to confirm risky shell commands via elicitation.", true),
+  secList("VENIRA_SHELL_OVERRIDES", "Named exceptions the operator enables (ALLOW_GIT_PUSH, ALLOW_ENV_READ).", true),
+  secPath("VENIRA_SHELL_POLICY_FILE", "JSON file with extra shell allow/ask/deny rules and an optional mode.", true),
+  secFlag("VENIRA_ALLOW_SELF_INSTALL", "Let `project_install_self` write other MCP clients' config files.", true, {
+    default: "0",
+  }),
+  secStr("VENIRA_SESSION_ID", "Session id used to bind approvals and tag audit rows.", true),
+  secStr(
+    "VENIRA_PERMISSION_MODE",
+    "Client-facing permission mode, set by the native adapter or the client environment.",
+    true,
+  ),
+  removed(
+    "VENIRA_SHELL_AUTO_APPROVE_TOKEN",
+    "flag",
+    "Legacy auto-approve token (removed in v1.15).",
+    "approvals now use a human-granted approval_id (or a session grant).",
+  ),
+  removed(
+    "VENIRA_NETWORK",
+    "string",
+    "Application-level network kill switch (removed).",
+    "Git-provider calls are always allowed. Restrict outbound network at the OS, container or firewall level instead.",
+  ),
+
+  // --- tools / output ------------------------------------------------------
+  toolEnum("VENIRA_TOOL_MODE", "Tool surface: the coding-focused default set or the full expert set.", true, {
+    default: "default",
+    choices: ["default", "expert"],
+    allowEmpty: true,
+  }),
+  toolEnum("VENIRA_PROFILE", "Tool profile preset; `core` hides dependency-graph and change-impact tools.", true, {
+    default: "full",
+    choices: ["full", "core"],
+  }),
+  toolList("VENIRA_DISABLE_TOOLS", "Comma-separated tool names kept out of tools/list entirely.", true),
+  toolStr("VENIRA_TOOL_POLICY_JSON", "Inline JSON tool policy (per-tool allow/deny).", true),
+  toolPath("VENIRA_TOOL_POLICY_FILE", "JSON file with the per-tool policy.", true),
+  toolEnum("VENIRA_OUTPUT_MODE", "Payload size mode; `compact` trims large payloads.", true, {
+    default: "full",
+    choices: ["full", "compact"],
+  }),
+  toolFlag("VENIRA_PRETTY", "Pretty-print JSON envelopes.", false, { default: "0", reason: NOT_DOC }),
+  toolInt("VENIRA_BATCH_ITEM_BYTES", "Per-item response budget inside project_read_batch.", false, {
+    default: "524288",
+    reason: NOT_DOC,
+  }),
+  toolFlag("VENIRA_EDIT_FUZZY", "Allow fuzzy matching as a fallback in project_edit_file.", true, { default: "0" }),
+  toolFlag("VENIRA_USE_RIPGREP", "Use ripgrep for literal content search when available.", true, { default: "1" }),
+
+  // --- shell ---------------------------------------------------------------
+  shFlag("VENIRA_SHELL_EXIT_EARLY", "Pollers return as soon as the exit code is known.", true, { default: "0" }),
+  shEnum("VENIRA_SHELL_TIMEOUT_POLICY", "`soft` warns on timeout; `hard` kills the process tree.", true, {
+    default: "soft",
+    choices: ["soft", "hard"],
+  }),
+  shFlag("VENIRA_SHELL_ENV_PASS_ALL", "Pass the full parent environment to shell runs.", true, { default: "0" }),
+  shList("VENIRA_SHELL_ENV_ALLOW", "Extra environment variable names passed to shell runs.", false, {
+    reason: NOT_DOC,
+  }),
+  shInt("VENIRA_SHELL_MAX_OUTPUT_BYTES", "Per-stream output cap for a shell run.", false, {
+    default: "262144",
+    reason: NOT_DOC,
+  }),
+  shInt("VENIRA_SHELL_MAX_TIMEOUT_MS", "Upper bound for a caller-supplied shell timeout.", false, {
+    default: "1800000",
+    reason: NOT_DOC,
+  }),
+  shInt("VENIRA_SHELL_TAIL_MAX", "Characters kept in a shell run's stdout/stderr tail (minimum 256).", false, {
+    default: "2000",
+    reason: NOT_DOC,
+  }),
+  shFlag("VENIRA_SHELL_CACHE", "Cache read-only shell results.", false, { default: "1", reason: NOT_DOC }),
+  shFlag("VENIRA_SHELL_CACHE_READ_ONLY", "Cache only read-only commands (0 restores the legacy cache-everything mode).", false, {
+    default: "1",
+    reason: NOT_DOC,
+  }),
+  shStr("VENIRA_DEFAULT_SHELL", "Shell used when a call does not name one (powershell, cmd or bash).", false, {
+    reason: NOT_DOC,
+  }),
+
+  // --- workspace / data ----------------------------------------------------
+  wsPath("VENIRA_WORKSPACE", "Workspace root; every path resolves against it.", true, { default: "process.cwd()" }),
+  wsPath("VENIRA_DATA_DIR", "Directory for the audit DB, approvals and state.", true),
+  wsPath("VENIRA_CONFIG_FILE", "Explicit path of the JSON config file (git provider settings).", false, {
+    reason: NOT_DOC,
+  }),
+  wsFlag("VENIRA_DYNAMIC_WORKSPACE", "Allow switching workspace at runtime within VENIRA_WORKSPACE_ROOTS.", false, {
+    default: "0",
+    reason: NOT_DOC,
+  }),
+  wsList("VENIRA_WORKSPACE_ROOTS", "Allowed workspace roots for dynamic workspace switching.", false, {
+    reason: NOT_DOC,
+  }),
+
+  // --- cache ---------------------------------------------------------------
+  cacheFlag("VENIRA_CACHE_ALL", "Enable every read/list/search cache.", true),
+  cacheFlag("VENIRA_CACHE_LIST_ONLY", "Enable only the directory-listing cache.", false, { reason: NOT_DOC }),
+  cacheFlag("VENIRA_CACHE_SEARCH_ONLY", "Enable only the search cache.", false, { reason: NOT_DOC }),
+  cacheInt("VENIRA_LIST_CACHE_MS", "Directory-listing cache lifetime.", false, { default: "1500", reason: NOT_DOC }),
+  cacheInt("VENIRA_NEGATIVE_CACHE_MS", "Lifetime of cached not-found results.", false, {
+    default: "500",
+    reason: NOT_DOC,
+  }),
+  cacheInt("VENIRA_RECENT_CACHE_MS", "project_recent_files cache lifetime.", false, {
+    default: "2000",
+    reason: NOT_DOC,
+  }),
+  cacheInt("VENIRA_SEARCH_CACHE_MS", "Search cache lifetime.", false, { default: "3000", reason: NOT_DOC }),
+  cacheInt("VENIRA_READ_CACHE_BYTES", "Total size cap of the file-read cache.", false, {
+    default: "67108864",
+    reason: NOT_DOC,
+  }),
+
+  // --- audit ---------------------------------------------------------------
+  auditFlag("VENIRA_AUDIT_STRICT", "Fail a tool call when its audit row cannot be written.", false, {
+    default: "0",
+    reason: NOT_DOC,
+  }),
+  auditFlag("VENIRA_AUDIT_FAST", "Relax audit durability for speed.", false, { reason: NOT_DOC }),
+  auditInt("VENIRA_AUDIT_KEEP_DAYS", "Audit rows older than this many days are pruned.", false, {
+    default: "90",
+    reason: NOT_DOC,
+  }),
+
+  // --- snapshots -----------------------------------------------------------
+  snapPath("VENIRA_SNAPSHOT_ROOT", "Shared root folder for per-project checkpoint stores.", true),
+  snapPath("VENIRA_SNAPSHOT_DIR", "Exact checkpoint store folder (single project, no sub-folders).", true),
+  snapInt("VENIRA_SNAPSHOT_KEEP", "Checkpoints kept per project before pruning.", true, { default: "20" }),
+  snapInt("VENIRA_SNAPSHOT_MAX_BYTES", "Total size cap of a project checkpoint.", false, {
+    default: "536870912",
+    reason: NOT_DOC,
+  }),
+  snapInt("VENIRA_SNAPSHOT_MAX_FILE_BYTES", "Largest single file a checkpoint captures.", false, {
+    default: "33554432",
+    reason: NOT_DOC,
+  }),
+  snapInt("VENIRA_SNAPSHOT_MAX_FILES", "File-count cap of a checkpoint (0 keeps the built-in limit).", false, {
+    default: "0",
+    reason: NOT_DOC,
+  }),
+
+  // --- git providers -------------------------------------------------------
+  gitEnum("VENIRA_GIT_PROVIDER", "Force the CI/PR provider instead of detecting it from the remote.", true, {
+    choices: ["github", "gitlab", "bitbucket"],
+  }),
+  gitStr("VENIRA_GIT_TOKEN", "Provider token (prefer a stored secret via project_secret).", true),
+  gitInt("VENIRA_GIT_TIMEOUT_MS", "Provider API request timeout.", true),
+  gitInt("VENIRA_GIT_RETRIES", "Retries for transient provider errors.", true),
+  gitInt("VENIRA_GIT_LOG_TIMEOUT_MS", "Timeout for CI log downloads.", true),
+  gitInt("VENIRA_GIT_LOG_ZIP_BYTES", "Largest CI log archive accepted.", true),
+  gitInt("VENIRA_GIT_LOG_ENTRY_BYTES", "Largest single log entry read from an archive.", true),
+  gitInt("VENIRA_GIT_LOG_TEXT_BYTES", "Largest text kept from one log entry.", true),
+  gitInt("VENIRA_GIT_LOG_MAX_BYTES", "Total CI log bytes returned per call.", false, { reason: NOT_DOC }),
+  gitInt("VENIRA_GIT_MAX_BYTES", "Largest provider API response accepted.", false, { reason: NOT_DOC }),
+  gitInt("VENIRA_GIT_MAX_REDIRECTS", "Redirects followed (same-origin only).", false, { reason: NOT_DOC }),
+  gitFlag("VENIRA_GIT_ALLOW_HTTP", "Allow plain-HTTP provider URLs (tokens may travel in clear text).", false, {
+    default: "0",
+    reason: NOT_DOC,
+  }),
+  gitFlag("VENIRA_GITHUB_ALLOW_HTTP", "Same as VENIRA_GIT_ALLOW_HTTP, GitHub spelling.", false, {
+    default: "0",
+    reason: NOT_DOC,
+  }),
+  gitList("VENIRA_GIT_ALLOWED_HOSTS", "Extra API hosts the provider client may call.", false, { reason: NOT_DOC }),
+  gitStr("VENIRA_GIT_API_URL", "Provider API base URL (self-hosted instances).", false, { reason: NOT_DOC }),
+  gitStr("VENIRA_GITHUB_API_URL", "Alias of VENIRA_GIT_API_URL.", false, { reason: NOT_DOC }),
+  gitStr("VENIRA_GIT_PROXY", "HTTP(S) proxy for provider calls.", false, { reason: NOT_DOC }),
+  gitStr("VENIRA_GIT_REPO", "Repository slug override (owner/name).", false, { reason: NOT_DOC }),
+  gitStr("VENIRA_GITHUB_REPO", "GitHub repository slug override.", false, { reason: NOT_DOC }),
+  gitStr("VENIRA_GITLAB_REPO", "GitLab project path override.", false, { reason: NOT_DOC }),
+  gitStr("VENIRA_BITBUCKET_REPO", "Bitbucket repository slug override.", false, { reason: NOT_DOC }),
+  gitStr("VENIRA_GIT_SECRET_NAME", "Name of the stored secret holding the provider token.", false, {
+    reason: NOT_DOC,
+  }),
+  gitStr("VENIRA_GIT_TOKEN_ENV", "Name of another environment variable holding the provider token.", false, {
+    reason: NOT_DOC,
+  }),
+  gitStr("VENIRA_GIT_USERNAME", "Username for providers that need one (Bitbucket app passwords).", false, {
+    reason: NOT_DOC,
+  }),
+  gitStr("VENIRA_GITHUB_TOKEN", "GitHub token (falls back to GITHUB_TOKEN / GH_TOKEN).", false, { reason: NOT_DOC }),
+  gitStr("VENIRA_GITLAB_TOKEN", "GitLab token (falls back to GITLAB_TOKEN / GL_TOKEN).", false, { reason: NOT_DOC }),
+  gitStr("VENIRA_BITBUCKET_TOKEN", "Bitbucket token (falls back to BITBUCKET_TOKEN / BB_TOKEN).", false, {
+    reason: NOT_DOC,
+  }),
+
+  // --- secrets -------------------------------------------------------------
+  secretFlag("VENIRA_SECRET_ALLOW_REVEAL", "Allow `project_secret reveal=1` to print a stored secret.", true, {
+    default: "0",
+  }),
+  secretEnum("VENIRA_SECRET_KEYCHAIN", "Windows keychain use for the secret store key.", false, {
+    default: "auto",
+    choices: ["auto", "off", "required", "0", "1", "false", "true"],
+    reason: NOT_DOC,
+  }),
+
+  // --- observability -------------------------------------------------------
+  obsFlag("VENIRA_TRACE", "Write a trace of tool calls to stderr.", true),
+  obsPath("VENIRA_TRACE_FILE", "Also append the trace to this file (rotates at 10 MB).", false, { reason: NOT_DOC }),
+
+  // --- internal / test -----------------------------------------------------
+  internal("flag", "observability", "VENIRA_VERIFY_DEBUG", "Extra logging inside the verify harness.", "developer diagnostics"),
+  testOnly("VENIRA_SHELL_SECURITY_DEBUG", "Echo server stderr during the shell-security regression test."),
+  testOnly("VENIRA_TEST_ONLY", "Fixture variable used to check shell environment filtering."),
+  testOnly("VENIRA_TEST_SECRET", "Fixture secret used to check scrubbing in verify."),
+  testOnly("VENIRA_LEAK_TEST_SECRET", "Fixture secret used by the provider secret-guard test."),
+];
+
+const BY_NAME: ReadonlyMap<string, EnvVarSpec> = new Map(ENV_REGISTRY.map((entry) => [entry.name, entry]));
+
+export function envSpec(name: string): EnvVarSpec | undefined {
+  return BY_NAME.get(name);
+}
+
+/** Names validated as strict 0/1 flags at startup. */
+export const ENV_FLAG_NAMES: readonly string[] = ENV_REGISTRY.filter((entry) => entry.kind === "flag").map(
+  (entry) => entry.name,
+);
+
+export type EnvIssueCode = "invalid_flag" | "invalid_enum" | "invalid_int" | "unknown_name" | "removed_var";
+
+export interface EnvIssue {
+  code: EnvIssueCode;
+  name: string;
+  message: string;
+  suggestion?: string;
+}
+
+function editDistance(a: string, b: string): number {
+  const prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i += 1) {
+    let diagonal = prev[0];
+    prev[0] = i;
+    for (let j = 1; j <= b.length; j += 1) {
+      const above = prev[j];
+      prev[j] = Math.min(prev[j] + 1, prev[j - 1] + 1, diagonal + (a[i - 1] === b[j - 1] ? 0 : 1));
+      diagonal = above;
+    }
+  }
+  return prev[b.length];
+}
+
+/** Closest registered name for a probable typo, or undefined when nothing is close. */
+export function suggestEnvName(name: string): string | undefined {
+  let best: { name: string; distance: number } | undefined;
+  for (const entry of ENV_REGISTRY) {
+    if (entry.status === "test") continue;
+    const distance = editDistance(name, entry.name);
+    if (!best || distance < best.distance) best = { name: entry.name, distance };
+  }
+  if (!best) return undefined;
+  const limit = Math.max(2, Math.floor(name.length / 8));
+  return best.distance <= limit ? best.name : undefined;
+}
+
+const NAME_SHAPE = /^VENIRA_[A-Z0-9_]+$/;
+
+/**
+ * Pure environment check against the registry. Reports problems; it never
+ * throws and never changes behaviour (flags and enums that already fail closed
+ * at read time keep doing so; this surfaces the rest: typos, removed variables
+ * and lenient values that would silently fall back to a default).
+ */
+export function checkEnvironment(env: Readonly<Record<string, string | undefined>> = process.env): EnvIssue[] {
+  const issues: EnvIssue[] = [];
+  for (const key of Object.keys(env).sort()) {
+    if (!NAME_SHAPE.test(key)) continue;
+    const value = env[key];
+    if (value === undefined) continue;
+    const entry = BY_NAME.get(key);
+    if (!entry) {
+      const suggestion = suggestEnvName(key);
+      issues.push({
+        code: "unknown_name",
+        name: key,
+        message: `${key} is not a known VENIRA_ variable and is ignored${suggestion ? `; did you mean ${suggestion}?` : "."}`,
+        ...(suggestion ? { suggestion } : {}),
+      });
+      continue;
+    }
+    if (entry.status === "removed") {
+      issues.push({
+        code: "removed_var",
+        name: key,
+        message: `${key} was removed and is ignored; ${entry.removedNote ?? "remove it from the environment."}`,
+      });
+      continue;
+    }
+    if (entry.kind === "flag" && value !== "0" && value !== "1") {
+      issues.push({ code: "invalid_flag", name: key, message: `${key} must be "0" or "1" (got "${value}").` });
+    } else if (entry.kind === "enum" && entry.choices) {
+      const normalized = value.trim().toLowerCase();
+      const ok = normalized === "" ? entry.allowEmpty === true : entry.choices.includes(normalized);
+      if (!ok) {
+        issues.push({
+          code: "invalid_enum",
+          name: key,
+          message: `${key} must be one of: ${entry.choices.join(", ")} (got "${value}").`,
+        });
+      }
+    } else if (entry.kind === "int" && !/^\d+$/.test(value.trim())) {
+      issues.push({
+        code: "invalid_int",
+        name: key,
+        message: `${key} must be a non-negative integer (got "${value}"); the built-in default is used instead.`,
+      });
+    }
+  }
+  return issues;
+}

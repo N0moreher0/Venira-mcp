@@ -24,7 +24,8 @@ import {
 } from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
-import Database from "better-sqlite3";
+import { createRequire } from "node:module";
+import type Database from "better-sqlite3";
 import type { HostSnapshot } from "./types.js";
 import { loadAuditKey, hashAuditRow } from "./audit-hash.js";
 import {
@@ -123,6 +124,8 @@ function auditDbPath(): string {
 function ensureAuditDb(): Database.Database | null {
   if (auditDb) return auditDb;
   try {
+    const require = createRequire(import.meta.url);
+    const Database = require("better-sqlite3") as new (dbPath: string, options?: unknown) => Database.Database;
     const dbPath = auditDbPath();
     const dir = path.dirname(dbPath);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
@@ -551,6 +554,8 @@ const TAIL_LIMIT = (() => {
   const value = Number(process.env.VENIRA_SHELL_TAIL_MAX);
   return Number.isFinite(value) && value >= 256 ? Math.floor(value) : 2000;
 })();
+/** Effective tail length; `project_health` reports this so it cannot drift from the real default. */
+export const SHELL_TAIL_LIMIT = TAIL_LIMIT;
 /** VENIRA_SHELL_EXIT_EARLY=1: pollers return immediately when the exit code is
  * already known, without waiting out the full wait_seconds window. */
 export const SHELL_EXIT_EARLY = envFlag("VENIRA_SHELL_EXIT_EARLY", false);
@@ -2063,7 +2068,7 @@ async function opShellRun(
           `Set VENIRA_SHELL_OVERRIDES=${override} explicitly to enable it.`,
       );
     }
-    if (!shellOverrideMatches(override, command, cwd)) {
+    if (!shellOverrideMatches(override, command, cwd, shell)) {
       throw new Error(
         `[override_scope_mismatch] Override ${override} does not cover this command (rule: override.${override}); ` +
           `remove override or use a command within its documented scope.`,
@@ -2076,6 +2081,7 @@ async function opShellRun(
   // -------------------------------------------------------------------------
   const evaluatedDecision = evaluateShellCommand(command, cwd, {
     ...(override ? { override, overrideReason: String(args.reason).trim() } : {}),
+    shell,
   });
   const decision: Decision =
     secretNames.length > 0 && evaluatedDecision.tier !== "deny"
@@ -2088,7 +2094,7 @@ async function opShellRun(
       : evaluatedDecision;
   const dryRun = [1, true, "1", "true"].includes(args.dry_run as number | boolean | string);
   if (!dryRun) recordDecision(decision);
-  const parsed = parseShellCommand(command);
+  const parsed = parseShellCommand(command, { shell });
   const approvalKey = commandKey(parsed);
   // Everything an approval covers: a grant only redeems for this exact call.
   const approvalBinding = approvals.bindingHash({

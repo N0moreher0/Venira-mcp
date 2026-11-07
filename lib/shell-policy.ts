@@ -164,6 +164,46 @@ const WRITE_COMMANDS = new Set([
   "clear-content",
 ]);
 
+/** `-r`, `-rf`, `-fr`, `-R` or `--recursive`. */
+function hasRecursiveFlag(argv: string[]): boolean {
+  return argv.some((arg) => arg === "--recursive" || /^-[a-z]*r/i.test(arg));
+}
+
+/** `-f`, `-rf`, `-fr` or `--force`. */
+function hasForceFlag(argv: string[]): boolean {
+  return argv.some((arg) => arg === "--force" || /^-[a-z]*f/i.test(arg));
+}
+
+function hasRecursiveForce(argv: string[]): boolean {
+  return hasRecursiveFlag(argv) && hasForceFlag(argv);
+}
+
+const POSIX_ROOT_TARGET = /^\/+(?:\.\/+)*\*?$/;
+const WINDOWS_ROOT_TARGET = /^[A-Za-z]:[\\/](?:\*)?$/;
+const HOME_TARGET = /^(?:~|\$HOME|\$\{HOME\}|%USERPROFILE%)(?:[\\/]\*)?$/i;
+
+/**
+ * True for a delete target that is a filesystem root, the whole home
+ * directory, or a wildcard directly under either. Quoting is already removed by
+ * the tokenizer, so `"$HOME"`, `${HOME}` and `~/` all reduce to the same check.
+ */
+function catastrophicDeleteTarget(target: string, cwd: string): boolean {
+  const raw = target.trim();
+  if (!raw) return false;
+  if (POSIX_ROOT_TARGET.test(raw) || WINDOWS_ROOT_TARGET.test(raw) || HOME_TARGET.test(raw)) return true;
+  const expanded = expandHome(
+    raw
+      .replace(/^\$\{HOME\}/i, os.homedir())
+      .replace(/^\$HOME/i, os.homedir())
+      .replace(/^%USERPROFILE%/i, os.homedir()),
+  );
+  const abs = path.resolve(cwd, expanded);
+  if (abs === path.parse(abs).root) return true;
+  const home = path.resolve(os.homedir());
+  if (abs === home) return true;
+  return abs.startsWith(home + path.sep) && /[\\/]\*$/.test(expanded);
+}
+
 function writeTargetsOutside(parsed: ParsedCommand, cwd: string): string[] {
   const targets: string[] = [];
   for (const target of parsed.redirect_targets) {
@@ -173,6 +213,10 @@ function writeTargetsOutside(parsed: ParsedCommand, cwd: string): string[] {
     if (!WRITE_COMMANDS.has(segment.command)) continue;
     for (const arg of segment.argv.slice(1)) {
       if (arg.startsWith("-")) continue;
+      // cmd.exe switch flags use the `/x` spelling (`/f`, `/s`, `/q`), not `-x`.
+      // Skip them so a cmd delete like `del /f /s /q C:\Windows` is evaluated by
+      // its real operands instead of flagging the flags themselves as paths.
+      if (parsed.dialect === "cmd" && arg.startsWith("/")) continue;
       if (isOutsideWorkspace(arg, cwd)) targets.push(arg);
     }
   }
@@ -212,8 +256,11 @@ function mayMatchProtectedBasename(token: string, protectedNames: Set<string>): 
   if (/\.(pem|key|p12|pfx|jks|keystore|crt|cer|der|asc|gpg)$/i.test(base)) return true;
   if (!/[*?[]/.test(base)) return false;
 
+  // Only expand globs for names a broad pattern can genuinely target: dotfiles
+  // and SSH keys. Generic names such as `credentials.json` stay literal-only so
+  // `cat *.json` is not turned into a hard deny.
   const protectedCandidates = [
-    ...protectedNames,
+    ...[...protectedNames].filter((name) => name.startsWith(".") || name.startsWith("id_")),
     ".env",
     ".env.local",
     ".env.production",
@@ -233,9 +280,31 @@ function mayMatchProtectedBasename(token: string, protectedNames: Set<string>): 
     "credential.gpg",
   ];
   return protectedCandidates.some((candidate) => {
-    if (candidate.startsWith(".") && !base.startsWith(".")) return false;
+    if (!globSpecificEnough(base, candidate)) return false;
     return globMatches(base, candidate);
   });
+}
+
+/**
+ * A `*` alone matches every protected name, which would make `cat *` a hard
+ * deny. Require the pattern to carry a literal run (>=3 chars) that also appears
+ * in the candidate, or a literal prefix the candidate starts with
+ * (`id_*` → `id_rsa`). Specific patterns such as `*.env` still match.
+ */
+function globSpecificEnough(pattern: string, candidate: string): boolean {
+  const p = pattern.toLowerCase();
+  const c = candidate.toLowerCase();
+  const prefix = p.split(/[*?[\]]/)[0] ?? "";
+  if (prefix.length >= 3 && c.startsWith(prefix)) return true;
+  // A character class constrains the pattern (`[.]env`, `.e[n]v`), so keep
+  // matching it. Bare `*`/`?` patterns still fail the literal-check below.
+  if (/\[[^\]]+\]/.test(p) && p.replace(/\[[^\]]*\]/g, "").replace(/[*?]/g, "").length >= 2) {
+    return true;
+  }
+  return p
+    .split(/[*?[\]]+/)
+    .filter((run) => run.length >= 3)
+    .some((run) => c.includes(run));
 }
 
 /**
@@ -332,17 +401,56 @@ const HARD_DENY: HardDenyRule[] = [
   {
     id: "privilege_escalation",
     reason: "Elevating privileges is never allowed from an agent session.",
-    test: (_p, raw, _cwd) => /(^|[\s;&|`(])(sudo|doas|pkexec|runas)\b/i.test(raw),
+    test: (parsed, raw) =>
+      // Check parsed commands too: quoting, a path prefix (`/usr/bin/sudo`)
+      // or a shell escape must not hide an elevation from the raw regex.
+      parsed.segments.some((segment) => ["sudo", "doas", "pkexec", "runas"].includes(segment.command)) ||
+      /(^|[\s;&|`("'\\/])(sudo|doas|pkexec|runas)\b/i.test(raw) ||
+      /\bstart-process\b[^\n]*\s-verb\s+runas\b/i.test(raw),
   },
   {
     id: "root_delete",
     reason: "This deletes a filesystem root or your entire home directory.",
-    test: (_p, raw) => /(^|[\s;&|`(])rm\s+(-[a-z]*[rf][a-z]*\s+)+(\/|\/\*|~|~\/\*|\$HOME|\$HOME\/\*)\s*($|[;&|)`])/i.test(raw),
+    test: (parsed, raw, cwd) => {
+      const catastrophicRm = parsed.segments.some((segment) => {
+        if (segment.command !== "rm") return false;
+        const args = segment.argv.slice(1);
+        if (!hasRecursiveForce(args)) return false;
+        return args
+          .filter((arg) => !arg.startsWith("-"))
+          .some((target) => catastrophicDeleteTarget(target, cwd));
+      });
+      if (catastrophicRm) return true;
+      return /(^|[\s;&|`(])rm\s+(-[a-z]*[rf][a-z]*\s+)+(\/|\/\*|~|~\/\*|\$HOME|\$HOME\/\*)\s*($|[;&|)`])/i.test(raw);
+    },
   },
   {
     id: "chmod_root",
     reason: "Recursively opening permissions on the filesystem root.",
     test: (_p, raw) => /chmod\s+(-R\s+)?(777|a\+rwx)\s+\/(\s|$)/i.test(raw),
+  },
+  {
+    id: "filesystem_root_delete",
+    reason: "This deletes a filesystem root, a drive root, or the whole home directory.",
+    test: (parsed, _raw, cwd) => {
+      const destructiveCommands = new Set([
+        "rm",
+        "rmdir",
+        "rd",
+        "del",
+        "erase",
+        "remove-item",
+        "ri",
+      ]);
+      return parsed.segments.some((segment) => {
+        if (!destructiveCommands.has(segment.command)) return false;
+        const args = segment.argv.slice(1);
+        if (!hasRecursiveForce(args)) return false;
+        return args
+          .filter((arg) => !arg.startsWith("-"))
+          .some((target) => catastrophicDeleteTarget(target, cwd));
+      });
+    },
   },
   {
     id: "windows_mass_delete",
@@ -511,14 +619,29 @@ const ASK_RULES: AskRule[] = [
       parsed.segments.some((segment) => {
         if (["eval", "exec", "source", ".", "invoke-expression", "iex"].includes(segment.command)) return true;
         const flags = segment.argv;
-        if (segment.command === "node" || segment.command === "nodejs") {
+        // Interpreter + a script file / code operand the policy cannot statically
+        // analyze (`bash ./probe.sh`, `python3 ./probe.py`, `perl x.pl`, …) is
+        // dynamic execution, same as `bash -c …` / `python -c …`.
+        if (
+          [
+            "bash", "sh", "zsh", "ksh", "dash", "fish", "pwsh", "powershell", "python",
+            "python3", "perl", "ruby", "deno", "node", "nodejs", "tsx", "ts-node", "ts-node-esm", "cmd",
+          ].includes(segment.command) &&
+          flags.slice(1).some((arg) => !arg.startsWith("-"))
+        ) {
+          return true;
+        }
+        if (["node", "nodejs", "tsx", "ts-node", "ts-node-esm"].includes(segment.command)) {
+          // `tsx`/`ts-node` run arbitrary TypeScript/JavaScript just like `node`;
+          // treating them as safe would make the node gate meaningless.
+          const args = flags.slice(1); // drop the command itself
           const informationalFlags = new Set(["--version", "-v", "--help", "-h"]);
           return (
             parsed.has_pipe ||
             parsed.has_redirect ||
             parsed.has_background ||
-            flags.length === 0 ||
-            !flags.every((flag) => informationalFlags.has(flag.toLowerCase()))
+            args.length === 0 ||
+            !args.every((flag) => informationalFlags.has(flag.toLowerCase()))
           );
         }
         const interpreters: Record<string, string[]> = {
@@ -566,15 +689,17 @@ const ASK_RULES: AskRule[] = [
       parsed.segments.some((s) => {
         if (!["rm", "rd", "rmdir", "del", "erase", "remove-item", "ri"].includes(s.command)) return false;
         const args = s.argv.join(" ");
-        if (/\b-Recurse\b/i.test(args) && /\b-Force\b/i.test(args)) return true;
+        if (/-Recurse\b/i.test(args) && /-Force\b/i.test(args)) return true;
         if (s.command === "rd" || s.command === "rmdir") {
-          if (/\b\/s\b/i.test(args) && /\b\/q\b/i.test(args)) return true;
+          if (/\/s\b/i.test(args) && /\/q\b/i.test(args)) return true;
         }
         if (s.command === "del" || s.command === "erase") {
-          if (/\b\/f\b/i.test(args) && /\b\/q\b/i.test(args)) return true;
+          if (/\/f\b/i.test(args) && /\/q\b/i.test(args)) return true;
         }
         if (s.command === "rm") {
-          if (/\b-rf\b/i.test(args) && /\/\*$/i.test(args)) return true;
+          // Any spelling of recursive+force (`-rf`, `-fr`, `-r -f`,
+          // `--recursive --force`) is destructive, not just `-rf`.
+          if (hasRecursiveForce(s.argv.slice(1))) return true;
         }
         return false;
       }),
@@ -731,8 +856,8 @@ function matchesOverride(parsed: ParsedCommand, cwd: string, name: ShellOverride
   }
 }
 
-export function shellOverrideMatches(name: ShellOverride, command: string, cwd: string): boolean {
-  return matchesOverride(parseShellCommand(command), cwd, name);
+export function shellOverrideMatches(name: ShellOverride, command: string, cwd: string, shell?: string): boolean {
+  return matchesOverride(parseShellCommand(command, { shell }), cwd, name);
 }
 
 let cachedPolicy: ShellPolicy | null = null;
@@ -829,11 +954,11 @@ export function commandKey(parsed: ParsedCommand): string {
 export function evaluateShellCommand(
   command: string,
   cwd: string,
-  options: { mode?: ShellMode; override?: ShellOverride; overrideReason?: string } = {},
+  options: { mode?: ShellMode; override?: ShellOverride; overrideReason?: string; shell?: string } = {},
 ): Decision {
   const policy = loadShellPolicy();
   const mode = options.mode ?? policy.mode;
-  const parsed = parseShellCommand(command);
+  const parsed = parseShellCommand(command, { shell: options.shell });
   const enabled = enabledShellOverrides();
   const override = options.override
     ? {

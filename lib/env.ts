@@ -1,4 +1,5 @@
 import { resolveSecurityProfile } from "./security-profile.js";
+import { ENV_FLAG_NAMES, checkEnvironment } from "./env-registry.js";
 
 export function envFlag(name: string, defaultValue: boolean, value = process.env[name]): boolean {
   if (value === undefined) return defaultValue;
@@ -39,38 +40,20 @@ export function parseBackgroundFlag(value: unknown): boolean {
   return true;
 }
 
-const BOOLEAN_ENV_NAMES = [
-  "VENIRA_UNRESTRICTED",
-  "VENIRA_ALLOW_JS_EXEC",
-  "VENIRA_JS_EXEC_APPROVAL",
-  "VENIRA_CACHE_ALL",
-  "VENIRA_CACHE_LIST_ONLY",
-  "VENIRA_CACHE_SEARCH_ONLY",
-  "VENIRA_AUDIT_STRICT",
-  "VENIRA_AUDIT_FAST",
-  "VENIRA_SHELL_EXIT_EARLY",
-  "VENIRA_SHELL_ENV_PASS_ALL",
-  "VENIRA_EDIT_FUZZY",
-  "VENIRA_SHELL_AUTO_APPROVE_TOKEN",
-  "VENIRA_SECRET_ALLOW_REVEAL",
-  "VENIRA_SHELL_ELICIT",
-  "VENIRA_PRETTY",
-  "VENIRA_ALLOW_SELF_INSTALL",
-  "VENIRA_GIT_ALLOW_HTTP",
-  "VENIRA_GITHUB_ALLOW_HTTP",
-  "VENIRA_TRACE",
-  "VENIRA_VERIFY_DEBUG",
-] as const;
-
+/**
+ * Startup validation. Every `flag` in the environment registry must be exactly
+ * "0" or "1" (fails closed with `[config_invalid]`, as `envFlag` does at read
+ * time). Everything else the registry can detect (typos, removed variables,
+ * lenient enum/int values that would silently fall back to a default) is a
+ * warning on stderr only; stdout stays reserved for the MCP protocol.
+ */
 export function validateBooleanEnvironment(): void {
   resolveSecurityProfile(); // throws [config_invalid] on an unknown VENIRA_SECURITY_PROFILE
-  if (process.env.VENIRA_NETWORK !== undefined) {
-    console.error(
-      "[env] WARNING: VENIRA_NETWORK was removed and is ignored; Git-provider calls are always allowed. " +
-        "Restrict outbound network at the OS, container or firewall level instead.",
-    );
-  }
-  for (const name of BOOLEAN_ENV_NAMES) {
+  for (const name of ENV_FLAG_NAMES) {
     if (process.env[name] !== undefined) envFlag(name, false);
+  }
+  for (const issue of checkEnvironment()) {
+    if (issue.code === "invalid_flag") continue; // already thrown above
+    console.error(`[env] WARNING: ${issue.message}`);
   }
 }

@@ -4,7 +4,8 @@ import { promises as fs, readFileSync } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import { envChoice, envFlag, parseBackgroundFlag } from "../lib/env.js";
-import { CoreHost, SHELL_MAX_TIMEOUT_MS, shellPolicySnapshot, SCOPE_TTL_MS } from "../lib/corehost.js";
+import { CoreHost, SHELL_MAX_TIMEOUT_MS, SHELL_TAIL_LIMIT, shellPolicySnapshot, SCOPE_TTL_MS } from "../lib/corehost.js";
+import { checkEnvironment } from "../lib/env-registry.js";
 import * as approvals from "../lib/approvals.js";
 import {
   APPROVAL_PENDING_TTL_MS,
@@ -67,6 +68,7 @@ import {
 } from "../lib/self-install.js";
 import { explainErrorText } from "../lib/diagnostics.js";
 import { resolveSecurityProfile, securityProfileIsExplicit } from "../lib/security-profile.js";
+import { computeConfigPosture } from "../lib/config-posture.js";
 import {
   NAME_HIT_POINTS,
   buildReadPlan,
@@ -1622,25 +1624,21 @@ async function runCreate(args: Args): Promise<ToolResult> {
 // ---------------------------------------------------------------------------
 // project_health
 // ---------------------------------------------------------------------------
-/** Approval config as the agent should see it, plus operator-facing warnings. */
-function approvalsHealth(): { approvals: Record<string, unknown>; warnings: string[] } {
+/** Approval config as the agent should see it, plus the shared posture report. */
+function approvalsHealth(): {
+  approvals: Record<string, unknown>;
+  warnings: string[];
+  posture: ReturnType<typeof computeConfigPosture>;
+} {
   const policy = shellPolicySnapshot().policy;
-  const warnings: string[] = [];
   const securityProfile = resolveSecurityProfile();
-  if (securityProfile === "off") {
-    warnings.push("security_profile=off: shell checks and per-call JS approval are disabled. Use only in a trusted environment.");
-  }
-  if (policy.mode === "off") {
-    warnings.push("shell_mode=off: ALL shell policy checks are bypassed, hard-deny included (secret_env still asks).");
-  } else if (policy.mode === "permissive") {
-    warnings.push("shell_mode=permissive: hard-deny commands ask instead of being refused; ask-rule commands run without approval.");
-  }
-  if (ALLOW_JS_EXEC && !JS_EXEC_APPROVAL) {
-    warnings.push("project_execute_js is enabled without per-call approval (VENIRA_JS_EXEC_APPROVAL=0).");
-  }
-  if (/^(1|true|yes|on)$/i.test((process.env.VENIRA_SHELL_AUTO_APPROVE_TOKEN ?? "").trim())) {
-    warnings.push("VENIRA_SHELL_AUTO_APPROVE_TOKEN is set but was removed in v1.15; it is ignored.");
-  }
+  const sessionGrantRules = approvals.sessionGrantRules();
+  const posture = computeConfigPosture({
+    shellMode: policy.mode,
+    jsExecEnabled: ALLOW_JS_EXEC,
+    jsExecApproval: JS_EXEC_APPROVAL,
+    sessionGrantRules,
+  });
   return {
     approvals: {
       security_profile: securityProfile,
@@ -1650,11 +1648,16 @@ function approvalsHealth(): { approvals: Record<string, unknown>; warnings: stri
       js_exec_enabled: ALLOW_JS_EXEC,
       js_exec_approval: JS_EXEC_APPROVAL,
       elicitation: SHELL_ELICIT,
-      session_grant_rules: approvals.sessionGrantRules(),
+      session_grant_rules: sessionGrantRules,
       pending_ttl_ms: APPROVAL_PENDING_TTL_MS,
       max_wait_ms: APPROVAL_WAIT_MAX_MS,
     },
-    warnings,
+    // Kept for clients that already read the flat list; posture carries the
+    // same findings with stable ids and severities.
+    warnings: posture.findings
+      .filter((finding) => finding.severity !== "info")
+      .map((finding) => `${finding.id}: ${finding.summary}`),
+    posture,
   };
 }
 
@@ -1922,10 +1925,12 @@ async function runHealth(args: Args): Promise<ToolResult> {
       },
       trace: traceSnapshot(),
       shell: {
-        tail_max: Number(process.env.VENIRA_SHELL_TAIL_MAX ?? 4096),
+        tail_max: SHELL_TAIL_LIMIT,
         exit_early: envFlag("VENIRA_SHELL_EXIT_EARLY", false),
         timeout_policy: envChoice("VENIRA_SHELL_TIMEOUT_POLICY", "soft", ["soft", "hard"]),
       },
+      // Typos, removed variables and lenient values the registry can detect (warnings only).
+      environment: { issues: checkEnvironment() },
       audit: includeAudit ? await auditHealth(dbPath) : { skipped: true },
     };
     const elapsedMs = performance.now() - started;
@@ -2081,10 +2086,19 @@ const JS_EXEC_RULE = "ask.js_exec";
  * The whole call is the approval scope: the script plus its argv. Hashing both
  * (instead of trusting a stored copy) means a grant cannot be replayed for a
  * different snippet or different `process.argv` values.
+ *
+ * This exact string is also what the pending record stores as `command`, so
+ * `readPendingApproval` can recompute the binding from the fields a human
+ * reviewed and reject a record whose display copy was swapped. The CLI decodes
+ * it back into readable code + argv (`formatPendingCommand`).
  */
+function jsExecCommand(code: string, argv: string[] | undefined): string {
+  return `${code}\u0000${JSON.stringify(argv ?? [])}`;
+}
+
 function jsExecBinding(code: string, argv: string[] | undefined): string {
   return approvals.bindingHash({
-    command: `${code}\u0000${JSON.stringify(argv ?? [])}`,
+    command: jsExecCommand(code, argv),
     shell: "node",
     cwd: WORKSPACE,
     secret_env: [],
@@ -2122,7 +2136,9 @@ async function runExecuteJs(args: Args): Promise<ToolResult> {
         // The approver must see exactly what they are approving, so the code is
         // stored as written (the data dir is per-user, 0700). Redaction belongs
         // in the tool response/transcript, not in the human's review copy.
-        command: code.slice(0, 8000),
+        // Must equal the hashed form, or the pending record fails its binding
+        // recomputation and can never be granted.
+        command: jsExecCommand(code, cliArgs),
         shell: "node",
         cwd: WORKSPACE,
         secretEnv: [],

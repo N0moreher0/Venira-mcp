@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, unlinkSync } from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { activeDataDir } from "./workspace.js";
@@ -70,6 +70,9 @@ function pendingPath(id: string): string {
 }
 function grantPath(id: string): string {
   return path.join(approvalsDir(), `${safeId(id)}.granted`);
+}
+function consumedPath(id: string): string {
+  return path.join(approvalsDir(), `${safeId(id)}.consumed`);
 }
 
 /** approval_ids are UUIDs we generated; refuse anything that could escape the dir. */
@@ -157,6 +160,20 @@ export function readPendingApproval(id: string): PendingApproval | null {
     const raw = readFileSync(pendingPath(id), "utf8");
     const p = JSON.parse(raw) as PendingApproval;
     if (!p.mac || !macMatches(pendingMac(p), p.mac)) return null;
+    // The MAC covers `binding`, but the human reviews the display fields. A
+    // writer who can reach the approvals dir (but not the key) must not be able
+    // to show a benign command while the signed binding covers another one, so
+    // recompute the binding from the fields actually displayed.
+    if (p.binding) {
+      const recomputed = bindingHash({
+        command: p.command,
+        shell: p.shell,
+        cwd: p.cwd,
+        secret_env: p.secret_env ?? [],
+        rule: p.rule,
+      });
+      if (recomputed !== p.binding) return null;
+    }
     if (p.expires_at <= Date.now()) {
       p.status = "expired";
     }
@@ -235,12 +252,37 @@ export function verifyApprovalGrant(
   return { ok: true, scope };
 }
 
-export function consumeApproval(id: string): void {
-  const p = readPendingApproval(id);
-  if (!p) return;
+/**
+ * Claim a grant exactly once. The claim is an exclusive create (`wx`, i.e.
+ * CREATE_NEW / O_EXCL) of the `.consumed` marker: when two processes redeem the
+ * same id concurrently, only one create succeeds and the loser gets EEXIST.
+ * `rename` was used before, but two concurrent renames of the same source can
+ * both report success on Windows, so it is not a reliable cross-process claim.
+ * Without a claim both would verify the grant first and then both would
+ * consume it (verify + write is not atomic).
+ *
+ * Returns false when the approval was already consumed, is unknown, or the
+ * grant file is missing/unclaimable. Callers must treat false as "do not run".
+ */
+export function consumeApproval(id: string): boolean {
+  let p: PendingApproval | null;
+  try {
+    p = readPendingApproval(id);
+  } catch {
+    return false;
+  }
+  if (!p || (p.status !== "pending" && p.status !== "granted")) return false;
+  if (!existsSync(grantPath(id))) return false; // never granted, or already claimed
+  try {
+    closeSync(openSync(consumedPath(id), "wx"));
+  } catch {
+    // EEXIST: another redeemer claimed it first.
+    return false;
+  }
+  try { unlinkSync(grantPath(id)); } catch { /* already removed */ }
   p.status = "consumed";
   try { writeFileAtomicSync(pendingPath(id), JSON.stringify(p, null, 2)); } catch { /* ignore */ }
-  try { unlinkSync(grantPath(id)); } catch { /* ignore */ }
+  return true;
 }
 
 export function cleanupExpired(): void {
@@ -252,6 +294,7 @@ export function cleanupExpired(): void {
         if (p && p.expires_at <= Date.now()) {
           try { unlinkSync(pendingPath(id)); } catch {}
           try { unlinkSync(grantPath(id)); } catch {}
+          try { unlinkSync(consumedPath(id)); } catch {}
         }
       }
     }

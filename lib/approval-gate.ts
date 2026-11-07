@@ -161,8 +161,36 @@ export function redeemApproval(
         : `Run \`${approveCommand(approvalId)}\` in a terminal first, then retry with approval_id="${approvalId}".`;
     return { ok: false, reason, hint };
   }
-  approvals.consumeApproval(approvalId);
+  if (!approvals.consumeApproval(approvalId)) {
+    // A concurrent redeemer claimed the grant between verify and consume.
+    return {
+      ok: false,
+      reason: "already_used",
+      hint: `This approval was already used. Call ${tool} again without approval_id to get a new approval_id for this exact call.`,
+    };
+  }
   return { ok: true, scope: verdict.scope ?? "once" };
+}
+
+/**
+ * Human-readable form of a pending record's `command`.
+ *
+ * Shell records store the command verbatim. JS records store the canonical
+ * binding string `code\0argv-json` (so the binding can be recomputed from what
+ * the human reviewed); decode it back to code plus an optional argv line.
+ */
+export function formatPendingCommand(p: approvals.PendingApproval): string {
+  if (p.tool !== "project_execute_js") return p.command;
+  const at = p.command.lastIndexOf("\u0000");
+  if (at < 0) return p.command;
+  const code = p.command.slice(0, at);
+  let argv: unknown;
+  try {
+    argv = JSON.parse(p.command.slice(at + 1));
+  } catch {
+    return p.command;
+  }
+  return Array.isArray(argv) && argv.length > 0 ? `${code}\nargv:    ${JSON.stringify(argv)}` : code;
 }
 
 /**
