@@ -3,19 +3,16 @@ import { createHash } from "node:crypto";
 import { promises as fs, readFileSync } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
-import { envChoice, envFlag, parseBackgroundFlag } from "../lib/env.js";
-import { CoreHost, SHELL_MAX_TIMEOUT_MS, SHELL_TAIL_LIMIT, shellPolicySnapshot, SCOPE_TTL_MS } from "../lib/corehost.js";
-import { checkEnvironment } from "../lib/env-registry.js";
+import { envFlag, parseBackgroundFlag } from "../lib/env.js";
+import { CoreHost, SHELL_MAX_TIMEOUT_MS, SCOPE_TTL_MS } from "../lib/corehost.js";
 import * as approvals from "../lib/approvals.js";
 import {
-  APPROVAL_PENDING_TTL_MS,
   APPROVAL_WAIT_MAX_MS,
   approveCommand,
 } from "../lib/approval-gate.js";
 import { evaluateToolPolicy } from "../lib/tool-policy.js";
-import { recordMetric, metricsSnapshot } from "../lib/metrics.js";
+import { recordMetric } from "../lib/metrics.js";
 import {
-  OUTPUT_MODE,
   batchEnvelope,
   buildEnvelope,
   errorEnvelope,
@@ -25,22 +22,15 @@ import {
   toolResult,
 } from "../lib/output.js";
 import type { RustResponse, ToolResult } from "../lib/output.js";
-import { VERSION } from "../lib/version.js";
 import { queryRecentFiles } from "../lib/corehost.js";
-import { snapshotHealth } from "../lib/snapshots.js";
-import { githubHealth } from "../lib/git-provider.js";
-import { secretsHealth } from "../lib/secrets.js";
 import {
   toHostPath,
-  UNRESTRICTED,
   WORKSPACE,
   CACHE_ALL_ENABLED,
   CACHE_LIST_ONLY_ENABLED,
   CACHE_SEARCH_ONLY_ENABLED,
   isProtectedPath,
   ALLOW_JS_EXEC,
-  JS_EXEC_APPROVAL,
-  activeDataDir,
 } from "../lib/workspace.js";
 import { addTrace, recentTraces, traceSnapshot } from "../lib/tracer.js";
 import { invalidateDependencyGraphCache } from "../lib/dependency-graph.js";
@@ -50,6 +40,7 @@ import { readTextFile, runDiffFiles, runOutlineSymbol } from "./project-codeinte
 import { runExecuteJs } from "./project-jsexec.js";
 import { runReadAudit } from "./project-audit.js";
 import { runRecentFiles, type RecentFilesDeps } from "./project-recent.js";
+import { dataDirFor, runHealth, type HealthDeps } from "./project-health.js";
 import { SESSION_ID } from "../lib/session.js";
 import {
   detectAllHarnesses,
@@ -58,8 +49,6 @@ import {
   type InstallResult,
 } from "../lib/self-install.js";
 import { explainErrorText } from "../lib/diagnostics.js";
-import { resolveSecurityProfile, securityProfileIsExplicit } from "../lib/security-profile.js";
-import { computeConfigPosture } from "../lib/config-posture.js";
 import {
   NAME_HIT_POINTS,
   buildReadPlan,
@@ -1438,186 +1427,9 @@ async function runCreate(args: Args): Promise<ToolResult> {
 }
 
 // ---------------------------------------------------------------------------
-// project_health
+// project_health lives in ./project-health.ts. The providers below expose the state
+// this module owns (caches, queue, capability, shell runs) as read-only snapshots.
 // ---------------------------------------------------------------------------
-/** Approval config as the agent should see it, plus the shared posture report. */
-function approvalsHealth(): {
-  approvals: Record<string, unknown>;
-  warnings: string[];
-  posture: ReturnType<typeof computeConfigPosture>;
-} {
-  const policy = shellPolicySnapshot().policy;
-  const securityProfile = resolveSecurityProfile();
-  const sessionGrantRules = approvals.sessionGrantRules();
-  const posture = computeConfigPosture({
-    shellMode: policy.mode,
-    jsExecEnabled: ALLOW_JS_EXEC,
-    jsExecApproval: JS_EXEC_APPROVAL,
-    sessionGrantRules,
-  });
-  return {
-    approvals: {
-      security_profile: securityProfile,
-      security_profile_explicit: securityProfileIsExplicit(),
-      shell_mode: policy.mode,
-      policy_source: policy.source,
-      js_exec_enabled: ALLOW_JS_EXEC,
-      js_exec_approval: JS_EXEC_APPROVAL,
-      elicitation: SHELL_ELICIT,
-      session_grant_rules: sessionGrantRules,
-      pending_ttl_ms: APPROVAL_PENDING_TTL_MS,
-      max_wait_ms: APPROVAL_WAIT_MAX_MS,
-    },
-    // Kept for clients that already read the flat list; posture carries the
-    // same findings with stable ids and severities.
-    warnings: posture.findings
-      .filter((finding) => finding.severity !== "info")
-      .map((finding) => `${finding.id}: ${finding.summary}`),
-    posture,
-  };
-}
-
-function dataDirFor(exe: string | null): string {
-  // `exe` is always null in the standalone (pure-Node, no Rust binary) build — kept as a
-  // parameter for call-site compatibility. Must match corehost.ts's ensureAuditDb(), which
-  // resolves VENIRA_DATA_DIR else the per-user default (lib/workspace.ts#defaultDataDir);
-  // falling back to WORKSPACE/data here would silently point at a DB nothing ever writes to.
-  void exe;
-  return activeDataDir();
-}
-
-async function auditHealth(dbPath: string): Promise<Record<string, unknown>> {
-  let exists = false;
-  let bytes = 0;
-  try {
-    const stat = await fs.stat(dbPath);
-    exists = stat.isFile();
-    bytes = stat.size;
-  } catch {
-    return { path: dbPath, exists: false, reachable: false };
-  }
-  if (!exists) return { path: dbPath, exists: false, reachable: false };
-
-  try {
-    const Database = (await import("better-sqlite3")).default;
-    const db = new Database(dbPath, { readonly: true, fileMustExist: true });
-    try {
-      const total = db.prepare("SELECT count(*) AS n FROM project_tool_audit").get() as { n?: unknown };
-      const orphan = db
-        .prepare(
-          "SELECT count(*) AS n FROM project_tool_audit WHERE outcome = 'running' AND completed_at IS NULL",
-        )
-        .get() as { n?: unknown };
-      const mine = db
-        .prepare("SELECT outcome, count(*) AS n FROM project_tool_audit WHERE session_id = ? GROUP BY outcome")
-        .all(SESSION_ID) as { outcome?: string; n?: unknown }[];
-      let loopFailures: Array<{ operation: string; reason_code: string; count: number }> = [];
-      let adoptionRuns: Array<{ operation: string; count: number; duration_ms: number }> = [];
-      try {
-        const loopRows = db
-          .prepare(
-            `SELECT operation, COALESCE(reason_code, 'operation_failed') AS reason_code, COUNT(*) AS n
-             FROM project_tool_audit
-             WHERE outcome = 'failed'
-               AND started_at >= ?
-               AND args_hash IS NOT NULL
-             GROUP BY operation, reason_code, args_hash
-             HAVING COUNT(*) >= 2
-             ORDER BY n DESC
-             LIMIT 20`,
-          )
-          .all(Date.now() - 10 * 60 * 1000) as Array<{ operation?: string; reason_code?: string; n?: number }>;
-        loopFailures = loopRows.map((row) => ({
-            operation: row.operation ?? "unknown",
-            reason_code: row.reason_code ?? "operation_failed",
-            count: Number(row.n ?? 0),
-          }));
-      } catch {
-        // Legacy databases without args_hash remain healthy; the migration may
-        // not have completed yet in a concurrently opened health reader.
-      }
-      try {
-        const adoptionRows = db
-          .prepare(
-            `SELECT id, session_id, operation, outcome, started_at, completed_at
-             FROM project_tool_audit
-             WHERE started_at >= ?
-             ORDER BY id ASC`,
-          )
-          .all(Date.now() - 10 * 60 * 1000) as Array<{
-          id: number;
-          session_id: string;
-          operation: string;
-          outcome: string;
-          started_at: number;
-          completed_at?: number | null;
-        }>;
-        const eligible = new Set(["read_file", "edit_file"]);
-        let current: { operation: string; session_id: string; count: number; started_at: number; ended_at: number } | null = null;
-        const flush = () => {
-          if (current && current.count >= 3) {
-            adoptionRuns.push({
-              operation: current.operation,
-              count: current.count,
-              duration_ms: Math.max(0, current.ended_at - current.started_at),
-            });
-          }
-          current = null;
-        };
-        for (const row of adoptionRows) {
-          const canJoin =
-            row.outcome === "succeeded" &&
-            eligible.has(row.operation) &&
-            current !== null &&
-            current.operation === row.operation &&
-            current.session_id === row.session_id &&
-            row.started_at - current.ended_at <= 60_000;
-          if (canJoin && current) {
-            current.count += 1;
-            current.ended_at = row.completed_at ?? row.started_at;
-          } else {
-            flush();
-            if (row.outcome === "succeeded" && eligible.has(row.operation)) {
-              current = {
-                operation: row.operation,
-                session_id: row.session_id,
-                count: 1,
-                started_at: row.started_at,
-                ended_at: row.completed_at ?? row.started_at,
-              };
-            }
-          }
-        }
-        flush();
-        adoptionRuns = adoptionRuns.sort((a, b) => b.count - a.count).slice(0, 20);
-      } catch {
-        // Legacy or concurrently migrated audit databases remain usable.
-      }
-      return {
-        path: dbPath,
-        exists: true,
-        bytes,
-        reachable: true,
-        total_rows: Number(total?.n ?? 0),
-        orphan_running: Number(orphan?.n ?? 0),
-        session: Object.fromEntries(mine.map((row) => [row.outcome ?? "unknown", Number(row.n ?? 0)])),
-        loop_failures: loopFailures,
-        adoption_runs: adoptionRuns,
-      };
-    } finally {
-      db.close();
-    }
-  } catch (error) {
-    return {
-      path: dbPath,
-      exists: true,
-      bytes,
-      reachable: false,
-      error: error instanceof Error ? error.message : String(error),
-    };
-  }
-}
-
 function cacheReport() {
   const rate = (counter: { hits: number; misses: number }) => {
     const total = counter.hits + counter.misses;
@@ -1668,99 +1480,29 @@ function cacheReport() {
   };
 }
 
-async function runHealth(args: Args): Promise<ToolResult> {
-  const started = performance.now();
-  const requestId = newRequestId();
-  // Refresh transparently so a long-lived process never reports an expired/stale scope.
-  try {
-    await capabilityReady();
-  } catch {
-    /* health still reports what it can (state "closed" below) */
-  }
-  const hostInfo = host.snapshot();
-  const dataDir = dataDirFor(hostInfo.exe);
-  const includeAudit = args.include_audit !== false;
-  try {
-    const dbPath = path.join(dataDir, "venira.db");
-    const data = {
-      notice: "Venira is a guard rail with an audit trail, not a sandbox. It runs with the OS user’s privileges. The workspace lock limits file-tool paths, not shell effects; prompt injection can still steer commands allowed by the active profile. Same-user processes can read keys in VENIRA_DATA_DIR. Use a container or VM for real isolation. See SECURITY.md.",
-      server: {
-        name: "venira-coding",
-        version: VERSION,
-        pid: process.pid,
-        session_id: SESSION_ID,
-        uptime_ms: Date.now() - STARTED_AT,
-        workspace: WORKSPACE,
-        unrestricted: UNRESTRICTED,
-        permission_mode: PERMISSION_MODE,
-        output_mode: OUTPUT_MODE,
-        pretty: envFlag("VENIRA_PRETTY", false),
-        node: process.version,
-      },
-      corehost: {
-        ...hostInfo,
-        exe: hostInfo.exe,
-        data_dir: dataDir,
-        audit_fast: envFlag("VENIRA_AUDIT_FAST", true),
-      },
-      capability: capability
-        ? {
-            state: capabilityState(capability),
-            project_id: capability.projectId,
-            opened_ago_ms: Date.now() - capability.openedAt,
-          }
-        : { state: opening ? "opening" : "closed" },
-      queue: {
-        depth: queueDepth,
-        in_flight: inFlight,
-        peak_depth: peakQueueDepth,
-      },
-      caches: cacheReport(),
-      shells: {
-        active: [...shellRuns.entries()]
-          .filter(([, state]) => state.running)
-          .map(([runId, state]) => ({ run_id: runId, exit_code: state.exit_code })),
-        tracked: shellRuns.size,
-        policy: shellPolicySnapshot(),
-      },
-      ...approvalsHealth(),
-      // Checkpoints: manifest-level only (no blob walk, so health stays fast).
-      snapshots: await snapshotHealth().catch(() => ({ store: "", checkpoints: 0, logical_bytes: 0 })),
-      // Secrets: counts + encryption only; the store path is reported, never values.
-      secrets: secretsHealth(),
-      // GitHub/CI: repo detection, api base, auth presence (never the token).
-      network: {
-        github: githubHealth(),
-      },
-      metrics: metricsSnapshot(),
-      // P1: config + observability surfaces
-      cache: {
-        all_enabled: CACHE_ALL_ENABLED,
-        list_enabled: CACHE_LIST_ONLY_ENABLED,
-        search_enabled: CACHE_SEARCH_ONLY_ENABLED,
-      },
-      trace: traceSnapshot(),
-      shell: {
-        tail_max: SHELL_TAIL_LIMIT,
-        exit_early: envFlag("VENIRA_SHELL_EXIT_EARLY", false),
-        timeout_policy: envChoice("VENIRA_SHELL_TIMEOUT_POLICY", "soft", ["soft", "hard"]),
-      },
-      // Typos, removed variables and lenient values the registry can detect (warnings only).
-      environment: { issues: checkEnvironment() },
-      audit: includeAudit ? await auditHealth(dbPath) : { skipped: true },
-    };
-    const elapsedMs = performance.now() - started;
-    recordMetric("health", elapsedMs, true);
-    return toolResult(buildEnvelope("health", { status: "completed", result: { kind: "health", data } }, {
-      requestId,
-      elapsedMs,
-    }));
-  } catch (error) {
-    const elapsedMs = performance.now() - started;
-    recordMetric("health", elapsedMs, false);
-    return toolResult(errorEnvelope("health", error, { requestId, elapsedMs }), true);
-  }
-}
+const healthDeps: HealthDeps = {
+  hostSnapshot: () => host.snapshot(),
+  refreshCapability: capabilityReady,
+  capability: () =>
+    capability
+      ? {
+          state: capabilityState(capability),
+          project_id: capability.projectId,
+          opened_ago_ms: Date.now() - capability.openedAt,
+        }
+      : { state: opening ? "opening" : "closed" },
+  queue: () => ({ depth: queueDepth, in_flight: inFlight, peak_depth: peakQueueDepth }),
+  caches: cacheReport,
+  shells: () => ({
+    active: [...shellRuns.entries()]
+      .filter(([, state]) => state.running)
+      .map(([runId, state]) => ({ run_id: runId, exit_code: state.exit_code })),
+    tracked: shellRuns.size,
+  }),
+  startedAt: STARTED_AT,
+  permissionMode: PERMISSION_MODE,
+  shellElicit: SHELL_ELICIT,
+};
 
 // ---------------------------------------------------------------------------
 // Tool registration
@@ -3020,7 +2762,7 @@ export function registerProjectTools(server: McpServer): void {
       ),
       inputSchema: { include_audit: flag01.optional() },
     },
-    (args) => runHealth(args as Args),
+    (args) => runHealth(args as Args, healthDeps),
 
   );
 

@@ -1,11 +1,13 @@
+import { promises as fs } from "node:fs";
 import path from "node:path";
 import { auditKeyPath, verifyAuditRows } from "../lib/audit-hash.js";
 import { readHexKey } from "../lib/keyfile.js";
 import { recordMetric } from "../lib/metrics.js";
 import { buildEnvelope, errorEnvelope, newRequestId, toolResult } from "../lib/output.js";
 import type { RustResponse, ToolResult } from "../lib/output.js";
+import { SESSION_ID } from "../lib/session.js";
 
-// project_read_audit handler. The caller resolves the audit DB path (it depends on
+// project_read_audit handler and the audit-DB health probe used by project_health. The caller resolves the audit DB path (it depends on
 // the corehost data dir), so this module only needs the path. Extracted verbatim
 // from tools/project.ts (P1 #6, step 5b); behavior is unchanged.
 
@@ -115,5 +117,137 @@ export async function runReadAudit(args: Args, dbPath: string): Promise<ToolResu
       errorEnvelope("read_audit", new Error(`[audit_unavailable] ${msg}`), { requestId, elapsedMs }),
       true,
     );
+  }
+}
+
+export async function auditHealth(dbPath: string): Promise<Record<string, unknown>> {
+  let exists = false;
+  let bytes = 0;
+  try {
+    const stat = await fs.stat(dbPath);
+    exists = stat.isFile();
+    bytes = stat.size;
+  } catch {
+    return { path: dbPath, exists: false, reachable: false };
+  }
+  if (!exists) return { path: dbPath, exists: false, reachable: false };
+
+  try {
+    const Database = (await import("better-sqlite3")).default;
+    const db = new Database(dbPath, { readonly: true, fileMustExist: true });
+    try {
+      const total = db.prepare("SELECT count(*) AS n FROM project_tool_audit").get() as { n?: unknown };
+      const orphan = db
+        .prepare(
+          "SELECT count(*) AS n FROM project_tool_audit WHERE outcome = 'running' AND completed_at IS NULL",
+        )
+        .get() as { n?: unknown };
+      const mine = db
+        .prepare("SELECT outcome, count(*) AS n FROM project_tool_audit WHERE session_id = ? GROUP BY outcome")
+        .all(SESSION_ID) as { outcome?: string; n?: unknown }[];
+      let loopFailures: Array<{ operation: string; reason_code: string; count: number }> = [];
+      let adoptionRuns: Array<{ operation: string; count: number; duration_ms: number }> = [];
+      try {
+        const loopRows = db
+          .prepare(
+            `SELECT operation, COALESCE(reason_code, 'operation_failed') AS reason_code, COUNT(*) AS n
+             FROM project_tool_audit
+             WHERE outcome = 'failed'
+               AND started_at >= ?
+               AND args_hash IS NOT NULL
+             GROUP BY operation, reason_code, args_hash
+             HAVING COUNT(*) >= 2
+             ORDER BY n DESC
+             LIMIT 20`,
+          )
+          .all(Date.now() - 10 * 60 * 1000) as Array<{ operation?: string; reason_code?: string; n?: number }>;
+        loopFailures = loopRows.map((row) => ({
+            operation: row.operation ?? "unknown",
+            reason_code: row.reason_code ?? "operation_failed",
+            count: Number(row.n ?? 0),
+          }));
+      } catch {
+        // Legacy databases without args_hash remain healthy; the migration may
+        // not have completed yet in a concurrently opened health reader.
+      }
+      try {
+        const adoptionRows = db
+          .prepare(
+            `SELECT id, session_id, operation, outcome, started_at, completed_at
+             FROM project_tool_audit
+             WHERE started_at >= ?
+             ORDER BY id ASC`,
+          )
+          .all(Date.now() - 10 * 60 * 1000) as Array<{
+          id: number;
+          session_id: string;
+          operation: string;
+          outcome: string;
+          started_at: number;
+          completed_at?: number | null;
+        }>;
+        const eligible = new Set(["read_file", "edit_file"]);
+        let current: { operation: string; session_id: string; count: number; started_at: number; ended_at: number } | null = null;
+        const flush = () => {
+          if (current && current.count >= 3) {
+            adoptionRuns.push({
+              operation: current.operation,
+              count: current.count,
+              duration_ms: Math.max(0, current.ended_at - current.started_at),
+            });
+          }
+          current = null;
+        };
+        for (const row of adoptionRows) {
+          const canJoin =
+            row.outcome === "succeeded" &&
+            eligible.has(row.operation) &&
+            current !== null &&
+            current.operation === row.operation &&
+            current.session_id === row.session_id &&
+            row.started_at - current.ended_at <= 60_000;
+          if (canJoin && current) {
+            current.count += 1;
+            current.ended_at = row.completed_at ?? row.started_at;
+          } else {
+            flush();
+            if (row.outcome === "succeeded" && eligible.has(row.operation)) {
+              current = {
+                operation: row.operation,
+                session_id: row.session_id,
+                count: 1,
+                started_at: row.started_at,
+                ended_at: row.completed_at ?? row.started_at,
+              };
+            }
+          }
+        }
+        flush();
+        adoptionRuns = adoptionRuns.sort((a, b) => b.count - a.count).slice(0, 20);
+      } catch {
+        // Legacy or concurrently migrated audit databases remain usable.
+      }
+      return {
+        path: dbPath,
+        exists: true,
+        bytes,
+        reachable: true,
+        total_rows: Number(total?.n ?? 0),
+        orphan_running: Number(orphan?.n ?? 0),
+        session: Object.fromEntries(mine.map((row) => [row.outcome ?? "unknown", Number(row.n ?? 0)])),
+        loop_failures: loopFailures,
+        adoption_runs: adoptionRuns,
+      };
+    } finally {
+      db.close();
+    }
+  } catch (error) {
+    return {
+      path: dbPath,
+      exists: true,
+      bytes,
+      reachable: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
   }
 }
