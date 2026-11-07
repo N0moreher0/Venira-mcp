@@ -120,18 +120,27 @@ out.health_ok = JSON.parse(String(
   (health.result as { content?: { text?: string }[] })?.content?.[0]?.text ?? "{}",
 )).ok === true;
 
+// Parse the envelope instead of substring-matching '"ok":true': pretty-printed output has a space after the colon.
+const resultOk = (result: unknown): boolean => {
+  try {
+    return JSON.parse(String((result as { content?: { text?: string }[] })?.content?.[0]?.text ?? "{}")).ok === true;
+  } catch {
+    return false;
+  }
+};
+
 const ranges = await call("project_read_file", {
   relative_path: "server.ts",
   ranges: [{ start_line: 1, end_line: 10 }, { start_line: 20, end_line: 30 }],
 });
 out.read_ranges_ms = ranges.ms.toFixed(1);
 out.read_ranges_bytes = text(ranges.result).length;
-out.read_ranges_ok = ((ranges.result as { content?: { text?: string }[] })?.content?.[0]?.text?.includes('"ok":true') ?? false);
+out.read_ranges_ok = resultOk(ranges.result);
 
 const recent = await call("project_recent_files", { relative_path: ".", limit: 20 });
 out.recent_files_ms = recent.ms.toFixed(1);
 out.recent_files_bytes = text(recent.result).length;
-out.recent_files_ok = ((recent.result as { content?: { text?: string }[] })?.content?.[0]?.text?.includes('"ok":true') ?? false);
+out.recent_files_ok = resultOk(recent.result);
 
 await client.close();
 console.log(JSON.stringify(out, null, 2));

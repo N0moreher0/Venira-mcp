@@ -179,16 +179,44 @@ export function isProtectedPath(absPath: string): boolean {
   if (/^id_(rsa|dsa|ecdsa|ed25519)(\.pub)?$/i.test(base)) return true;
   // Everything under the data dir (approval store + key, audit DB, secrets) is
   // off-limits to the file tools: the agent must not be able to forge a grant.
-  try {
-    if (isInsideDir(canonicalPath, realPathOrSelf(activeDataDir()))) return true;
-    // The checkpoint store (shared root and/or exact override) is equally off-limits.
-    for (const snapshotRoot of snapshotProtectedRoots(defaultDataDir(), WORKSPACE)) {
-      if (isInsideDir(canonicalPath, realPathOrSelf(snapshotRoot))) return true;
-    }
-  } catch {
-    /* fall through */
+  // The checkpoint store (shared root and/or exact override) is equally off-limits.
+  for (const root of canonicalProtectedRoots()) {
+    if (isInsideDir(canonicalPath, root)) return true;
   }
   return false;
+}
+
+/**
+ * Canonical (symlink-resolved) data dir + checkpoint roots. Resolving them costs
+ * several realpath/exists syscalls, and isProtectedPath runs once per directory
+ * entry, so the result is cached briefly. The cache key covers every input
+ * (data dir, workspace, snapshot env vars), and the short TTL bounds staleness
+ * if a link is created or replaced under one of these folders.
+ */
+const PROTECTED_ROOTS_TTL_MS = 2000;
+let protectedRootsCache: { key: string; at: number; roots: string[] } | null = null;
+
+function canonicalProtectedRoots(): string[] {
+  try {
+    const dataDir = activeDataDir();
+    const key = [dataDir, WORKSPACE, defaultDataDir(), process.env.VENIRA_SNAPSHOT_DIR ?? "", process.env.VENIRA_SNAPSHOT_ROOT ?? ""].join("\u0000");
+    const now = Date.now();
+    if (protectedRootsCache && protectedRootsCache.key === key && now - protectedRootsCache.at < PROTECTED_ROOTS_TTL_MS) {
+      return protectedRootsCache.roots;
+    }
+    const roots = [realPathOrSelf(dataDir)];
+    try {
+      for (const snapshotRoot of snapshotProtectedRoots(defaultDataDir(), WORKSPACE)) {
+        roots.push(realPathOrSelf(snapshotRoot));
+      }
+    } catch {
+      /* keep the data dir root */
+    }
+    protectedRootsCache = { key, at: now, roots };
+    return roots;
+  } catch {
+    return []; // same behaviour as before: a failure here never blocks the other checks
+  }
 }
 
 function realPathOrSelf(p: string): string {

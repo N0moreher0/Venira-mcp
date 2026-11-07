@@ -8,7 +8,7 @@
     "ram_gib": 11.8,
     "node": "v24.20.0",
     "powershell": "5.1.26100.8655",
-    "venira": "1.15.1"
+    "venira": "1.17.0 with isProtectedPath fix (component benchmark); live_codex_tool_path measured on 1.15.1"
   },
   "live_codex_tool_path": {
     "runs_per_phase": 20,
@@ -277,85 +277,225 @@
           ]
         }
       }
-    }
+    },
+    "venira_version": "1.15.1",
+    "note": "Not re-run on 1.17.0 (requires the Codex exec_command tool); cache-miss Venira numbers may be optimistic for 1.17.0, see same_day_ab_v1_16_2."
   },
   "local_component_benchmark": {
-    "generated_at_utc": "2026-11-06T17:19:11.461Z",
+    "venira_version": "1.17.0 with isProtectedPath fix",
+    "generated_at_utc": "2026-11-07T11:02:07.773Z",
     "command": "npm run bench:tools -- --runs=100",
     "runs_per_phase": 100,
+    "powershell_suite_total_ms": 10458.36,
     "comparison": "Persistent local MCP stdio client vs native PowerShell operations executed inside one PowerShell process; cache_miss clears only Venira in-process cache; OS file cache stays warm; semantic parity MATCH in every case.",
     "rows": [
       {
         "workload": "read_file package.json first 25 lines",
         "phase": "cache_miss",
-        "venira_mcp_e2e_p50_ms": 3.24,
-        "powershell_operation_p50_ms": 0.97,
+        "venira_mcp_e2e_p50_ms": 4.89,
+        "powershell_operation_p50_ms": 1.57,
         "parity": "MATCH"
       },
       {
         "workload": "read_file package.json first 25 lines",
         "phase": "warm",
-        "venira_mcp_e2e_p50_ms": 1.08,
-        "powershell_operation_p50_ms": 0.97,
+        "venira_mcp_e2e_p50_ms": 2.23,
+        "powershell_operation_p50_ms": 1.57,
         "parity": "MATCH"
       },
       {
         "workload": "read_batch 3 files",
         "phase": "cache_miss",
-        "venira_mcp_e2e_p50_ms": 7.92,
-        "powershell_operation_p50_ms": 2.64,
+        "venira_mcp_e2e_p50_ms": 12.98,
+        "powershell_operation_p50_ms": 3.61,
         "parity": "MATCH"
       },
       {
         "workload": "read_batch 3 files",
         "phase": "warm",
-        "venira_mcp_e2e_p50_ms": 1.38,
-        "powershell_operation_p50_ms": 2.64,
+        "venira_mcp_e2e_p50_ms": 2.31,
+        "powershell_operation_p50_ms": 3.61,
         "parity": "MATCH"
       },
       {
         "workload": "get_file_info",
         "phase": "cache_miss",
-        "venira_mcp_e2e_p50_ms": 1.91,
-        "powershell_operation_p50_ms": 1.37,
+        "venira_mcp_e2e_p50_ms": 2.19,
+        "powershell_operation_p50_ms": 0.63,
         "parity": "MATCH"
       },
       {
         "workload": "get_file_info",
         "phase": "warm",
-        "venira_mcp_e2e_p50_ms": 0.8,
-        "powershell_operation_p50_ms": 1.37,
+        "venira_mcp_e2e_p50_ms": 0.64,
+        "powershell_operation_p50_ms": 0.63,
         "parity": "MATCH"
       },
       {
         "workload": "list_files lib",
         "phase": "cache_miss",
-        "venira_mcp_e2e_p50_ms": 2.14,
-        "powershell_operation_p50_ms": 3.25,
+        "venira_mcp_e2e_p50_ms": 1.97,
+        "powershell_operation_p50_ms": 3.76,
         "parity": "MATCH"
       },
       {
         "workload": "list_files lib",
         "phase": "warm",
-        "venira_mcp_e2e_p50_ms": 0.83,
-        "powershell_operation_p50_ms": 3.25,
+        "venira_mcp_e2e_p50_ms": 0.71,
+        "powershell_operation_p50_ms": 3.76,
         "parity": "MATCH"
       },
       {
         "workload": "literal search in lib/corehost.ts",
         "phase": "cache_miss",
-        "venira_mcp_e2e_p50_ms": 38.12,
-        "powershell_operation_p50_ms": 39.64,
+        "venira_mcp_e2e_p50_ms": 28.71,
+        "powershell_operation_p50_ms": 41.35,
         "parity": "MATCH"
       },
       {
         "workload": "literal search in lib/corehost.ts",
         "phase": "warm",
-        "venira_mcp_e2e_p50_ms": 1.32,
-        "powershell_operation_p50_ms": 39.64,
+        "venira_mcp_e2e_p50_ms": 0.66,
+        "powershell_operation_p50_ms": 41.35,
         "parity": "MATCH"
+      }
+    ],
+    "pre_fix_v1_17_0_rows": [
+      {
+        "workload": "read_file package.json first 25 lines",
+        "phase": "cache_miss",
+        "venira_mcp_e2e_p50_ms": 11.11
+      },
+      {
+        "workload": "read_file package.json first 25 lines",
+        "phase": "warm",
+        "venira_mcp_e2e_p50_ms": 2.14
+      },
+      {
+        "workload": "read_batch 3 files",
+        "phase": "cache_miss",
+        "venira_mcp_e2e_p50_ms": 28.94
+      },
+      {
+        "workload": "read_batch 3 files",
+        "phase": "warm",
+        "venira_mcp_e2e_p50_ms": 4.33
+      },
+      {
+        "workload": "get_file_info",
+        "phase": "cache_miss",
+        "venira_mcp_e2e_p50_ms": 11.38
+      },
+      {
+        "workload": "get_file_info",
+        "phase": "warm",
+        "venira_mcp_e2e_p50_ms": 1.82
+      },
+      {
+        "workload": "list_files lib",
+        "phase": "cache_miss",
+        "venira_mcp_e2e_p50_ms": 152.62
+      },
+      {
+        "workload": "list_files lib",
+        "phase": "warm",
+        "venira_mcp_e2e_p50_ms": 0.86
+      },
+      {
+        "workload": "literal search in lib/corehost.ts",
+        "phase": "cache_miss",
+        "venira_mcp_e2e_p50_ms": 42.25
+      },
+      {
+        "workload": "literal search in lib/corehost.ts",
+        "phase": "warm",
+        "venira_mcp_e2e_p50_ms": 0.99
       }
     ]
   },
-  "interpretation": "The live-tool benchmark includes fresh PowerShell process startup on the native side and a persistent MCP session on the Venira side. It is a practical agent-tool-path comparison, not a raw filesystem benchmark. Component timings show that raw PowerShell operations can be faster for simple reads; Venira's benefit is strongest for repeated warm list/search operations and tool calls that avoid starting a fresh shell. This is one Windows machine and one run; results are not a general performance guarantee."
+  "interpretation": "The live-tool benchmark includes fresh PowerShell process startup on the native side and a persistent MCP session on the Venira side. It is a practical agent-tool-path comparison, not a raw filesystem benchmark. Component timings (Venira 1.17.0) show that raw PowerShell operations are faster for uncached reads, metadata and listings; Venira's benefit is strongest for repeated warm list/search operations and tool calls that avoid starting a fresh shell. This is one Windows machine and one run; results are not a general performance guarantee.",
+  "same_day_ab_v1_16_2": {
+    "note": "Same day, same machine, same harness; runs were sequential (not interleaved), so differences under ~30% are noise. v1.16.2 from detached worktree 176036b, v1.17.0 column is the build BEFORE the fix (4c4b311). Cause: isProtectedPath in lib/workspace.ts recomputed and re-canonicalised snapshot roots on every call. Fix: canonical protected roots cached for 2 s, keyed by data dir, workspace and snapshot env vars.",
+    "v1_16_2_generated": "2026-11-07",
+    "rows": [
+      {
+        "workload": "read_file",
+        "phase": "cache_miss",
+        "v1_16_2_mcp_e2e_p50_ms": 4,
+        "v1_17_0_mcp_e2e_p50_ms": 11.11,
+        "ratio": 2.78
+      },
+      {
+        "workload": "read_file",
+        "phase": "warm",
+        "v1_16_2_mcp_e2e_p50_ms": 1.69,
+        "v1_17_0_mcp_e2e_p50_ms": 2.14,
+        "ratio": 1.27
+      },
+      {
+        "workload": "read_batch 3 files",
+        "phase": "cache_miss",
+        "v1_16_2_mcp_e2e_p50_ms": 11.55,
+        "v1_17_0_mcp_e2e_p50_ms": 28.94,
+        "ratio": 2.51
+      },
+      {
+        "workload": "read_batch 3 files",
+        "phase": "warm",
+        "v1_16_2_mcp_e2e_p50_ms": 1.85,
+        "v1_17_0_mcp_e2e_p50_ms": 4.33,
+        "ratio": 2.34
+      },
+      {
+        "workload": "get_file_info",
+        "phase": "cache_miss",
+        "v1_16_2_mcp_e2e_p50_ms": 1.96,
+        "v1_17_0_mcp_e2e_p50_ms": 11.38,
+        "ratio": 5.81
+      },
+      {
+        "workload": "get_file_info",
+        "phase": "warm",
+        "v1_16_2_mcp_e2e_p50_ms": 0.79,
+        "v1_17_0_mcp_e2e_p50_ms": 1.82,
+        "ratio": 2.3
+      },
+      {
+        "workload": "list_files lib",
+        "phase": "cache_miss",
+        "v1_16_2_mcp_e2e_p50_ms": 1.81,
+        "v1_17_0_mcp_e2e_p50_ms": 152.62,
+        "ratio": 84.32
+      },
+      {
+        "workload": "list_files lib",
+        "phase": "warm",
+        "v1_16_2_mcp_e2e_p50_ms": 0.86,
+        "v1_17_0_mcp_e2e_p50_ms": 0.86,
+        "ratio": 1
+      },
+      {
+        "workload": "literal search in lib/corehost.ts",
+        "phase": "cache_miss",
+        "v1_16_2_mcp_e2e_p50_ms": 36.14,
+        "v1_17_0_mcp_e2e_p50_ms": 42.25,
+        "ratio": 1.17
+      },
+      {
+        "workload": "literal search in lib/corehost.ts",
+        "phase": "warm",
+        "v1_16_2_mcp_e2e_p50_ms": 0.75,
+        "v1_17_0_mcp_e2e_p50_ms": 0.99,
+        "ratio": 1.32
+      }
+    ]
+  },
+  "isProtectedPath_microbench": {
+    "calls": 2000,
+    "per_call_ms": {
+      "v1_16_2": 0.1139,
+      "v1_17_0_pre_fix": 2.1727,
+      "v1_17_0_fixed": 0.1009
+    }
+  }
 }
