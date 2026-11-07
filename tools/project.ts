@@ -79,8 +79,10 @@ import {
 const PERMISSION_MODE = process.env.VENIRA_PERMISSION_MODE ?? "allow_all";
 // allow_all grants the "chat-terminal" scope when there is no Project (same as the native app).
 // Set VENIRA_SESSION_ID so test/verify runs can trace their own audit rows.
+// The default prefix is client-neutral: the id is minted at module load, before
+// the MCP handshake says which client (Claude Desktop, opencode, ...) connected.
 export const SESSION_ID =
-  process.env.VENIRA_SESSION_ID ?? `opencode-${process.pid}-${randomBytes(3).toString("hex")}`;
+  process.env.VENIRA_SESSION_ID ?? `mcp-${process.pid}-${randomBytes(3).toString("hex")}`;
 
 const envInt = (name: string, fallback: number): number => {
   const value = Number(process.env[name]);
@@ -218,15 +220,22 @@ export async function warmUp(): Promise<void> {
     await capabilityReady();
     // Cache warm-up: proactively read the handful of files that are read
     // in virtually every session, so the first real tool call hits a
-    // warm cache. Failures (missing files) are expected and swallowed.
+    // warm cache. Only files that exist are read: a blind read of a missing
+    // file still lands in the audit table as failed/not_found on every start,
+    // which is noise and trips the health "loop_failures" warning.
     const candidates = ["README.md", "AGENTS.md", "CLAUDE.md", "package.json", ".env.example"];
     // Fire-and-forget: do not block server start on I/O warmup.
     void Promise.allSettled(
       candidates.map(async (name) => {
         try {
+          await fs.access(path.join(WORKSPACE, name));
+        } catch {
+          return; // absent: nothing to warm, and nothing to audit
+        }
+        try {
           await readFileCached({ relative_path: name } as Args);
         } catch {
-          /* not_found expected; negative cache stores it */
+          /* raced with a delete or unreadable: best-effort only */
         }
       }),
     ).catch(() => {});

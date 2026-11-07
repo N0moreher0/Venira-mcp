@@ -1593,6 +1593,9 @@ check("recent_files_includes_recent", recentFileNames.some((f) => f.endsWith("re
 
 // 15. Health: ok, corehost.exe, capability, caches, metrics
 await call("project_read_file", { relative_path: `${dir}/loop-metric-missing.txt` });
+// The negative cache (500 ms) would answer the second read without a backend call, so no
+// second failed audit row would exist. Clear it so the repeat is really audited.
+await call("project_cache_clear", { type: "negative" });
 await call("project_read_file", { relative_path: `${dir}/loop-metric-missing.txt` });
 await call("project_read_file", { relative_path: "server.ts", start_line: 1, end_line: 2 });
 await call("project_read_file", { relative_path: "server.ts", start_line: 3, end_line: 4 });
