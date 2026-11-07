@@ -1855,7 +1855,9 @@ async function computeHybridSearch(args: Args, symbolCache?: HybridSymbolCache):
   }
 
   const wordRe = identifier !== null ? new RegExp(`\\b${escapeRegExp(identifier)}\\b`) : null;
-  const tagged: HybridHit[] = hits.slice(0, requestedLimit).map((hit) => {
+  // Tag every raw hit (already bounded by the 200-hit over-fetch), rank, and only then apply
+  // `limit`. Slicing first would make the tag priority irrelevant for which hits are returned.
+  const taggedAll: HybridHit[] = hits.map((hit) => {
     const rel = String(hit.relative_path ?? "");
     const line = Number(hit.line_number ?? 0);
     const snippet = String(hit.snippet ?? "");
@@ -1870,6 +1872,16 @@ async function computeHybridSearch(args: Args, symbolCache?: HybridSymbolCache):
     }
     return { ...hit, source, confidence };
   });
+
+  // symbol_index > symbol_reference > content; ties keep file-walk order (explicit index tie-break,
+  // so the result does not depend on the engine's sort stability).
+  const sourceRank = (source: string): number =>
+    source === "symbol_index" ? 0 : source === "symbol_reference" ? 1 : 2;
+  const tagged: HybridHit[] = taggedAll
+    .map((hit, index) => ({ hit, index }))
+    .sort((a, b) => sourceRank(a.hit.source) - sourceRank(b.hit.source) || a.index - b.index)
+    .slice(0, requestedLimit)
+    .map((entry) => entry.hit);
 
   const truncated = tagged.length < hits.length || response.truncated === true || data.complete === false;
   const mergedData = {

@@ -385,6 +385,29 @@ export async function runSearch(
       ),
     hyb.data?.hits?.slice(0, 4),
   );
+  // Item 14 regression: ranking happens before `limit`, so even limit=1 must surface the definition
+  // (whichever raw-hit position it has in file-walk order) and agree with the larger-limit result.
+  const hybOne = asEnvelope(
+    await call("project_search", {
+      query: "CoreHost",
+      kind: "literal_content",
+      relative_path: ".",
+      glob: "*.ts",
+      hybrid: 1,
+      limit: 1,
+    }),
+  );
+  check(
+    "search_hybrid_ranks_before_limit",
+    Array.isArray(hybOne.data?.hits) &&
+      hybOne.data.hits.length === 1 &&
+      hybOne.data.hits[0].source === "symbol_index" &&
+      hybOne.data.complete === false &&
+      hyb.data?.hits?.[0]?.source === "symbol_index" &&
+      hyb.data.hits[0].relative_path === hybOne.data.hits[0].relative_path &&
+      hyb.data.hits[0].line_number === hybOne.data.hits[0].line_number,
+    { one: hybOne.data?.hits, eight: hyb.data?.hits?.slice(0, 2) },
+  );
   const scopedMiss = asEnvelope(
     await call("project_search", {
       query: "McpServer",
