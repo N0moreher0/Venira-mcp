@@ -599,6 +599,13 @@ const BASE_ENV_ALLOW = [
   "JAVA_HOME", "DOTNET_ROOT", "GOPATH", "GOROOT", "CARGO_HOME", "RUSTUP_HOME",
   "PYTHONPATH", "VIRTUAL_ENV", "CONDA_PREFIX", "NVM_HOME", "NVM_SYMLINK",
   "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "CI",
+  // Windows session basics. Without these (notably PSModulePath) a scrubbed
+  // powershell.exe spawn takes 24-30s on CI runners instead of ~1.7s because it
+  // re-discovers module paths from scratch. None of them carry secrets.
+  "PSModulePath", "SystemDrive", "ALLUSERSPROFILE", "PUBLIC", "DriverData",
+  "ProgramW6432", "CommonProgramFiles(x86)", "CommonProgramW6432",
+  "COMPUTERNAME", "USERDOMAIN", "USERDOMAIN_ROAMINGPROFILE", "LOGONSERVER",
+  "PROCESSOR_IDENTIFIER", "PROCESSOR_LEVEL", "PROCESSOR_REVISION",
 ];
 
 function buildShellEnv(overrides: Record<string, string> = {}): NodeJS.ProcessEnv {
@@ -609,10 +616,14 @@ function buildShellEnv(overrides: Record<string, string> = {}): NodeJS.ProcessEn
     .split(",")
     .map((name) => name.trim())
     .filter(Boolean);
-  const allow = new Set([...BASE_ENV_ALLOW, ...extra]);
+  // Windows env names are case-insensitive (the OS reports `ProgramFiles`, not
+  // `PROGRAMFILES`), so match case-insensitively there; keep exact match on POSIX.
+  const caseInsensitive = process.platform === "win32";
+  const norm = (name: string): string => (caseInsensitive ? name.toLowerCase() : name);
+  const allow = new Set([...BASE_ENV_ALLOW, ...extra].map(norm));
   const env: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(process.env)) {
-    if (value !== undefined && allow.has(key)) env[key] = value;
+    if (value !== undefined && allow.has(norm(key))) env[key] = value;
   }
   // Keep PATH resolvable even if the host named it unusually.
   if (!env.PATH && !env.Path && process.env.PATH) env.PATH = process.env.PATH;
