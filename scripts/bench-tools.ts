@@ -325,7 +325,6 @@ const main = async () => {
       VENIRA_SESSION_ID: `bench-tools-${process.pid}`,
       VENIRA_OUTPUT_MODE: "full",
       VENIRA_PRETTY: "0",
-      VENIRA_NETWORK: "0",
       VENIRA_UNRESTRICTED: "0",
       VENIRA_ALLOW_JS_EXEC: "0",
       VENIRA_TOOL_MODE: "expert",

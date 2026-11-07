@@ -227,9 +227,6 @@ export function createCorehost(config: WorkspaceConfig = {}): VeniraCorehost {
   if (config.allowSelfInstall !== undefined) {
     process.env.VENIRA_ALLOW_SELF_INSTALL = config.allowSelfInstall ? "1" : "0";
   }
-  if (config.network !== undefined) {
-    process.env.VENIRA_NETWORK = config.network ? "1" : "0";
-  }
   if (config.auditFast !== undefined) {
     process.env.VENIRA_AUDIT_FAST = config.auditFast ? "1" : "0";
   }
@@ -335,7 +332,6 @@ export function createCorehost(config: WorkspaceConfig = {}): VeniraCorehost {
         "auth_failed",
         "forbidden",
         "rate_limited",
-        "network_disabled",
       ];
       retryable = !nonRetryable.includes(code);
 
@@ -389,7 +385,6 @@ export function createCorehost(config: WorkspaceConfig = {}): VeniraCorehost {
       if (newConfig.allowJsExec !== undefined) process.env.VENIRA_ALLOW_JS_EXEC = newConfig.allowJsExec ? "1" : "0";
       if (newConfig.jsExecApproval !== undefined) process.env.VENIRA_JS_EXEC_APPROVAL = newConfig.jsExecApproval ? "1" : "0";
       if (newConfig.allowSelfInstall !== undefined) process.env.VENIRA_ALLOW_SELF_INSTALL = newConfig.allowSelfInstall ? "1" : "0";
-      if (newConfig.network !== undefined) process.env.VENIRA_NETWORK = newConfig.network ? "1" : "0";
       if (newConfig.auditFast !== undefined) process.env.VENIRA_AUDIT_FAST = newConfig.auditFast ? "1" : "0";
       if (newConfig.cacheAll !== undefined) process.env.VENIRA_CACHE_ALL = newConfig.cacheAll ? "1" : "0";
       if (newConfig.cacheListOnly !== undefined) process.env.VENIRA_CACHE_LIST_ONLY = newConfig.cacheListOnly ? "1" : "0";

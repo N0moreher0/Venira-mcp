@@ -14,7 +14,7 @@
         // "full" keeps envelopes complete; "compact" trims payloads over 8 KB.
         "VENIRA_OUTPUT_MODE": "full"
         // All other VENIRA_* flags keep safe defaults; only set them in this block
-        // when you intentionally need to change the default (e.g. VENIRA_NETWORK="0" for offline).
+        // when you intentionally need to change the default (e.g. VENIRA_SECURITY_PROFILE="strict").
       }
     }
   }

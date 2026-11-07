@@ -1864,6 +1864,7 @@ async function runHealth(args: Args): Promise<ToolResult> {
   try {
     const dbPath = path.join(dataDir, "venira.db");
     const data = {
+      notice: "Venira is a guard rail with an audit trail, not a sandbox. It runs with the OS user’s privileges. The workspace lock limits file-tool paths, not shell effects; prompt injection can still steer commands allowed by the active profile. Same-user processes can read keys in VENIRA_DATA_DIR. Use a container or VM for real isolation. See SECURITY.md.",
       server: {
         name: "venira-coding",
         version: VERSION,
@@ -1910,7 +1911,6 @@ async function runHealth(args: Args): Promise<ToolResult> {
       secrets: secretsHealth(),
       // GitHub/CI: repo detection, api base, auth presence (never the token).
       network: {
-        enabled: envFlag("VENIRA_NETWORK", true),
         github: githubHealth(),
       },
       metrics: metricsSnapshot(),
@@ -3569,13 +3569,13 @@ export function registerProjectTools(server: McpServer): void {
     "project_health",
     {
       ...config(
-        "Server diagnostics: corehost/data dir/audit DB, capability, queue depth, cache hit-rate, running shells, p50/p95 metrics.",
+        "Server diagnostics: corehost/data dir/audit DB, capability, queue depth, cache hit-rate, running shells, p50/p95 metrics, plus a security-limit notice (guard rail, not sandbox).",
         "Health & metrics",
         {
           use_when: "debugging slowness/errors, checking the backend/DB/audit before reporting, or inspecting this session's cache/metrics.",
           avoid_when: "you just need to read/write files normally.",
           speed_profile: "fast (~a few ms + 1 audit DB query); set include_audit=0 to skip the DB query.",
-          output_kind: "health: server, corehost, capability, queue, caches, shells, metrics, audit.",
+          output_kind: "health: notice, server, corehost, capability, queue, caches, shells, metrics, audit.",
           batch_safe: false,
         },
         { readOnlyHint: true, openWorldHint: false },
@@ -4464,7 +4464,7 @@ export function registerProjectTools(server: McpServer): void {
           avoid_when:
             "you want a snapshot right now (project_ci_status) or the full log of a specific job (project_ci_logs with job_id).",
           speed_profile:
-            "blocks up to timeout_ms (default 45 s, max 110 s) with 2–15 s backoff polling; unqueued, so other tools keep working. Respects VENIRA_NETWORK=0.",
+            "blocks up to timeout_ms (default 45 s, max 110 s) with 2–15 s backoff polling; unqueued, so other tools keep working.",
           output_kind:
             "ci_wait: overall, previous, changed, terminal, waited_ms, polls, run, selector, ci_status, failure_tail? {text, lines, truncated}; terminal=false means chain another call.",
           batch_safe: false,

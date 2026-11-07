@@ -55,7 +55,6 @@ function verifyEnv(extraEnv: Record<string, string> = {}, outputMode = "full") {
     VENIRA_SECRET_ALLOW_REVEAL: "0",
     VENIRA_SHELL_ELICIT: "0",
     VENIRA_PRETTY: "0",
-    VENIRA_NETWORK: "1",
     VENIRA_ALLOW_SELF_INSTALL: "0",
     VENIRA_GIT_ALLOW_HTTP: "0",
     VENIRA_GITHUB_ALLOW_HTTP: "0",
@@ -3026,12 +3025,6 @@ const providerCall = async (target: Client, name: string, args: Record<string, u
   return JSON.parse((raw as { content?: { text?: string }[] }).content?.[0]?.text ?? "{}");
 };
 
-// VENIRA_NETWORK=0 must refuse the wait before a socket opens.
-const offlineWaitClient = await providerClient({ VENIRA_NETWORK: "0" });
-const offlineWait = await providerCall(offlineWaitClient, "project_ci_wait", { run_id: 99, timeout_ms: 2000 });
-check("ci_wait_network_disabled", offlineWait.ok === false && offlineWait.error?.code === "network_disabled", offlineWait);
-await offlineWaitClient.close();
-
 const gl = await providerClient({
   VENIRA_GIT_PROVIDER: "gitlab",
   VENIRA_GIT_API_URL: gitlabMock.apiUrl,
@@ -3614,22 +3607,7 @@ check(
   { estimated_ms: planEstimate, files: planFileCount },
 );
 
-// 11e. Network kill switch + missing token (separate clients, real env variants).
-const offlineTransport = new StdioClientTransport({
-  command: "node",
-  args: ["dist/server.js"],
-  cwd: process.cwd(),
-  env: verifyEnv({ VENIRA_SESSION_ID: `${SESSION_ID}-offline`, VENIRA_NETWORK: "0" }, "full"),
-  stderr: "pipe",
-});
-const offlineClient = new Client({ name: "verify-offline", version: "0.0.0" }, { capabilities: {} });
-await offlineClient.connect(offlineTransport);
-const offline = asEnvelope(
-  await offlineClient.callTool({ name: "project_ci_status", arguments: { limit: 1 } }),
-);
-check("network_kill_switch", offline.error?.code === "network_disabled", offline);
-await offlineClient.close();
-
+// 11e. Missing token (separate client, real env variant).
 const authTransport = new StdioClientTransport({
   command: "node",
   args: ["dist/server.js"],
@@ -3688,13 +3666,6 @@ try {
 if (savedApiUrl === undefined) delete process.env.VENIRA_GITHUB_API_URL;
 else process.env.VENIRA_GITHUB_API_URL = savedApiUrl;
 check("provider_https_only", httpsOnly, undefined);
-
-const savedNetwork = process.env.VENIRA_NETWORK;
-process.env.VENIRA_NETWORK = "0";
-const networkOff = provider.networkEnabled() === false;
-if (savedNetwork === undefined) delete process.env.VENIRA_NETWORK;
-else process.env.VENIRA_NETWORK = savedNetwork;
-check("provider_network_unit", networkOff, undefined);
 
 // 11g. Config precedence, limits and HTTP knobs (pure unit checks).
 console.log("[verify] checking git config precedence + http knobs...");

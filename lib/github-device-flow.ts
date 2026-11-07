@@ -5,7 +5,6 @@ import {
   getSecretValueSync,
   setSecret,
 } from "./secrets.js";
-import { networkEnabled } from "./git-http.js";
 
 export const GITHUB_OAUTH_CLIENT_ID = "Ov23li4y56kYerOV6eo5";
 
@@ -105,9 +104,6 @@ export class GithubDeviceFlow {
     expires_in_seconds: number;
     poll_interval_seconds: number;
   }> {
-    if (!networkEnabled()) {
-      throw new Error("[network_disabled] Outbound network access is disabled (VENIRA_NETWORK=0).");
-    }
     if (this.hasToken() && !replaceExisting) {
       throw new Error("[already_configured] A GitHub credential is already stored. Set replace_existing=1 to connect another account.");
     }
@@ -158,9 +154,6 @@ export class GithubDeviceFlow {
   }
 
   async poll(pendingId: string): Promise<Record<string, unknown>> {
-    if (!networkEnabled()) {
-      throw new Error("[network_disabled] Outbound network access is disabled (VENIRA_NETWORK=0).");
-    }
     this.pruneExpired();
     const pending = this.pending.get(pendingId);
     if (!pending) {
@@ -256,9 +249,6 @@ export async function refreshGithubAccessTokenIfNeeded(fetcher: typeof fetch = f
     if (!refreshMeta || refreshMeta.expired) return;
     const refreshToken = getSecretValueSync("GITHUB_REFRESH_TOKEN");
     if (!refreshToken) return;
-    if (!networkEnabled()) {
-      throw new Error("[network_disabled] The GitHub access token expired while outbound network access is disabled.");
-    }
 
     const response = await fetcher("https://github.com/login/oauth/access_token", {
       method: "POST",

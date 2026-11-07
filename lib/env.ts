@@ -55,7 +55,6 @@ const BOOLEAN_ENV_NAMES = [
   "VENIRA_SECRET_ALLOW_REVEAL",
   "VENIRA_SHELL_ELICIT",
   "VENIRA_PRETTY",
-  "VENIRA_NETWORK",
   "VENIRA_ALLOW_SELF_INSTALL",
   "VENIRA_GIT_ALLOW_HTTP",
   "VENIRA_GITHUB_ALLOW_HTTP",
@@ -65,6 +64,12 @@ const BOOLEAN_ENV_NAMES = [
 
 export function validateBooleanEnvironment(): void {
   resolveSecurityProfile(); // throws [config_invalid] on an unknown VENIRA_SECURITY_PROFILE
+  if (process.env.VENIRA_NETWORK !== undefined) {
+    console.error(
+      "[env] WARNING: VENIRA_NETWORK was removed and is ignored; Git-provider calls are always allowed. " +
+        "Restrict outbound network at the OS, container or firewall level instead.",
+    );
+  }
   for (const name of BOOLEAN_ENV_NAMES) {
     if (process.env[name] !== undefined) envFlag(name, false);
   }

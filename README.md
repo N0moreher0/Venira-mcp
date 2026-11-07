@@ -1,8 +1,10 @@
 # venira-mcp
 
 Fast, workspace-scoped MCP server for coding agents (OpenCode, Claude Desktop, any MCP client).
-Two tool modes — **Default** (32 coding tools + shell, no CI/CD) · **Expert** (42 tools: default + CI/CD). Setting `VENIRA_ALLOW_JS_EXEC=1` adds `project_execute_js` (33 / 43).
+Two tool modes — **Default** (32 coding tools + shell, no CI/CD) · **Expert** (43 tools: default + CI/CD). Setting `VENIRA_ALLOW_JS_EXEC=1` adds `project_execute_js` (33 / 44).
 Pure Node, 1 native dependency (better-sqlite3), no GUI, no external binary.
+
+> **Security scope.** Venira is a guard rail with an audit trail, not a sandbox. It runs with the privileges of the OS user that started it. The workspace lock limits the paths the file tools can touch (unless `VENIRA_UNRESTRICTED=1`), not what a shell command does: commands are classified by rules (allow / ask / deny) and every call is audited, but a malicious prompt can still steer the agent into running a harmful command that the active profile lets through (with `off`, every command runs). Anything running as the same OS user can read the keys in `VENIRA_DATA_DIR`. For untrusted workspaces, or whenever you need a real isolation boundary, run Venira in a container or VM. Details: [`SECURITY.md`](./SECURITY.md).
 
 ## 1. Setup
 
@@ -170,7 +172,6 @@ VENIRA_SECURITY_PROFILE = "balanced"
 | `VENIRA_SHELL_MODE` | Profile mapping | You need to override only the shell policy (`strict`, `balanced`, `permissive`, or `off`) |
 | `VENIRA_JS_EXEC_APPROVAL` | Profile mapping | Trusted automation needs to skip per-call JS approval |
 | `VENIRA_ALLOW_JS_EXEC` | `0` | You need to register `project_execute_js` |
-| `VENIRA_NETWORK` | `1` | The workspace must run offline |
 | `VENIRA_UNRESTRICTED` | `0` | Keep workspace path restrictions enabled; do not set to `1` in production |
 
 See the full environment reference in §6 for caching, shell, provider, and diagnostic options.
@@ -227,7 +228,7 @@ Two tool modes set which tools the client sees. Set via `VENIRA_TOOL_MODE` env v
 | Mode | Tools | Includes |
 |---|---|---|
 | `default` | **32** (33 with `VENIRA_ALLOW_JS_EXEC=1`) | Read/write/edit/search, code intel, snapshots, shell, `project_delete_path`, optional JS exec — **no** CI/CD |
-| `expert` | **42** (43 with `VENIRA_ALLOW_JS_EXEC=1`) | Everything in default + `project_pr_*`, `project_ci_*` |
+| `expert` | **43** (44 with `VENIRA_ALLOW_JS_EXEC=1`) | Everything in default + `project_pr_*`, `project_ci_*` |
 
 `project_delete_path` is always available. In `balanced` / `strict` mode, shell `rm -rf /` / `~` and Windows drive-wide deletes are hard-denied, and recursive/force deletes (`Remove-Item -Recurse -Force`, `rd /s /q`, `del /f /q`) need approval. `permissive` mode applies no shell checks at all.
 
@@ -245,7 +246,7 @@ All tools return the standard envelope (`ok`, `kind`, `data`, `hint`, `elapsed_m
 | `project_search` | Search by file/dir name, content, regex, or symbol; `hybrid: 1` tags hits with `source`+`confidence` |
 | `project_recent_files` | Recently modified files (index-first, scan-fallback) |
 | `project_read_batch` | Up to 8 read-only ops in one call; each item takes the same arguments as its standalone tool (`search` items support `regex`, `case_sensitive`, `hybrid`, ...) |
-| `project_health` | Diagnostics: capability, queue, cache hit-rates, p50/p95 |
+| `project_health` | Diagnostics: capability, queue, cache hit-rates, p50/p95, and security limits notice |
 | `project_read_audit` | Read recent audit log rows |
 
 **Write (mutating, pass `reason`)**
@@ -284,7 +285,7 @@ All tools return the standard envelope (`ok`, `kind`, `data`, `hint`, `elapsed_m
 
 **Git provider: PR/CI (GitHub, GitLab, Bitbucket)**
 
-`project_pr_create/comment/merge/list/close/reopen`, `project_ci_status/trigger/logs/wait` — same tool args across providers; token from `project_secret` or env vars.
+`project_pr_create/comment/merge/list/close/reopen`, `project_ci_status/trigger/logs/wait`, `project_ci_control` (cancel / retry-failed; Bitbucket supports cancel only) — same tool args across providers; token from `project_secret` or env vars.
 
 CI reads are bounded and never hide a cap:
 
@@ -309,12 +310,12 @@ CI reads are bounded and never hide a cap:
 
 ## 6. Environment variables (key ones)
 
-Full reference: ~60 `VENIRA_*` flags — see the env table in the source or `npx venira-mcp --help`.
+Full reference: the source reads 90+ distinct `VENIRA_*` names; this table lists the documented ones. See the source or `npx venira-mcp --help` for the rest.
 
 | Variable | Default | What it does |
 |---|---|---|
 | `VENIRA_WORKSPACE` | `process.cwd()` | Workspace root; all paths resolve against it |
-| `VENIRA_TOOL_MODE` | `default` | `default` (32 tools) or `expert` (42 tools); +1 with `VENIRA_ALLOW_JS_EXEC=1` |
+| `VENIRA_TOOL_MODE` | `default` | `default` (32 tools) or `expert` (43 tools); +1 with `VENIRA_ALLOW_JS_EXEC=1` |
 | `VENIRA_OUTPUT_MODE` | `full` | `full` or `compact` (trim payloads > 8 KB) |
 | `VENIRA_PROFILE` | `full` | `full` or `core` (disables dependency graph / change impact) |
 | `VENIRA_UNRESTRICTED` | `"0"` | `"1"` disables workspace lock (never in production) |
@@ -328,7 +329,6 @@ Full reference: ~60 `VENIRA_*` flags — see the env table in the source or `npx
 | `VENIRA_USE_RIPGREP` | `"1"` | `"1"` uses ripgrep if installed (faster on big repos) |
 | `VENIRA_CACHE_ALL` | `"1"` | `"1"` TTL caches on · `"0"` always-fresh (slower) |
 | `VENIRA_EDIT_FUZZY` | `"0"` | `"1"` enables fuzzy-match fallback for `old_text` |
-| `VENIRA_NETWORK` | `"1"` | `"0"` = hard kill switch for all provider calls |
 | `VENIRA_DATA_DIR` | per-user OS path | Where audit DB + encrypted secrets live |
 | `VENIRA_SNAPSHOT_ROOT` | `<per-user data dir>/snapshots` | Shared checkpoint root for every project and client; each workspace gets its own sub-folder (absolute path) |
 | `VENIRA_SNAPSHOT_DIR` | unset | Exact checkpoint store for a single project, no sub-folders; wins over `VENIRA_SNAPSHOT_ROOT` (absolute path) |
@@ -453,7 +453,7 @@ Venira MCP rules:
 npm run build       # tsc → dist/  (verify launches dist/server.js, so rebuild before verifying)
 npm run smoke       # in-process sanity check
 npm run doctor      # 13 preflight checks
-npm run verify      # 493 behavioural + security checks
+npm run verify      # 507 behavioural + security checks
 npm run bench:mcp   # end-to-end numbers
 ```
 
@@ -477,7 +477,7 @@ npm run bench:mcp   # end-to-end numbers
 
 ## 12. Changelog (latest)
 
-**v1.17.0** (2026-11-07) — `project_read_batch` fixes and hybrid support: numeric 0/1 flags inside batch items (`regex`, `case_sensitive`, `whole_word`, `include_hidden`, `count_only`, `include_ignored`, `line_numbers`) were passed to the host as raw numbers and silently ignored, so a batch `search` with `regex: 1` matched the pattern as plain text (`A|B` returned nothing); they are now coerced exactly like the standalone tools. Batch `search` items with `hybrid: 1` (and `kind: literal_content`) now return the same tagged hits (`source`, `confidence`, `scope_widened`) as `project_search`. Hybrid items in one batch share a per-call symbol cache (each file is parsed once), and a hybrid item larger than `max_response_bytes_per_item` is trimmed to the hits that fit (`complete: false`, `trimmed_to_item_budget: true`) instead of failing with `resource_limit`. Adds 11 `verify` checks (`batch_flag_*`, `batch_hybrid_*`). Shell runs on Windows now keep the session environment (`PSModulePath` etc.) and the env allow list is matched case-insensitively on win32. Audit and startup fixes: `project_read_audit verify=1` no longer fails on rows written before the hash chain existed (they are counted in `legacy_rows`; a hash stripped *after* the chain started is still `missing_hash`), and benign forks left by concurrent writers of older versions are counted in `forks` instead of failing (a `prev_hash` that points at no known row is still `broken_link`); startup cache warm-up only reads files that exist, so it no longer logs `failed/not_found` rows and trips the `loop_failures` health warning on every start; the default session id prefix is now client-neutral (`mcp-<pid>-…`, was `opencode-<pid>-…`); adds `npm run test:audit-verify`, part of `npm run verify`. CI provider reliability (Phase E): GitHub and Bitbucket list/log reads now paginate with the same bounded rules as GitLab (5 pages / 200 items, same-origin only, `truncated`/`partial` reported); Bitbucket reads `state.result` so failed runs are no longer shown green; Bitbucket step lists follow the body `next` URL; log reads fetch failing steps first and refuse oversized declared archives early; `project_ci_wait` adds `summary`, `next_step`, `failing_jobs` and now tails the failing Bitbucket step (UUID ids were previously dropped). The existing `VENIRA_GIT_TIMEOUT_MS`, `VENIRA_GIT_RETRIES` and `VENIRA_GIT_LOG_*` limits are now documented in §6. Checkpoints move to a shared per-user store with one sub-folder per project (`VENIRA_SNAPSHOT_ROOT`, `VENIRA_SNAPSHOT_DIR`, name clashes resolved via `project.json` + hash suffix); the file tools now refuse the snapshot store. **Upgrade note:** the default store is no longer `<VENIRA_DATA_DIR>/snapshots`; point `VENIRA_SNAPSHOT_DIR` at the old folder to keep existing checkpoints.
+**v1.17.1** (2026-11-07) — Removes the application-level `VENIRA_NETWORK` kill switch (legacy settings are ignored with a warning; use OS/container policy for isolation); adds the security-limit notice to `doctor` and `project_health`; synchronizes the documented tool count at 32 Default / 43 Expert (33 / 44 with JS exec).\n\n**v1.17.0** (2026-11-07) — `project_read_batch` fixes and hybrid support: numeric 0/1 flags inside batch items (`regex`, `case_sensitive`, `whole_word`, `include_hidden`, `count_only`, `include_ignored`, `line_numbers`) were passed to the host as raw numbers and silently ignored, so a batch `search` with `regex: 1` matched the pattern as plain text (`A|B` returned nothing); they are now coerced exactly like the standalone tools. Batch `search` items with `hybrid: 1` (and `kind: literal_content`) now return the same tagged hits (`source`, `confidence`, `scope_widened`) as `project_search`. Hybrid items in one batch share a per-call symbol cache (each file is parsed once), and a hybrid item larger than `max_response_bytes_per_item` is trimmed to the hits that fit (`complete: false`, `trimmed_to_item_budget: true`) instead of failing with `resource_limit`. Adds 11 `verify` checks (`batch_flag_*`, `batch_hybrid_*`). Shell runs on Windows now keep the session environment (`PSModulePath` etc.) and the env allow list is matched case-insensitively on win32. Audit and startup fixes: `project_read_audit verify=1` no longer fails on rows written before the hash chain existed (they are counted in `legacy_rows`; a hash stripped *after* the chain started is still `missing_hash`), and benign forks left by concurrent writers of older versions are counted in `forks` instead of failing (a `prev_hash` that points at no known row is still `broken_link`); startup cache warm-up only reads files that exist, so it no longer logs `failed/not_found` rows and trips the `loop_failures` health warning on every start; the default session id prefix is now client-neutral (`mcp-<pid>-…`, was `opencode-<pid>-…`); adds `npm run test:audit-verify`, part of `npm run verify`. CI provider reliability (Phase E): GitHub and Bitbucket list/log reads now paginate with the same bounded rules as GitLab (5 pages / 200 items, same-origin only, `truncated`/`partial` reported); Bitbucket reads `state.result` so failed runs are no longer shown green; Bitbucket step lists follow the body `next` URL; log reads fetch failing steps first and refuse oversized declared archives early; `project_ci_wait` adds `summary`, `next_step`, `failing_jobs` and now tails the failing Bitbucket step (UUID ids were previously dropped). The existing `VENIRA_GIT_TIMEOUT_MS`, `VENIRA_GIT_RETRIES` and `VENIRA_GIT_LOG_*` limits are now documented in §6. Checkpoints move to a shared per-user store with one sub-folder per project (`VENIRA_SNAPSHOT_ROOT`, `VENIRA_SNAPSHOT_DIR`, name clashes resolved via `project.json` + hash suffix); the file tools now refuse the snapshot store. **Upgrade note:** the default store is no longer `<VENIRA_DATA_DIR>/snapshots`; point `VENIRA_SNAPSHOT_DIR` at the old folder to keep existing checkpoints.
 
 **v1.16.2** (2026-11-07) — Serialize audit-chain writes so concurrent tool calls cannot fork the hash chain; release verification now checks the published artifacts.
 

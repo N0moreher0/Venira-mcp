@@ -17,6 +17,14 @@ if (!readme.includes("VENIRA_PROFILE")) {
   console.error("README missing VENIRA_PROFILE.");
   failed = true;
 }
+if (!readme.includes("> **Security scope.**") || !readme.includes("not a sandbox")) {
+  console.error("README is missing the security-limit notice.");
+  failed = true;
+}
+if (readme.includes("| `VENIRA_NETWORK` |")) {
+  console.error("README documents VENIRA_NETWORK, which has been removed.");
+  failed = true;
+}
 for (const tool of ["project_dependency_graph", "project_change_impact", "project_ci_wait"]) {
   if (!readme.includes(tool)) {
     console.error(`README is missing ${tool}.`);
@@ -24,9 +32,10 @@ for (const tool of ["project_dependency_graph", "project_change_impact", "projec
   }
 }
 // Tool counts: README must state the Default/Expert counts that doctor.ts treats as the contract
-// (doctor expects 43 = Expert 42 + project_execute_js). Update all three together.
+// (Expert = Default 32 + the 11 PR/CI tools listed in TOOL_MODE_EXCLUDES.default = 43; +1 with
+// project_execute_js. doctor.ts expects 43.) Update all three together.
 const EXPECTED_DEFAULT_TOOLS = 32;
-const EXPECTED_EXPERT_TOOLS = 42;
+const EXPECTED_EXPERT_TOOLS = 43;
 for (const phrase of [
   `${EXPECTED_DEFAULT_TOOLS} coding tools`,
   `${EXPECTED_EXPERT_TOOLS} tools`,

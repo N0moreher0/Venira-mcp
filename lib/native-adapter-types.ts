@@ -45,7 +45,6 @@ export interface WorkspaceConfig {
   allowJsExec?: boolean;
   jsExecApproval?: boolean;
   allowSelfInstall?: boolean;
-  network?: boolean;
   auditFast?: boolean;
   cacheAll?: boolean;
   cacheListOnly?: boolean;

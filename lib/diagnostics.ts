@@ -91,18 +91,6 @@ function searchTerm(ctx: RuleContext, term: string, why: string): NextAction[] {
 
 const RULES: Rule[] = [
   {
-    id: "venira.network_disabled",
-    title: "Outbound network is disabled",
-    confidence: "high",
-    pattern: /\[network_disabled\]|VENIRA_NETWORK=0/,
-    cause: "The server runs with VENIRA_NETWORK=0, so GitHub/CI calls are refused before a socket opens.",
-    fix: [
-      "Set VENIRA_NETWORK=1 in the MCP server environment and restart the server.",
-      "If outbound access is intentionally blocked, use local tools (git, shell) instead of the provider tools.",
-    ],
-    retry: "Safe to retry once the env change is applied (the server must be restarted).",
-  },
-  {
     id: "venira.secret_expired",
     title: "Stored secret expired",
     confidence: "high",

@@ -12,7 +12,6 @@ import https from "node:https";
 import tls from "node:tls";
 import type { GitContext, ProviderId } from "./git-config.js";
 import { assertProviderPayloadSafe } from "./provider-secret-guard.js";
-import { envFlag } from "./env.js";
 
 export type RawHeaders = Record<string, string | string[] | undefined>;
 export type RawResult = { status: number; headers: RawHeaders; url: string; buffer: Buffer };
@@ -30,10 +29,6 @@ export type FetchOpts = {
 
 const USER_AGENT = "venira-mcp-coding (+https://github.com/N0moreher0/Venira-mcp)";
 const JSON_MAX_BYTES = 8 * 1024 * 1024;
-
-export function networkEnabled(): boolean {
-  return envFlag("VENIRA_NETWORK", true);
-}
 
 function isLocalHost(hostname: string): boolean {
   return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
@@ -354,11 +349,6 @@ function defaultAccept(provider: ProviderId): string {
 }
 
 export async function gitFetch(ctx: GitContext, apiPath: string, opts: FetchOpts = {}): Promise<RawResult> {
-  if (!networkEnabled()) {
-    throw new Error(
-      "[network_disabled] Outbound network access is disabled (VENIRA_NETWORK=0). Hint: set VENIRA_NETWORK=1 to allow provider calls.",
-    );
-  }
   if (!apiPath.startsWith("/")) {
     throw new Error(`[invalid_request] Provider path must start with "/" (got "${apiPath}").`);
   }

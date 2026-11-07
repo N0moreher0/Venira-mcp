@@ -6,7 +6,6 @@
  * state, the state changes (`until: "any_change"`), or `timeout_ms` elapses.
  * No background timer, no standing network traffic.
  */
-import { networkEnabled } from "./git-http.js";
 import { opCiLogs, opCiStatus } from "./git-provider.js";
 import type { Resp } from "./git-common.js";
 
@@ -217,11 +216,6 @@ export async function opCiWait(args: Record<string, unknown>): Promise<Resp> {
     throw new Error(
       "[invalid_request] Pass exactly one of run_id / ref / pr / branch (they select different CI surfaces). " +
         "Hint: add workflow= to narrow a branch selector.",
-    );
-  }
-  if (!networkEnabled()) {
-    throw new Error(
-      "[network_disabled] Outbound network access is disabled (VENIRA_NETWORK=0). Hint: set VENIRA_NETWORK=1 to allow provider calls.",
     );
   }
 

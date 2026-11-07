@@ -99,7 +99,6 @@ export async function opCiLogs(args: Record<string, unknown>): Promise<Resp> {
 }
 
 export { gitHealth, gitHealth as githubHealth };
-export { networkEnabled } from "./git-http.js";
 export { resolveRepo } from "./git-config.js";
 export { parseRepoRef, parsePrOrRepo, currentBranch, type RepoRef } from "./git-repo.js";
 

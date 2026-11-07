@@ -154,6 +154,7 @@ async function main() {
         ((healthRes as { content?: { text?: string }[] })?.content?.[0]?.text ?? "{}"),
       );
       results.push(await check("health_ok", healthData.ok === true, healthData));
+      results.push(await check("health_notice", typeof healthData.data?.notice === "string" && healthData.data.notice.includes("not a sandbox"), { notice: healthData.data?.notice }));
       results.push(await check("health_capability_open", healthData.data?.capability?.state === "open", healthData.data?.capability));
 
       await client.close();
@@ -261,6 +262,7 @@ async function main() {
   const failed = results.filter((r) => (r as CheckResult).status === "FAIL");
   const warnings = results.filter((r) => (r as CheckResult).status === "WARN");
   console.log(`\nDoctor: ${passes}/${results.length} checks passed${warnings.length > 0 ? ` (${warnings.length} warning(s))` : ""}`);
+  console.log("[doctor] Security limits: Venira runs with the OS user’s privileges. The workspace lock limits file-tool paths, not shell effects; prompt injection can still steer commands allowed by the active profile. Same-user processes can read keys in VENIRA_DATA_DIR. Use a container or VM for real isolation. See SECURITY.md.");
   if (failed.length > 0) {
     console.log("Failed checks:", JSON.stringify(failed, null, 2));
   }
