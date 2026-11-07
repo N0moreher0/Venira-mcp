@@ -5,11 +5,7 @@ import path from "node:path";
 import { z } from "zod";
 import { envFlag, parseBackgroundFlag } from "../lib/env.js";
 import { CoreHost, SHELL_MAX_TIMEOUT_MS, SCOPE_TTL_MS } from "../lib/corehost.js";
-import * as approvals from "../lib/approvals.js";
-import {
-  APPROVAL_WAIT_MAX_MS,
-  approveCommand,
-} from "../lib/approval-gate.js";
+import { APPROVAL_WAIT_MAX_MS } from "../lib/approval-gate.js";
 import { evaluateToolPolicy } from "../lib/tool-policy.js";
 import { recordMetric } from "../lib/metrics.js";
 import {
@@ -42,6 +38,7 @@ import { runRecentFiles, type RecentFilesDeps } from "./project-recent.js";
 import { dataDirFor, runHealth, type HealthDeps } from "./project-health.js";
 import { runHybridSearch, type HybridDeps } from "./project-hybrid.js";
 import { runEditBatch, runReadBatch, type BatchDeps } from "./project-batch.js";
+import { SHELL_ELICIT, runCancelShellSession, runShell, type ShellDeps } from "./project-shell.js";
 import { SESSION_ID } from "../lib/session.js";
 import {
   detectAllHarnesses,
@@ -898,146 +895,6 @@ async function executeCached(operation: string, args: Args): Promise<Execution> 
 }
 
 // ---------------------------------------------------------------------------
-// Shell approval flow
-// ---------------------------------------------------------------------------
-
-const SHELL_ELICIT = envFlag("VENIRA_SHELL_ELICIT", false);
-const ELICIT_TIMEOUT_MS = 5 * 60 * 1000;
-
-type ShellApprovalData = {
-  approval_id?: unknown;
-  approval?: { approve_command?: unknown };
-  command?: unknown;
-  rule?: unknown;
-  reason?: unknown;
-  mode?: unknown;
-  expires_at?: unknown;
-};
-
-function approvalFailure(
-  operation: string,
-  data: ShellApprovalData,
-  requestId: string,
-  elapsedMs: number,
-): ToolResult {
-  const approvalId = typeof data.approval_id === "string" ? data.approval_id : "";
-  const reason = typeof data.reason === "string" ? data.reason : "This command requires approval.";
-  const rule = typeof data.rule === "string" ? data.rule : "policy";
-  const command =
-    typeof data.approval?.approve_command === "string"
-      ? data.approval.approve_command
-      : approveCommand(approvalId);
-  const hint = approvalId
-    ? `Stop and tell the user: run \`${command}\` in an interactive terminal. Do not loop. After they confirm, retry project_shell_run once with approval_id="${approvalId}".`
-    : undefined;
-  return toolResult(
-    errorEnvelope(operation, new Error(`[approval_required] ${reason} (rule: ${rule})`), {
-      requestId,
-      elapsedMs,
-      data,
-      hint,
-    }),
-    true,
-  );
-}
-
-/**
- * Optional MCP elicitation (`VENIRA_SHELL_ELICIT=1`). Clients that do not
- * advertise the `elicitation` capability are skipped, so the caller still gets
- * the `approval_required` envelope with an `approval_id` for the CLI flow.
- */
-async function elicitShellApproval(
-  server: McpServer,
-  data: ShellApprovalData,
-): Promise<{ approved: boolean; remember: boolean }> {
-  const capabilities = server.server.getClientCapabilities() as
-    | { elicitation?: unknown }
-    | undefined;
-  if (!capabilities?.elicitation) return { approved: false, remember: false };
-  try {
-    const result = await server.server.elicitInput(
-      {
-        message: `Run this shell command?\n\n${String(data.command ?? "").slice(0, 2000)}\n\nWhy approval is needed: ${String(data.reason ?? "policy")}`,
-        requestedSchema: {
-          type: "object" as const,
-          properties: {
-            approve: {
-              type: "boolean" as const,
-              title: "Run the command",
-              description: "Approve this exact command once.",
-              default: false,
-            },
-            remember: {
-              type: "boolean" as const,
-              title: "Remember for this session",
-              description: "Approve the same command group (e.g. `git push`) until the approval TTL ends.",
-              default: false,
-            },
-          },
-          required: ["approve"],
-        },
-      },
-      { timeout: ELICIT_TIMEOUT_MS },
-    );
-    if (result.action !== "accept") return { approved: false, remember: false };
-    const content = (result.content ?? {}) as { approve?: unknown; remember?: unknown };
-    return { approved: content.approve === true, remember: content.remember === true };
-  } catch (error) {
-    console.error(
-      `[venira-coding] elicitation failed: ${error instanceof Error ? error.message : String(error)}`,
-    );
-    return { approved: false, remember: false };
-  }
-}
-
-async function runShell(args: Args, server: McpServer): Promise<ToolResult> {
-  const started = performance.now();
-  const requestId = newRequestId();
-  try {
-    let { response, cached } = await executeCached("shell_run", args);
-    let data = response.result?.data as ShellApprovalData | undefined;
-
-    if (response.result?.kind === "shell_approval" && SHELL_ELICIT) {
-      const verdict = await elicitShellApproval(server, data ?? {});
-      if (verdict.approved) {
-        // The person accepted in their own client UI: record the grant on their
-        // behalf, with the scope they chose (session only where it is allowed).
-        const pendingId = typeof data?.approval_id === "string" ? data.approval_id : "";
-        if (pendingId) {
-          try {
-            approvals.writeApprovalGrant(pendingId, "elicitation", verdict.remember ? "session" : "once");
-          } catch {
-            try {
-              approvals.writeApprovalGrant(pendingId, "elicitation", "once");
-            } catch (error) {
-              console.error(`[venira-coding] could not record approval: ${error instanceof Error ? error.message : String(error)}`);
-            }
-          }
-        }
-        const retry: Args = { ...args, approval_id: data?.approval_id };
-        delete (retry as Record<string, unknown>).approval_token;
-        delete (retry as Record<string, unknown>).approval_scope;
-        ({ response } = await executeCached("shell_run", retry));
-        data = response.result?.data as ShellApprovalData | undefined;
-        cached = false;
-      }
-    }
-
-    const elapsedMs = performance.now() - started;
-    if (response.result?.kind === "shell_approval") {
-      recordMetric("shell_run", elapsedMs, false);
-      return approvalFailure("shell_run", data ?? {}, requestId, elapsedMs);
-    }
-    recordMetric("shell_run", elapsedMs, true);
-    return toolResult(buildEnvelope("shell_run", response, { requestId, elapsedMs, cached }));
-  } catch (error) {
-    const elapsedMs = performance.now() - started;
-    recordMetric("shell_run", elapsedMs, false);
-    return toolResult(errorEnvelope("shell_run", error, { requestId, elapsedMs }), true);
-  }
-}
-
-// ---------------------------------------------------------------------------
 // Tool handlers
 // ---------------------------------------------------------------------------
 async function runOne(operation: string, args: Args, options?: { line_numbers?: boolean }): Promise<ToolResult> {
@@ -1092,6 +949,14 @@ const hybridDeps: HybridDeps = {
 // project_read_batch / project_edit_batch live in ./project-batch.ts; same cached executor plus the
 // batch response budget (also used by this module's caches).
 const batchDeps: BatchDeps = { ...hybridDeps, maxBatchResponseBytes: MAX_BATCH_RESPONSE_BYTES };
+
+// project_shell_run (approval flow + elicitation) and project_shell_cancel_session live in
+// ./project-shell.ts. The shell run registry (shellRuns/trackShell) stays here: executeCached and
+// project_health share it.
+const shellDeps: ShellDeps = {
+  execute: (operation, args) => executeCached(operation, args),
+  callHost: (method, params, timeoutMs) => host.call(method, params, timeoutMs),
+};
 
 async function runReadRanges(args: Args): Promise<ToolResult> {
   const started = performance.now();
@@ -1491,37 +1356,6 @@ async function runSecret(args: Args): Promise<ToolResult> {
     );
   }
   return runOne("secret", args);
-}
-
-async function runCancelShellSession(): Promise<ToolResult> {
-  const started = performance.now();
-  const requestId = newRequestId();
-  try {
-    // Reuse the session-level cancel exposed by the corehost.
-    const result = (await host.call(
-      "project_tool.shell.cancel_session",
-      { session_id: SESSION_ID },
-      5_000,
-    )) as { cancelled?: unknown } | undefined;
-    const response: RustResponse = {
-      status: "completed",
-      result: {
-        kind: "shell_cancel_session",
-        data: {
-          cancelled: result?.cancelled === true,
-          session_id: SESSION_ID,
-        },
-      },
-      truncated: false,
-    };
-    const elapsedMs = performance.now() - started;
-    recordMetric("shell_cancel_session", elapsedMs, true);
-    return toolResult(buildEnvelope("shell_cancel_session", response, { requestId, elapsedMs, cached: false }));
-  } catch (error) {
-    const elapsedMs = performance.now() - started;
-    recordMetric("shell_cancel_session", elapsedMs, false);
-    return toolResult(errorEnvelope("shell_cancel_session", error, { requestId, elapsedMs }), true);
-  }
 }
 
 async function runSymbolReferences(args: Args): Promise<ToolResult> {
@@ -2301,7 +2135,7 @@ export function registerProjectTools(server: McpServer): void {
           .describe("Ignored: scope (once/session) is chosen by the human at approval time (`--approve <id> --session`), never by the model."),
       },
     },
-    (args) => runShell(args, server),
+    (args) => runShell(args, server, shellDeps),
   );
 
   server.registerTool(
@@ -2539,7 +2373,7 @@ export function registerProjectTools(server: McpServer): void {
       ),
       inputSchema: {},
     },
-    () => runCancelShellSession(),
+    () => runCancelShellSession(shellDeps),
   );
 
   // -------------------------------------------------------------------------
