@@ -1,5 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash } from "node:crypto";
 import { promises as fs, readFileSync } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
@@ -11,11 +11,6 @@ import {
   APPROVAL_PENDING_TTL_MS,
   APPROVAL_WAIT_MAX_MS,
   approveCommand,
-  awaitApprovalGrant,
-  buildApprovalPayload,
-  parseApprovalWaitMs,
-  redeemApproval,
-  requestApproval,
 } from "../lib/approval-gate.js";
 import { evaluateToolPolicy } from "../lib/tool-policy.js";
 import { recordMetric, metricsSnapshot } from "../lib/metrics.js";
@@ -31,8 +26,6 @@ import {
 } from "../lib/output.js";
 import type { RustResponse, ToolResult } from "../lib/output.js";
 import { VERSION } from "../lib/version.js";
-import { executeJs } from "../lib/js-executor.js";
-import { redactSecrets } from "../lib/shell-policy.js";
 import { queryRecentFiles } from "../lib/corehost.js";
 import { snapshotHealth } from "../lib/snapshots.js";
 import { githubHealth } from "../lib/git-provider.js";
@@ -51,11 +44,12 @@ import {
 } from "../lib/workspace.js";
 import { addTrace, recentTraces, traceSnapshot } from "../lib/tracer.js";
 import { invalidateDependencyGraphCache } from "../lib/dependency-graph.js";
-import { clearShellCache, getShellCacheStats } from "../lib/shell-cache.js";
-import { auditKeyPath, verifyAuditRows } from "../lib/audit-hash.js";
-import { readHexKey } from "../lib/keyfile.js";
+import { clearShellCache } from "../lib/shell-cache.js";
 import { extractSymbols, selectiveSearch } from "../lib/symbol-diff.js";
 import { readTextFile, runDiffFiles, runOutlineSymbol } from "./project-codeintel.js";
+import { runExecuteJs } from "./project-jsexec.js";
+import { runReadAudit } from "./project-audit.js";
+import { SESSION_ID } from "../lib/session.js";
 import {
   detectAllHarnesses,
   installSelf,
@@ -76,11 +70,8 @@ import {
 
 const PERMISSION_MODE = process.env.VENIRA_PERMISSION_MODE ?? "allow_all";
 // allow_all grants the "chat-terminal" scope when there is no Project (same as the native app).
-// Set VENIRA_SESSION_ID so test/verify runs can trace their own audit rows.
-// The default prefix is client-neutral: the id is minted at module load, before
-// the MCP handshake says which client (Claude Desktop, opencode, ...) connected.
-export const SESSION_ID =
-  process.env.VENIRA_SESSION_ID ?? `mcp-${process.pid}-${randomBytes(3).toString("hex")}`;
+// Defined in lib/session.ts (so handler modules can import it without a cycle).
+export { SESSION_ID };
 
 const envInt = (name: string, fallback: number): number => {
   const value = Number(process.env[name]);
@@ -2076,269 +2067,8 @@ function applyDisabledTools(server: McpServer): void {
   console.error(`[venira-coding] disabled tools (${mode}): ${[...blocked].join(", ")}`);
 }
 
-const JS_EXEC_RULE = "ask.js_exec";
-
-/**
- * The whole call is the approval scope: the script plus its argv. Hashing both
- * (instead of trusting a stored copy) means a grant cannot be replayed for a
- * different snippet or different `process.argv` values.
- *
- * This exact string is also what the pending record stores as `command`, so
- * `readPendingApproval` can recompute the binding from the fields a human
- * reviewed and reject a record whose display copy was swapped. The CLI decodes
- * it back into readable code + argv (`formatPendingCommand`).
- */
-function jsExecCommand(code: string, argv: string[] | undefined): string {
-  return `${code}\u0000${JSON.stringify(argv ?? [])}`;
-}
-
-function jsExecBinding(code: string, argv: string[] | undefined): string {
-  return approvals.bindingHash({
-    command: jsExecCommand(code, argv),
-    shell: "node",
-    cwd: WORKSPACE,
-    secret_env: [],
-    rule: JS_EXEC_RULE,
-  });
-}
-
-async function runExecuteJs(args: Args): Promise<ToolResult> {
-  const started = performance.now();
-  const requestId = newRequestId();
-  if (!ALLOW_JS_EXEC) {
-    const elapsedMs = performance.now() - started;
-    return toolResult(
-      errorEnvelope("execute_js", new Error("[unsupported] project_execute_js is disabled. Set VENIRA_ALLOW_JS_EXEC=1 to enable."), { requestId, elapsedMs }),
-      true,
-    );
-  }
-  const code = typeof args.code === "string" ? args.code : "";
-  const timeoutMs = typeof args.timeout_ms === "number" && Number.isFinite(args.timeout_ms) && args.timeout_ms > 0
-    ? Math.min(Math.floor(args.timeout_ms), 600_000)
-    : 30_000;
-  const cliArgs = Array.isArray(args.argv) ? (args.argv as string[]).map(String) : undefined;
-
-  // Per-call human approval. Enabling the tool only says the operator accepts
-  // the risk in general; it does not say they have read this snippet, which can
-  // still read protected files and (best-effort) reach the network.
-  if (JS_EXEC_APPROVAL) {
-    const binding = jsExecBinding(code, cliArgs);
-    const approvalId = typeof args.approval_id === "string" ? args.approval_id.trim() : "";
-    if (!approvalId) {
-      const reason =
-        "project_execute_js runs arbitrary JavaScript outside shell policy and the protected-path guard.";
-      const pending = requestApproval("js", SESSION_ID, {
-        tool: "project_execute_js",
-        // The approver must see exactly what they are approving, so the code is
-        // stored as written (the data dir is per-user, 0700). Redaction belongs
-        // in the tool response/transcript, not in the human's review copy.
-        // Must equal the hashed form, or the pending record fails its binding
-        // recomputation and can never be granted.
-        command: jsExecCommand(code, cliArgs),
-        shell: "node",
-        cwd: WORKSPACE,
-        secretEnv: [],
-        rule: JS_EXEC_RULE,
-        reason,
-        binding,
-      });
-      const pendingId = pending.approval_id;
-      const waitMs = parseApprovalWaitMs(args.approval_wait_ms);
-      if (waitMs > 0 && (await awaitApprovalGrant(SESSION_ID, pendingId, binding, waitMs))) {
-        // Granted by a human while waiting: redeem through the normal path (single use).
-        return runExecuteJs({ ...args, approval_id: pendingId, approval_wait_ms: 0 });
-      }
-      const expiresAt = pending.expires_at;
-      const elapsedMs = performance.now() - started;
-      return toolResult(
-        errorEnvelope("execute_js", new Error(`[approval_required] ${reason} (rule: ${JS_EXEC_RULE})`), {
-          requestId,
-          elapsedMs,
-          data: {
-            approval_required: true,
-            approval_id: pendingId,
-            rule: JS_EXEC_RULE,
-            reason,
-            cwd: WORKSPACE,
-            code_preview: redactSecrets(code).slice(0, 2000),
-            ...(cliArgs ? { argv: cliArgs } : {}),
-            approval: buildApprovalPayload(
-              "js",
-              pending,
-              { tool: "project_execute_js", rule: JS_EXEC_RULE, reason },
-              redactSecrets(code),
-              {
-                code,
-                ...(cliArgs ? { argv: cliArgs } : {}),
-                ...(typeof args.timeout_ms === "number" ? { timeout_ms: args.timeout_ms } : {}),
-              },
-            ),
-            expires_at: expiresAt,
-            retry_with: {
-              tool: "project_execute_js",
-              arguments: {
-                code,
-                ...(cliArgs ? { argv: cliArgs } : {}),
-                ...(typeof args.timeout_ms === "number" ? { timeout_ms: args.timeout_ms } : {}),
-                approval_id: pendingId,
-              },
-            },
-            note: `A human must run: ${pending.approve_command} (then retry with approval_id).`,
-          },
-          hint: `Ask the user to run \`${pending.approve_command}\` in an interactive terminal, then retry project_execute_js with approval_id="${pendingId}".`,
-        }),
-        true,
-      );
-    }
-    const verdict = redeemApproval("js", SESSION_ID, approvalId, binding, "project_execute_js");
-    if (!verdict.ok) {
-      const elapsedMs = performance.now() - started;
-      return toolResult(
-        errorEnvelope("execute_js", new Error(`[approval_invalid] Approval ${approvalId} ${verdict.reason}. Hint: ${verdict.hint}`), {
-          requestId,
-          elapsedMs,
-        }),
-        true,
-      );
-    }
-  }
-
-  try {
-    const r = executeJs(code, { cwd: WORKSPACE, timeout: timeoutMs, args: cliArgs });
-    const response: RustResponse = {
-      status: "completed",
-      result: {
-        kind: "js_execute",
-        data: {
-          ok: r.ok,
-          // execute_js is not covered by the protected-path guard, so at least
-          // keep obvious secret assignments out of the transcript.
-          stdout_tail: redactSecrets(r.stdout_tail),
-          stderr_tail: redactSecrets(r.stderr_tail),
-          exit_code: r.exit_code,
-          timed_out: r.timed_out,
-          ...(r.error ? { error: redactSecrets(r.error) } : {}),
-        },
-      },
-      truncated: false,
-    };
-    const elapsedMs = performance.now() - started;
-    recordMetric("execute_js", elapsedMs, r.ok);
-    return toolResult(buildEnvelope("execute_js", response, { requestId, elapsedMs, cached: false }));
-  } catch (error) {
-    const elapsedMs = performance.now() - started;
-    recordMetric("execute_js", elapsedMs, false);
-    return toolResult(errorEnvelope("execute_js", error, { requestId, elapsedMs }), true);
-  }
-}
-
-async function runReadAudit(args: Args): Promise<ToolResult> {
-  const started = performance.now();
-  const requestId = newRequestId();
-  const limit = Math.max(1, Math.min(200, Number(args.limit ?? 50)));
-  const dbPath = path.join(dataDirFor(host.snapshot().exe), "venira.db");
-  try {
-    const Database = (await import("better-sqlite3")).default;
-    const db = new Database(dbPath, { readonly: true, fileMustExist: true });
-    const where: string[] = [];
-    const values: unknown[] = [];
-    if (typeof args.session_id === "string") { where.push("session_id = ?"); values.push(args.session_id); }
-    if (typeof args.operation === "string") { where.push("operation = ?"); values.push(args.operation); }
-    if (typeof args.outcome === "string") { where.push("outcome = ?"); values.push(args.outcome); }
-    if (typeof args.since_unix === "number") { where.push("started_at >= ?"); values.push(Math.floor(args.since_unix * 1000)); }
-    // `reason` is a newer additive column: probe first so an older DB file
-    // (written before the migration) still returns rows instead of erroring.
-    const columns = new Set(
-      (db.prepare("PRAGMA table_info(project_tool_audit)").all() as Array<{ name: string }>).map((c) => c.name),
-    );
-    const reasonColumn = columns.has("reason") ? ", reason" : "";
-    const sql =
-      `SELECT session_id, operation, outcome, reason_code, request_id, started_at, completed_at, elapsed_ms${reasonColumn} ` +
-      `FROM project_tool_audit ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ` +
-      `ORDER BY started_at DESC LIMIT ?`;
-    const rows = db.prepare(sql).all(...values, limit + 1) as unknown[];
-    const truncated = rows.length > limit;
-    let verified: boolean | null = null;
-    let verifyDetail: Record<string, unknown> | undefined;
-    if (args.verify === true && columns.has("row_hash")) {
-      try {
-        // Recompute the digest, not just the links: a link-only check passes
-        // even when a row's operation/reason was edited in place.
-        const fields = ["session_id", "project_id", "operation", "request_id", "started_at", "prev_hash", "row_hash"];
-        if (columns.has("reason")) fields.push("reason");
-        if (columns.has("args_hash")) fields.push("args_hash");
-        const all = db
-          .prepare(`SELECT ${fields.join(", ")} FROM project_tool_audit ORDER BY id ASC`)
-          .all() as Array<Record<string, unknown>>;
-        let key: Buffer | null = null;
-        try {
-          key = readHexKey(auditKeyPath(path.dirname(dbPath)), "audit");
-        } catch {
-          key = null; // keyed rows cannot be verified without the key; reported below
-        }
-        const window = all.length > 50_000 ? all.slice(-50_000) : all;
-        const result = verifyAuditRows(
-          window.map((r) => ({
-            session_id: String(r.session_id ?? ""),
-            project_id: String(r.project_id ?? ""),
-            operation: String(r.operation ?? ""),
-            request_id: (r.request_id as string | null | undefined) ?? null,
-            started_at: Number(r.started_at ?? 0),
-            reason: (r.reason as string | null | undefined) ?? null,
-            args_hash: (r.args_hash as string | null | undefined) ?? null,
-            prev_hash: (r.prev_hash as string | null | undefined) ?? null,
-            row_hash: (r.row_hash as string | null | undefined) ?? null,
-          })),
-          key,
-        );
-        verified = result.ok;
-        verifyDetail = { ...result, total_rows: all.length, checked_rows: window.length, keyed: Boolean(key) };
-      } catch (error) {
-        verified = false;
-        verifyDetail = { ok: false, reason: "verify_failed", error: error instanceof Error ? error.message : String(error) };
-      }
-    }
-    db.close();
-    const data = {
-      db_path: dbPath,
-      count: truncated ? limit : rows.length,
-      truncated,
-      ...(verified !== null ? { verified } : {}),
-      ...(verifyDetail ? { verify_detail: verifyDetail } : {}),
-      rows: rows.slice(0, limit).map((r) => {
-        const row = r as Record<string, unknown>;
-        return {
-          session_id: row.session_id,
-          operation: row.operation,
-          outcome: row.outcome,
-          ...(row.reason_code ? { reason_code: row.reason_code } : {}),
-          ...(typeof row.reason === "string" && row.reason ? { reason: row.reason } : {}),
-          request_id: row.request_id,
-          started_at: typeof row.started_at === "number" ? Math.floor(row.started_at / 1000) : row.started_at,
-          ...(row.completed_at != null ? { completed_at: Math.floor((row.completed_at as number) / 1000) } : {}),
-          ...(row.elapsed_ms != null ? { elapsed_ms: row.elapsed_ms } : {}),
-        };
-      }),
-    };
-    const response: RustResponse = {
-      status: "completed",
-      result: { kind: "audit_read", data },
-      truncated,
-    };
-    const elapsedMs = performance.now() - started;
-    recordMetric("read_audit", elapsedMs, true);
-    return toolResult(buildEnvelope("read_audit", response, { requestId, elapsedMs, cached: false }));
-  } catch (error) {
-    // WAL locked or DB missing: report audit_unavailable (non-retryable), do not crash.
-    const msg = error instanceof Error ? error.message : String(error);
-    const elapsedMs = performance.now() - started;
-    recordMetric("read_audit", elapsedMs, false);
-    return toolResult(
-      errorEnvelope("read_audit", new Error(`[audit_unavailable] ${msg}`), { requestId, elapsedMs }),
-      true,
-    );
-  }
-}
+/** Path of the audit DB (lives in the corehost data dir). */
+const auditDbPath = (): string => path.join(dataDirFor(host.snapshot().exe), "venira.db");
 
 async function runSnapshot(args: Args): Promise<ToolResult> {
   const started = performance.now();
@@ -2428,10 +2158,6 @@ async function runCancelShellSession(): Promise<ToolResult> {
     return toolResult(errorEnvelope("shell_cancel_session", error, { requestId, elapsedMs }), true);
   }
 }
-
-// ---------------------------------------------------------------------------
-// P2/P3: code intelligence + workflow tools
-// ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 // project_search hybrid mode (opt-in, `hybrid: 1`). One backend walk feeds the
@@ -3597,7 +3323,7 @@ export function registerProjectTools(server: McpServer): void {
         verify: flag01.optional().describe("1 verifies the audit hash chain and returns chain_ok; 0 disables verification."),
       },
     },
-    (args) => runReadAudit(args as Args),
+    (args) => runReadAudit(args as Args, auditDbPath()),
   );
 
   server.registerTool(
