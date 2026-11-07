@@ -1,5 +1,4 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { createHash } from "node:crypto";
 import { promises as fs, readFileSync } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
@@ -39,6 +38,8 @@ import { dataDirFor, runHealth, type HealthDeps } from "./project-health.js";
 import { runHybridSearch, type HybridDeps } from "./project-hybrid.js";
 import { runEditBatch, runReadBatch, type BatchDeps } from "./project-batch.js";
 import { SHELL_ELICIT, runCancelShellSession, runShell, type ShellDeps } from "./project-shell.js";
+import { MAX_BATCH_RESPONSE_BYTES, createCacheLayer, envInt, stableKey } from "./project-cache.js";
+import type { Args, Execution } from "./project-cache.js";
 import { SESSION_ID } from "../lib/session.js";
 import {
   detectAllHarnesses,
@@ -61,29 +62,6 @@ const PERMISSION_MODE = process.env.VENIRA_PERMISSION_MODE ?? "allow_all";
 // Defined in lib/session.ts (so handler modules can import it without a cycle).
 export { SESSION_ID };
 
-const envInt = (name: string, fallback: number): number => {
-  const value = Number(process.env[name]);
-  return Number.isFinite(value) && value >= 0 ? value : fallback;
-};
-
-const MAX_CACHE_BYTES = envInt("VENIRA_READ_CACHE_BYTES", 64 * 1024 * 1024);
-const MAX_CACHE_ENTRIES = 1024;
-const LIST_CACHE_MS = envInt("VENIRA_LIST_CACHE_MS", 1500);
-const SEARCH_CACHE_MS = envInt("VENIRA_SEARCH_CACHE_MS", 3000);
-const RECENT_CACHE_MS = envInt("VENIRA_RECENT_CACHE_MS", 2000);
-const NEGATIVE_CACHE_TTL_MS = envInt("VENIRA_NEGATIVE_CACHE_MS", 500);
-
-/** Age of the oldest entry in the negative-read cache (ms), 0 when empty. */
-function oldestNegativeAge(): number {
-  const now = Date.now();
-  let oldest = 0;
-  for (const ts of negativeReadCache.values()) {
-    const age = now - ts;
-    if (age > oldest) oldest = age;
-  }
-  return oldest;
-}
-const MAX_BATCH_RESPONSE_BYTES = 2 * 1024 * 1024;
 const MAX_BATCH_ITEM_BYTES = envInt("VENIRA_BATCH_ITEM_BYTES", 512 * 1024);
 const MAX_READ_BYTES = 1048576; // 1 MiB, safer than the native ceiling
 const STARTED_AT = Date.now();
@@ -253,7 +231,6 @@ export async function cancelAllShellRuns(): Promise<void> {
 // ---------------------------------------------------------------------------
 // Request/response
 // ---------------------------------------------------------------------------
-type Args = Record<string, unknown>;
 
 /**
  * Operations that talk to GitHub/CI or to the secret store. They take no
@@ -397,332 +374,23 @@ async function execute(operation: string, args: Args): Promise<RustResponse> {
 }
 
 // ---------------------------------------------------------------------------
-// Read cache: validated by stat (mtime + size) so edited/deleted files drop out.
-// list/search/recent use short TTLs and are wiped on any mutating op.
+// Cache layer lives in ./project-cache.ts (step 5h). It receives the uncached executor and path
+// helpers through CacheDeps and never imports this module.
 // ---------------------------------------------------------------------------
-type CachedRead = {
-  status: string;
-  truncated: boolean;
-  result: RustResponse["result"];
-  hint?: string;
-  mtimeMs: number;
-  size: number;
-  bytes: number;
-};
-
-type CachedTtl = { at: number; response: RustResponse; bytes: number };
-
-type Execution = { response: RustResponse; cached: boolean };
-
-const readCache = new Map<string, CachedRead>();
-const infoCache = new Map<string, CachedRead>();
-const listCache = new Map<string, CachedTtl>();
-const searchCache = new Map<string, CachedTtl>();
-const referencesCache = new Map<string, CachedTtl>();
-const recentCache = new Map<string, CachedTtl>();
-const negativeReadCache = new Map<string, number>(); // Absolute path -> timestamp of not_found
-
-let readBytes = 0;
-let infoBytes = 0;
-
-const cacheStats = {
-  read: { hits: 0, misses: 0 },
-  info: { hits: 0, misses: 0 },
-  list: { hits: 0, misses: 0 },
-  search: { hits: 0, misses: 0 },
-  // symbol_references (workspace) uses a dedicated cache (keyed on the inner
-  // search args) because the host reports complete=false when it stops at the
-  // hit cap, and searchCache only stores complete results.
-  references: { hits: 0, misses: 0 },
-  recent: { hits: 0, misses: 0 },
-};
-
-function enforceLimits(): void {
-  while (readBytes + infoBytes > MAX_CACHE_BYTES || readCache.size + infoCache.size > MAX_CACHE_ENTRIES) {
-    const useRead = readCache.size >= infoCache.size;
-    const map = useRead ? readCache : infoCache;
-    const key = map.keys().next().value;
-    if (key === undefined) break;
-    const entry = map.get(key)!;
-    map.delete(key);
-    if (useRead) readBytes -= entry.bytes;
-    else infoBytes -= entry.bytes;
-  }
-}
-
-function touch(map: Map<string, CachedRead>, key: string, entry: CachedRead): void {
-  map.delete(key);
-  map.set(key, entry);
-  enforceLimits();
-}
-
-async function statSignature(
-  absolutePath: string,
-): Promise<{ mtimeMs: number; size: number; isFile: boolean } | null> {
-  try {
-    const stat = await fs.stat(absolutePath);
-    return { mtimeMs: stat.mtimeMs, size: stat.size, isFile: stat.isFile() };
-  } catch {
-    return null;
-  }
-}
-
-function cacheKey(absolutePath: string, args: Args): string {
-  return `${absolutePath}\u0000${args.start_line ?? ""}\u0000${args.end_line ?? ""}\u0000${args.max_bytes ?? ""}`;
-}
-
-function fromReadEntry(entry: CachedRead): RustResponse {
-  return {
-    status: entry.status,
-    truncated: entry.truncated,
-    result: entry.result,
-    ...(entry.hint ? { hint: entry.hint } : {}),
-  };
-}
-
-async function readFileCached(args: Args): Promise<Execution> {
-  const absolutePath = toHostPath(args.relative_path as string | undefined);
-  const key = cacheKey(absolutePath, args);
-  // Negative cache: short-TTL suppress repeated backend calls for not_found paths.
-  const negTs = negativeReadCache.get(key);
-  if (negTs !== undefined) {
-    const stat = await statSignature(absolutePath);
-    if (!stat) {
-      if (Date.now() - negTs <= NEGATIVE_CACHE_TTL_MS) {
-        // MRU: refresh recency without displacing unrelated cache entries.
-        negativeReadCache.delete(key);
-        negativeReadCache.set(key, negTs);
-        throw new Error(
-          '[not_found] Path does not exist: ' + args.relative_path + '. Hint: Check it with project_list_files; do not retry the same path.',
-        );
-      }
-      negativeReadCache.delete(key);
-    } else {
-      negativeReadCache.delete(key);
-    }
-  }
-  const entry = readCache.get(key);
-  if (entry) {
-    const signature = await statSignature(absolutePath);
-    if (signature && signature.isFile && signature.mtimeMs === entry.mtimeMs && signature.size === entry.size) {
-      touch(readCache, key, entry);
-      cacheStats.read.hits += 1;
-      return { response: fromReadEntry(entry), cached: true };
-    }
-    readCache.delete(key);
-    readBytes -= entry.bytes;
-  }
-
-  cacheStats.read.misses += 1;
-  let response: RustResponse;
-  try {
-    response = (await execute("read_file", args)) as RustResponse;
-  } catch (error) {
-    // The backend lumps "does not exist" and "locked" into io_error; stat again to return the right code.
-    const signature = await statSignature(absolutePath);
-    if (!signature) {
-      while (negativeReadCache.size >= 256) {
-       const oldest = negativeReadCache.keys().next().value;
-       if (oldest === undefined) break;
-       negativeReadCache.delete(oldest);
-     }
-     negativeReadCache.set(key, Date.now());
-      throw new Error(
-        '[not_found] Path does not exist: ' + args.relative_path + '. Hint: Check it with project_list_files; do not retry the same path.',
-      );
-    }
-    if (!signature.isFile) {
-      throw new Error(
-        '[invalid_request] Not a file: ' + args.relative_path + '. Hint: Use project_list_files for folders or project_get_file_info for metadata.',
-      );
-    }
-    throw error;
-  }  const signature = await statSignature(absolutePath);
-  const readData = response.result && typeof response.result === 'object' ? (response.result.data as Record<string, unknown> | null) : null;
-  const readText = typeof readData?.text === 'string' ? (readData.text as string) : null;
-  if (signature && signature.isFile && readText !== null) {
-    // Surface content integrity + freshness metadata for Agents (TOCTOU guard). Hash computed once on first read, reused from cache.
-    const sha256 = createHash('sha256').update(readText, 'utf8').digest('hex');
-    if (readData) {
-      readData.sha256 = sha256;
-      readData.mtime_ms = signature.mtimeMs;
-      readData.size_bytes = signature.size;
-    }
-    const bytes = stringify(response).length;
-    if (bytes <= MAX_BATCH_RESPONSE_BYTES) {
-      const cached: CachedRead = {
-        status: response.status ?? "completed",
-        truncated: response.truncated === true,
-        result: response.result,
-        hint: response.hint,
-        mtimeMs: signature.mtimeMs,
-        size: signature.size,
-        bytes,
-      };
-      readCache.set(key, cached);
-      readBytes += bytes;
-      touch(readCache, key, cached);
-    }
-  }
-  return { response, cached: false };
-}
-
-async function fileInfoCached(args: Args): Promise<Execution> {
-  const absolutePath = toHostPath(args.relative_path as string | undefined);
-  const key = absolutePath;
-  const entry = infoCache.get(key);
-  if (entry) {
-    const signature = await statSignature(absolutePath);
-    if (signature && signature.mtimeMs === entry.mtimeMs && signature.size === entry.size) {
-      touch(infoCache, key, entry);
-      cacheStats.info.hits += 1;
-      return { response: fromReadEntry(entry), cached: true };
-    }
-    infoCache.delete(key);
-    infoBytes -= entry.bytes;
-  }
-
-  const response = (await execute("get_file_info", args)) as RustResponse;
-  cacheStats.info.misses += 1;
-  const signature = await statSignature(absolutePath);
-  if (signature && response.result) {
-    const bytes = stringify(response).length;
-    if (bytes <= MAX_BATCH_RESPONSE_BYTES) {
-      const cached: CachedRead = {
-        status: response.status ?? "completed",
-        truncated: response.truncated === true,
-        result: response.result,
-        hint: response.hint,
-        mtimeMs: signature.mtimeMs,
-        size: signature.size,
-        bytes,
-      };
-      infoCache.set(key, cached);
-      infoBytes += bytes;
-      touch(infoCache, key, cached);
-    }
-  }
-  return { response, cached: false };
-}
-
-function stableKey(args: Args): string {
-  return JSON.stringify(
-    Object.keys(args)
-      .sort()
-      .map((key) => [key, args[key]]),
-  );
-}
-
-function ttlLookup(
-  map: Map<string, CachedTtl>,
-  key: string,
-  ttlMs: number,
-  counter: { hits: number; misses: number },
-): RustResponse | null {
-  if (ttlMs <= 0) return null;
-  const entry = map.get(key);
-  if (!entry) {
-    counter.misses += 1;
-    return null;
-  }
-  if (Date.now() - entry.at > ttlMs) {
-    map.delete(key);
-    counter.misses += 1;
-    return null;
-  }
-  map.delete(key);
-  map.set(key, entry);
-  counter.hits += 1;
-  return entry.response;
-}
-
-function ttlStore(map: Map<string, CachedTtl>, key: string, response: RustResponse): void {
-  const bytes = stringify(response).length;
-  if (bytes > 1024 * 1024) return;
-  map.set(key, { at: Date.now(), response, bytes });
-  while (map.size > 64) {
-    const oldest = map.keys().next().value;
-    if (oldest === undefined) break;
-    map.delete(oldest);
-  }
-}
-
-async function listCached(args: Args): Promise<Execution> {
-  const absolutePath = toHostPath(args.relative_path as string | undefined);
-  const key = `${absolutePath}\u0000${args.depth ?? ""}\u0000${args.limit ?? ""}\u0000${args.include_ignored === true ? 1 : 0}`;
-  const cached = ttlLookup(listCache, key, LIST_CACHE_MS, cacheStats.list);
-  if (cached) return { response: cached, cached: true };
-  const response = (await execute("list_files", args)) as RustResponse;
-  ttlStore(listCache, key, response);
-  return { response, cached: false };
-}
-
-// In-flight de-duplication protects concurrent callers (MCP batching) from
-// triggering duplicate full-tree walks for the same query while one is running.
-const inflightSearches = new Map<string, Promise<Execution>>();
-async function searchCached(args: Args): Promise<Execution> {
-  const prepared = prepare("search", args);
-  const key = stableKey(prepared);
-  const cached = ttlLookup(searchCache, key, SEARCH_CACHE_MS, cacheStats.search);
-  if (cached) return { response: cached, cached: true };
-
-  const inFlight = inflightSearches.get(key);
-  if (inFlight) return await inFlight;
-
-  const promise = (async () => {
-    const response = (await execute("search", args)) as RustResponse;
-    // Cache any COMPLETE result (including zero-hit).
-    const data = response.result?.data as { complete?: boolean; hits?: unknown[] } | undefined;
-    if (data?.complete !== false) {
-      ttlStore(searchCache, key, response);
-    }
-    return { response, cached: false };
-  })();
-  inflightSearches.set(key, promise);
-  try {
-    return await promise;
-  } finally {
-    inflightSearches.delete(key);
-  }
-}
-
-function invalidatePath(absolutePath: string): void {
-  const prefix = `${absolutePath}\u0000`;
-  for (const [key, entry] of readCache) {
-    if (key.startsWith(prefix)) {
-      readCache.delete(key);
-      readBytes -= entry.bytes;
-    }
-  }
-  // Clear negative-cache entries keyed by the same path prefix.
-  for (const key of negativeReadCache.keys()) {
-    if (key.startsWith(prefix)) {
-      negativeReadCache.delete(key);
-    }
-  }
-  const info = infoCache.get(absolutePath);
-  if (info) {
-    infoCache.delete(absolutePath);
-    infoBytes -= info.bytes;
-  }
-}
-
-/** A restore can rewrite any file under the workspace: drop every cache. */
-function invalidateAllCaches(): void {
-  readCache.clear();
-  infoCache.clear();
-  negativeReadCache.clear();
-  readBytes = 0;
-  infoBytes = 0;
-  invalidateListCaches();
-}
-
-function invalidateListCaches(): void {
-  listCache.clear();
-  searchCache.clear();
-  referencesCache.clear();
-  recentCache.clear();
-}
+const cache = createCacheLayer({
+  execute: (operation, args) => execute(operation, args),
+  prepare: (operation, args) => prepare(operation, args),
+  toHostPath,
+});
+const {
+  readFileCached,
+  fileInfoCached,
+  listCached,
+  searchCached,
+  invalidatePath,
+  invalidateListCaches,
+  invalidateAllCaches,
+} = cache;
 
 const MUTATING = new Set(["write_file", "edit_file", "delete_path"]);
 
@@ -805,23 +473,8 @@ async function executeCached(operation: string, args: Args): Promise<Execution> 
         clearShellCache();
         cleared.shell = -1; // not tracked by size
       }
-      if (type === "all" || type === "read") {
-        clearType("read", () => { const n = readCache.size; readCache.clear(); readBytes = 0; return n; });
-      }
-      if (type === "all" || type === "info") {
-        clearType("info", () => { const n = infoCache.size; infoCache.clear(); infoBytes = 0; return n; });
-      }
-      if (type === "all" || type === "list") {
-        clearType("list", () => { const n = listCache.size; listCache.clear(); return n; });
-      }
-      if (type === "all" || type === "search") {
-        clearType("search", () => { const n = searchCache.size; searchCache.clear(); return n; });
-      }
-      if (type === "all" || type === "recent") {
-        clearType("recent", () => { const n = recentCache.size; recentCache.clear(); return n; });
-      }
-      if (type === "all" || type === "negative") {
-        clearType("negative", () => { const n = negativeReadCache.size; negativeReadCache.clear(); return n; });
+      for (const name of ["read", "info", "list", "search", "recent", "negative"] as const) {
+        if (type === "all" || type === name) clearType(name, () => cache.clear(name));
       }
       if (type === "all" || type === "graph") {
         invalidateDependencyGraphCache();
@@ -1040,8 +693,8 @@ async function runReadRanges(args: Args): Promise<ToolResult> {
 // cache and to the session edit log (recentEdits), which this module owns.
 // ---------------------------------------------------------------------------
 const recentFilesDeps: RecentFilesDeps = {
-  lookup: (key) => ttlLookup(recentCache, key, RECENT_CACHE_MS, cacheStats.recent),
-  store: (key, response) => ttlStore(recentCache, key, response),
+  lookup: cache.recent.lookup,
+  store: cache.recent.store,
   recentEdits,
 };
 
@@ -1089,56 +742,6 @@ async function runCreate(args: Args): Promise<ToolResult> {
 // project_health lives in ./project-health.ts. The providers below expose the state
 // this module owns (caches, queue, capability, shell runs) as read-only snapshots.
 // ---------------------------------------------------------------------------
-function cacheReport() {
-  const rate = (counter: { hits: number; misses: number }) => {
-    const total = counter.hits + counter.misses;
-    return total === 0 ? null : Math.round((counter.hits / total) * 1000) / 1000;
-  };
-  return {
-    read: {
-      entries: readCache.size,
-      bytes: readBytes,
-      ...cacheStats.read,
-      hit_rate: rate(cacheStats.read),
-    },
-    negative: {
-      entries: negativeReadCache.size,
-      ttl_ms: NEGATIVE_CACHE_TTL_MS,
-      oldest_age_ms: oldestNegativeAge(),
-    },
-    info: {
-      entries: infoCache.size,
-      bytes: infoBytes,
-      ...cacheStats.info,
-      hit_rate: rate(cacheStats.info),
-    },
-    list: {
-      entries: listCache.size,
-      ttl_ms: LIST_CACHE_MS,
-      ...cacheStats.list,
-      hit_rate: rate(cacheStats.list),
-    },
-    search: {
-      entries: searchCache.size,
-      ttl_ms: SEARCH_CACHE_MS,
-      ...cacheStats.search,
-      hit_rate: rate(cacheStats.search),
-    },
-    references: {
-      entries: referencesCache.size,
-      ttl_ms: SEARCH_CACHE_MS,
-      ...cacheStats.references,
-      hit_rate: rate(cacheStats.references),
-    },
-    recent: {
-      entries: recentCache.size,
-      ttl_ms: RECENT_CACHE_MS,
-      ...cacheStats.recent,
-      hit_rate: rate(cacheStats.recent),
-    },
-  };
-}
-
 const healthDeps: HealthDeps = {
   hostSnapshot: () => host.snapshot(),
   refreshCapability: capabilityReady,
@@ -1151,7 +754,7 @@ const healthDeps: HealthDeps = {
         }
       : { state: opening ? "opening" : "closed" },
   queue: () => ({ depth: queueDepth, in_flight: inFlight, peak_depth: peakQueueDepth }),
-  caches: cacheReport,
+  caches: cache.report,
   shells: () => ({
     active: [...shellRuns.entries()]
       .filter(([, state]) => state.running)
@@ -1405,10 +1008,10 @@ async function runSymbolReferences(args: Args): Promise<ToolResult> {
       relative_path: args.relative_path,
     };
     const refKey = stableKey(innerArgs);
-    const cachedSearch = ttlLookup(referencesCache, refKey, SEARCH_CACHE_MS, cacheStats.references);
+    const cachedSearch = cache.references.lookup(refKey);
     searchCacheHit = cachedSearch !== null;
     const searchRes = cachedSearch ?? (await executeCached("search", innerArgs)).response;
-    if (!cachedSearch) ttlStore(referencesCache, refKey, searchRes);
+    if (!cachedSearch) cache.references.store(refKey, searchRes);
     const hits = (searchRes.result?.data as { hits?: unknown[] } | undefined)?.hits ?? [];
     references = (hits as Array<{ relative_path?: unknown; line_number?: unknown; snippet?: unknown; text?: unknown; line?: unknown; context?: unknown }>).map((h) => ({
       relative_path: String(h.relative_path ?? ""),
