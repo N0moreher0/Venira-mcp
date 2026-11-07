@@ -50,7 +50,7 @@ compact output mode, and tool annotations.
 1. Add the registration in `tools/project.ts` → `registerProjectTools`.
 2. Route it through `executeCached` if it's read-only; add it to `MUTATING` if it writes.
 3. Envelope + hint: use `buildEnvelope` / `errorEnvelope` from `lib/output.ts` — never hand-roll.
-4. `verify.ts`: add a `check("…", …)` block; update `expectedCount` (currently 16).
+4. `scripts/verify/`: add a `check("…", …)` block in the matching section module; update `expectedCount` (currently 16).
 5. `server.ts` → `INSTRUCTIONS` decision tree: one line if it belongs in the flow.
 6. `README.md` → tool table + §4 section for the family it belongs to.
 7. `npm run build && npm run verify && npm run bench:mcp` — paste bench output in the PR.

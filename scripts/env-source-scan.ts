@@ -9,7 +9,7 @@ import path from "node:path";
 
 const RUNTIME_ROOTS = ["lib", "tools", "scripts", "server.ts"];
 const SKIP_DIRS = new Set(["node_modules", "dist", ".git"]);
-const SKIP_FILE = /(^|[\\/])(env-registry\.ts|env-source-scan\.ts|check-docs\.ts|verify\.ts|test-[^\\/]*\.ts|policy-corpus[^\\/]*\.ts)$/;
+const SKIP_FILE = /(^|[\\/])(env-registry\.ts|env-source-scan\.ts|check-docs\.ts|verify\.ts|test-[^\\/]*\.ts|policy-corpus[^\\/]*\.ts)$|[\\/]scripts[\\/]verify[\\/]/;
 
 /** Whole variable names only: no `VENIRA_GIT_*` wildcards, no template fragments such as `VENIRA_${x}`. */
 const NAME = /VENIRA_[A-Z0-9]+(?:_[A-Z0-9]+)*(?![A-Z0-9_*])/g;

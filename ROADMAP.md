@@ -32,8 +32,9 @@
 3. **Audit-store installation fallback** (in progress)
    - Make native SQLite optional with a documented fallback, add a clean-install smoke job, and include Node 24 in CI after validating compatibility.
    - Started: native `better-sqlite3` now loads lazily via `createRequire` in `lib/corehost.ts` with a type-only import, so a missing native binding degrades to the existing no-op/fail-closed path instead of crashing module load. Tests still green. Remaining: clean-install smoke job + Node 24 CI validation + documented fallback behaviour.
-6. **Maintainability refactor**
-   - Split the oversized `tools/project.ts`, `lib/corehost.ts`, and `scripts/verify.ts` along stable responsibilities, preserving public contracts and tests.
+6. **Maintainability refactor** (in progress)
+   - Split the oversized `tools/project.ts` and `lib/corehost.ts` along stable responsibilities, preserving public contracts and tests.
+   - Done: `scripts/verify.ts` is now a 89-line orchestrator over `scripts/verify/harness.ts` plus nine section modules (`core`, `shell-policy`, `shell-env-audit`, `search`, `checkpoints-errors`, `secrets`, `github-ci`, `providers-config`, `audit-symbols`); mechanical split, same 509 checks in the same order. Remaining there: `github-ci.ts` is still ~69 KB and can be cut by provider (GitHub / GitLab / Bitbucket / `ci_wait`).
 
 ### P2 — Deeper assurance and operational improvements
 

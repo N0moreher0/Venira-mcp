@@ -464,7 +464,7 @@ npm run bench:mcp   # end-to-end numbers
 1. Register in `tools/project.ts` → `registerProjectTools`, use the `config()` helper.
 2. Read-only: route through `executeCached`; mutations: add to `MUTATING` set.
 3. Envelope: use `buildEnvelope` / `errorEnvelope` from `lib/output.ts`.
-4. Add a check in `scripts/verify.ts`; update the decision tree in `server.ts` INSTRUCTIONS.
+4. Add a check in the matching section module under `scripts/verify/` (`scripts/verify.ts` only orchestrates); update the decision tree in `server.ts` INSTRUCTIONS.
 5. `npm run build && npm run verify && npm run bench:mcp` — paste numbers in the PR.
 
 ## 11. Troubleshooting
