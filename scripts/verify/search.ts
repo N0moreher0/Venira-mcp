@@ -423,6 +423,34 @@ export async function runSearch(
     scopedMiss.data,
   );
 
+  const patternBatchSearch = asEnvelope(
+    await call("project_read_batch", {
+      requests: [{ operation: "search", arguments: { pattern: "function ", scope: "workspace", limit: 10 } }],
+    }),
+  );
+  const patternBatchSearchItem = patternBatchSearch.data?.responses?.[0];
+  check(
+    "batch_search_pattern_alias_maps_to_query",
+    patternBatchSearchItem?.ok === true &&
+      Array.isArray(patternBatchSearchItem?.response?.data?.hits) &&
+      patternBatchSearchItem.response.data.hits.length > 0,
+    patternBatchSearchItem,
+  );
+
+  const missingBatchQuery = asEnvelope(
+    await call("project_read_batch", {
+      requests: [{ operation: "search", arguments: { scope: "workspace" } }],
+    }),
+  );
+  const missingBatchQueryItem = missingBatchQuery.data?.responses?.[0];
+  check(
+    "batch_search_missing_query_is_invalid_request",
+    missingBatchQueryItem?.ok === false &&
+      missingBatchQueryItem?.error?.code === "invalid_request" &&
+      String(missingBatchQueryItem?.hint ?? "").includes("arguments.query"),
+    missingBatchQueryItem,
+  );
+
   // 10c-2. Hybrid search inside project_read_batch (same routing rule as the standalone tool).
   const hybBatch = asEnvelope(
     await call("project_read_batch", {

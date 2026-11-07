@@ -308,7 +308,7 @@ async function opGithubConnect(args: Record<string, unknown>): Promise<RustRespo
   if (action === "poll") {
     const pendingId = typeof args.pending_id === "string" ? args.pending_id.trim() : "";
     if (!pendingId) {
-      throw new Error("[invalid_request] `pending_id` is required for action=poll.");
+      throw new Error(`[invalid_request] \`pending_id\` ${typeof args.pending_id === "string" ? "cannot be empty" : "is required"} for action=poll.`);
     }
     const data = await githubDeviceFlow.poll(pendingId);
     return {

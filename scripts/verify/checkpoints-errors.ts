@@ -70,6 +70,43 @@ export async function runCheckpointsErrors(
       (snapCreate.data?.file_count ?? 0) >= 8,
     snapCreate,
   );
+  const badScopeSnapshot = asEnvelope(
+    await call("project_snapshot", {
+      action: "create",
+      scope: [".verify-definitely-missing-snapshot-scope"],
+      label: "invalid scope must not widen",
+    }),
+  );
+  check(
+    "snapshot_scope_alias_missing_path_fails_closed",
+    badScopeSnapshot.ok === false && badScopeSnapshot.error?.code === "not_found",
+    badScopeSnapshot,
+  );
+  const outlineDirectory = asEnvelope(
+    await call("project_outline_symbol", { relative_path: ".", max_symbols: 5 }),
+  );
+  check(
+    "outline_symbol_directory_has_actionable_error",
+    outlineDirectory.ok === false &&
+      outlineDirectory.error?.code === "invalid_request" &&
+      /directories are not supported/i.test(String(outlineDirectory.error?.message ?? "")),
+    outlineDirectory,
+  );
+  const sameFileDiff = asEnvelope(
+    await call("project_diff_files", {
+      relative_path_a: `${dir}/snap-target.txt`,
+      relative_path_b: `${dir}/snap-target.txt`,
+      context_lines: 3,
+    }),
+  );
+  check(
+    "diff_same_file_returns_empty_diff",
+    sameFileDiff.ok === true &&
+      sameFileDiff.data?.lines_added === 0 &&
+      sameFileDiff.data?.lines_removed === 0 &&
+      sameFileDiff.data?.unified_diff === "",
+    sameFileDiff.data,
+  );
   await fs.mkdir(`${dir}/target/debug`, { recursive: true });
   await fs.writeFile(`${dir}/target/debug/build-artifact`, "binary-bytes\n");
   const snapCreateRust = asEnvelope(

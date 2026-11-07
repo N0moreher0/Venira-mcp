@@ -13,9 +13,9 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        node: ["20", "22"]
-        # macOS is darwin, where better-sqlite3 needs a prebuilt binary.
-        # Node 22 + x64/arm64 has prebuilds; Node 20 does too.
+        node: ["20", "22", "24"]
+        # macOS is darwin, where better-sqlite3 needs a prebuilt binary;
+        # the explicit binding step below rebuilds if a prebuild is missing.
         exclude: []
     steps:
       - uses: actions/checkout@v4
@@ -98,3 +98,23 @@ jobs:
         run: |
           npm pack --dry-run
           npm pack 2>&1 | tail -5
+
+  audit-fallback:
+    # Prove that a clean install without native install scripts can still
+    # start, while strict audit mode refuses to silently drop audit rows.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install without native scripts
+        run: npm ci --ignore-scripts
+
+      - name: Start the in-process backend
+        run: npm run smoke
+
+      - name: Audit fallback smoke
+        run: npm run test:audit-fallback

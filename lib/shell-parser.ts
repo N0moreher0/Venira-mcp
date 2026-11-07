@@ -117,7 +117,7 @@ function makeSegment(argv: string[], raw: string): Segment {
 }
 
 export function parseShellCommand(raw: string, options?: { shell?: string }): ParsedCommand {
-  const { tokens, has_substitution } = tokenize(raw);
+  const { tokens, has_substitution } = tokenize(raw, options);
   const segments: Segment[] = [];
   const operators: string[] = [];
   const redirect_targets: string[] = [];

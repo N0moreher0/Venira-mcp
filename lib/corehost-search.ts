@@ -148,7 +148,10 @@ export async function opSearch(
   args: Record<string, unknown>,
   root: string,
 ): Promise<RustResponse> {
-  const query = args.query as string;
+  if (typeof args.query !== "string") {
+    throw new Error("[invalid_request] Search requires a string query. Hint: pass arguments.query in every search item.");
+  }
+  const query = args.query;
   const kind = (args.kind as string) ?? "literal_content";
   const searchRoot = resolveInWorkspace(args.relative_path as string, root);
   // Hidden files are searched by default (parity with the JS walker; agents

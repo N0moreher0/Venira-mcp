@@ -15,6 +15,7 @@ import { runSearch } from "./verify/search.js";
 import { runCheckpointsErrors } from "./verify/checkpoints-errors.js";
 import { runSecrets } from "./verify/secrets.js";
 import { runGithubCi } from "./verify/github-ci.js";
+import { runDiagnosticsReadPlan } from "./verify/diagnostics-read-plan.js";
 import { runProvidersConfig } from "./verify/providers-config.js";
 import { runAuditSymbols } from "./verify/audit-symbols.js";
 
@@ -49,6 +50,7 @@ await runGithubCi(harness, {
   ...shellEnvAudit,
   ...secrets,
 });
+await runDiagnosticsReadPlan(harness);
 await runProvidersConfig(harness, {
   ...core,
   ...shellPolicy,

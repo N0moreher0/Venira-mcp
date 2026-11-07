@@ -49,13 +49,19 @@ const BATCH_FLAG_KEYS = new Set([
   "line_numbers",
 ]);
 
-function normalizeBatchFlags(args: Args): Args {
+function normalizeBatchArgs(operation: string, args: Args): Args {
   const out: Args = { ...args };
   for (const key of BATCH_FLAG_KEYS) {
     const value = out[key];
     if (typeof value === "number") out[key] = value === 1;
     else if (value === "1" || value === "true") out[key] = true;
     else if (value === "0" || value === "false") out[key] = false;
+  }
+  // Search clients commonly call the text field `pattern`; the standalone
+  // project_search contract calls it `query`. Accept the alias in batches so
+  // a valid search is not forwarded with query=undefined to the backend.
+  if (operation === "search" && typeof out.query !== "string" && typeof out.pattern === "string") {
+    out.query = out.pattern;
   }
   return out;
 }
@@ -89,7 +95,7 @@ export async function runReadBatch(
 
     const itemStarted = performance.now();
     try {
-      const itemArgs = normalizeBatchFlags(request.arguments as Args);
+      const itemArgs = normalizeBatchArgs(request.operation, request.arguments as Args);
       // Same routing rule as the standalone project_search tool: hybrid only applies to literal_content.
       const useHybrid = request.operation === "search" && itemArgs.hybrid === true && itemArgs.kind === "literal_content";
       const execution = useHybrid

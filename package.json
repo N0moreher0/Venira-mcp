@@ -90,6 +90,7 @@
     "test:config-posture": "tsx scripts/test-config-posture.ts",
     "test:env-registry": "tsx scripts/test-env-registry.ts",
     "test:shell-policy-adversarial": "tsx scripts/test-shell-policy-adversarial.ts",
+    "test:audit-fallback": "npm run build && node scripts/test-audit-fallback.mjs",
     "test:audit-verify": "tsx scripts/test-audit-verify.ts",
     "check:docs": "tsx scripts/check-docs.ts",
     "check:source-shape": "tsx scripts/check-source-shape.ts",

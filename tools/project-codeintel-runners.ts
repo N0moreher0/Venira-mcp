@@ -1,0 +1,154 @@
+import { recordMetric } from "../lib/metrics.js";
+import { buildEnvelope, errorEnvelope, newRequestId, toolResult } from "../lib/output.js";
+import type { RustResponse, ToolResult } from "../lib/output.js";
+import { selectiveSearch, type SelectiveQuery } from "../lib/symbol-diff.js";
+import type { Args } from "./project-cache.js";
+
+type ReferenceCache = {
+  lookup: (key: string) => RustResponse | null;
+  store: (key: string, response: RustResponse) => void;
+};
+
+export type CodeIntelRunnerDeps = {
+  execute: (operation: string, args: Args) => Promise<RustResponse>;
+  executeCached: (operation: string, args: Args) => Promise<{ response: RustResponse; cached: boolean }>;
+  readTextFile: (relativePath: string) => Promise<string | null>;
+  toHostPath: (relativePath: string | undefined) => string;
+  isProtectedPath: (absolutePath: string) => boolean;
+  referenceCache: ReferenceCache;
+  stableKey: (value: Args) => string;
+};
+
+export function createCodeIntelRunners(deps: CodeIntelRunnerDeps) {
+  const { execute, executeCached, readTextFile, toHostPath, isProtectedPath, referenceCache, stableKey } = deps;
+
+  async function runSymbolReferences(args: Args): Promise<ToolResult> {
+    const started = performance.now();
+    const requestId = newRequestId();
+    const symbolName = String(args.symbol_name ?? "");
+    if (!symbolName) {
+      return toolResult(errorEnvelope("symbol_references", new Error("[invalid_request] symbol_name is required."), { requestId, elapsedMs: 0 }), true);
+    }
+    const scope = args.scope === "file" ? "file" : "workspace";
+    let references: Array<{ relative_path: string; line_number: number; context: string }> = [];
+    let searchCacheHit = false;
+    let sourceTruncated = false;
+    if (scope === "file") {
+      const rel = String(args.relative_path ?? "");
+      if (isProtectedPath(toHostPath(rel))) {
+        return toolResult(
+          errorEnvelope("symbol_references", new Error(`[sensitive_result] Path is protected by policy: ${rel}.`), { requestId, elapsedMs: performance.now() - started }),
+          true,
+        );
+      }
+      const content = await readTextFile(rel);
+      if (content === null) {
+        return toolResult(errorEnvelope("symbol_references", new Error(`[not_found] No such file: ${rel}.`), { requestId, elapsedMs: performance.now() - started }), true);
+      }
+      const lines = content.split("\n");
+      const escaped = symbolName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const re = new RegExp(`\\b${escaped}\\b`);
+      for (let i = 0; i < lines.length; i++) {
+        if (re.test(lines[i])) {
+          references.push({ relative_path: toHostPath(rel), line_number: i + 1, context: lines[i].trim().slice(0, 160) });
+        }
+      }
+    } else {
+      const limit = Number(args.limit ?? 50);
+      const innerArgs = {
+        query: symbolName,
+        kind: "literal_content",
+        whole_word: true,
+        limit,
+        relative_path: args.relative_path,
+      };
+      const refKey = stableKey(innerArgs);
+      const cachedSearch = referenceCache.lookup(refKey);
+      searchCacheHit = cachedSearch !== null;
+      const searchRes = cachedSearch ?? (await executeCached("search", innerArgs)).response;
+      const searchData = searchRes.result?.data as { complete?: boolean } | undefined;
+      sourceTruncated = searchData?.complete === false;
+      if (!cachedSearch && searchData?.complete !== false) referenceCache.store(refKey, searchRes);
+      const hits = (searchRes.result?.data as { hits?: unknown[] } | undefined)?.hits ?? [];
+      references = (hits as Array<{ relative_path?: unknown; line_number?: unknown; snippet?: unknown; text?: unknown; line?: unknown; context?: unknown }>).map((hit) => ({
+        relative_path: String(hit.relative_path ?? ""),
+        line_number: Number(hit.line_number ?? 0),
+        context: String(hit.snippet ?? hit.text ?? hit.line ?? hit.context ?? "").slice(0, 160),
+      }));
+    }
+    const max = Number(args.max_references ?? 100);
+    const response: RustResponse = {
+      status: "completed",
+      result: {
+        kind: "symbol_references",
+        data: { symbol_name: symbolName, scope, count: references.length, references: references.slice(0, max) },
+      },
+      truncated: sourceTruncated || references.length > max,
+    };
+    const elapsedMs = performance.now() - started;
+    recordMetric("symbol_references", elapsedMs, true);
+    return toolResult(buildEnvelope("symbol_references", response, { requestId, elapsedMs, cached: searchCacheHit }));
+  }
+
+  async function runSelectiveSearch(args: Args): Promise<ToolResult> {
+    const started = performance.now();
+    const requestId = newRequestId();
+    const queries = args.queries as SelectiveQuery[] | undefined;
+    if (!Array.isArray(queries) || queries.length === 0) {
+      return toolResult(errorEnvelope("selective_search", new Error("[invalid_request] queries[] is required."), { requestId, elapsedMs: 0 }), true);
+    }
+    const files = new Map<string, string>();
+    const hint = Array.isArray(args.files_hint) ? (args.files_hint as string[]) : [];
+    if (hint.length > 0) {
+      let usable = 0;
+      let blocked = 0;
+      for (const rel of hint.slice(0, 20)) {
+        let protectedPath = false;
+        try {
+          protectedPath = isProtectedPath(toHostPath(rel));
+        } catch {
+          protectedPath = false;
+        }
+        if (protectedPath) {
+          blocked += 1;
+          continue;
+        }
+        usable += 1;
+        const content = await readTextFile(rel);
+        if (content !== null) files.set(toHostPath(rel), content);
+      }
+      if (usable === 0 && blocked > 0) {
+        return toolResult(
+          errorEnvelope("selective_search", new Error("[sensitive_result] Every files_hint path is protected by policy."), { requestId, elapsedMs: performance.now() - started }),
+          true,
+        );
+      }
+    } else {
+      const relPath = args.relative_path ? String(args.relative_path) : undefined;
+      const listRes = await execute("list_files", { relative_path: relPath, depth: 2, limit: 40 });
+      const entries = (listRes.result?.data as { entries?: unknown[] } | undefined)?.entries ?? [];
+      const list = entries.filter((entry) => typeof entry === "object" && (entry as { kind?: unknown }).kind === "file").slice(0, 40) as Array<{ relative_path?: unknown }>;
+      for (const entry of list) {
+        const rel = String(entry.relative_path ?? "");
+        if (/\.(ts|tsx|js|jsx|py|rs|go|java|c|cpp|h|cs|rb|php|sql|json|md|sh|yml|yaml|toml)$/.test(rel)) {
+          const content = await readTextFile(rel);
+          if (content !== null) files.set(toHostPath(rel), content);
+        }
+      }
+    }
+    const result = selectiveSearch(files, queries, Number(args.limit ?? 100));
+    const response: RustResponse = {
+      status: "completed",
+      result: {
+        kind: "selective_search",
+        data: { hits: result.hits, total_files: result.total_files, total_hits: result.total_hits, truncated: result.truncated },
+      },
+      truncated: result.truncated,
+    };
+    const elapsedMs = performance.now() - started;
+    recordMetric("selective_search", elapsedMs, true);
+    return toolResult(buildEnvelope("selective_search", response, { requestId, elapsedMs, cached: false }));
+  }
+
+  return { runSymbolReferences, runSelectiveSearch };
+}

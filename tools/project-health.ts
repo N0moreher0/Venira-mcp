@@ -80,8 +80,8 @@ export function dataDirFor(exe: string | null): string {
 }
 
 /**
- * Snapshot providers for state that tools/project.ts owns (queue, capability, shell
- * runs, caches). Injected so this module never touches those mutable variables and
+ * Snapshot providers for state owned by tools/project.ts (queue, capability, caches)
+ * and the shell-run registry. Injected so this module never touches those mutable variables and
  * never imports back from project.ts.
  */
 export type HealthDeps = {

@@ -147,6 +147,9 @@ export type DiffResult = {
  * @param maxLines - cap the diff length before truncating
  */
 export function diffUnified(a: string, b: string, contextLines = 3, maxLines = 500): DiffResult {
+  if (a === b) {
+    return { lines_added: 0, lines_removed: 0, unified_diff: "", truncated: false };
+  }
   const A = a.split("\n");
   const B = b.split("\n");
   const n = A.length;
@@ -259,7 +262,6 @@ export function selectiveSearch(
 ): SelectiveResult {
   const hits: SelectiveResult["hits"] = [];
   let totalHits = 0;
-  let truncated = false;
 
   for (const [rel, text] of files.entries()) {
     const lines = text.split("\n");
@@ -280,22 +282,30 @@ export function selectiveSearch(
         }
       }
       if (allMust && matched.length > 0) {
-        hits.push({
+        totalHits++;
+        const candidate = {
           relative_path: rel,
           line_number: idx + 1,
           text: line.trim().slice(0, 200),
           score,
           matched,
-        });
-        totalHits++;
-        if (hits.length >= limit) {
-          truncated = true;
-          return { hits, total_files: files.size, total_hits: totalHits, truncated };
+        };
+        // Keep only the best `limit` candidates while scanning every line.
+        // Returning as soon as the list fills makes later, higher-scoring hits
+        // invisible and renders the score sort below ineffective.
+        let low = 0;
+        let high = hits.length;
+        while (low < high) {
+          const middle = (low + high) >>> 1;
+          if (hits[middle].score >= candidate.score) low = middle + 1;
+          else high = middle;
+        }
+        if (low < limit) {
+          hits.splice(low, 0, candidate);
+          if (hits.length > limit) hits.pop();
         }
       }
     }
   }
-  // Sort by score desc
-  hits.sort((a, b) => b.score - a.score);
-  return { hits: hits.slice(0, limit), total_files: files.size, total_hits: totalHits, truncated };
+  return { hits, total_files: files.size, total_hits: totalHits, truncated: totalHits > limit };
 }

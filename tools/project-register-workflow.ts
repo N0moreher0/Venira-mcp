@@ -195,6 +195,11 @@ export function registerWorkflowTools(server: McpServer, deps: WorkflowToolsDeps
           .max(64)
           .optional()
           .describe("Capture affected paths (default ['.'] only when scope is unclear); restore accepts a subset to filter files."),
+        scope: z
+          .array(z.string())
+          .max(64)
+          .optional()
+          .describe("Deprecated alias for paths; supplied scope is honored and missing paths return not_found."),
         exclude: z.array(z.string()).max(64).optional().describe("Extra directory/file names to skip."),
         respect_default_excludes: flag01
           .optional()

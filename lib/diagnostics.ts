@@ -126,6 +126,50 @@ const RULES: Rule[] = [
     ],
   },
   {
+    id: "venira.path_escape",
+    title: "Path is outside the workspace",
+    confidence: "high",
+    pattern: /\[path_escape\]|\[scope_denied\]/i,
+    cause: "Venira refused a path that escapes the configured workspace or capability scope.",
+    fix: [
+      "Use a workspace-relative path and confirm it with project_list_files.",
+      "For a deliberate external path, configure an explicit project grant or enable the documented unrestricted mode only when appropriate.",
+    ],
+  },
+  {
+    id: "venira.sensitive_result",
+    title: "Path or result is protected by policy",
+    confidence: "high",
+    pattern: /\[sensitive_result\]|\[sensitive_path\]/i,
+    cause: "Venira blocked access to a protected secret, credential, or internal data path.",
+    fix: [
+      "Choose a non-sensitive workspace file; do not try to read secret stores through project tools.",
+      "Use the dedicated project_secret tool for managed credentials; it does not return stored values by default.",
+    ],
+  },
+  {
+    id: "venira.audit_unavailable",
+    title: "Audit storage is unavailable",
+    confidence: "high",
+    pattern: /\[audit_unavailable\]|audit.{0,30}(unavailable|failed)/i,
+    cause: "Venira could not persist or read the audit trail, so operations that require audit evidence may fail closed.",
+    fix: [
+      "Check project_health for the audit store status and inspect the reported data directory permissions/free space.",
+      "After restoring the store, retry the original operation once and verify it appears in project_read_audit.",
+    ],
+  },
+  {
+    id: "venira.invalid_request",
+    title: "Venira rejected invalid tool arguments",
+    confidence: "high",
+    pattern: /\[invalid_request\]/i,
+    cause: "A required argument is missing, has the wrong type, or violates a tool limit.",
+    fix: [
+      "Read the tool's argument schema and the error hint, then correct the arguments before retrying.",
+      "For paths and search, pass the canonical parameter names and the values in their documented types.",
+    ],
+  },
+  {
     id: "fs.enoent",
     title: "File or directory does not exist (ENOENT)",
     confidence: "high",

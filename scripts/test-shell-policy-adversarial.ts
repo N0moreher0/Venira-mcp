@@ -203,6 +203,10 @@ try {
       policy.evaluateShellCommand("Get-Content .env", workspaceDir, { shell: "powershell", mode: "balanced" }).rule,
       "deny.protected_file_access",
     );
+    for (const command of ["Get-Content .e`nv", 'Get-Content ".e`nv"']) {
+      const decision = policy.evaluateShellCommand(command, workspaceDir, { shell: "powershell", mode: "balanced" });
+      assert.equal(decision.rule, "deny.protected_file_access", `${command}: ${JSON.stringify(decision)}`);
+    }
   });
 
   check("policy_adv_dialect_cmd", () => {

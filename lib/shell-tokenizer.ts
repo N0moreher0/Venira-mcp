@@ -1,4 +1,4 @@
-import { PLATFORM } from "./workspace.js";
+import { resolveShellDialect } from "./shell-dialect.js";
 
 export type Token = { type: "word" | "op" | "redirect"; value: string };
 
@@ -9,7 +9,8 @@ const REDIRECT_OPS = new Set([">", ">>", ">|", "<", "<<", "&>", "&>>"]);
  * The parser is intentionally conservative: unsupported syntax remains
  * visible to policy evaluation rather than being silently normalized.
  */
-export function tokenize(raw: string): { tokens: Token[]; has_substitution: boolean } {
+export function tokenize(raw: string, options?: { shell?: string }): { tokens: Token[]; has_substitution: boolean } {
+  const dialect = resolveShellDialect(options?.shell);
   const tokens: Token[] = [];
   let word = "";
   let hasWord = false;
@@ -44,20 +45,53 @@ export function tokenize(raw: string): { tokens: Token[]; has_substitution: bool
         quote = null;
         continue;
       }
-      if (ch === "\\" && i + 1 < raw.length) {
+      if (ch === "`" && dialect === "powershell" && i + 1 < raw.length) {
+        if (raw[i + 1] === "\n") {
+          i += 1;
+          continue;
+        }
+        if (raw[i + 1] === "\r" && raw[i + 2] === "\n") {
+          i += 2;
+          continue;
+        }
         word += raw[i + 1];
         i += 1;
         hasWord = true;
         continue;
       }
-      if (ch === "`" || (ch === "$" && raw[i + 1] === "(")) hasSubstitution = true;
+      if (ch === "\\" && dialect !== "powershell" && i + 1 < raw.length) {
+        word += raw[i + 1];
+        i += 1;
+        hasWord = true;
+        continue;
+      }
+      if ((ch === "`" && dialect === "posix") || (ch === "$" && raw[i + 1] === "(")) hasSubstitution = true;
       word += ch;
       hasWord = true;
       continue;
     }
 
+    if (ch === "`" && dialect === "powershell") {
+      if (raw[i + 1] === "\n") {
+        i += 1;
+        continue;
+      }
+      if (raw[i + 1] === "\r" && raw[i + 2] === "\n") {
+        i += 2;
+        continue;
+      }
+      if (i + 1 < raw.length) {
+        word += raw[i + 1];
+        i += 1;
+        hasWord = true;
+      } else {
+        word += ch;
+        hasWord = true;
+      }
+      continue;
+    }
     if (ch === "\\") {
-      if (PLATFORM !== "win32" && i + 1 < raw.length) {
+      if (dialect === "posix" && i + 1 < raw.length) {
         word += raw[i + 1];
         i += 1;
         hasWord = true;
@@ -83,7 +117,7 @@ export function tokenize(raw: string): { tokens: Token[]; has_substitution: bool
       continue;
     }
     if (ch === "`") {
-      hasSubstitution = true;
+      if (dialect === "posix") hasSubstitution = true;
       word += ch;
       hasWord = true;
       continue;

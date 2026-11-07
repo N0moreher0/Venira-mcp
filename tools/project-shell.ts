@@ -10,8 +10,8 @@ import { SESSION_ID } from "../lib/session.js";
 // project_shell_run (approval flow + optional MCP elicitation) and project_shell_cancel_session.
 // Extracted from tools/project.ts (P1 #6, step 5g); behavior is unchanged. The cached backend
 // executor and the corehost call are owned by project.ts and reach this module through ShellDeps,
-// so it never imports project.ts. The shell run registry (`shellRuns` / `trackShell`) stays in
-// project.ts because executeCached and project_health share it.
+// so it never imports project.ts. The shell run registry lives separately in
+// project-shell-registry.ts and is shared with the health snapshot through injected state.
 
 type Args = Record<string, unknown>;
 
