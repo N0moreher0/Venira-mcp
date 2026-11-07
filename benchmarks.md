@@ -11,7 +11,7 @@ npm run bench:tools  # paired MCP vs PowerShell command proxy
 
 Environment (sections 1–2, 5–6): Windows 11 build 26200 / NVMe / Intel Core i5-1035G1 (8 logical processors) / 11.8 GiB RAM / Node v24.20.0 / PowerShell 5.1. Section 3 used Node 20. Single host — treat deltas vs a new baseline, not absolute targets.
 
-Sections 1–2 and 5 were re-measured on **2026-11-07** with `venira-mcp@1.17.0` plus the `isProtectedPath` fix described in section 6 (working tree on top of commit `4c4b311`); section 6 also keeps the pre-fix numbers and a same-day A/B against `v1.16.2`. Section 3 is an older migration comparison of v0.3.0 → v1.0.0 plus the 2026-11-03 `v1.13.8` numbers that used to be in sections 1–2; those are **not** a same-version comparison with the current sections. The current package is `v1.17.0`.
+Sections 1–2 and 5 were re-measured on **2026-11-07** with `venira-mcp@1.17.0` plus the `isProtectedPath` fix described in section 6 (working tree on top of commit `4c4b311`); section 6 also keeps the pre-fix numbers and a same-day A/B against `v1.16.2`. Section 3 is an older migration comparison of v0.3.0 → v1.0.0 plus the 2026-11-03 `v1.13.8` numbers that used to be in sections 1–2; those are **not** a same-version comparison with the current sections. At the time of these measurements, the current package was `v1.17.0`.
 
 ## 0. Methodology & caveats
 

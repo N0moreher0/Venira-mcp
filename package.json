@@ -62,6 +62,9 @@
     "bin/",
     "README.md",
     "LICENSE",
+    "SECURITY.md",
+    "BENCHMARK-2026-11-07.md",
+    "BENCHMARK-2026-11-07.json",
     "opencode.example.json",
     "CONTRIBUTING.md"
   ],
