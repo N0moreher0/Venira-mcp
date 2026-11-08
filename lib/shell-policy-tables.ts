@@ -675,6 +675,12 @@ const SAFE_COMMANDS = new Set([
   "git",
 ]);
 
+/** `tsc` flags that write config (`--init`), never exit (`--watch`), delete output (`--clean`) or dump traces. */
+export const TSC_UNSAFE_FLAG = /^(?:--init|--watch|-w|--clean|--generatetrace)(?:=|$)/;
+
+/** Tools `npx --no-install` may run on the routine path: the same ones that are safe when called bare. */
+const SAFE_NPX_TOOLS = new Set(["tsc", "esbuild", "tsx", "vitest", "jest", "eslint", "prettier"]);
+
 export function isSafeSegment(segment: Segment): boolean {
   if (!SAFE_COMMANDS.has(segment.command)) return false;
   if (segment.command === "git") {
@@ -693,7 +699,20 @@ export function isSafeSegment(segment: Segment): boolean {
     return hasFileArg;
   }
   if (segment.command === "npx") {
-    return segment.argv.includes("--no-install");
+    // Only `npx --no-install <known dev tool> ...`, judged exactly like the bare tool; any other
+    // local bin (`rimraf`, `del-cli`, a project script) or a bare `npx --no-install` needs approval.
+    const args = segment.argv.slice(1);
+    let i = 0;
+    while (i < args.length && args[i].startsWith("-")) {
+      if (args[i] !== "--no-install" && args[i] !== "--no") return false;
+      i += 1;
+    }
+    const tool = args[i];
+    if (i === 0 || !tool || !SAFE_NPX_TOOLS.has(tool)) return false;
+    return isSafeSegment({ ...segment, command: tool, argv: args.slice(i) });
+  }
+  if (segment.command === "tsc") {
+    return !segment.argv.slice(1).some((arg) => TSC_UNSAFE_FLAG.test(arg.toLowerCase()));
   }
   return true;
 }

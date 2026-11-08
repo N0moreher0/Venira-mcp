@@ -5,6 +5,9 @@
  * `balanced.local_dev`  : routine local development inside the workspace:
  *   - build / test / lint toolchain commands (npm|pnpm|yarn scripts with conventional names,
  *     cargo, go, dotnet, pytest, eslint, prettier --check, vitest, jest, mocha, tsc ...);
+ *   - the same toolchain run through `npx` (`npx tsc --noEmit`) only when the bin is already installed
+ *     in the workspace's `node_modules/.bin`, so npx can never download or run a remote package
+ *     (`npx tsc` without a local TypeScript would fetch the unrelated `tsc` package);
  *   - reversible git branch/stash operations (`checkout -b`, `switch`, `stash`, `restore --staged`).
  *
  * Everything here still requires: no redirect / background / substitution, workspace-bound
@@ -20,8 +23,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { ParsedCommand, Segment } from "./shell-parser.js";
-import { balancedSegmentOk, gitSubcommandIndex, isOutsideWorkspace } from "./shell-policy-tables.js";
-import { extraReadOnlyOk, installSegmentOk, redirectKind, writeSegmentOk } from "./shell-policy-balanced-write.js";
+import { balancedSegmentOk, gitSubcommandIndex, isOutsideWorkspace, TSC_UNSAFE_FLAG } from "./shell-policy-tables.js";
+import { extraReadOnlyOk, installSegmentOk, redirectKind, writeSegmentOk, writeTargetOk } from "./shell-policy-balanced-write.js";
 import { dockerReadOnlySegment } from "./shell-policy-balanced-docker.js";
 
 export type BalancedAllow = { rule: string; reason: string };
@@ -159,6 +162,40 @@ function scriptRunnerOk(segment: Segment, cwd: string, cdSeen: boolean): boolean
 
 const GO_UNSAFE_FLAGS = new Set(["exec", "toolexec", "overlay", "modfile"]);
 
+// ---------------------------------------------------------------------------
+// npx: only bins that are already installed locally
+// ---------------------------------------------------------------------------
+
+/** Tools npx may run; each is also judged by `toolchainOk` exactly like the bare command. */
+const NPX_TOOLS = new Set(["tsc", "vue-tsc", "vitest", "jest", "mocha", "eslint", "prettier"]);
+/** The only npx flags accepted: both refuse to install anything. */
+const NPX_FLAGS = new Set(["--no-install", "--no"]);
+
+function localBinInstalled(cwd: string, tool: string): boolean {
+  const dir = path.join(cwd, "node_modules", ".bin");
+  return [tool, `${tool}.cmd`].some((name) => {
+    try {
+      return fs.statSync(path.join(dir, name)).isFile();
+    } catch {
+      return false;
+    }
+  });
+}
+
+function npxToolchainOk(segment: Segment, cwd: string, cdSeen: boolean): boolean {
+  // After a `cd` the node_modules we can inspect is no longer the one npx would use.
+  if (cdSeen) return false;
+  const args = segment.argv.slice(1);
+  let i = 0;
+  while (i < args.length && args[i].startsWith("-")) {
+    if (!NPX_FLAGS.has(args[i])) return false;
+    i += 1;
+  }
+  const tool = args[i];
+  if (!tool || !NPX_TOOLS.has(tool) || !localBinInstalled(cwd, tool)) return false;
+  return toolchainOk({ ...segment, command: tool, argv: args.slice(i) });
+}
+
 function toolchainOk(segment: Segment): boolean {
   const sub = segment.argv[1]?.toLowerCase();
   const lower = segment.argv.map((arg) => arg.toLowerCase());
@@ -181,9 +218,12 @@ function toolchainOk(segment: Segment): boolean {
     case "vitest":
     case "jest":
     case "mocha":
+      return true;
     case "tsc":
     case "vue-tsc":
-      return true;
+      // `--init` writes tsconfig.json, `--watch` never exits, `--clean` deletes build output,
+      // `--generateTrace` writes a trace directory.
+      return !lower.some((arg) => TSC_UNSAFE_FLAG.test(arg));
     case "ruff": {
       if (sub === "check") return !lower.some((arg) => /^--(?:fix|unsafe-fixes|add-noqa|fix-only)/.test(arg));
       return sub === "format" && (lower.includes("--check") || lower.includes("--diff"));
@@ -228,6 +268,27 @@ function stashOk(rest: string[]): boolean {
   return true;
 }
 
+/**
+ * `git restore <file>...` (worktree): overwrites uncommitted edits of explicit files with the committed
+ * version. Deliberately accepted at this tier because the project's checkpoints (`project_snapshot`)
+ * make the overwrite recoverable. Still asks for: directories, `.`, globs/pathspec magic, `--source`,
+ * `--staged --worktree`, `-p`, the `--` separator, and build/config/hook/protected files.
+ */
+function restoreFilesOk(rest: string[], cwd: string): boolean {
+  const paths = rest.filter((arg) => arg !== "-q" && arg !== "--quiet");
+  if (paths.length === 0) return false;
+  return paths.every((raw) => {
+    if (raw.startsWith("-") || /[*?[\]:]/.test(raw) || /[\\/]$/.test(raw) || raw === "." || raw === "..") return false;
+    if (!writeTargetOk(raw, cwd)) return false;
+    try {
+      if (fs.statSync(path.resolve(cwd, raw)).isDirectory()) return false;
+    } catch {
+      // A missing path is a deleted tracked file; restoring it is the common case.
+    }
+    return true;
+  });
+}
+
 function gitLocalOk(segment: Segment, cwd: string): boolean {
   const i = gitSubcommandIndex(segment, cwd);
   if (i < 0) return false;
@@ -244,12 +305,14 @@ function gitLocalOk(segment: Segment, cwd: string): boolean {
       return false;
     case "stash":
       return stashOk(rest);
-    case "restore":
-      // Unstaging only; restoring the worktree discards uncommitted changes.
-      return (
-        (rest.includes("--staged") || rest.includes("-S")) &&
-        !rest.some((arg) => arg === "--worktree" || arg === "-W" || arg === "-s" || arg === "--source" || arg.startsWith("--source="))
-      );
+    case "restore": {
+      if (rest.some((arg) => arg === "-s" || arg === "--source" || arg.startsWith("--source="))) return false;
+      const staged = rest.includes("--staged") || rest.includes("-S");
+      const worktree = rest.some((arg) => arg === "--worktree" || arg === "-W");
+      // Unstaging only, or restoring explicit worktree files (see restoreFilesOk).
+      if (staged) return !worktree;
+      return restoreFilesOk(rest, cwd);
+    }
     default:
       return false;
   }
@@ -257,10 +320,11 @@ function gitLocalOk(segment: Segment, cwd: string): boolean {
 
 function localDevSegmentOk(segment: Segment, parsed: ParsedCommand, cwd: string, cdSeen: boolean): boolean {
   if (!argsContained(segment, parsed, cwd)) return false;
-  if (segment.command === "git") return gitLocalOk(segment, cwd);
+  if (segment.command === "git") return !(cdSeen && segment.argv.includes("restore")) && gitLocalOk(segment, cwd);
   if (segment.command === "npm" || segment.command === "pnpm" || segment.command === "yarn") {
     return scriptRunnerOk(segment, cwd, cdSeen);
   }
+  if (segment.command === "npx") return npxToolchainOk(segment, cwd, cdSeen);
   return toolchainOk(segment);
 }
 
