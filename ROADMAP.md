@@ -28,12 +28,6 @@
    - Adversarial coverage added for per-dialect classification (`policy_adv_dialect_*`); the targeted adversarial suite passes 94 checks and the TypeScript build passes after the PowerShell escape fix below. Full cross-dialect parser rewrite (PowerShell verb-noun parameter model, cmd batch flags) remains open.
    - This session landed the cmd.exe delegation layer: `cmd /c <command>` (and `/k`) is unwrapped at parse time to the inner command (`del /f /s /q …`, `git push`, `npm publish`, `powershell -enc …`) while script targets (`*.bat`, `*.ps1`, …) keep the dynamic-execution gate; destructive-delete flag matching no longer uses a leading word boundary that never matched `-Recurse`, `-Force`, `/f`, `/s`, `/q`. New adversarial cases cover the unwrap (`policy_adv_dialect_cmd`). Interpreter + script execution (`bash ./probe.sh`, `python3 ./probe.py`) requires approval via `policy_adv_just_written_executable_*`. PowerShell backtick escapes now decode before policy matching, preventing escaped sensitive names such as `.e`nv from bypassing protected-file checks; regression coverage is in `policy_adv_dialect_powershell`. The exhaustive cross-dialect grammar (PowerShell verb-noun parameter model, cmd batch flags) remains open.
 
-### P1 — Installation, context and policy controls
-
-3. **Audit-store installation fallback** (in progress)
-   - Make native SQLite optional with a documented fallback, add a clean-install smoke job, and include Node 24 in CI after validating compatibility.
-   - Native `better-sqlite3` loads lazily via `createRequire`; a missing binding does not crash module load. This session adds Node 24 to the OS test matrix and a clean `npm ci --ignore-scripts` smoke that proves default best-effort behavior and `VENIRA_AUDIT_STRICT=1` fail-closed behavior. README now documents the fallback. Local Node 24 build and full verify passed. Remaining: confirm the new CI jobs on hosted runners.
-
 ### P2 — Deeper assurance and operational improvements
 
 7. **Property-based shell-policy fuzzing**
