@@ -121,6 +121,36 @@ const CMDLET_PARAMETERS: ReadonlyMap<string, readonly string[]> = new Map<string
       "UserAgent", "WebSession", "TimeoutSec", "Proxy", "MaximumRedirection",
     ],
   ],
+  [
+    "get-item",
+    [
+      "Path", "LiteralPath", "Name", "Filter", "Include", "Exclude", "Credential",
+    ],
+  ],
+  [
+    "get-itemproperty",
+    ["Name", "Path", "LiteralPath", "Credential"],
+  ],
+  [
+    "get-service",
+    ["Name", "Value", "CaseSensitive", "Required", "Status", "InputObject"],
+  ],
+  [
+    "start-service",
+    ["Name", "ErrorAction", "ErrorVariable", "WarningAction", "WarningVariable", "InformationAction", "InformationVariable", "OutVariable", "OutBuffer", "PipelineVariable", "WhatIf", "Confirm"],
+  ],
+  [
+    "stop-service",
+    ["Name", "Force", "InputObject", "ErrorAction", "ErrorVariable", "WarningAction", "WarningVariable", "InformationAction", "InformationVariable", "OutVariable", "OutBuffer", "PipelineVariable", "WhatIf", "Confirm"],
+  ],
+  [
+    "get-process",
+    ["InputObject", "Name", "Id", "Force", "ErrorAction", "ErrorVariable", "WarningAction", "WarningVariable", "InformationAction", "InformationVariable", "OutVariable", "OutBuffer", "PipelineVariable", "WhatIf", "Confirm"],
+  ],
+  [
+    "stop-process",
+    ["InputObject", "Name", "Id", "Force", "ErrorAction", "ErrorVariable", "WarningAction", "WarningVariable", "InformationAction", "InformationVariable", "OutBuffer", "PipelineVariable", "WhatIf", "Confirm"],
+  ],
   ["tee-object", ["FilePath", "LiteralPath", "InputObject", "Append", "Variable"]],
   ["select-object", ["Property", "InputObject", "First", "Last", "Skip", "Unique", "ExpandProperty", "ExcludeProperty", "Index", "Wait"]],
 ]);
