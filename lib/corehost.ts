@@ -216,7 +216,7 @@ async function opSecret(args: Record<string, unknown>): Promise<RustResponse> {
       if (!envFlag("VENIRA_SECRET_ALLOW_REVEAL", false)) {
         throw new Error(
           "[feature_disabled] Plaintext reveal is disabled on this host (operator flag, not a per-call approval). " +
-            "Hint: inject the value via project_shell_run secret_env instead; set VENIRA_SECRET_ALLOW_REVEAL=1 only if the user explicitly wants the value printed.",
+            "Hint: use project_shell_run secret_env; set VENIRA_SECRET_ALLOW_REVEAL=1 only if the user wants it printed.",
         );
       }
       const value = getSecretValueSync(name);

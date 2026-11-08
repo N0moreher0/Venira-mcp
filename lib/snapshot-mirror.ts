@@ -247,7 +247,7 @@ export async function syncSnapshotMirror(
   const [localWorkspace, mirrorWorkspace] = await Promise.all([readWorkspaceOf(localMeta), readWorkspaceOf(mirrorMeta)]);
   if (localWorkspace && mirrorWorkspace && canon(localWorkspace) !== canon(mirrorWorkspace)) {
     throw new Error(
-      `[mirror_conflict] ${projectDir} already belongs to another workspace (${mirrorWorkspace}). Hint: use a different VENIRA_SNAPSHOT_MIRROR_DIR per machine/workspace set, or remove that folder by hand if it is stale.`,
+      `[mirror_conflict] ${projectDir} already belongs to another workspace (${mirrorWorkspace}). Hint: use a separate VENIRA_SNAPSHOT_MIRROR_DIR per workspace, or remove the stale folder by hand.`,
     );
   }
   await fs.mkdir(projectDir, { recursive: true });

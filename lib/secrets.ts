@@ -253,7 +253,7 @@ function readKeySync(): Buffer {
     raw = readFileSync(file, "utf8").trim();
   } catch {
     throw new Error(
-      `[secret_store_locked] Cannot read the encryption key ${file}. Hint: the key file is required to decrypt stored secrets; restore it or delete both secrets.json and secrets.key to start fresh.`,
+      `[secret_store_locked] Cannot read the encryption key ${file}. Hint: the key file decrypts stored secrets; restore it, or delete secrets.json and secrets.key to start fresh.`,
     );
   }
   const key = Buffer.from(raw, "base64");
@@ -401,7 +401,7 @@ export function assertSecretUsable(name: string): void {
     const at = meta.expires_at === null ? "unknown" : new Date(meta.expires_at).toISOString();
     throw new Error(
       `[secret_expired] Secret "${name}" expired at ${at}. ` +
-        `Hint: rotate it with project_secret action=set name=${name} value=<new value> (add expires_in_days to track the next rotation).`,
+        `Hint: rotate with project_secret action=set name=${name} (add expires_in_days to track expiry).`,
     );
   }
 }

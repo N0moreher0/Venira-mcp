@@ -198,7 +198,7 @@ export async function opShellRun(
     if (legacyToken && !approvalId) {
       throw new Error(
         `[approval_invalid] approval_token was removed in v1.15 (rule: ${decision.rule}). ` +
-          `Hint: call project_shell_run without it to get an approval_id; a human grants it with \`data.approval.approve_command\` (or client elicitation), then retry once with approval_id.`,
+          `Hint: call project_shell_run again without it; a human grants the new approval_id, then retry once with it.`,
       );
     }
     if (hasSessionApproval(sessionId, decision, approvalKey)) {
@@ -554,7 +554,7 @@ export async function opShellStatus(
   const waitSeconds = Math.min(30, Math.max(0, Number(args.wait_seconds ?? 0)));
   const run = shellRuns.get(runId);
   if (!run) {
-    throw new Error(`[not_found] Unknown run_id: ${runId}. Hint: run ids only exist for the session that started them; start a command with project_shell_run and use the run_id it returns.`);
+    throw new Error(`[not_found] Unknown run_id: ${runId}. Hint: run ids live only in the session that started them; start a new run with project_shell_run.`);
   }
 
   if (waitSeconds > 0 && run.running) {
@@ -601,7 +601,7 @@ export function opShellCancel(args: Record<string, unknown>): RustResponse {
   const killKey = args.kill_key as string | undefined;
   const run = shellRuns.get(runId);
   if (!run) {
-    throw new Error(`[not_found] Unknown run_id: ${runId}. Hint: run ids only exist for the session that started them; start a command with project_shell_run and use the run_id it returns.`);
+    throw new Error(`[not_found] Unknown run_id: ${runId}. Hint: run ids live only in the session that started them; start a new run with project_shell_run.`);
   }
   if (!killKey || killKey !== run.kill_key) {
     throw new Error(`[invalid_request] Missing or incorrect kill_key. Each shell process has a unique kill_key returned in the shell_run response. Provide kill_key to authorize cancellation.`);

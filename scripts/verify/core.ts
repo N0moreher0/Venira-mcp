@@ -92,7 +92,7 @@ export async function runCore($h: Harness) {
   check(
     "recent_files_description_teaches_when_to_use",
     (recentFilesTool?.description ?? "").includes("session_edits") &&
-      (recentFilesTool?.description ?? "").includes("start of a task"),
+      (recentFilesTool?.description ?? "").includes("resume a task"),
     recentFilesTool?.description,
   );
   const directBooleanToolInputs = tools.tools.flatMap((tool) =>
@@ -144,7 +144,7 @@ export async function runCore($h: Harness) {
   check(
     "snapshot_tool_teaches_safe_rollback",
     snapshotDescription.includes("dry_run=1") &&
-      snapshotDescription.includes("same-size content changes") &&
+      snapshotDescription.includes("path and size preview") &&
       snapshotDescription.includes("verify=1") &&
       snapshotDescription.includes("delete_extra=0"),
     snapshotDescription,
@@ -162,8 +162,8 @@ export async function runCore($h: Harness) {
   check(
     "delete_path_teaches_snapshot_first",
     deletePathDescription.includes("project_snapshot") &&
-      deletePathDescription.includes("before using this irreversible tool") &&
-      deletePathDescription.includes("do not delete") &&
+      deletePathDescription.includes("Not undoable") &&
+      deletePathDescription.includes("snapshot first") &&
       deleteRecursiveDescription.includes("snapshot") &&
       deleteRecursiveDescription.includes("recursive"),
     {

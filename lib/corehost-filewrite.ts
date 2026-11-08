@@ -227,7 +227,7 @@ export async function opEditFile(
     if (idx === -1) {
       throw errorWithData(
         "old_text_not_found",
-        `old_text not found in ${args.relative_path}. Hint: re-read the file to confirm the exact text.${fuzzyEnabled ? " (Fuzzy edit enabled with distance " + fuzzyDistance + ")" : ""}`,
+        `old_text not found in ${args.relative_path}. Hint: re-read the file and copy the exact text.${fuzzyEnabled ? ` (fuzzy distance ${fuzzyDistance})` : ""}`,
         { occurrences: 0, suggestion: "re-read file and copy exact old_text" },
       );
     }
