@@ -11,6 +11,7 @@ import { getShellCache, setShellCache } from "./shell-cache.js";
 import * as approvals from "./approvals.js";
 import { awaitApprovalGrant, buildApprovalPayload, parseApprovalWaitMs, redeemApproval, requestApproval } from "./approval-gate.js";
 import { PLATFORM } from "./workspace.js";
+import { checkpointBeforeRestore, type RestoreCheckpoint } from "./restore-checkpoint.js";
 import { assertSecretUsable, getSecretValueSync, markSecretUsed, redactSecretValues } from "./secrets.js";
 import { parseBackgroundFlag } from "./env.js";
 import { resolveInWorkspace, type RustResponse } from "./corehost-common.js";
@@ -278,6 +279,23 @@ export async function opShellRun(
   // -------------------------------------------------------------------------
   // 2. Execution with hardening: env scrub, output cap, timeout, tree kill.
   // -------------------------------------------------------------------------
+  // `git restore` overwrites uncommitted edits. balanced.local_dev lets it run unattended only because
+  // the overwrite is recoverable, so that tier must get its checkpoint or the command does not run;
+  // a human-approved restore is checkpointed best-effort.
+  let checkpoint: RestoreCheckpoint | null = null;
+  let checkpointError: string | null = null;
+  try {
+    checkpoint = await checkpointBeforeRestore(parsed, cwd, root);
+  } catch (error) {
+    checkpointError = error instanceof Error ? error.message : String(error);
+  }
+  if (decision.rule === "balanced.local_dev" && (checkpointError || checkpoint?.truncated)) {
+    throw new Error(
+      `[checkpoint_failed] git restore was not run because its safety checkpoint could not be completed ` +
+        `(${checkpointError ?? "checkpoint truncated by snapshot limits"}). ` +
+        `Hint: create a narrower project_snapshot of the files yourself, or ask the user to approve the restore.`,
+    );
+  }
   const timeoutMs = clampTimeout(args.timeout_ms);
   const foreground = !parseBackgroundFlag(args.background);
   const { file, args: spawnArgs } = shellCommandFor(shell, command);
@@ -506,6 +524,17 @@ export async function opShellRun(
             }
           : {}),
         ...(secretNames.length > 0 ? { secret_env: secretNames } : {}),
+        ...(checkpoint
+          ? {
+              checkpoint: {
+                id: checkpoint.id,
+                paths: checkpoint.paths,
+                reused: checkpoint.reused,
+                restore_with: `project_snapshot action=restore id=${checkpoint.id}`,
+              },
+            }
+          : {}),
+        ...(checkpointError ? { checkpoint_error: checkpointError } : {}),
         policy: { decision: run.decision.tier, rule: run.decision.rule, mode: decision.mode, approver },
       },
     },
