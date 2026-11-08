@@ -333,6 +333,38 @@ try {
     assert.equal(ps("Remove-Item -F ./probe-missing.txt", "balanced").tier, "ask");
   });
 
+  check("policy_adv_snapshot_store_is_protected", () => {
+    const store = path.join(tempDir, "snapstore");
+    const previous = process.env.VENIRA_SNAPSHOT_DIR;
+    process.env.VENIRA_SNAPSHOT_DIR = store;
+    const posixStore = store.replace(/\\/g, "/");
+    try {
+      const cases: Array<[string, string]> = [
+        ["bash", `rm -rf ${posixStore}/proj`],
+        ["bash", `cat ${posixStore}/project.json`],
+        ["bash", `echo x > ${posixStore}/index.json`],
+        ["bash", "rm -rf ../snapstore/proj"],
+        ["powershell", `Remove-Item -Recurse -Force ${store}`],
+        ["powershell", `Get-Content ${store}\\project.json`],
+        ["powershell", `Set-Content ${store}\\index.json x`],
+        ["cmd", `type ${store}\\project.json`],
+        ["cmd", `del /f /q ${store}\\project.json`],
+      ];
+      for (const [shell, command] of cases) {
+        const balanced = policy.evaluateShellCommand(command, workspaceDir, { shell, mode: "balanced" });
+        assert.equal(balanced.rule, "deny.protected_file_access", `${command}: ${JSON.stringify(balanced)}`);
+        const permissive = policy.evaluateShellCommand(command, workspaceDir, { shell, mode: "permissive" });
+        assert.equal(permissive.rule, "ask.deny.protected_file_access", `${command}: ${JSON.stringify(permissive)}`);
+      }
+      // Workspace paths keep their old verdicts: the store check must not become a broad deny.
+      assert.equal(policy.evaluateShellCommand("cat README.md", workspaceDir, { shell: "bash", mode: "balanced" }).tier, "allow");
+      assert.equal(policy.evaluateShellCommand("rm -rf ./dist", workspaceDir, { shell: "bash", mode: "balanced" }).rule, "ask.destructive_delete");
+    } finally {
+      if (previous === undefined) delete process.env.VENIRA_SNAPSHOT_DIR;
+      else process.env.VENIRA_SNAPSHOT_DIR = previous;
+    }
+  });
+
   check("policy_adv_dialect_protected_across_shells", () => {
     for (const shell of ["bash", "powershell", "cmd"]) {
       const decision = policy.evaluateShellCommand("cat .e[n]v", workspaceDir, { shell, mode: "balanced" });

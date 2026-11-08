@@ -4,7 +4,8 @@
  */
 import os from "node:os";
 import path from "node:path";
-import { UNRESTRICTED, WORKSPACE, activeDataDir } from "./workspace.js";
+import { UNRESTRICTED, WORKSPACE, activeDataDir, defaultDataDir } from "./workspace.js";
+import { snapshotProtectedRoots } from "./snapshot-paths.js";
 import { isNullSink, type ParsedCommand, type Segment } from "./shell-parser.js";
 import { dockerReadOnlySegment } from "./shell-policy-balanced-docker.js";
 import { pythonModuleRunOk } from "./shell-policy-python.js";
@@ -437,8 +438,8 @@ export const HARD_DENY: HardDenyRule[] = [
   },
   {
     id: "protected_file_access",
-    reason: "This reads or writes a protected secret store, audit database, or credential file.",
-    test: (parsed) => {
+    reason: "This reads or writes a protected secret store, audit database, credential file, or the checkpoint store.",
+    test: (parsed, _raw, cwd) => {
       const protectedNames = new Set([
         "secrets.json",
         "secrets.key",
@@ -457,6 +458,27 @@ export const HARD_DENY: HardDenyRule[] = [
         "id_ed25519",
       ]);
       const dataDir = activeDataDir().toLowerCase();
+      // Checkpoints are the rollback safety net: a shell write/delete of the store would let the
+      // agent destroy the very backups it may need to restore (`project_snapshot`), so the store is
+      // protected from shell side effects exactly like the data dir. File tools already refuse it.
+      const foldSeparators = (value: string): string => value.replace(/\\/g, "/").replace(/\/+$/, "");
+      const foldCase = (value: string): string => (process.platform === "win32" ? value.toLowerCase() : value);
+      let snapshotRoots: string[] = [];
+      try {
+        snapshotRoots = snapshotProtectedRoots(defaultDataDir(), WORKSPACE).map((root) => foldCase(foldSeparators(path.resolve(root))));
+      } catch {
+        /* bad snapshot env: the rest of the rule still applies */
+      }
+      const hitsSnapshotStore = (token: string): boolean => {
+        if (!token || /[$%`]/.test(token)) return false; // unresolved variable: other rules still ask
+        const normalized = foldCase(foldSeparators(token));
+        for (const root of snapshotRoots) {
+          if (normalized === root) return true;
+          const resolved = foldCase(foldSeparators(path.resolve(cwd, token)));
+          if (resolved === root || resolved.startsWith(`${root}/`)) return true;
+        }
+        return false;
+      };
       const collect = (tokens: string[]): boolean => {
         for (const t of tokens) {
           const base = path.basename(t.replace(/\\/g, "/")).toLowerCase();
@@ -464,6 +486,7 @@ export const HARD_DENY: HardDenyRule[] = [
           if (dataDir && t.toLowerCase().replace(/\\/g, "/").includes(dataDir.replace(/\\/g, "/"))) return true;
           if (/(^|[\\/])venira[\\/](approvals|approval\.key)/i.test(t)) return true;
           if (/\.ssh[\\/]/i.test(t)) return true;
+          if (hitsSnapshotStore(t)) return true;
         }
         return false;
       };
