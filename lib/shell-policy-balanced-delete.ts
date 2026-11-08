@@ -68,7 +68,7 @@ function parseOperands(segment: Segment, dialect: ParsedCommand["dialect"]): str
         i += 1;
         continue;
       }
-      if (arg.startsWith("-")) return null; // -Recurse, -Include, -WhatIf, abbreviations, `-Path:x` ...
+      if (arg.startsWith("-")) return null; // -Recurse, -Include, -WhatIf, abbreviations ... (`-Path:x` is already split into `-Path x` by the parser)
       operands.push(arg);
     }
   } else if (dialect === "cmd") {

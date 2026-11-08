@@ -56,6 +56,10 @@ function containedRelative(raw: string, cwd: string): string | null {
   // `~` is expanded by the shell (path.resolve would treat it as a literal folder), and `{a,b}`
   // brace expansion can hide an outside target inside one token.
   if (raw.startsWith("~") || /[{}]/.test(raw)) return null;
+  // A backslash is a path separator for PowerShell/cmd but an ordinary file-name character for a POSIX
+  // host's path.resolve, so `..\x` would look like a harmless in-workspace file name there. The same
+  // command means a different path depending on the shell that runs it: do not guess, let it ask.
+  if (path.sep === "/" && raw.includes("\\")) return null;
   let abs: string;
   try {
     abs = resolveWithin(WORKSPACE, path.resolve(cwd, raw));
