@@ -234,8 +234,8 @@ try {
     // `git status (Remove-Item -Recurse -Force $HOME)` deletes although its segment looks like read-only git.
     // Measured before the fix: balanced and strict returned allow/safe_command for it. The `??`, `?.` and ternary
     // spellings of PowerShell 7 are the same hole. A group or script block must never ride on an allowlisted
-    // command: balanced and strict ask in both PowerShell shells.
-    const run = (command: string, shell: string, mode: "balanced" | "strict") =>
+    // command: all policy modes ask in both PowerShell shells.
+    const run = (command: string, shell: string, mode: "balanced" | "strict" | "permissive") =>
       policy.evaluateShellCommand(command, workspaceDir, { shell, mode });
     const hidden = [
       "git status (Remove-Item -Recurse -Force $HOME)",
@@ -251,7 +251,7 @@ try {
     ];
     for (const command of hidden) {
       for (const shell of ["powershell", "pwsh"]) {
-        for (const mode of ["balanced", "strict"] as const) {
+        for (const mode of ["balanced", "strict", "permissive"] as const) {
           const decision = run(command, shell, mode);
           assert.equal(decision.tier, "ask", `${shell}/${mode}: ${command}: ${JSON.stringify(decision)}`);
         }
@@ -260,6 +260,10 @@ try {
     // The group itself is what is flagged, with the substitution rule, not a generic default.
     for (const shell of ["powershell", "pwsh"]) {
       const decision = run("git status (Remove-Item -Recurse -Force $HOME)", shell, "balanced");
+      assert.equal(decision.rule, "ask.command_substitution", `${shell}: ${JSON.stringify(decision)}`);
+    }
+    for (const shell of ["powershell", "pwsh"]) {
+      const decision = run("git status (Remove-Item -Recurse -Force $HOME)", shell, "permissive");
       assert.equal(decision.rule, "ask.command_substitution", `${shell}: ${JSON.stringify(decision)}`);
     }
     // Hard denies that already see the operand keep winning over the new ask.
@@ -277,6 +281,20 @@ try {
       }
     }
     assert.equal(run("git log --format=%h", "bash", "balanced").tier, "allow");
+  });
+
+  check("policy_adv_permissive_posix_substitution_requires_approval", () => {
+    for (const command of [
+      'git status $(rm -rf "$HOME")',
+      'git status `rm -rf "$HOME"`',
+    ]) {
+      const decision = evaluate(command, "permissive", "bash");
+      assert.deepEqual(
+        [decision.tier, decision.rule],
+        ["ask", "ask.command_substitution"],
+        `${command}: ${JSON.stringify(decision)}`,
+      );
+    }
   });
 
   check("policy_adv_dialect_pwsh_chain_operators", () => {

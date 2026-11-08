@@ -18,6 +18,7 @@ export type AskRule = {
   id: string;
   reason: string;
   test: (parsed: ParsedCommand, cwd: string) => boolean;
+  alwaysAsk?: boolean;
 };
 
 type StrictAllowRule = { command: string; subcommands?: string[] };
@@ -155,6 +156,20 @@ export function evaluateParsedShellCommand(
       };
     }
   }
+
+  for (const rule of askRules) {
+    if (rule.alwaysAsk && rule.test(parsed, cwd)) {
+      return {
+        tier: "ask",
+        rule: `ask.${rule.id}`,
+        reason: rule.reason,
+        mode,
+        command_hash: hash,
+        ...(deleteHint ? { hint: deleteHint } : {}),
+      };
+    }
+  }
+
   if (overrideApplies && override) {
     return {
       tier: "allow",
@@ -166,7 +181,7 @@ export function evaluateParsedShellCommand(
   }
 
   for (const rule of askRules) {
-    if (mode !== "permissive" && rule.test(parsed, cwd)) {
+    if (!rule.alwaysAsk && mode !== "permissive" && rule.test(parsed, cwd)) {
       return {
         tier: "ask",
         rule: `ask.${rule.id}`,

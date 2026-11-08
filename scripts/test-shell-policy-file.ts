@@ -315,6 +315,13 @@ await check("overrides_need_env_enablement_a_reason_and_a_matching_command", () 
     const staged = ev("git add -A && git commit -m 'release' && git push origin main", "ALLOW_GIT_PUSH", "release v1");
     assert.deepEqual([staged.tier, staged.rule], ["allow", "override.ALLOW_GIT_PUSH"]);
     assert.notEqual(ev("git push --force origin main", "ALLOW_GIT_PUSH", "release v1").rule, "override.ALLOW_GIT_PUSH", "force never rides on the override");
+    const hiddenPush = policy.evaluateShellCommand("git push $(echo main)", workspaceDir, {
+      shell: "bash",
+      mode: "permissive",
+      override: "ALLOW_GIT_PUSH",
+      overrideReason: "release v1",
+    });
+    assert.deepEqual([hiddenPush.tier, hiddenPush.rule], ["ask", "ask.command_substitution"]);
 
     const env = ev("cat .env", "ALLOW_ENV_READ", "debugging config");
     assert.deepEqual([env.tier, env.rule], ["allow", "override.ALLOW_ENV_READ"]);
