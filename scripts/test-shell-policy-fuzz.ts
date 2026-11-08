@@ -344,6 +344,16 @@ for (const seed of SEEDS) {
     }
   }
 }
+// Consecutive triples catch chained interactions that only surface when two transforms compound
+// (e.g. glued switch + attached value + quoted operand).
+for (const seed of SEEDS) {
+  for (let i = 0; i < TRANSFORMS.length - 1; i += 1) {
+    for (let j = i + 1; j < TRANSFORMS.length - 1; j += 1) {
+      const command = applyTransforms(seed, [TRANSFORMS[i].id, TRANSFORMS[j].id, TRANSFORMS[j + 1].id]);
+      if (command !== null) variants.push({ seed, transforms: [TRANSFORMS[i].id, TRANSFORMS[j].id, TRANSFORMS[j + 1].id], command });
+    }
+  }
+}
 
 type Failure = { seed: Seed; transforms: string[]; command: string; decision: { tier: string; rule: string } };
 const failures: Failure[] = [];

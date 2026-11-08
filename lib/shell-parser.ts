@@ -169,12 +169,21 @@ export function parseShellCommand(raw: string, options?: { shell?: string }): Pa
   flushSegment();
 
   const dialect = resolveShellDialect(options?.shell);
-  const normalizedSegments =
-    dialect === "cmd"
-      ? segments.map((segment) => normalizeCmdSegment(unwrapCmdSegment(segment)))
-      : dialect === "powershell"
-        ? segments.map((segment) => splitPowerShellSegment(segment))
-        : segments;
+  let normalizedSegments: typeof segments;
+  if (dialect === "cmd") {
+    // Unwrapping can expose another `cmd /c …` shim (`cmd /c cmd /c …`), so iterate to a fixed point.
+    let list = segments.map((segment) => normalizeCmdSegment(unwrapCmdSegment(segment)));
+    for (let depth = 0; depth < 4; depth += 1) {
+      const next = list.map((segment) => normalizeCmdSegment(unwrapCmdSegment(segment)));
+      const same =
+        next.length === list.length && next.every((segment, index) => segment.argv === list[index].argv && segment.command === list[index].command);
+      list = next;
+      if (same) break;
+    }
+    normalizedSegments = list;
+  } else {
+    normalizedSegments = segments.map((segment) => (dialect === "powershell" ? splitPowerShellSegment(segment) : segment));
+  }
 
   const cd_targets: string[] = [];
   for (const segment of normalizedSegments) {
