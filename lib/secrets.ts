@@ -74,7 +74,10 @@ function keychainAccount(): string {
 async function loadKeychain(): Promise<void> {
   if (process.platform !== "win32" || keychainMode() === "off") return;
   try {
-    const module = await import("keytar");
+    // keytar is an optional dependency (win32 only). Import it through a variable so `tsc` does not need its
+    // types installed: npm drops the package when its native install fails (e.g. on Linux CI), which broke the build.
+    const keytarSpecifier = "keytar";
+    const module = (await import(keytarSpecifier)) as { default: KeytarApi };
     keytar = module.default;
     const stored = await keytar.getPassword(KEYCHAIN_SERVICE, keychainAccount());
     if (stored) {
