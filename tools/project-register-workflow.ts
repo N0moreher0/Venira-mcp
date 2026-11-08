@@ -200,7 +200,7 @@ export function registerWorkflowTools(server: McpServer, deps: WorkflowToolsDeps
           .array(z.string())
           .max(64)
           .optional()
-          .describe("Deprecated alias for paths; supplied scope is honored and missing paths return not_found."),
+          .describe("Deprecated alias for paths."),
         exclude: z.array(z.string()).max(64).optional().describe("Extra directory/file names to skip."),
         respect_default_excludes: flag01
           .optional()

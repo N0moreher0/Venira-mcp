@@ -1,6 +1,6 @@
 /**
  * Standardizes the envelope returned by every venira tool:
- *   { ok, status, request_id, kind, data, truncated, summary, hint, cached, elapsed_ms }
+ *   { ok, status, request_id, kind, data, truncated, summary, hint, cached, command_status, elapsed_ms }
  * and on failure:
  *   { ok:false, status:"failed", request_id, kind, error:{code, message, retryable}, hint, elapsed_ms }
  */
@@ -41,20 +41,49 @@ export type Envelope = {
   data?: unknown;
   summary?: unknown;
   hint?: string;
+  next_actions?: unknown[];
   truncated?: boolean;
   cached?: boolean;
   trimmed?: boolean;
+  command_status?: "running" | "succeeded" | "failed" | "cancelled" | "unknown";
   elapsed_ms?: number;
 };
 
 const PREVIEW_BYTES = 8 * 1024;
+// A file read is the content the caller asked for, so compact mode keeps far more of it than of a list or search.
+const FILE_PREVIEW_BYTES = 32 * 1024;
 const SUMMARY_THRESHOLD_BYTES = 8 * 1024;
+const GENERIC_PREVIEW_BYTES = PREVIEW_BYTES / 2;
 
 type Loose = Record<string, any>;
 
 const round = (ms: number) => Math.round(ms * 100) / 100;
 const isObject = (value: unknown): value is Loose =>
   typeof value === "object" && value !== null && !Array.isArray(value);
+
+function serializedBytes(value: unknown): number {
+  return Buffer.byteLength(stringify(value) ?? "null", "utf8");
+}
+
+function truncateUtf8(value: string, maxBytes: number): { text: string; truncated: boolean } {
+  let end = 0;
+  let bytes = 0;
+  for (const character of value) {
+    const characterBytes = Buffer.byteLength(character, "utf8");
+    if (bytes + characterBytes > maxBytes) return { text: value.slice(0, end), truncated: true };
+    bytes += characterBytes;
+    end += character.length;
+  }
+  return { text: value, truncated: false };
+}
+
+function commandStatus(data: Loose): NonNullable<Envelope["command_status"]> {
+  if (data.running === true) return "running";
+  if (data.cancelled === true) return "cancelled";
+  if (data.timed_out === true) return "failed";
+  if (typeof data.exit_code !== "number") return "unknown";
+  return data.exit_code === 0 ? "succeeded" : "failed";
+}
 
 function inferHint(kind: string, data: unknown): string | undefined {
   if (!isObject(data)) return undefined;
@@ -81,7 +110,20 @@ function inferHint(kind: string, data: unknown): string | undefined {
     return undefined;
   }
   if (kind === "shell_run" && data.running === true) {
-    return `Poll project_shell_status({ run_id: "${data.run_id}", wait_seconds: 5 }).`;
+    const timeoutNote = data.timed_out === true ? " It exceeded its time budget but is still running." : "";
+    return `Command is still running.${timeoutNote} Poll project_shell_status({ run_id: "${data.run_id}", wait_seconds: 5 }).`;
+  }
+  if (kind === "shell_run" && data.cancelled === true) {
+    return "Command was cancelled. Check its partial stdout/stderr before deciding whether to rerun.";
+  }
+  if (kind === "shell_run" && data.timed_out === true) {
+    return `Command timed out${typeof data.exit_code === "number" ? ` (exit_code ${data.exit_code})` : ""}. Read stderr, adjust the timeout or command, then rerun.`;
+  }
+  if (kind === "shell_run" && typeof data.exit_code === "number" && data.exit_code !== 0) {
+    return `Command failed (exit_code ${data.exit_code}). Read stderr, fix, rerun; project_explain_error can diagnose it.`;
+  }
+  if (kind === "shell_run" && data.running === false && data.exit_code == null) {
+    return "Command stopped without an exit code. Check project_health and the run's stderr before retrying.";
   }
   if (kind === "file_read_ranges" && data.truncated === true) {
     return "Some ranges were truncated; continue with next_start_line.";
@@ -162,14 +204,18 @@ export function summarize(kind: string, data: unknown): unknown {
     };
   }
   if (kind === "shell_run") {
-    const stdout = typeof data.stdout_tail === "string" ? data.stdout_tail : "";
-    const stderr = typeof data.stderr_tail === "string" ? data.stderr_tail : "";
+    const stdoutRaw = data.stdout_tail ?? data.stdout;
+    const stderrRaw = data.stderr_tail ?? data.stderr;
+    const stdout = typeof stdoutRaw === "string" ? stdoutRaw : "";
+    const stderr = typeof stderrRaw === "string" ? stderrRaw : "";
     return {
       run_id: data.run_id,
       shell: data.shell,
       running: data.running === true,
+      command_status: commandStatus(data),
       exit_code: data.exit_code ?? null,
       cancelled: data.cancelled === true,
+      timed_out: data.timed_out === true,
       stdout_bytes: Buffer.byteLength(stdout, "utf8"),
       stderr_bytes: Buffer.byteLength(stderr, "utf8"),
       truncated: data.truncated === true,
@@ -194,16 +240,36 @@ export function previewData(kind: string, data: unknown): unknown {
   if (!isObject(data)) return data;
   if (kind === "file_read") {
     const text = typeof data.text === "string" ? data.text : "";
-    const preview = text.slice(0, PREVIEW_BYTES);
+    const { text: prefix, truncated: cut } = truncateUtf8(text, FILE_PREVIEW_BYTES);
+    let preview = prefix;
+    let nextStart = data.next_start_line;
+    let lastLine = data.last_line;
+    if (cut) {
+      const lastNewline = preview.lastIndexOf("\n");
+      const hasCompleteLine = lastNewline >= 0;
+      if (hasCompleteLine) {
+        preview = preview.slice(0, lastNewline + 1);
+      } else {
+        nextStart = undefined;
+      }
+      const firstLine = typeof data.first_line === "number" ? data.first_line : 1;
+      if (!hasCompleteLine) {
+        lastLine = firstLine;
+      } else {
+        const whole = preview.match(/\n/g)?.length ?? 0;
+        nextStart = firstLine + whole;
+        lastLine = nextStart - 1;
+      }
+    }
     return {
       relative_path: data.relative_path,
       first_line: data.first_line,
-      last_line: data.last_line,
+      last_line: lastLine,
       total_bytes: data.total_bytes,
-      truncated: data.truncated === true,
-      ...(data.next_start_line !== undefined ? { next_start_line: data.next_start_line } : {}),
+      truncated: data.truncated === true || cut,
+      ...(nextStart !== undefined ? { next_start_line: nextStart } : {}),
       preview,
-      preview_truncated: text.length > preview.length,
+      preview_truncated: cut,
     };
   }
   if (kind === "file_list") {
@@ -211,17 +277,21 @@ export function previewData(kind: string, data: unknown): unknown {
     return {
       entries_preview: entries.slice(0, 20),
       entry_count: entries.length,
-      truncated: data.truncated === true,
+      entries_omitted: Math.max(0, entries.length - 20),
+      truncated: data.truncated === true || entries.length > 20,
       ...(typeof data.hint === "string" ? { hint: data.hint } : {}),
     };
   }
   if (kind === "search") {
     const hits = Array.isArray(data.hits) ? (data.hits as unknown[]) : [];
+    const diagnostics = Array.isArray(data.diagnostics) ? data.diagnostics : [];
     const out: Loose = {
       matches_preview: hits.slice(0, 20),
       match_count: hits.length,
+      matches_omitted: Math.max(0, hits.length - 20),
       complete: data.complete !== false,
-      diagnostics: data.diagnostics ?? [],
+      diagnostics: diagnostics.slice(0, 10),
+      diagnostics_omitted: Math.max(0, diagnostics.length - 10),
     };
     if (data.total_match_lines !== undefined) out.total_match_lines = data.total_match_lines;
     if (data.files_matched !== undefined) out.files_matched = data.files_matched;
@@ -230,13 +300,46 @@ export function previewData(kind: string, data: unknown): unknown {
     return out;
   }
   if (kind === "shell_run") {
+    const tail = (value: unknown) =>
+      typeof value === "string" ? truncateUtf8(value.slice(-2000), PREVIEW_BYTES).text : value;
     return {
       ...data,
-      stdout_tail: typeof data.stdout_tail === "string" ? data.stdout_tail.slice(-2000) : data.stdout_tail,
-      stderr_tail: typeof data.stderr_tail === "string" ? data.stderr_tail.slice(-2000) : data.stderr_tail,
+      ...(data.stdout_tail !== undefined ? { stdout_tail: tail(data.stdout_tail), stderr_tail: tail(data.stderr_tail) } : {}),
+      ...(data.stdout !== undefined ? { stdout: tail(data.stdout), stderr: tail(data.stderr) } : {}),
     };
   }
   return data;
+}
+
+function genericSummary(data: unknown, originalBytes = serializedBytes(data)): Loose {
+  if (Array.isArray(data)) {
+    return { data_type: "array", item_count: data.length, serialized_bytes: originalBytes };
+  }
+  if (isObject(data)) {
+    const keys = Object.keys(data);
+    return {
+      data_type: "object",
+      key_count: keys.length,
+      keys_preview: keys.slice(0, 20),
+      serialized_bytes: originalBytes,
+    };
+  }
+  return { data_type: data === null ? "null" : typeof data, serialized_bytes: originalBytes };
+}
+
+function genericPreview(data: unknown, originalBytes: number): Loose {
+  const serialized = stringify(data) ?? "null";
+  const preview = truncateUtf8(serialized, GENERIC_PREVIEW_BYTES);
+  return {
+    preview_text: preview.text,
+    preview_truncated: preview.truncated,
+    original_bytes: originalBytes,
+  };
+}
+
+function trimHint(hint: string | undefined): string {
+  const trimNotice = "Output mode compact: payload trimmed; set VENIRA_OUTPUT_MODE=full for complete data.";
+  return hint ? `${hint} ${trimNotice}` : trimNotice;
 }
 
 export type EnvelopeOptions = {
@@ -275,23 +378,42 @@ export function buildEnvelope(
   if (truncated) envelope.truncated = true;
   if (options.cached) envelope.cached = true;
   if (hint) envelope.hint = hint;
+  if (kind === "shell_run" && isObject(data)) envelope.command_status = commandStatus(data);
 
-  if (OUTPUT_MODE === "compact" && stringify(data ?? null).length > SUMMARY_THRESHOLD_BYTES) {
-    envelope.data = previewData(kind, data);
-    const summary = summarize(kind, data);
-    if (summary !== undefined) envelope.summary = summary;
+  const originalBytes = serializedBytes(data ?? null);
+  if (OUTPUT_MODE === "compact" && originalBytes > SUMMARY_THRESHOLD_BYTES) {
+    const candidate = previewData(kind, data);
+    const previewed = serializedBytes(candidate) < originalBytes ? candidate : genericPreview(data, originalBytes);
+    envelope.data = previewed;
+    const summary = summarize(kind, data) ?? genericSummary(data, originalBytes);
+    envelope.summary = serializedBytes(summary) > PREVIEW_BYTES ? genericSummary(summary) : summary;
+    envelope.truncated = true;
+    if (kind === "file_read" && isObject(previewed) && previewed.preview_truncated === true) {
+      if (isObject(envelope.summary)) {
+        envelope.summary.truncated = true;
+        if (typeof previewed.last_line === "number") envelope.summary.last_line = previewed.last_line;
+        if (typeof previewed.first_line === "number" && typeof previewed.last_line === "number") {
+          envelope.summary.lines_returned = Math.max(0, previewed.last_line - previewed.first_line + 1);
+        }
+        if (typeof previewed.next_start_line === "number") {
+          envelope.summary.next_start_line = previewed.next_start_line;
+        } else {
+          delete envelope.summary.next_start_line;
+        }
+      }
+      envelope.hint =
+        typeof previewed.next_start_line === "number"
+          ? `Cut by compact mode. Next chunk: project_read_file({ relative_path: "${previewed.relative_path}", start_line: ${previewed.next_start_line} }).`
+          : `A line exceeds the compact preview. Re-read with VENIRA_OUTPUT_MODE=full or a larger max_bytes to get that line completely.`;
+    }
     envelope.trimmed = true;
-    const trimHint = "Output mode compact: payload trimmed; set VENIRA_OUTPUT_MODE=full for complete data.";
-    envelope.hint = envelope.hint ? `${envelope.hint} ${trimHint}` : trimHint;
+    envelope.hint = trimHint(envelope.hint);
     return envelope;
   }
 
   envelope.data = data;
   const summary = summarize(kind, data);
-  if (summary !== undefined) {
-    const tooBig = stringify(data ?? null).length > SUMMARY_THRESHOLD_BYTES;
-    if (tooBig) envelope.summary = summary;
-  }
+  if (summary !== undefined && originalBytes > SUMMARY_THRESHOLD_BYTES) envelope.summary = summary;
   return envelope;
 }
 
@@ -316,12 +438,16 @@ export type Failure = {
   hint?: string;
   retryable: boolean;
   data?: unknown;
+  next_actions?: unknown[];
 };
 
 const RETRYABLE = new Set(["io_error", "capability_expired", "host_timeout", "host_unavailable"]);
 
+const GENERIC_HINT =
+  "Unknown error code. Read error.message, fix what it names, retry once; else project_explain_error.";
+
 const DEFAULT_HINTS: Record<string, string> = {
-  invalid_request: "Check argument names/types; unknown fields are rejected.",
+  invalid_request: "Check argument names, types and values against the tool schema; unknown fields are rejected.",
   not_found: "Check the path with project_list_files or project_search first; do not retry the same path.",
   conflict: "The file changed or the edit is ambiguous; re-read it and retry.",
   scope_denied: "Use a path inside the workspace (workspace-relative is safest).",
@@ -344,6 +470,39 @@ const DEFAULT_HINTS: Record<string, string> = {
     "An approval_id is single-use, bound to the exact command/shell/cwd/secret_env and expires after VENIRA_SHELL_APPROVAL_TTL_MS. approval_token was removed in v1.15. Call the tool again without approval_id to get a fresh approval_required envelope; a human must grant the new id.",
   command_denied:
     "The policy refuses this command in every mode. Do not retry or rephrase to bypass it; ask the user to run it manually if it is genuinely required.",
+  old_text_not_found: "Re-read the file with project_read_file, copy the exact text, retry.",
+  old_text_ambiguous: "Add surrounding lines to old_text to make it unique, or set replace_all=1.",
+  batch_failed: "Check data.atomic for rollback state, fix the failed item, resubmit the rest.",
+  batch_partial_failure: "Fix or drop the failed items in data.responses, retry only those.",
+  config_invalid: "Fix the named VENIRA_* setting or config value and restart; do not retry unchanged.",
+  workspace_switch_denied: "Workspace switching is disabled; stay in the current workspace.",
+  override_not_enabled: "Override not enabled by the operator; do not retry, ask the user to run it manually.",
+  override_scope_mismatch: "Override does not cover this command; ask the user to run it manually.",
+  checkpoint_failed: "Pre-command snapshot failed, command not run. Create a scoped project_snapshot, then retry.",
+  snapshot_corrupt: "Snapshot is damaged; pick another id from project_snapshot action=list.",
+  snapshot_version_unsupported: "Snapshot format not supported by this version; use a newer snapshot or upgrade.",
+  mirror_conflict: "Snapshot mirror differs from primary; change nothing and check project_health.",
+  secret_missing: "No such secret; see project_secret action=list or create it with action=set.",
+  secret_expired: "Secret expired; ask the user for a new one (project_secret action=set).",
+  secret_store_locked: "Secret store locked by another process; retry once.",
+  secret_store_corrupt: "Secret store unreadable; do not delete it, tell the user.",
+  lock_timeout: "Lock held by another process; retry once, do not loop.",
+  secret_detected: "Content looks like a credential and was blocked; remove it and retry.",
+  secret_output_blocked: "Output contained a secret and was withheld; tell the user.",
+  secret_scan_failed: "Secret scan failed, nothing sent; retry once with a smaller body.",
+  secret_scan_limit: "Content too large to scan; send a smaller body.",
+  auth_missing: "No credential; run project_github_connect or store a token with project_secret.",
+  auth_failed: "Provider rejected the credential; ask the user to reconnect or replace it.",
+  forbidden: "Credential lacks permission for this repo/action; check token scopes with the user.",
+  rate_limited: "Rate limited; wait until the reset time before retrying, do not loop.",
+  network_blocked: "Network access is blocked by policy; tell the user, do not retry.",
+  network_error: "Network failed; check connectivity, retry once.",
+  timeout: "Timed out; retry once with a smaller scope.",
+  provider_error: "Provider error; retry once, then check its status page.",
+  repo_unresolved: 'Pass repo as "owner/name" or set VENIRA_GIT_REPO.',
+  detached_head: "No current branch (detached HEAD); pass an explicit ref/head.",
+  already_exists: "Already exists; update the existing one instead.",
+  already_configured: "Credential already set; use replace_existing=1 only if the user wants to replace it.",
 };
 
 function classify(raw: string): string {
@@ -360,15 +519,68 @@ const DEFAULT_NEXT_ACTIONS: Record<string, unknown[]> = {
   path_escape: [{ tool: "project_list_files", arguments: { relative_path: "." }, why: "stay inside the workspace" }],
 };
 
-export function parseToolError(error: unknown): Failure & { data?: unknown } {
-  const errorData = error && typeof error === "object" ? (error as { data?: unknown }).data : undefined;
-  const raw = (error instanceof Error ? error.message : String(error)).trim();
-  const veniraData = error instanceof VeniraError ? error.data : (error && typeof error === "object" ? (error as { data?: unknown }).data : undefined);
-  if (error instanceof VeniraError && !/\[[a-z0-9_]+\]/.test(raw)) {
-    // Fall through; VeniraError already supplies a code not in brackets.
+/** A not_found about a shell run id is not a path problem: listing files would not help. */
+function defaultNextActions(failure: Failure): unknown[] | undefined {
+  if (failure.code === "not_found" && /^(Unknown run_id|Checkpoint )/i.test(failure.message)) return undefined;
+  if (failure.code === "old_text_not_found" || failure.code === "old_text_ambiguous") {
+    const file = /^old_text (?:not found|matches \d+ locations) in (.+?)\.(?: |$)/.exec(failure.message)?.[1];
+    return file
+      ? [{ tool: "project_read_file", arguments: { relative_path: file }, why: "copy the exact current text, then retry the edit" }]
+      : undefined;
   }
+  return DEFAULT_NEXT_ACTIONS[failure.code];
+}
+
+const INVALID_REQUEST_HINTS: Array<[RegExp, string]> = [
+  [/symbol_name is required/i, "Pass symbol_name (identifier); scope=file with relative_path, or scope=workspace."],
+  [/queries\[\] is required/i, "Pass queries: [{ pattern, must?, weight? }]."],
+  [/`kind` must be "file" or "directory"/i, 'Set kind to "file" or "directory".'],
+  [/kind=file requires `content`/i, 'Add content ("" for an empty file).'],
+  [/action must be create\|list\|restore/i, "Use project_snapshot action=create|list|restore|delete|mirror; restore/delete need id."],
+  [/Invalid checkpoint id/i, "Use an id from project_snapshot action=list."],
+  [/paths\[\] is limited/i, "Max 64 paths; pass a directory instead."],
+  [/harness must be one of/i, "See project_detect_harnesses for valid names."],
+  [/No edits provided/i, "Pass old_text+new_text, or edits[] of { old_text, new_text }."],
+  [/old_text must be a non-empty/i, "old_text is the exact text to replace; to replace a whole file use project_write_file."],
+  [/Directory requires recursive=1/i, "Set recursive=1 only after a scoped project_snapshot of it."],
+  [/`command` must be a non-empty/i, "Pass command as the shell command line."],
+  [/override must be/i, "override: ALLOW_GIT_PUSH or ALLOW_ENV_READ (operator-enabled), plus reason."],
+  [/reason of at most 400/i, "Add reason (one line, max 400 chars)."],
+  [/kill_key/i, "Use the kill_key from the project_shell_run response."],
+  [/secret_env/i, "secret_env: array of up to 16 names from project_secret action=list."],
+  [/Pass exactly one/i, "Pass only one selector: run_id, ref, pr or branch."],
+  [/Pass either expires_in_days or expires_at|expires_at` must be/i, "Use expires_in_days or expires_at (epoch ms/ISO-8601), not both."],
+  [/`until` must be/i, 'Set until to "terminal" or "any_change".'],
+  [/pending_id|action must be "start" or "poll"/i, "Call project_github_connect action=start first, then poll with its pending_id."],
+  [/`value` must be a non-empty|NUL bytes/i, "value must be a non-empty string without NUL; or use value_env."],
+  [/`side` must be/i, "side: RIGHT (new code) or LEFT (deleted)."],
+  [/start_line|`line`|line\/`start_line`/i, "Inline comments need path + positive line; start_line <= line. Omit both for a general comment."],
+  [/`method` must be/i, "method: merge, squash or rebase."],
+  [/`state` must be/i, "state: open, closed or all."],
+  [/`action` must be "cancel"/i, 'action: "cancel" or "retry_failed".'],
+  [/run_id|job_id|pipeline\/step UUID/i, "Take run_id/job_id from project_ci_status."],
+  [/`inputs`|Variable|Workflow input|Too many/i, "inputs: object of string/number/boolean values with valid names, within the limit."],
+  [/`kind` must be "files"|`format` must be|`direction` must be/i, "Use a value listed in the message; see the tool schema."],
+  [/Seed path is not a file|not a regular file or directory/i, "Pass an existing file path (check with project_list_files)."],
+  [/git\.repos|has no host/i, 'Fix git.repos / remote URL (expected "owner/name").'],
+  [/root\/relative_path required/i, "Pass relative_path (workspace-relative)."],
+  [/Unknown method/i, "Server/backend mismatch; restart and check project_health."],
+];
+
+function invalidRequestHint(body: string): string | undefined {
+  for (const [re, text] of INVALID_REQUEST_HINTS) if (re.test(body)) return text;
+  return undefined;
+}
+
+export function parseToolError(error: unknown): Failure & { data?: unknown } {
+  const raw = (error instanceof Error ? error.message : String(error)).trim() || "Unknown error (no message provided).";
   const match = /^\[([a-z0-9_]+)\]\s*([\s\S]*)$/i.exec(raw);
-  let code = match ? match[1].toLowerCase() : "";
+  let code =
+    error instanceof VeniraError && error.code.trim()
+      ? error.code.trim().toLowerCase()
+      : match
+        ? match[1].toLowerCase()
+        : "";
   let body = match ? match[2].trim() : raw;
   if (!code) code = classify(raw);
 
@@ -378,14 +590,26 @@ export function parseToolError(error: unknown): Failure & { data?: unknown } {
     hint = body.slice(hintAt + " Hint: ".length).trim();
     body = body.slice(0, hintAt).trim();
   }
-  if (!hint) hint = DEFAULT_HINTS[code];
+  if (!hint && code === "not_found" && /^Unknown run_id/i.test(body)) hint = "Run ids only live for this session; start the command again with project_shell_run.";
+  if (!hint && code === "invalid_request" && /^Invalid regex/i.test(body)) hint = "Fix the pattern, or set regex=0 to search it as literal text.";
+  if (!hint && code === "invalid_request") hint = invalidRequestHint(body);
+  if (!hint) hint = DEFAULT_HINTS[code] ?? GENERIC_HINT;
+  const message = body || raw;
+  const retryable = error instanceof VeniraError ? error.retryable : RETRYABLE.has(code);
+  const nextActions =
+    error instanceof VeniraError
+      ? error.next_actions
+      : defaultNextActions({ code, message, hint, retryable });
 
   return {
     code,
-    message: body || raw,
+    message,
     hint,
-    retryable: RETRYABLE.has(code),
-    ...(veniraData !== undefined ? { data: veniraData } : errorData !== undefined ? { data: errorData } : {}),
+    retryable,
+    ...(error && typeof error === "object" && (error as { data?: unknown }).data !== undefined
+      ? { data: (error as { data?: unknown }).data }
+      : {}),
+    ...(nextActions !== undefined ? { next_actions: nextActions } : {}),
   };
 }
 
@@ -396,6 +620,24 @@ export function errorEnvelope(
 ): Envelope & { error: { code: string; message: string; retryable: boolean } } {
   const failure = parseToolError(error);
   const hint = options.hint ?? failure.hint;
+  const messageBytes = Buffer.byteLength(failure.message, "utf8");
+  const messagePreview =
+    OUTPUT_MODE === "compact" && messageBytes > SUMMARY_THRESHOLD_BYTES
+      ? truncateUtf8(failure.message, PREVIEW_BYTES)
+      : undefined;
+  const failureData = options.data !== undefined ? options.data : failure.data;
+  const failureDataBytes = failureData === undefined ? 0 : serializedBytes(failureData);
+  const compactFailureData =
+    OUTPUT_MODE === "compact" && failureData !== undefined && failureDataBytes > SUMMARY_THRESHOLD_BYTES
+      ? genericPreview(failureData, failureDataBytes)
+      : undefined;
+  const compacted = messagePreview?.truncated === true || compactFailureData !== undefined;
+  const compactHint = compacted ? trimHint(hint) : hint;
+  const nextActions = options.next_actions ?? failure.next_actions ?? defaultNextActions(failure);
+  const summary = {
+    ...(messagePreview?.truncated ? { error_message_bytes: messageBytes } : {}),
+    ...(compactFailureData ? { error_data: genericSummary(failureData, failureDataBytes) } : {}),
+  };
   return {
     ok: false,
     status: "failed",
@@ -403,12 +645,14 @@ export function errorEnvelope(
     kind: operation,
     error: {
       code: failure.code,
-      message: failure.message,
+      message: messagePreview?.truncated ? `${messagePreview.text}… [message trimmed]` : failure.message,
       retryable: failure.retryable,
     },
-    ...(hint ? { hint } : {}),
-    ...(options.data !== undefined ? { data: options.data } : failure.data !== undefined ? { data: failure.data } : {}),
-    ...(options.next_actions !== undefined ? { next_actions: options.next_actions } : DEFAULT_NEXT_ACTIONS[failure.code] ? { next_actions: DEFAULT_NEXT_ACTIONS[failure.code] } : {}),
+    ...(compactHint ? { hint: compactHint } : {}),
+    ...(failureData !== undefined ? { data: compactFailureData ?? failureData } : {}),
+    ...(Object.keys(summary).length > 0 ? { summary } : {}),
+    ...(nextActions !== undefined ? { next_actions: nextActions } : {}),
+    ...(compacted ? { trimmed: true, truncated: true } : {}),
     elapsed_ms: round(options.elapsedMs ?? 0),
   };
 }
@@ -418,13 +662,36 @@ export function batchEnvelope(
   responses: unknown[],
   elapsedMs: number,
   extra: Record<string, unknown> = {},
+  options: { kind?: string; failure?: { code: string; message: string; hint?: string } } = {},
 ): Record<string, unknown> {
-  return {
-    ok: true,
-    status: "completed",
+  const failedResponses = responses.filter((response) => isObject(response) && response.ok === false);
+  const failure = options.failure ?? (failedResponses.length > 0
+    ? {
+        code: "batch_partial_failure",
+        message: `${failedResponses.length} of ${responses.length} batch item(s) failed; inspect data.responses.`,
+        hint: "Fix or remove the failed item(s), then retry only those requests.",
+      }
+    : undefined);
+  const base = {
     request_id: requestId,
-    kind: "read_batch",
-    data: { responses, count: responses.length, ...extra },
+    kind: options.kind ?? "read_batch",
+    data: {
+      responses,
+      count: responses.length,
+      ...(failedResponses.length > 0 ? { failed_count: failedResponses.length } : {}),
+      ...extra,
+    },
     elapsed_ms: round(elapsedMs),
   };
+  if (failure) {
+    const { code, message, hint } = failure;
+    return {
+      ok: false,
+      status: options.failure ? "failed" : "partial",
+      ...base,
+      error: { code, message, retryable: false },
+      ...(hint ? { hint } : {}),
+    };
+  }
+  return { ok: true, status: "completed", ...base };
 }

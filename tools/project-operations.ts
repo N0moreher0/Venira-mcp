@@ -71,21 +71,36 @@ export function createOperationRunners({ executeCached }: OperationRunnerDeps) {
         create_parents: args.create_dirs ?? true,
       };
       if (typeof args.reason === "string") dirParams.reason = args.reason;
-      const { response: dirResponse } = await executeCached("create_directory", dirParams);
+      let dirResponse: RustResponse;
+      try {
+        ({ response: dirResponse } = await executeCached("create_directory", dirParams));
+      } catch (error) {
+        const elapsedMs = elapsed();
+        recordMetric("create", elapsedMs, false);
+        return toolResult(errorEnvelope("create", error, { requestId, elapsedMs }), true);
+      }
       recordMetric("create", elapsed(), true);
       return toolResult(buildEnvelope("create", dirResponse, { requestId, elapsedMs: elapsed() }));
     }
     if (kind !== "file") {
       recordMetric("create", elapsed(), false);
       return toolResult(
-        errorEnvelope("create", new Error(`[invalid_request] \`kind\` must be "file" or "directory". Received: ${JSON.stringify(kind)}.`), { requestId, elapsedMs: elapsed() }),
+        errorEnvelope(
+          "create",
+          new Error(`[invalid_request] \`kind\` must be "file" or "directory". Received: ${JSON.stringify(kind)}.`),
+          { requestId, elapsedMs: elapsed() },
+        ),
         true,
       );
     }
     if (typeof args.content !== "string") {
       recordMetric("create", elapsed(), false);
       return toolResult(
-        errorEnvelope("create", new Error('[invalid_request] kind=file requires `content` (a UTF-8 string; use an empty string "" for an empty file).'), { requestId, elapsedMs: elapsed() }),
+        errorEnvelope(
+          "create",
+          new Error('[invalid_request] kind=file requires `content` (a UTF-8 string; use an empty string "" for an empty file).'),
+          { requestId, elapsedMs: elapsed() },
+        ),
         true,
       );
     }
@@ -97,7 +112,14 @@ export function createOperationRunners({ executeCached }: OperationRunnerDeps) {
     if (args.mode !== undefined) fileParams.mode = args.mode;
     if (args.expected_sha256 !== undefined) fileParams.expected_sha256 = args.expected_sha256;
     if (typeof args.reason === "string") fileParams.reason = args.reason;
-    const result = (await executeCached("write_file", fileParams)).response as RustResponse;
+    let result: RustResponse;
+    try {
+      result = (await executeCached("write_file", fileParams)).response as RustResponse;
+    } catch (error) {
+      const elapsedMs = elapsed();
+      recordMetric("create", elapsedMs, false);
+      return toolResult(errorEnvelope("create", error, { requestId, elapsedMs }), true);
+    }
     recordMetric("create", elapsed(), true);
     return toolResult(buildEnvelope("create", result, { requestId, elapsedMs: elapsed() }));
   }

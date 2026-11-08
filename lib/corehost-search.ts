@@ -171,20 +171,34 @@ export async function opSearch(
   const contextLines = Math.min(20, (args.context_lines as number | undefined) ?? 0);
   const countOnly = args.count_only === true;
 
-  // Simple glob-to-regex (supports *, ?, [seq])
+  // Glob-to-regex with rg/gitignore semantics, matched against the workspace-relative path:
+  //   *  = any characters except "/"      ?  = one character except "/"      [seq] = character class
+  //   ** = anything, "**/" = zero or more directories      {a,b} = alternatives
+  //   a pattern without "/" ("*.ts", "corehost-*.ts") matches the file name at any depth.
   function globToRegex(g: string): RegExp {
     if (g.length > 256) {
       throw new Error("[resource_limit] glob is too long; limit it to 256 characters.");
     }
+    const anywhere = !g.includes("/");
     let re = "";
-    for (const ch of g) {
-      if (ch === "*") re += ".*";
-      else if (ch === "?") re += ".";
-      else if (ch === "[") re += "[";
-      else if (ch === "]") re += "]";
+    let braceDepth = 0;
+    for (let i = 0; i < g.length; i += 1) {
+      const ch = g[i] as string;
+      if (ch === "*") {
+        if (g[i + 1] === "*") {
+          const slashAfter = g[i + 2] === "/";
+          i += slashAfter ? 2 : 1;
+          re += slashAfter ? "(?:.*/)?" : ".*";
+        } else re += "[^/]*";
+      } else if (ch === "?") re += "[^/]";
+      else if (ch === "[" || ch === "]") re += ch;
+      else if (ch === "{") { braceDepth += 1; re += "(?:"; }
+      else if (ch === "}" && braceDepth > 0) { braceDepth -= 1; re += ")"; }
+      else if (ch === "," && braceDepth > 0) re += "|";
       else re += ch.replace(/[.+^${}()|\\]/g, "\\$&");
     }
-    return new RegExp(`^${re}$`);
+    if (braceDepth > 0) re += ")".repeat(braceDepth);
+    return new RegExp(anywhere ? `(?:^|/)${re}$` : `^${re}$`);
   }
 
   const includeRe = glob ? globToRegex(glob) : null;
@@ -280,8 +294,10 @@ export async function opSearch(
           if (includeHidden) argList.push("--hidden");
           if (args.regex === true) { argList.push("-e", String(query)); }
           else { argList.push("-F", "-e", String(query)); }
-          if (glob) argList.push("--glob", String(glob));
-          if (excludeGlob) argList.push("--glob", `!${excludeGlob}`);
+          // rg anchors a glob containing "/" to its own cwd, not the workspace, so those globs are
+          // applied to the workspace-relative path below (same includeRe/excludeRe as the JS scanner).
+          if (glob && !String(glob).includes("/")) argList.push("--glob", String(glob));
+          if (excludeGlob && !String(excludeGlob).includes("/")) argList.push("--glob", `!${excludeGlob}`);
           // Hidden exclusion goes last: rg applies later globs with higher
           // precedence, so a caller glob such as `*.ts` cannot re-include a
           // dotfile when include_hidden=0.
@@ -319,6 +335,8 @@ export async function opSearch(
               const segments = rel.split("/");
               if (!includeHidden && segments.some((seg) => seg.startsWith("."))) continue;
               if (segments.some((seg) => IGNORED.has(seg))) continue;
+              if (includeRe && !includeRe.test(rel)) continue;
+              if (excludeRe && excludeRe.test(rel)) continue;
               const ln = Number(rec.data?.line_number ?? 0);
               const lineText = String(rec.data?.lines?.text ?? "").replace(/\r?\n$/, "");
               const snippet = lineText.trim().slice(0, 200);

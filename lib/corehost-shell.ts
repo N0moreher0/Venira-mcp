@@ -87,8 +87,7 @@ export async function opShellRun(
           exit_code: cached.exitCode,
           background: false,
           foreground: true,
-          stdout_tail: cached.output.slice(-4000),
-          stderr_tail: cached.error.slice(-4000),
+          // Foreground results carry full stdout/stderr below; *_tail is only for background runs and status.
           truncated: false,
           dropped_bytes: 0,
           timed_out: false,
@@ -514,8 +513,12 @@ export async function opShellRun(
         exit_code: run.exit_code,
         background: !foreground,
         foreground,
-        stdout_tail: redactSecretValues(run.stdout_tail),
-        stderr_tail: redactSecretValues(run.stderr_tail),
+        ...(foreground
+          ? {}
+          : {
+              stdout_tail: redactSecretValues(run.stdout_tail),
+              stderr_tail: redactSecretValues(run.stderr_tail),
+            }),
         truncated: run.stdout_full.length >= MAX_OUTPUT_BYTES || run.stderr_full.length >= MAX_OUTPUT_BYTES,
         dropped_bytes: run.dropped_bytes,
         timed_out: run.timed_out,
@@ -551,7 +554,7 @@ export async function opShellStatus(
   const waitSeconds = Math.min(30, Math.max(0, Number(args.wait_seconds ?? 0)));
   const run = shellRuns.get(runId);
   if (!run) {
-    throw new Error(`[not_found] Unknown run_id: ${runId}.`);
+    throw new Error(`[not_found] Unknown run_id: ${runId}. Hint: run ids only exist for the session that started them; start a command with project_shell_run and use the run_id it returns.`);
   }
 
   if (waitSeconds > 0 && run.running) {
@@ -598,7 +601,7 @@ export function opShellCancel(args: Record<string, unknown>): RustResponse {
   const killKey = args.kill_key as string | undefined;
   const run = shellRuns.get(runId);
   if (!run) {
-    throw new Error(`[not_found] Unknown run_id: ${runId}.`);
+    throw new Error(`[not_found] Unknown run_id: ${runId}. Hint: run ids only exist for the session that started them; start a command with project_shell_run and use the run_id it returns.`);
   }
   if (!killKey || killKey !== run.kill_key) {
     throw new Error(`[invalid_request] Missing or incorrect kill_key. Each shell process has a unique kill_key returned in the shell_run response. Provide kill_key to authorize cancellation.`);

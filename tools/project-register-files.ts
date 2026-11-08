@@ -253,10 +253,10 @@ export function registerFileTools(server: McpServer, deps: FileToolsDeps): void 
         edits: z.array(editOp).max(64).optional().describe("Multiple section replacements in this file. Create a scoped project_snapshot first when applying 2+ edits or when the change is hard to recreate."),
         expected_sha256: z.string().optional(),
         // P2: Fuzzy edit args
-        old_text_fuzzy: z.string().optional().describe("P2: Fuzzy-match fallback for old_text (used when exact match fails and VENIRA_EDIT_FUZZY=1)."),
-        fuzzy_distance: z.number().int().min(0).max(10).optional().describe("P2: Max Levenshtein distance for fuzzy matching (default 3)."),
-        ignore_indentation: flag01.optional().describe("P2: Ignore leading whitespace differences in fuzzy matching; 1=on, 0=off."),
-        case_insensitive: flag01.optional().describe("P2: Case-insensitive fuzzy matching; 1=on, 0=off."),
+        old_text_fuzzy: z.string().optional().describe("Fuzzy fallback for old_text (needs VENIRA_EDIT_FUZZY=1)."),
+        fuzzy_distance: z.number().int().min(0).max(10).optional().describe("Max edit distance for the fuzzy match (default 3)."),
+        ignore_indentation: flag01.optional().describe("Fuzzy match ignores leading whitespace."),
+        case_insensitive: flag01.optional().describe("Fuzzy match ignores case."),
         // TOCTOU guard: "sha256" = read fresh, verify content unchanged vs expected_sha256, apply edits, write, re-read and verify
         guard: z.enum(["sha256"]).optional().describe("TOCTOU guard: 'sha256' reads fresh content, verifies expected_sha256, applies edits, writes, then re-reads to verify content+sha256 match. Provides atomic read-edit-verify cycle."),
         reason: reason_,

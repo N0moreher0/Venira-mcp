@@ -255,7 +255,7 @@ All tools return the standard envelope (`ok`, `kind`, `data`, `hint`, `elapsed_m
 |---|---|
 | `project_write_file` | Create/overwrite/append; `expected_sha256` guards blind overwrites |
 | `project_edit_file` | Replace `old_text`→`new_text`; `edits[]` (up to 64); fuzzy edit opt-in |
-| `project_edit_batch` | Multiple edits atomically; stops at first failure |
+| `project_edit_batch` | Multiple edits; stops at first failure and attempts checkpoint rollback. Check `data.atomic` and `data.rollback_succeeded`; snapshot failure/incompleteness or a partial restore means changes may remain. |
 | `project_create` | Create file or directory |
 | `project_delete_path` | Delete file/dir; **not undoable** |
 
@@ -316,7 +316,7 @@ Full reference: the source reads 90+ distinct `VENIRA_*` names; this table lists
 |---|---|---|
 | `VENIRA_WORKSPACE` | `process.cwd()` | Workspace root; all paths resolve against it |
 | `VENIRA_TOOL_MODE` | `default` | `default` (32 tools) or `expert` (43 tools); +1 with `VENIRA_ALLOW_JS_EXEC=1` |
-| `VENIRA_OUTPUT_MODE` | `full` | `full` or `compact` (trim payloads > 8 KB) |
+| `VENIRA_OUTPUT_MODE` | `full` | `full` or `compact` (summarize/trim payloads > 8 KiB; generic payloads use `preview_text`) |
 | `VENIRA_PROFILE` | `full` | `full` or `core` (disables dependency graph / change impact) |
 | `VENIRA_UNRESTRICTED` | `"0"` | `"1"` disables workspace lock (never in production) |
 | `VENIRA_SECURITY_PROFILE` | `balanced` | Selects shell policy and JS approval defaults: `strict`, `balanced`, `trusted`, or `off` |
@@ -456,8 +456,12 @@ Success:
 Failure:
 
 ```jsonc
-{ "ok": false, "error": { "code": "not_found", "message": "…", "retryable": false }, "hint": "Check with project_list_files first" }
+{ "ok": false, "status": "failed", "error": { "code": "not_found", "message": "…", "retryable": false }, "hint": "Check with project_list_files first", "next_actions": [{ "tool": "project_list_files", "arguments": { "relative_path": "." } }] }
 ```
+
+`ok` describes the tool operation. For `project_shell_run`, a command that ran and exited non-zero still has `ok: true`; `command_status: "failed"` and `hint` report the command outcome. A running or cancelled command reports `command_status: "running"` or `"cancelled"`. A read batch with failed items reports top-level `ok: false`, `status: "partial"`, and `error.code: "batch_partial_failure"`; inspect `data.responses` for each result.
+
+In `compact` mode, shortened payloads set `trimmed: true` and `truncated: true`; `summary` describes omitted content. For an otherwise unsupported large payload, `data.preview_text` contains a bounded JSON-text preview and `summary` reports the original size and shape. Large error messages or attached error data are also explicitly marked as trimmed. Use `full` when the complete payload is required.
 
 Common codes: `not_found`, `invalid_request`, `old_text_not_found`, `old_text_ambiguous`, `stale_content`, `path_escape`, `resource_limit`, `sensitive_result`, `unsupported`, `internal`.
 

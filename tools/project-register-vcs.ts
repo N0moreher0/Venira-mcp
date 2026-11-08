@@ -25,16 +25,12 @@ export function registerVcsTools(server: McpServer, deps: VcsDeps): void {
     .string()
     .max(200)
     .optional()
-    .describe(
-      'Repository as "owner/name" or a PR URL (default: VENIRA_GIT_REPO, git.repo in venira.config.json, else the workspace .git origin remote).',
-    );
+    .describe('"owner/name" or PR URL. Default: configured repo or git origin.');
 
   const providerArg = z
     .enum(["github", "gitlab", "bitbucket"])
     .optional()
-    .describe(
-      "Provider override for this call (default: VENIRA_GIT_PROVIDER, then venira.config.json, then inferred from the origin remote).",
-    );
+    .describe("Default: configured, else from git origin.");
 
   server.registerTool(
     "project_pr_create",

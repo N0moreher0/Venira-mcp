@@ -50,7 +50,7 @@ export function registerShellTools(server: McpServer, deps: ShellToolsDeps): voi
       ),
       inputSchema: {
         shell: z.enum(["powershell", "cmd", "bash"]).optional(),
-        command: z.string().describe("Command line to execute. If it overwrites or deletes existing workspace source files, create and verify a scoped project_snapshot first; use project_write_file/project_edit_file/project_delete_path for targeted file operations."),
+        command: z.string().describe("Command line to run. Use the file tools for file changes; project_snapshot first if it overwrites or deletes files git does not hold."),
         relative_cwd: z.string().optional().describe("Working directory inside the workspace (default: workspace root)."),
         background: backgroundFlag.optional(),
         secret_env: z
@@ -70,7 +70,7 @@ export function registerShellTools(server: McpServer, deps: ShellToolsDeps): voi
         approval_token: z
           .string()
           .optional()
-          .describe("REMOVED in v1.15: passing it returns an error. Use approval_id instead."),
+          .describe("Removed; use approval_id."),
         approval_id: z
           .string()
           .optional()
@@ -98,11 +98,11 @@ export function registerShellTools(server: McpServer, deps: ShellToolsDeps): voi
           .min(1)
           .max(400)
           .optional()
-          .describe("Required with override; explain the specific intent in one line. Redacted and recorded in the SQLite audit trail."),
+          .describe("Required with override: one-line intent (audit-logged)."),
         approval_scope: z
           .enum(["once", "session"])
           .optional()
-          .describe("Ignored: scope (once/session) is chosen by the human at approval time (`--approve <id> --session`), never by the model."),
+          .describe("Ignored; the human picks the approval scope."),
       },
     },
     (args) => runShell(args, server, shellDeps),

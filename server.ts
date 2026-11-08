@@ -18,7 +18,7 @@ enabledShellOverrides();
 migrateLegacyDataDirIfNeeded();
 
 const INSTRUCTIONS = `Venira coding tools operate on the workspace ${WORKSPACE}.
-Every call returns a JSON envelope: { ok, status, request_id, kind, data, truncated?, summary?, hint?, cached?, elapsed_ms }. On failure: { ok:false, error:{ code, message, retryable }, hint } and the MCP result has isError=true. Read "hint" first; it says how to fix the request.
+Every call returns a JSON envelope: { ok, status, request_id, kind, data, truncated?, summary?, hint?, next_actions?, cached?, trimmed?, command_status?, elapsed_ms }. On failure: { ok:false, error:{ code, message, retryable }, hint, next_actions? } and the MCP result has isError=true. A read_batch with any failed items returns ok=false/status=partial; inspect each data.responses entry. For shell_run, ok=true means the tool call completed; command_status separately reports running/succeeded/failed/cancelled/unknown. Read "hint" and "next_actions" first; they say how to recover.
 
 Decision tree
 1. Two or more reads, or mixed read-only steps -> project_read_batch (max 8, sequential + cached). Do not fire many single reads.
@@ -52,7 +52,7 @@ Rules
 - project_github_connect uses GitHub Device Flow and the \`repo offline_access\` OAuth scopes for private-repository support and refreshable access. The access/refresh tokens are stored encrypted locally and never returned to the agent; users authorize Venira at github.com.
 - project_explain_error and project_plan_read_batch are deterministic (no model call): explain_error maps signatures to next_actions, plan_read_batch returns a ready batch call.
 - Never loop on a non-retryable error (not_found, scope_denied, invalid_request, sensitive_result, audit_unavailable). Read the hint and change the request or tell the user.
-- Output modes: VENIRA_OUTPUT_MODE=full|compact (default full). compact trims payloads over 8 KB; use full when you need complete data.
+- Output modes: VENIRA_OUTPUT_MODE=full|compact (default full). compact trims payloads over 8 KiB and marks them; generic data uses data.preview_text. Use full when you need complete data.
 - Security profile: VENIRA_SECURITY_PROFILE=strict|balanced|trusted|off (default balanced) sets the shell policy and per-call JS approval together; VENIRA_SHELL_MODE=balanced|strict|permissive|off is an advanced override. Hard-deny rules stay active in strict/balanced; permissive turns hard-deny into an approval request; off disables all shell checks, hard-deny included (operator opt-in, trusted environments only).
 - Approvals: when project_shell_run or project_execute_js returns approval_required, STOP. Tell the user the approval_id and data.approval.approve_command (a human grants it via \`data.approval.approve_command\` or client elicitation); do not loop, poll or try to approve it yourself. After the user confirms, retry once with data.approval.retry_with. Use project_shell_run dry_run=1 to learn beforehand whether a command would be allowed, asked or denied (nothing runs). approval_wait_ms (<=45000) makes the call wait for the human and run in the same call; keep it under the client request timeout. approval_token was removed; use approval_id.
 - Named shell overrides require both an operator allowlist (VENIRA_SHELL_OVERRIDES) and a per-call override name plus non-empty reason; they are narrow and audited.`;

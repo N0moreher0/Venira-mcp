@@ -27,6 +27,26 @@ const NETWORK_GUARD =
   'for(const k of ["fetch","WebSocket","EventSource","XMLHttpRequest"]){try{delete globalThis[k];}catch{}}';
 
 /**
+ * On an uncaught error Node echoes the offending source line (our guard + the caller's line 1) and a caret
+ * line. Drop the guard from that echo, and shift line-1 columns back, so stderr shows only the caller's code.
+ */
+function stripGuardEcho(stderr: string): string {
+  const shift = NETWORK_GUARD.length + 1;
+  const lines = stderr.split(/\r?\n/);
+  const out: string[] = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i] ?? "";
+    if (line.startsWith(NETWORK_GUARD)) {
+      out.push(line.slice(shift));
+      if (/^\s*\^+\s*$/.test(lines[i + 1] ?? "")) i += 1;
+      continue;
+    }
+    out.push(line.replace(/\[stdin\]:1:(\d+)/g, (_m, col: string) => `[stdin]:1:${Math.max(1, Number(col) - shift)}`));
+  }
+  return out.join("\n");
+}
+
+/**
  * Workspace-scoped synchronous JS evaluation.
  * Runs `node` in the workspace, reading code from stdin, capturing stdout/stderr.
  * Node's permission model limits filesystem access to the workspace and does not
@@ -64,7 +84,7 @@ export function executeJs(
     });
     const timed = Boolean(r.signal === "SIGTERM" || r.signal === "SIGKILL");
     const stdout = (r.stdout ?? "").slice(-MAX_BUFFER);
-    const stderr = (r.stderr ?? "").slice(-MAX_BUFFER);
+    const stderr = stripGuardEcho(r.stderr ?? "").slice(-MAX_BUFFER);
     if (r.error) {
       return {
         ok: false,

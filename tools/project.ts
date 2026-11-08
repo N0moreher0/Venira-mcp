@@ -25,6 +25,7 @@ import { createCachedExecutor } from "./project-executor.js";
 import { createCodeIntelRunners } from "./project-codeintel-runners.js";
 import { createReadPlanRunner } from "./project-read-plan.js";
 import { applyDisabledTools } from "./project-tool-mode.js";
+import { applyToolDocs } from "./project-docs.js";
 import { createProjectSessionRuntime } from "./project-session-runtime.js";
 import { prepareRequest } from "./project-request.js";
 import { createBackendExecutor } from "./project-backend.js";
@@ -216,6 +217,7 @@ const runPlanReadBatch = createReadPlanRunner({
 
 export function registerProjectTools(server: McpServer): void {
   const workflowRunners = createWorkflowRunners({ runOne });
+  applyToolDocs(server);
   applyDisabledTools(server);
   registerFileTools(server, {
     runOne,
