@@ -132,6 +132,18 @@ const CMDLET_PARAMETERS: ReadonlyMap<string, readonly string[]> = new Map<string
     ["Name", "Path", "LiteralPath", "Credential"],
   ],
   [
+    "get-eventlog",
+    ["LogName", "ProviderName", "Source", "MaxEvents", "Forward", "Tail", "Newest", "Oldest"],
+  ],
+  [
+    "get-winevent",
+    ["LogName", "ProviderName", "Source", "MaxEvents", "Forward", "Tail", "Newest", "Oldest"],
+  ],
+  [
+    "get-credential",
+    ["UserName", "UserId", "Target", "Message", "SupportedAlgorithms", "PinnedHosts", "Options", "Credential"],
+  ],
+  [
     "get-service",
     ["Name", "Value", "CaseSensitive", "Required", "Status", "InputObject"],
   ],
@@ -146,6 +158,10 @@ const CMDLET_PARAMETERS: ReadonlyMap<string, readonly string[]> = new Map<string
   [
     "get-process",
     ["InputObject", "Name", "Id", "Force", "ErrorAction", "ErrorVariable", "WarningAction", "WarningVariable", "InformationAction", "InformationVariable", "OutVariable", "OutBuffer", "PipelineVariable", "WhatIf", "Confirm"],
+  ],
+  [
+    "get-variable",
+    ["Name", "Value", "Level", "HelpMessage", "Description", "Option"],
   ],
   [
     "stop-process",

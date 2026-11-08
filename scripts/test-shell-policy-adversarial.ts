@@ -405,6 +405,10 @@ try {
     assert.deepEqual(argvOf("Get-Item -Pa:C:\\outside", "powershell"), ["Get-Item", "-Path", "C:\\outside"]);
     assert.equal(ps("Get-Item -Pa:C:\\outside", "balanced").rule, "ask.read_outside_workspace");
     assert.equal(ps("Start-Process -Verb:RunAs -FilePath C:\\outside\\x", "balanced").rule, "deny.privilege_escalation");
+    // Remaining policy-relevant cmdlets now resolve canonical parameters too.
+    assert.deepEqual(argvOf("Get-EventLog -LogName:Application -MaxEvents:5", "powershell"), ["Get-EventLog", "-LogName", "Application", "-MaxEvents", "5"]);
+    assert.deepEqual(argvOf("Get-Credential -UserName:admin", "powershell"), ["Get-Credential", "-UserName", "admin"]);
+    assert.deepEqual(argvOf("Get-Variable -Name:probe", "powershell"), ["Get-Variable", "-Name", "probe"]);
   });
 
   check("policy_adv_snapshot_store_is_protected", () => {
