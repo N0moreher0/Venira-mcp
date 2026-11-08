@@ -1,0 +1,30 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-07-09/server.schema.json",
+  "name": "io.github.N0moreher0/venira-mcp",
+  "description": "Workspace-scoped MCP server for coding agents: files, search, shell, checkpoints, PR/CI, audit.",
+  "repository": {
+    "url": "https://github.com/N0moreher0/Venira-mcp",
+    "source": "github"
+  },
+  "version": "1.19.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "venira-mcp",
+      "version": "1.19.0",
+      "transport": { "type": "stdio" },
+      "environmentVariables": [
+        {
+          "name": "VENIRA_WORKSPACE",
+          "description": "Absolute path of the project folder the server works in. Defaults to the current directory.",
+          "isRequired": false
+        },
+        {
+          "name": "VENIRA_DATA_DIR",
+          "description": "Folder for the audit database and encrypted secrets. Defaults to <workspace>/data.",
+          "isRequired": false
+        }
+      ]
+    }
+  ]
+}
