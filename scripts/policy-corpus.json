@@ -137,7 +137,7 @@
     "shell": "bash",
     "expected_tier": "ask",
     "expected_rule": "balanced.default_ask",
-    "description": "workspace-local redirect is allowed; text is not a disk command"
+    "description": "a drive-spec token (c:) counts as a path outside the workspace on every OS, so the redirect asks instead of being auto-allowed; not denied, since the text is not a disk command"
   },
   {
     "command": "xargs rm < list.txt",

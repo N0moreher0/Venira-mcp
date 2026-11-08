@@ -36,6 +36,10 @@ export function isOutsideWorkspace(target: string, cwd: string): boolean {
   if (/^[|&<>]/.test(raw)) return false;
   const expanded = expandHome(raw);
   if (path.win32.isAbsolute(expanded) && !path.isAbsolute(expanded)) return true;
+  // Drive-relative specs (`C:`, `C:foo`) are not absolute to win32 either, yet name another volume on
+  // Windows while POSIX `path.resolve` takes them for plain file names. Anywhere but Windows they are
+  // treated as outside so the verdict does not depend on the host OS.
+  if (process.platform !== "win32" && /^[A-Za-z]:/.test(expanded)) return true;
   const abs = path.resolve(cwd, expanded);
   const rel = path.relative(WORKSPACE, abs);
   return rel === ".." || rel.startsWith(".." + path.sep) || path.isAbsolute(rel);
