@@ -264,6 +264,54 @@ try {
     }
   });
 
+  // Dev tools on the routine path: write flags and config/output paths that leave the
+  // workspace (or are not provably plain paths) must ask in balanced; ordinary runs stay allowed.
+  const DEV_TOOL_ASK_CASES: Array<{ id: string; command: string }> = [
+    { id: "eslint_fix", command: "eslint --fix src" },
+    { id: "eslint_fix_type", command: "eslint --fix-type problem ." },
+    { id: "eslint_config_absolute", command: "eslint -c /tmp/evil.js ." },
+    { id: "eslint_output_file_escape", command: "eslint --output-file ../out.txt ." },
+    { id: "eslint_short_flag_glued", command: "eslint -c../evil.js ." },
+    { id: "npx_eslint_fix", command: "npx --no-install eslint --fix ." },
+    { id: "prettier_write", command: "prettier --write ." },
+    { id: "prettier_write_short", command: "prettier -w src" },
+    { id: "prettier_write_cluster", command: "prettier -lw src" },
+    { id: "prettier_write_equals", command: "prettier --write=true src" },
+    { id: "prettier_config_home", command: "prettier --config ~/.prettierrc ." },
+    { id: "jest_config_absolute", command: "jest --config /etc/evil.config.js" },
+    { id: "jest_config_dotdot_equals", command: "jest --config=../other/jest.config.js" },
+    { id: "jest_config_short_windows", command: "jest -c ..\\evil.js" },
+    { id: "jest_config_inline_json", command: `jest --config '{"setupFiles":["/tmp/x.js"]}'` },
+    { id: "jest_config_missing_value", command: "jest --config" },
+    { id: "jest_rootdir_escape", command: "jest --rootDir ../sibling" },
+    { id: "vitest_config_dotdot", command: "vitest --config ../x.ts" },
+    { id: "vitest_root_absolute", command: "vitest --root /tmp/other" },
+  ];
+  for (const { id, command } of DEV_TOOL_ASK_CASES) {
+    check(`policy_adv_dev_tool_${id}_asks`, () => {
+      const decision = evaluate(command, "balanced");
+      assert.equal(decision.tier, "ask", `${command}: ${JSON.stringify(decision)}`);
+    });
+  }
+  check("policy_adv_dev_tool_plain_runs_stay_allowed", () => {
+    for (const command of [
+      "eslint .",
+      "eslint src --max-warnings 0",
+      "eslint -c eslint.config.js src",
+      "prettier --check .",
+      "prettier src/index.ts",
+      "jest",
+      "jest --config jest.config.js",
+      "jest --config=config/jest.config.js",
+      "jest -c jest.config.js",
+      "vitest run",
+      "vitest --config vitest.config.ts",
+    ]) {
+      const decision = evaluate(command, "balanced");
+      assert.equal(decision.tier, "allow", `${command}: ${JSON.stringify(decision)}`);
+    }
+  });
+
   console.log(`\nShell policy adversarial tests passed (${checks} checks).`);
 } finally {
   await rm(tempDir, { recursive: true, force: true });

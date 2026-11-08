@@ -23,7 +23,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { ParsedCommand, Segment } from "./shell-parser.js";
-import { balancedSegmentOk, gitSubcommandIndex, isOutsideWorkspace, TSC_UNSAFE_FLAG } from "./shell-policy-tables.js";
+import { balancedSegmentOk, devToolFlagsOk, gitSubcommandIndex, isOutsideWorkspace, TSC_UNSAFE_FLAG } from "./shell-policy-tables.js";
 import { extraReadOnlyOk, installSegmentOk, redirectKind, writeSegmentOk, writeTargetOk } from "./shell-policy-balanced-write.js";
 import { dockerReadOnlySegment } from "./shell-policy-balanced-docker.js";
 
@@ -217,6 +217,8 @@ function toolchainOk(segment: Segment): boolean {
     case "mypy":
     case "vitest":
     case "jest":
+      // `--config`/`--rootDir` must stay a plain workspace-relative path.
+      return devToolFlagsOk(segment.command, segment.argv);
     case "mocha":
       return true;
     case "tsc":
@@ -234,11 +236,11 @@ function toolchainOk(segment: Segment): boolean {
       if (segment.argv.length === 2 && (segment.argv[1] === "--version" || segment.argv[1] === "-V")) return true;
       return sub === "-m" && ["pytest", "unittest", "mypy", "flake8"].includes(lower[2] ?? "");
     case "eslint":
-      return !lower.some((arg) => /^--(?:fix|fix-type|resolve-plugins-relative-to|rulesdir)/.test(arg));
+      return devToolFlagsOk("eslint", segment.argv);
     case "prettier":
       return (
         lower.some((arg) => arg === "--check" || arg === "-c" || arg === "--list-different" || arg === "-l") &&
-        !lower.some((arg) => arg === "--write" || arg === "-w")
+        devToolFlagsOk("prettier", segment.argv)
       );
     default:
       return false;

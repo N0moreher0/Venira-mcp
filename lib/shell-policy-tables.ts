@@ -682,6 +682,53 @@ const SAFE_COMMANDS = new Set([
 /** `tsc` flags that write config (`--init`), never exit (`--watch`), delete output (`--clean`) or dump traces. */
 export const TSC_UNSAFE_FLAG = /^(?:--init|--watch|-w|--clean|--generatetrace)(?:=|$)/;
 
+/** Per-tool flags whose value is a path the tool reads code/config from, or writes output to. */
+const DEV_TOOL_PATH_FLAGS: Record<string, ReadonlySet<string>> = {
+  jest: new Set(["--config", "-c", "--rootdir"]),
+  vitest: new Set(["--config", "-c", "--root", "-r"]),
+  eslint: new Set(["--config", "-c", "--output-file", "-o"]),
+  prettier: new Set(["--config", "--ignore-path", "--plugin"]),
+};
+
+/** A path provably relative and inside the workspace: no root/home/drive prefix, `..`, variables or globs. */
+function isPlainRelativePath(value: string): boolean {
+  if (!value || value.startsWith("-")) return false;
+  if (/^[\\/~]|^[A-Za-z]:/.test(value)) return false;
+  if (/[$%`*?{}<>|;&"'\s]/.test(value)) return false;
+  return !value.split(/[\\/]+/).some((part) => part === "..");
+}
+
+/**
+ * Flag guard for the dev tools that are routine to run (`eslint`, `prettier`, `jest`, `vitest`):
+ * `eslint --fix*` and `prettier --write` rewrite source files, and a config/output/root path that is
+ * absolute, escapes with `..`, is a variable or an inline JSON string makes the tool load code from,
+ * or write to, a place the policy cannot see. Anything else the tool accepts is judged by its caller.
+ */
+export function devToolFlagsOk(tool: string, argv: string[]): boolean {
+  const lower = argv.map((arg) => arg.toLowerCase());
+  if (tool === "eslint" && lower.some((arg) => /^--(?:fix|fix-type|resolve-plugins-relative-to|rulesdir)/.test(arg))) {
+    return false;
+  }
+  // `-w`, and short clusters such as `-lw`, mean --write.
+  if (tool === "prettier" && lower.some((arg) => /^--write(?:=|$)/.test(arg) || /^-[a-z]+$/.test(arg) && arg.includes("w"))) {
+    return false;
+  }
+  const pathFlags = DEV_TOOL_PATH_FLAGS[tool];
+  if (!pathFlags) return true;
+  for (let i = 1; i < argv.length; i += 1) {
+    const raw = argv[i];
+    if (!raw.startsWith("-")) continue;
+    const eq = raw.indexOf("=");
+    const flag = (eq > 0 ? raw.slice(0, eq) : raw).toLowerCase();
+    // `-c../x` (value glued to a short flag) cannot be told from a flag cluster, so it asks.
+    if (!raw.startsWith("--") && eq < 0 && raw.length > 2 && pathFlags.has(raw.slice(0, 2).toLowerCase())) return false;
+    if (!pathFlags.has(flag)) continue;
+    const value = eq > 0 ? raw.slice(eq + 1) : argv[i + 1];
+    if (value === undefined || !isPlainRelativePath(value)) return false;
+  }
+  return true;
+}
+
 /** Tools `npx --no-install` may run on the routine path: the same ones that are safe when called bare. */
 const SAFE_NPX_TOOLS = new Set(["tsc", "esbuild", "tsx", "vitest", "jest", "eslint", "prettier"]);
 
@@ -717,6 +764,9 @@ export function isSafeSegment(segment: Segment): boolean {
   }
   if (segment.command === "tsc") {
     return !segment.argv.slice(1).some((arg) => TSC_UNSAFE_FLAG.test(arg.toLowerCase()));
+  }
+  if (segment.command === "eslint" || segment.command === "prettier" || segment.command === "jest" || segment.command === "vitest") {
+    return devToolFlagsOk(segment.command, segment.argv);
   }
   return true;
 }
