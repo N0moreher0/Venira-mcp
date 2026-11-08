@@ -41,8 +41,8 @@ const parser = (await import(
 const argvOf = (command: string, shell: string): string[] =>
   parser.parseShellCommand(command, { shell }).segments[0]?.argv ?? [];
 
-const evaluate = (command: string, mode: "balanced" | "permissive") =>
-  policy.evaluateShellCommand(command, workspaceDir, { mode });
+const evaluate = (command: string, mode: "balanced" | "permissive", shell?: string) =>
+  policy.evaluateShellCommand(command, workspaceDir, { mode, ...(shell ? { shell } : {}) });
 
 let checks = 0;
 function check(name: string, fn: () => void) {
@@ -120,14 +120,17 @@ const PROTECTED_CASES: HardDenyCase[] = [
 
 try {
   for (const testCase of [...ROOT_DELETE_CASES, ...PRIVILEGE_CASES, ...PROTECTED_CASES, ...ROOT_DELETE_WINDOWS_CASES]) {
+    // Windows spellings (`C:\Users`, `Remove-Item`) only parse as intended in the PowerShell dialect; on a
+    // Linux/macOS host the default is bash, where `\U` is an escape and the verdict would depend on the runner.
+    const shell = ROOT_DELETE_WINDOWS_CASES.includes(testCase) ? "powershell" : undefined;
     check(`policy_adv_${testCase.id}_balanced_denies`, () => {
-      const decision = evaluate(testCase.command, "balanced");
+      const decision = evaluate(testCase.command, "balanced", shell);
       assert.equal(decision.tier, "deny", `${testCase.command}: ${JSON.stringify(decision)}`);
       assert.equal(decision.rule, testCase.rule, testCase.command);
     });
 
     check(`policy_adv_${testCase.id}_permissive_asks`, () => {
-      const decision = evaluate(testCase.command, "permissive");
+      const decision = evaluate(testCase.command, "permissive", shell);
       assert.equal(decision.tier, "ask", `${testCase.command}: ${JSON.stringify(decision)}`);
       assert.equal(decision.rule, `ask.${testCase.rule}`, testCase.command);
     });
