@@ -207,10 +207,27 @@ function splitPowerShellSegment(segment: Segment): Segment {
 }
 
 /**
- * cmd.exe built-ins whose switches are accepted glued to the command name and to each other
- * (`rd/s/q`, `del /f/s/q`). Policy rules read argv entries, so normalize the spellings the shell
- * accepts into the canonical `del /f /s /q` form.
+ * cmd.exe built-ins and Windows command-line tools accept switches glued to the command name
+ * (`rd/s/q`, `xcopy/e/h`, `move/y`, `attrib/s`) and, for the delete built-ins, to each other
+ * (`del /f/s/q`). Policy rules read argv entries, so normalize those spellings into the canonical
+ * `del /f /s /q` / `xcopy /e /h` form.
  */
+const CMD_SWITCH_COMMANDS = new Set([
+  "del",
+  "erase",
+  "rd",
+  "rmdir",
+  "move",
+  "copy",
+  "xcopy",
+  "robocopy",
+  "mklink",
+  "attrib",
+  "replace",
+  "ren",
+  "rename",
+]);
+/** Delete built-ins also accept clustered switches as their own token (`/f/s/q`, not only glued to the command). */
 const CMD_DELETE_COMMANDS = new Set(["del", "erase", "rd", "rmdir"]);
 const CMD_DELETE_SWITCHES = new Set(["f", "s", "q", "p"]);
 
@@ -229,31 +246,29 @@ function splitCmdDeleteSwitches(token: string): string[] | null {
   return parts.map((part) => `/${part.toLowerCase()}`);
 }
 
-/** Canonical argv for the cmd delete built-ins (command-name glue plus clustered switches). */
-function normalizeCmdDeleteArgv(argv: string[]): string[] {
+/** Canonical argv for the cmd tools that take `/switch` arguments (command-name glue plus delete clusters). */
+function normalizeCmdSwitchArgv(argv: string[]): string[] {
   if (argv.length === 0) return argv;
   let head = argv[0];
   let rest = argv.slice(1);
   const glued = /^([A-Za-z]+)((?:\/[A-Za-z]+)+)$/.exec(head);
-  if (glued && CMD_DELETE_COMMANDS.has(glued[1].toLowerCase())) {
-    const flags = glued[2].slice(1).split("/");
-    if (flags.every((flag) => flag.length === 1 && CMD_DELETE_SWITCHES.has(flag.toLowerCase()))) {
-      head = glued[1];
-      rest = [...flags.map((flag) => `/${flag.toLowerCase()}`), ...rest];
-    }
+  if (glued && CMD_SWITCH_COMMANDS.has(glued[1].toLowerCase())) {
+    head = glued[1];
+    rest = [...glued[2].slice(1).split("/").map((flag) => `/${flag.toLowerCase()}`), ...rest];
   }
-  if (!CMD_DELETE_COMMANDS.has(cmdBaseName(head))) return argv;
+  const deleteFamily = CMD_DELETE_COMMANDS.has(cmdBaseName(head));
   const out: string[] = [head];
   for (const arg of rest) {
-    const split = splitCmdDeleteSwitches(arg);
+    const split = deleteFamily ? splitCmdDeleteSwitches(arg) : null;
     if (split) out.push(...split);
     else out.push(arg);
   }
-  return out;
+  const changed = out.length !== argv.length || out.some((value, index) => value !== argv[index]);
+  return changed ? out : argv;
 }
 
 function normalizeCmdSegment(segment: Segment): Segment {
-  const argv = normalizeCmdDeleteArgv(segment.argv);
+  const argv = normalizeCmdSwitchArgv(segment.argv);
   if (argv === segment.argv) return segment;
   return makeSegment(argv, argv.join(" "));
 }
@@ -272,7 +287,7 @@ function unwrapCmdSegment(segment: Segment): Segment {
   if (cmdBaseName(argv[0] ?? "") !== "cmd") return segment;
   const flag = (argv[1] ?? "").toLowerCase();
   if (flag !== "/c" && flag !== "/k") return segment;
-  const inner = normalizeCmdDeleteArgv(argv.slice(2));
+  const inner = normalizeCmdSwitchArgv(argv.slice(2));
   if (inner.length === 0) return segment;
   const firstLower = inner[0].toLowerCase();
   const isInterpreter = [...CMD_INTERPRETERS].some((name) => name === firstLower);

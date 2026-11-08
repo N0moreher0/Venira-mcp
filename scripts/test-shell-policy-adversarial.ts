@@ -289,6 +289,29 @@ try {
     }
   });
 
+  check("policy_adv_dialect_cmd_glued_write_switches", () => {
+    const cmd = (command: string, mode: "balanced" | "permissive") =>
+      policy.evaluateShellCommand(command, workspaceDir, { shell: "cmd", mode });
+    // `move/y`, `xcopy/e/h`, `mklink/j` are valid cmd spellings for `move /y`, `xcopy /e /h`, `mklink /j`.
+    const outside: string[] = [
+      "move/y a.txt C:\\Windows\\a.txt",
+      "copy/y a.txt C:\\Windows\\a.txt",
+      "xcopy/e/h C:\\ws C:\\Windows\\Backup",
+      "robocopy/e C:\\ws C:\\Windows\\Backup",
+      "mklink/j link C:\\Windows",
+      "cmd /c xcopy/e/h C:\\ws C:\\Windows\\Backup",
+    ];
+    for (const command of outside) {
+      const decision = cmd(command, "balanced");
+      assert.equal(decision.rule, "ask.writes_outside_workspace", `${command}: ${JSON.stringify(decision)}`);
+    }
+    // In-workspace spellings must not be mistaken for outside writes.
+    for (const command of ["move/y a.txt b.txt", "copy/y a.txt b.txt"]) {
+      const decision = cmd(command, "balanced");
+      assert.notEqual(decision.rule, "ask.writes_outside_workspace", `${command}: ${JSON.stringify(decision)}`);
+    }
+  });
+
   check("policy_adv_dialect_powershell_parameter_abbreviations", () => {
     const ps = (command: string, mode: "balanced" | "permissive") =>
       policy.evaluateShellCommand(command, workspaceDir, { shell: "powershell", mode });
