@@ -3,6 +3,7 @@
  * Keeping them here means GitHub/GitLab/Bitbucket return the same envelope.
  */
 import zlib from "node:zlib";
+import { prNumberFromUrl } from "./git-repo.js";
 
 export type Resp = {
   status?: string;
@@ -24,12 +25,15 @@ export function requireText(args: Record<string, unknown>, key: string, hint: st
 
 export function prNumberFrom(args: Record<string, unknown>, key = "pr"): number {
   const raw = args[key];
-  if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) return Math.floor(raw);
+  if (typeof raw === "number" && Number.isFinite(raw) && raw >= 1 && Number.isSafeInteger(Math.floor(raw))) return Math.floor(raw);
   if (typeof raw === "string") {
-    const direct = Number(raw.trim());
-    if (Number.isFinite(direct) && direct > 0) return Math.floor(direct);
-    const match = /\/(?:pull|pulls|issues|merge_requests)\/(\d+)(?:[/?#]|$)/.exec(raw);
-    if (match) return Number(match[1]);
+    const trimmed = raw.trim();
+    if (/^\d{1,15}$/.test(trimmed)) {
+      const direct = Number(trimmed);
+      if (direct > 0) return direct;
+    }
+    const fromUrl = prNumberFromUrl(raw);
+    if (fromUrl !== null) return fromUrl;
   }
   throw new Error(
     `[invalid_request] \`${key}\` must be a PR number or a pull/merge-request URL. ` +

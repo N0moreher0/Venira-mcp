@@ -62,11 +62,42 @@ export function parseRepoRef(raw: string, source: string): RepoRef {
   return { owner, name };
 }
 
+/** Path word before the number: GitHub `pull`/`issues`, GitLab `merge_requests`, Bitbucket `pull-requests`. */
+const PR_WORD = "(?:pull|pulls|issues|merge_requests|pull-requests)";
+const PR_NUMBER_RE = new RegExp(`/${PR_WORD}/(\\d{1,15})(?:[/?#]|$)`, "i");
+/** `/owner/name/pull/7`, GitLab's `/group/name/-/merge_requests/7`, Bitbucket's `/ws/repo/pull-requests/7`. */
+const PR_REPO_RE = new RegExp(`/([A-Za-z0-9._-]+)/([A-Za-z0-9._-]+)(?:/-)?/${PR_WORD}/\\d{1,15}(?:[/?#]|$)`, "i");
+
+/** PR/MR number from a pull/merge-request URL; null when there is none or it is not a positive safe integer. */
+export function prNumberFromUrl(raw: string): number | null {
+  const match = PR_NUMBER_RE.exec(raw);
+  if (!match) return null;
+  const value = Number(match[1]);
+  return Number.isSafeInteger(value) && value > 0 ? value : null;
+}
+
+/** The part of a URL after the host, so a host name can never pass for an owner segment. */
+function pathOf(raw: string): string {
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) return raw;
+  try {
+    const url = new URL(raw);
+    return `${url.pathname}${url.search}${url.hash}`;
+  } catch {
+    return raw;
+  }
+}
+
 /** `owner/name` or a pull/merge-request URL (`.../owner/name/pull/7`). */
 export function parsePrOrRepo(raw: string): RepoRef | null {
-  const pull = /\/([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+)\/(?:pull|pulls|issues|merge_requests)\/(\d+)(?:[/?#]|$)/i.exec(raw);
-  if (pull && SEGMENT_RE.test(pull[1]) && SEGMENT_RE.test(pull[2])) {
+  const target = pathOf(raw);
+  const pull = PR_REPO_RE.exec(target);
+  if (pull && pull[2] !== "-" && SEGMENT_RE.test(pull[1]) && SEGMENT_RE.test(pull[2])) {
     return { owner: pull[1], name: pull[2] };
+  }
+  if (PR_NUMBER_RE.test(target)) {
+    throw new Error(
+      `[repo_unresolved] Cannot find owner/name in the pull/merge-request URL: "${raw}". Hint: pass repo="owner/name".`,
+    );
   }
   return parseRepoRef(raw, "argument");
 }

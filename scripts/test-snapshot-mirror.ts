@@ -123,6 +123,38 @@ await check("unsafe_mirror_targets_are_refused", async () => {
   assert.equal(existsSync(path.join(tempDir, "no-such-drive")), false, "venira never creates the mirror root");
 });
 
+await check("health_reports_unconfigured_then_never_run", () => {
+  setMirror(undefined);
+  mirror.resetMirrorHealthForTests();
+  assert.deepEqual(mirror.mirrorHealth(), { configured: false });
+  setMirror(mirrorDir);
+  const health = mirror.mirrorHealth();
+  assert.equal(health.configured, true);
+  if (!health.configured) return;
+  assert.equal(health.state, "never_run");
+  assert.equal(health.last_run, null);
+  assert.equal(path.resolve(health.dir ?? ""), path.resolve(mirrorDir));
+  assert.match(health.hint ?? "", /No mirror run in this session/);
+});
+
+await check("health_shows_a_failed_manual_run_and_never_throws_on_a_malformed_dir", async () => {
+  setMirror(path.join(tempDir, "no-such-drive"));
+  assert.match(await errorMessage(mirror.opSnapshotMirror({}, workspaceDir)), /^\[config_invalid\] .*does not exist/);
+  const failed = mirror.mirrorHealth();
+  assert.equal(failed.configured, true);
+  if (failed.configured) {
+    assert.equal(failed.state, "error");
+    assert.equal(failed.last_run?.source, "manual");
+    assert.match(String(failed.last_run?.error), /does not exist/);
+    assert.match(failed.hint ?? "", /not clean/);
+  }
+  setMirror("relative/mirror"); // malformed: still configured, dir unknown, no throw
+  const malformed = mirror.mirrorHealth();
+  assert.equal(malformed.configured, true);
+  if (malformed.configured) assert.equal(malformed.dir, null);
+  setMirror(mirrorDir);
+});
+
 await check("mirror_is_a_protected_root_for_file_tools_and_shell", () => {
   setMirror(mirrorDir);
   const roots = paths.snapshotProtectedRoots(process.env.VENIRA_DATA_DIR as string, workspaceDir).map((r) => path.resolve(r));
@@ -155,12 +187,26 @@ await check("create_mirrors_blobs_then_indexes_then_project_json", async () => {
   assert.ok((await readFile(mirrorIndex(idA))).equals(await readFile(store.indexPath(idA))), "index is a byte copy");
 });
 
+await check("health_reports_the_last_create_run", () => {
+  const health = mirror.mirrorHealth();
+  assert.equal(health.configured, true);
+  if (!health.configured) return;
+  assert.equal(health.state, "ok");
+  assert.equal(health.hint, undefined);
+  assert.equal(health.last_run?.source, "create");
+  assert.equal(health.last_run?.copied_blobs, 2);
+  assert.equal(health.last_run?.copied_indexes, 1);
+  assert.match(String(health.last_run?.at), /^\d{4}-\d{2}-\d{2}T/);
+});
+
 await check("a_second_run_is_idempotent", async () => {
   const result = dataOf(await mirror.opSnapshotMirror({}, workspaceDir));
   assert.equal(result.status, "ok");
   assert.equal(result.copied_blobs, 0);
   assert.equal(result.copied_indexes, 0);
   assert.equal(result.bytes, 0);
+  const health = mirror.mirrorHealth();
+  assert.equal(health.configured && health.last_run?.source, "manual", "health follows the most recent run");
 });
 
 await writeFile(path.join(workspaceDir, "a.txt"), "alpha-v2\n");
@@ -278,6 +324,16 @@ await check("a_config_problem_after_create_is_reported_without_failing_the_check
   assert.match(String(report.error), /^\[config_invalid\] .*does not exist/);
   assert.ok((await store.listManifests()).some((m) => m.id === result.id), "the checkpoint itself was created");
   setMirror(mirrorDir);
+});
+
+await check("health_shows_the_failed_create_run_with_a_hint", () => {
+  const health = mirror.mirrorHealth();
+  assert.equal(health.configured, true);
+  if (!health.configured) return;
+  assert.equal(health.state, "error");
+  assert.equal(health.last_run?.source, "create");
+  assert.match(String(health.last_run?.error), /does not exist/);
+  assert.match(health.hint ?? "", /not clean/);
 });
 
 await check("a_store_rebuilt_from_the_mirror_restores_files_even_for_pruned_checkpoints", async () => {

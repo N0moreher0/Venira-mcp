@@ -13,6 +13,7 @@ import { secretsHealth } from "../lib/secrets.js";
 import { resolveSecurityProfile, securityProfileIsExplicit } from "../lib/security-profile.js";
 import { SESSION_ID } from "../lib/session.js";
 import { snapshotHealth } from "../lib/snapshots.js";
+import { mirrorHealth } from "../lib/snapshot-mirror.js";
 import { traceSnapshot } from "../lib/tracer.js";
 import type { HostSnapshot } from "../lib/types.js";
 import { VERSION } from "../lib/version.js";
@@ -137,8 +138,12 @@ export async function runHealth(args: Args, deps: HealthDeps): Promise<ToolResul
       caches: deps.caches(),
       shells: { ...deps.shells(), policy: shellPolicySnapshot() },
       ...approvalsHealth(deps.shellElicit),
-      // Checkpoints: manifest-level only (no blob walk, so health stays fast).
-      snapshots: await snapshotHealth().catch(() => ({ store: "", checkpoints: 0, logical_bytes: 0 })),
+      // Checkpoints: manifest-level only (no blob walk, so health stays fast). `mirror` is the optional
+      // append-only copy: configured flag plus the outcome of the last run in this process.
+      snapshots: {
+        ...(await snapshotHealth().catch(() => ({ store: "", checkpoints: 0, logical_bytes: 0 }))),
+        mirror: mirrorHealth(),
+      },
       // Secrets: counts + encryption only; the store path is reported, never values.
       secrets: secretsHealth(),
       // GitHub/CI: repo detection, api base, auth presence (never the token).

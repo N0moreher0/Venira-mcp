@@ -21,7 +21,10 @@
  *     recreated as a local folder), must not equal/contain/sit inside the local store, and must not sit
  *     inside the workspace (checkpoints would capture it).
  *
- * Not in scope: restore-from-mirror automation, mirror-side retention, health reporting.
+ * Health: `mirrorHealth()` reports whether a mirror is configured and the outcome of the last run in this process
+ * (after `snapshot_create` or `action=mirror`); `project_health` surfaces it under `snapshots.mirror`.
+ *
+ * Not in scope: restore-from-mirror automation, mirror-side retention.
  */
 import { promises as fs, realpathSync } from "node:fs";
 import path from "node:path";
@@ -57,6 +60,68 @@ export type MirrorResult = {
   elapsed_ms: number;
   error?: string;
 };
+
+/** Outcome of the most recent mirror run in this process, as `project_health` reports it. */
+export type MirrorLastRun = {
+  at: string;
+  source: "create" | "manual";
+  status: MirrorResult["status"];
+  copied_blobs: number;
+  copied_indexes: number;
+  bytes: number;
+  elapsed_ms: number;
+  timed_out?: boolean;
+  failed_count?: number;
+  error?: string;
+};
+
+export type MirrorHealth =
+  | { configured: false }
+  | { configured: true; dir: string | null; state: "never_run" | MirrorResult["status"]; last_run: MirrorLastRun | null; hint?: string };
+
+let lastRun: MirrorLastRun | undefined;
+
+function recordMirrorRun(source: MirrorLastRun["source"], result: MirrorResult): void {
+  lastRun = {
+    at: new Date().toISOString(),
+    source,
+    status: result.status,
+    copied_blobs: result.copied_blobs,
+    copied_indexes: result.copied_indexes,
+    bytes: result.bytes,
+    elapsed_ms: result.elapsed_ms,
+    ...(result.timed_out ? { timed_out: true } : {}),
+    ...(result.failed_count ? { failed_count: result.failed_count } : {}),
+    ...(result.error ? { error: result.error } : {}),
+  };
+}
+
+/** Test hook: forget the recorded run. */
+export function resetMirrorHealthForTests(): void {
+  lastRun = undefined;
+}
+
+/**
+ * Mirror state for `project_health`: no I/O and never throws, so health stays fast. A malformed
+ * `VENIRA_SNAPSHOT_MIRROR_DIR` still reads as configured (dir null) with the error of the last run.
+ */
+export function mirrorHealth(): MirrorHealth {
+  if (!snapshotMirrorConfigured()) return { configured: false };
+  let dir: string | null = null;
+  try {
+    dir = snapshotMirrorRootDir();
+  } catch {
+    dir = null;
+  }
+  const state = lastRun ? lastRun.status : "never_run";
+  const hint =
+    state === "never_run"
+      ? "No mirror run in this session yet: it syncs after the next snapshot_create, or run project_snapshot action=mirror."
+      : state === "ok"
+        ? undefined
+        : "Last mirror run was not clean: run project_snapshot action=mirror (it resumes) and read failed[] / error.";
+  return { configured: true, dir, state, last_run: lastRun ?? null, ...(hint ? { hint } : {}) };
+}
 
 /** True when a mirror is configured (a malformed value counts: it must surface as an error, not be ignored). */
 export function snapshotMirrorConfigured(): boolean {
@@ -376,10 +441,11 @@ export async function syncSnapshotMirror(
 export async function runMirrorAfterCreate(root: string): Promise<MirrorResult | undefined> {
   if (!snapshotMirrorConfigured()) return undefined;
   const started = Date.now();
+  let result: MirrorResult;
   try {
-    return await syncSnapshotMirror(root, { verify: false, timeoutMs: mirrorTimeoutMs(MIRROR_AUTO_TIMEOUT_MS) });
+    result = await syncSnapshotMirror(root, { verify: false, timeoutMs: mirrorTimeoutMs(MIRROR_AUTO_TIMEOUT_MS) });
   } catch (error) {
-    return {
+    result = {
       status: "error",
       copied_blobs: 0,
       copied_indexes: 0,
@@ -388,14 +454,32 @@ export async function runMirrorAfterCreate(root: string): Promise<MirrorResult |
       error: (error instanceof Error ? error.message : String(error)).slice(0, 400),
     };
   }
+  recordMirrorRun("create", result);
+  return result;
 }
 
 /** `project_snapshot action=mirror`: the same sync on demand; configuration problems are errors, not results. */
 export async function opSnapshotMirror(args: Record<string, unknown>, root: string): Promise<RustResponse> {
-  const data = await syncSnapshotMirror(root, {
-    verify: args.verify === true,
-    timeoutMs: mirrorTimeoutMs(MIRROR_MANUAL_TIMEOUT_MS),
-  });
+  const started = Date.now();
+  let data: MirrorResult;
+  try {
+    data = await syncSnapshotMirror(root, {
+      verify: args.verify === true,
+      timeoutMs: mirrorTimeoutMs(MIRROR_MANUAL_TIMEOUT_MS),
+    });
+  } catch (error) {
+    // Still an error to the caller, but health must also show that the last manual run failed.
+    recordMirrorRun("manual", {
+      status: "error",
+      copied_blobs: 0,
+      copied_indexes: 0,
+      bytes: 0,
+      elapsed_ms: Date.now() - started,
+      error: (error instanceof Error ? error.message : String(error)).slice(0, 400),
+    });
+    throw error;
+  }
+  recordMirrorRun("manual", data);
   const hint =
     data.timed_out || data.status === "partial"
       ? "Mirror is incomplete. Run action=mirror again: it resumes and only copies what is still missing (failed[] lists per-file reasons)."
