@@ -266,7 +266,11 @@ try {
 
   // Dev tools on the routine path: write flags and config/output paths that leave the
   // workspace (or are not provably plain paths) must ask in balanced; ordinary runs stay allowed.
-  const DEV_TOOL_ASK_CASES: Array<{ id: string; command: string }> = [
+  // Each case runs under an explicit dialect (never the host default), so the result is the same on
+  // Linux, macOS and Windows runners. `shells` narrows a case whose spelling only means something in
+  // one family: `..\x` is a parent escape for cmd/PowerShell, but bash reads `\x` as an escape.
+  const DEV_TOOL_SHELLS = ["bash", "powershell"];
+  const DEV_TOOL_ASK_CASES: Array<{ id: string; command: string; shells?: string[] }> = [
     { id: "eslint_fix", command: "eslint --fix src" },
     { id: "eslint_fix_type", command: "eslint --fix-type problem ." },
     { id: "eslint_config_absolute", command: "eslint -c /tmp/evil.js ." },
@@ -280,17 +284,19 @@ try {
     { id: "prettier_config_home", command: "prettier --config ~/.prettierrc ." },
     { id: "jest_config_absolute", command: "jest --config /etc/evil.config.js" },
     { id: "jest_config_dotdot_equals", command: "jest --config=../other/jest.config.js" },
-    { id: "jest_config_short_windows", command: "jest -c ..\\evil.js" },
+    { id: "jest_config_short_windows", command: "jest -c ..\\evil.js", shells: ["powershell", "cmd"] },
     { id: "jest_config_inline_json", command: `jest --config '{"setupFiles":["/tmp/x.js"]}'` },
     { id: "jest_config_missing_value", command: "jest --config" },
     { id: "jest_rootdir_escape", command: "jest --rootDir ../sibling" },
     { id: "vitest_config_dotdot", command: "vitest --config ../x.ts" },
     { id: "vitest_root_absolute", command: "vitest --root /tmp/other" },
   ];
-  for (const { id, command } of DEV_TOOL_ASK_CASES) {
+  for (const { id, command, shells } of DEV_TOOL_ASK_CASES) {
     check(`policy_adv_dev_tool_${id}_asks`, () => {
-      const decision = evaluate(command, "balanced");
-      assert.equal(decision.tier, "ask", `${command}: ${JSON.stringify(decision)}`);
+      for (const shell of shells ?? DEV_TOOL_SHELLS) {
+        const decision = policy.evaluateShellCommand(command, workspaceDir, { shell, mode: "balanced" });
+        assert.equal(decision.tier, "ask", `${shell}: ${command}: ${JSON.stringify(decision)}`);
+      }
     });
   }
   check("policy_adv_dev_tool_plain_runs_stay_allowed", () => {
@@ -307,8 +313,10 @@ try {
       "vitest run",
       "vitest --config vitest.config.ts",
     ]) {
-      const decision = evaluate(command, "balanced");
-      assert.equal(decision.tier, "allow", `${command}: ${JSON.stringify(decision)}`);
+      for (const shell of DEV_TOOL_SHELLS) {
+        const decision = policy.evaluateShellCommand(command, workspaceDir, { shell, mode: "balanced" });
+        assert.equal(decision.tier, "allow", `${shell}: ${command}: ${JSON.stringify(decision)}`);
+      }
     }
   });
 
