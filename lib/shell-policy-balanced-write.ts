@@ -213,9 +213,9 @@ export function writeSegmentOk(segment: Segment, _parsed: ParsedCommand, cwd: st
     case "touch":
       return allTargets(operandsOf(args, (arg) => arg === "-c"), 1, cwd);
     case "cp":
-      return allTargets(operandsOf(args, (arg) => /^-[rRpvnf]+$/.test(arg)), 2, cwd);
+      return allTargets(operandsOf(args, (arg) => /^-(?:[rRpvnf]+|recurse|force)$/i.test(arg)), 2, cwd);
     case "mv":
-      return allTargets(operandsOf(args, (arg) => /^-[vnf]+$/.test(arg)), 2, cwd);
+      return allTargets(operandsOf(args, (arg) => /^-(?:[vnf]+|force)$/i.test(arg)), 2, cwd);
     case "copy":
     case "move":
       return allTargets(operandsOf(args, (arg) => /^\/(?:-?y|v)$/i.test(arg)), 2, cwd);

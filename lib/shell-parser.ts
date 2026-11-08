@@ -1,7 +1,8 @@
 import { PLATFORM } from "./workspace.js";
 import { resolveShellDialect, type ShellDialect } from "./shell-dialect.js";
 import { tokenize, type Token } from "./shell-tokenizer.js";
-import { normalizePowerShellDeleteParameters, splitColonParameters } from "./shell-powershell-params.js";
+import { normalizePowerShellParameters } from "./shell-powershell-params.js";
+import { normalizeCmdSwitchArgv } from "./shell-cmd-switches.js";
 
 export type Segment = {
   raw: string;
@@ -198,79 +199,22 @@ export function parseShellCommand(raw: string, options?: { shell?: string }): Pa
   };
 }
 
-/** PowerShell `-Name:value` is the same parameter as `-Name value`; expose the operand to the policy rules. */
+/** PowerShell `-Name:value` / `-Rec` are the same parameters as `-Name value` / `-Recurse`; expose the operand. */
 function splitPowerShellSegment(segment: Segment): Segment {
-  const colonSplit = splitColonParameters(segment.argv, segment.command);
-  const argv = normalizePowerShellDeleteParameters(colonSplit, segment.command);
+  const argv = normalizePowerShellParameters(segment.argv, segment.command);
   if (argv === segment.argv) return segment;
   return makeSegment(argv, segment.raw);
-}
-
-/**
- * cmd.exe built-ins and Windows command-line tools accept switches glued to the command name
- * (`rd/s/q`, `xcopy/e/h`, `move/y`, `attrib/s`) and, for the delete built-ins, to each other
- * (`del /f/s/q`). Policy rules read argv entries, so normalize those spellings into the canonical
- * `del /f /s /q` / `xcopy /e /h` form.
- */
-const CMD_SWITCH_COMMANDS = new Set([
-  "del",
-  "erase",
-  "rd",
-  "rmdir",
-  "move",
-  "copy",
-  "xcopy",
-  "robocopy",
-  "mklink",
-  "attrib",
-  "replace",
-  "ren",
-  "rename",
-]);
-/** Delete built-ins also accept clustered switches as their own token (`/f/s/q`, not only glued to the command). */
-const CMD_DELETE_COMMANDS = new Set(["del", "erase", "rd", "rmdir"]);
-const CMD_DELETE_SWITCHES = new Set(["f", "s", "q", "p"]);
-
-function cmdBaseName(token: string): string {
-  const base = token.split(/[\\/]/).pop() ?? token;
-  return base.replace(/\.(exe|cmd|bat|ps1)$/i, "").toLowerCase();
-}
-
-/** Split a clustered delete switch (`/f/s/q`, `/fsq`) into plain `/f /s /q`; leave paths untouched. */
-function splitCmdDeleteSwitches(token: string): string[] | null {
-  if (!token.startsWith("/") || token.length < 3) return null;
-  // `/tmp/x` and `/a:r` are paths/attribute switches, not clusters: every part must be a single known letter.
-  const parts = token.slice(1).split("/");
-  if (parts.length < 2) return null;
-  if (!parts.every((part) => part.length === 1 && CMD_DELETE_SWITCHES.has(part.toLowerCase()))) return null;
-  return parts.map((part) => `/${part.toLowerCase()}`);
-}
-
-/** Canonical argv for the cmd tools that take `/switch` arguments (command-name glue plus delete clusters). */
-function normalizeCmdSwitchArgv(argv: string[]): string[] {
-  if (argv.length === 0) return argv;
-  let head = argv[0];
-  let rest = argv.slice(1);
-  const glued = /^([A-Za-z]+)((?:\/[A-Za-z]+)+)$/.exec(head);
-  if (glued && CMD_SWITCH_COMMANDS.has(glued[1].toLowerCase())) {
-    head = glued[1];
-    rest = [...glued[2].slice(1).split("/").map((flag) => `/${flag.toLowerCase()}`), ...rest];
-  }
-  const deleteFamily = CMD_DELETE_COMMANDS.has(cmdBaseName(head));
-  const out: string[] = [head];
-  for (const arg of rest) {
-    const split = deleteFamily ? splitCmdDeleteSwitches(arg) : null;
-    if (split) out.push(...split);
-    else out.push(arg);
-  }
-  const changed = out.length !== argv.length || out.some((value, index) => value !== argv[index]);
-  return changed ? out : argv;
 }
 
 function normalizeCmdSegment(segment: Segment): Segment {
   const argv = normalizeCmdSwitchArgv(segment.argv);
   if (argv === segment.argv) return segment;
   return makeSegment(argv, argv.join(" "));
+}
+
+function cmdBaseName(token: string): string {
+  const base = token.split(/[\\/]/).pop() ?? token;
+  return base.replace(/\.(exe|cmd|bat|ps1)$/i, "").toLowerCase();
 }
 
 /**

@@ -33,6 +33,13 @@ const policy = (await import(
   pathToFileURL(path.join(repoRoot, "lib", "shell-policy.ts")).href
 )) as typeof import("../lib/shell-policy.js");
 
+const parser = (await import(
+  pathToFileURL(path.join(repoRoot, "lib", "shell-parser.ts")).href
+)) as typeof import("../lib/shell-parser.js");
+
+const argvOf = (command: string, shell: string): string[] =>
+  parser.parseShellCommand(command, { shell }).segments[0]?.argv ?? [];
+
 const evaluate = (command: string, mode: "balanced" | "permissive") =>
   policy.evaluateShellCommand(command, workspaceDir, { mode });
 
@@ -334,6 +341,63 @@ try {
     assert.equal(ps("Remove-Item -Rec -Fo ./dist", "balanced").rule, "ask.destructive_delete");
     // Ambiguous prefixes are rejected by PowerShell itself and stay unclassified (approval required).
     assert.equal(ps("Remove-Item -F ./probe-missing.txt", "balanced").tier, "ask");
+  });
+
+  check("policy_adv_dialect_cmd_attached_switch_values", () => {
+    const cmd = (command: string, mode: "balanced" | "permissive") =>
+      policy.evaluateShellCommand(command, workspaceDir, { shell: "cmd", mode });
+    // `xcopy /exclude:file` and `robocopy /log:file` attach a path to the switch; the path must stay visible.
+    assert.deepEqual(argvOf("robocopy src dst /log:../outside.log", "cmd"), ["robocopy", "src", "dst", "/log", "../outside.log"]);
+    assert.deepEqual(argvOf("robocopy src dst /log:C:/outside.log", "cmd"), ["robocopy", "src", "dst", "/log", "C:/outside.log"]);
+    assert.equal(cmd("robocopy src dst /log:../outside.log", "balanced").rule, "ask.writes_outside_workspace");
+    assert.equal(cmd("robocopy src dst /log:C:/outside.log", "balanced").rule, "ask.writes_outside_workspace");
+    // The value is a protected file: previously hidden inside the switch token, now hard-denied.
+    assert.equal(cmd("robocopy src dst /log:.env", "balanced").rule, "deny.protected_file_access");
+    assert.equal(cmd("xcopy a b /exclude:.env", "balanced").rule, "deny.protected_file_access");
+    // Clusters with an attached value keep splitting into the canonical `/switch value` entries.
+    assert.deepEqual(argvOf("del /a:r/f/q C:\\Windows\\*", "cmd"), ["del", "/a", "r", "/f", "/q", "C:\\Windows\\*"]);
+    assert.equal(cmd("del /a:r/f/q C:\\Windows\\*", "balanced").rule, "deny.windows_file_delete_wrong_targets");
+    assert.deepEqual(argvOf("rd /s/q/ C:\\Windows", "cmd"), ["rd", "/s", "/q", "C:\\Windows"]);
+    assert.deepEqual(argvOf("xcopy a b /e/h/y", "cmd"), ["xcopy", "a", "b", "/e", "/h", "/y"]);
+    assert.deepEqual(argvOf("attrib /a:r .env", "cmd"), ["attrib", "/a", "r", ".env"]);
+    assert.equal(cmd("attrib /a:r .env", "balanced").rule, "deny.protected_file_access");
+    // Unknown spellings are left exactly as written: no invented operands and no missed switches.
+    for (const command of ["del /a:r/zz C:\\x", "copy /y a.txt b.txt", "robocopy src dst /e/h"]) {
+      const argv = argvOf(command, "cmd");
+      assert.equal(argv[argv.length - 1], command.split(" ").pop(), `${command}: ${JSON.stringify(argv)}`);
+    }
+  });
+
+  check("policy_adv_dialect_powershell_generic_parameter_model", () => {
+    const ps = (command: string, mode: "balanced" | "permissive") =>
+      policy.evaluateShellCommand(command, workspaceDir, { shell: "powershell", mode });
+    // Every cmdlet gets colon splitting and switch-value reduction, even when no parameter table exists.
+    assert.deepEqual(argvOf("Get-Frobnitz -Pa:.env", "powershell"), ["Get-Frobnitz", "-Pa", ".env"]);
+    assert.equal(ps("Get-Frobnitz -Pa:.env", "balanced").rule, "deny.protected_file_access");
+    // Abbreviations resolve per cmdlet: unique prefixes become canonical, ambiguous ones stay untouched.
+    assert.deepEqual(argvOf("Get-Content -Lit .env", "powershell"), ["Get-Content", "-LiteralPath", ".env"]);
+    assert.equal(ps("Get-Content -Lit .env", "balanced").rule, "deny.protected_file_access");
+    assert.deepEqual(argvOf("Set-Content -Pa package.json -Value x", "powershell"), ["Set-Content", "-Pa", "package.json", "-Value", "x"]);
+    assert.deepEqual(argvOf("Set-Content -Lit:notes.txt -Value x", "powershell"), ["Set-Content", "-LiteralPath", "notes.txt", "-Value", "x"]);
+    assert.deepEqual(argvOf("Copy-Item -Rec -Fo src dst", "powershell"), ["Copy-Item", "-Recurse", "-Force", "src", "dst"]);
+    assert.deepEqual(argvOf("cp -r src backup", "powershell"), ["cp", "-Recurse", "src", "backup"]);
+    // The suite's data dir sits above the workspace, which makes every path protected. Pin a sibling
+    // data dir for the allow assertions so they test the write tier, not the protected-path guard.
+    const previousDataDir = process.env.VENIRA_DATA_DIR;
+    process.env.VENIRA_DATA_DIR = path.join(tempDir, "write-data");
+    try {
+      assert.equal(ps("Set-Content -Lit:notes.txt -Value x", "balanced").tier, "allow");
+      assert.equal(ps("Copy-Item -Rec -Fo src dst", "balanced").tier, "allow");
+      // `-r` on the `cp` alias means Copy-Item -Recurse; the write tier accepts the canonical spelling.
+      assert.equal(ps("cp -r src backup", "balanced").tier, "allow");
+    } finally {
+      if (previousDataDir === undefined) delete process.env.VENIRA_DATA_DIR;
+      else process.env.VENIRA_DATA_DIR = previousDataDir;
+    }
+    // Switch values reduce to the bare switch, which can only make the policy stricter.
+    assert.deepEqual(argvOf("Remove-Item -Recurse:$false -Force:$true ./dist", "powershell"), ["Remove-Item", "-Recurse", "-Force", "./dist"]);
+    // External programs keep their own parameter conventions.
+    assert.deepEqual(argvOf("dotnet build -p:Configuration=Release", "powershell"), ["dotnet", "build", "-p:Configuration=Release"]);
   });
 
   check("policy_adv_snapshot_store_is_protected", () => {

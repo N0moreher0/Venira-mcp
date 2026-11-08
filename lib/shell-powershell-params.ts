@@ -1,125 +1,232 @@
 /**
- * Shell policy — PowerShell parameter model (colon form).
+ * Shell policy — PowerShell parameter model.
  *
- * PowerShell accepts `-Name:value` as well as `-Name value` for every cmdlet parameter, so
- * `Get-Content -Path:.env` reads the same file as `Get-Content -Path .env`. The policy rules look at
- * separate argv entries, so the glued spelling used to hide the operand from protected-file,
- * root-delete and workspace-boundary checks. This module splits the glued form at parse time.
+ * PowerShell cmdlets accept parameters in several equivalent spellings the policy must normalize
+ * before rule matching:
  *
- * Scope is deliberately narrow: only cmdlets (verb-noun names) and a short list of well-known aliases
- * are split. External programs keep their own conventions (`dotnet build -p:Configuration=Release`,
- * `msbuild /p:X=1`, `git -c:x`) and are left untouched.
+ *   - colon form:      `Get-Content -Path:.env`     == `Get-Content -Path .env`
+ *   - abbreviations:   `Remove-Item -Rec -Fo`       == `Remove-Item -Recurse -Force`
+ *   - switch values:   `Remove-Item -Recurse:$true` == `Remove-Item -Recurse`
  *
- * Switch values (`-Force:$true`, `-Recurse:$false`) are reduced to the bare switch. Treating
- * `-Recurse:$false` as `-Recurse` only ever makes the policy stricter, never looser.
+ * Every cmdlet (verb-noun) and known alias is handled. Abbreviations are resolved per cmdlet against
+ * that cmdlet's parameter set plus the common parameters: an exact name wins, otherwise the prefix
+ * must match exactly one parameter. Ambiguous prefixes (`Set-Content -Pa` = `-Path`/`-PassThru`,
+ * `Get-ChildItem -Re` = `-Recurse`/`-ReadOnly`) are left untouched, mirroring PowerShell itself,
+ * which rejects them.
  *
- * Delete cmdlets also accept unambiguous parameter prefixes (`-Rec` for `-Recurse`); those are
- * expanded here as well, because the destructive-delete rules match the full parameter names.
+ * Unknown cmdlets still get colon splitting and switch-value reduction (grammar that is uniform
+ * across all cmdlets); abbreviation resolution for them only considers the common parameters.
+ * External programs (`dotnet build -p:Configuration=Release`, `git -c:x`) keep their own
+ * conventions and are never touched.
  */
 
-/**
- * PowerShell accepts any unambiguous parameter prefix (`-Rec` for `-Recurse`, `-Fo` for `-Force`).
- * The policy rules look for the full names, so resolve prefixes for the delete cmdlets before
- * evaluation. Ambiguous prefixes (`-F` = `-Force`/`-Filter`, `-In` = `-Include`/`-Information*`) are
- * left untouched: PowerShell itself rejects them.
- */
-const REMOVE_ITEM_PARAMETERS = [
-  "Path",
-  "LiteralPath",
-  "Filter",
-  "Include",
-  "Exclude",
-  "Recurse",
-  "Force",
-  "WhatIf",
-  "Confirm",
-  "Credential",
+const COMMON_PARAMETERS = [
   "Verbose",
   "Debug",
   "ErrorAction",
-  "WarningAction",
-  "InformationAction",
   "ErrorVariable",
+  "WarningAction",
   "WarningVariable",
+  "InformationAction",
   "InformationVariable",
   "OutVariable",
   "OutBuffer",
   "PipelineVariable",
-  "Stream",
-  "Attributes",
-];
+  "WhatIf",
+  "Confirm",
+] as const;
 
-/** Aliases that resolve to Remove-Item in PowerShell (`rm`, `ri`, `del`, `erase`, `rd`, `rmdir`). */
-const DELETE_CMDLETS = new Set(["remove-item", "ri", "rm", "del", "erase", "rd", "rmdir"]);
+/** Parameter sets for the cmdlets the policy reasons about (paths, writes, deletes, elevation). */
+const CMDLET_PARAMETERS: ReadonlyMap<string, readonly string[]> = new Map<string, readonly string[]>([
+  [
+    "remove-item",
+    [
+      "Path", "LiteralPath", "Filter", "Include", "Exclude", "Recurse", "Force", "Credential",
+      "Stream", "Attributes",
+    ],
+  ],
+  [
+    "get-content",
+    [
+      "Path", "LiteralPath", "ReadCount", "TotalCount", "Tail", "Head", "First", "Last", "Skip",
+      "Encoding", "Delimiter", "Wait", "Raw", "AsByteStream", "Stream", "Force", "Credential",
+      "Filter", "Include", "Exclude",
+    ],
+  ],
+  [
+    "set-content",
+    [
+      "Path", "LiteralPath", "Value", "PassThru", "Filter", "Include", "Exclude", "Force",
+      "NoNewline", "Encoding", "Stream", "AsByteStream",
+    ],
+  ],
+  [
+    "add-content",
+    [
+      "Path", "LiteralPath", "Value", "PassThru", "Filter", "Include", "Exclude", "Force",
+      "NoNewline", "Encoding", "Stream", "AsByteStream",
+    ],
+  ],
+  [
+    "out-file",
+    [
+      "FilePath", "LiteralPath", "Encoding", "Width", "InputObject", "Append", "Force",
+      "NoClobber", "NoNewline", "PassThru",
+    ],
+  ],
+  [
+    "copy-item",
+    [
+      "Path", "LiteralPath", "Destination", "Container", "Force", "Filter", "Include", "Exclude",
+      "Recurse", "PassThru", "Credential", "FromSession", "ToSession",
+    ],
+  ],
+  [
+    "move-item",
+    [
+      "Path", "LiteralPath", "Destination", "Force", "Filter", "Include", "Exclude", "PassThru",
+      "Credential",
+    ],
+  ],
+  ["new-item", ["Path", "Name", "ItemType", "Value", "Force", "Credential"]],
+  ["rename-item", ["Path", "LiteralPath", "NewName", "Force", "PassThru", "Credential"]],
+  ["clear-content", ["Path", "LiteralPath", "Force", "Filter", "Include", "Exclude", "Stream", "Credential"]],
+  [
+    "get-childitem",
+    [
+      "Path", "LiteralPath", "Filter", "Include", "Exclude", "Recurse", "Depth", "Force", "Name",
+      "File", "Directory", "Hidden", "ReadOnly", "System", "Attributes", "FollowSymlink",
+      "Credential",
+    ],
+  ],
+  [
+    "select-string",
+    [
+      "Pattern", "Path", "LiteralPath", "InputObject", "SimpleMatch", "CaseSensitive", "Context",
+      "AllMatches", "NotMatch", "Encoding", "Raw", "List", "Quiet", "Include", "Exclude",
+    ],
+  ],
+  [
+    "start-process",
+    [
+      "FilePath", "ArgumentList", "Credential", "WorkingDirectory", "Verb", "WindowStyle", "Wait",
+      "PassThru", "RedirectStandardError", "RedirectStandardInput", "RedirectStandardOutput",
+      "LoadUserProfile", "NoNewWindow", "UseNewEnvironment", "Environment",
+    ],
+  ],
+  [
+    "invoke-webrequest",
+    [
+      "Uri", "Method", "Body", "Headers", "OutFile", "InFile", "Credential", "UseBasicParsing",
+      "UserAgent", "WebSession", "TimeoutSec", "Proxy", "MaximumRedirection",
+    ],
+  ],
+  ["tee-object", ["FilePath", "LiteralPath", "InputObject", "Append", "Variable"]],
+  ["select-object", ["Property", "InputObject", "First", "Last", "Skip", "Unique", "ExpandProperty", "ExcludeProperty", "Index", "Wait"]],
+]);
 
-function resolveParameterPrefix(name: string): string | null {
+/** Aliases (and legacy cmd names) that PowerShell resolves to a cmdlet. */
+const ALIAS_CMDLETS: ReadonlyMap<string, string> = new Map<string, string>([
+  ["rm", "remove-item"],
+  ["ri", "remove-item"],
+  ["del", "remove-item"],
+  ["erase", "remove-item"],
+  ["rd", "remove-item"],
+  ["rmdir", "remove-item"],
+  ["cat", "get-content"],
+  ["gc", "get-content"],
+  ["type", "get-content"],
+  ["sc", "set-content"],
+  ["ac", "add-content"],
+  ["clc", "clear-content"],
+  ["cp", "copy-item"],
+  ["cpi", "copy-item"],
+  ["copy", "copy-item"],
+  ["mv", "move-item"],
+  ["mi", "move-item"],
+  ["move", "move-item"],
+  ["ren", "rename-item"],
+  ["rni", "rename-item"],
+  ["ls", "get-childitem"],
+  ["dir", "get-childitem"],
+  ["gci", "get-childitem"],
+  ["gi", "get-item"],
+  ["gp", "get-itemproperty"],
+  ["gl", "get-location"],
+  ["sl", "set-location"],
+  ["cd", "set-location"],
+  ["chdir", "set-location"],
+  ["ni", "new-item"],
+  ["mkdir", "new-item"],
+  ["md", "new-item"],
+  ["ii", "invoke-item"],
+  ["sls", "select-string"],
+  ["select", "select-object"],
+  ["tee", "tee-object"],
+  ["iex", "invoke-expression"],
+  ["saps", "start-process"],
+  ["start", "start-process"],
+  ["sasv", "start-service"],
+]);
+
+const VERB_NOUN = /^[A-Za-z]+-[A-Za-z][A-Za-z0-9]*$/;
+const PARAMETER = /^-([A-Za-z][A-Za-z0-9]*)(?::([\s\S]*))?$/;
+const SWITCH_VALUE = /^\$(?:true|false)$/i;
+
+/** Canonical cmdlet name, or null when the first word is not a cmdlet/alias. */
+export function resolvePowerShellCmdlet(command: string): string | null {
+  if (VERB_NOUN.test(command)) return command.toLowerCase();
+  return ALIAS_CMDLETS.get(command.toLowerCase()) ?? null;
+}
+
+/** True when `command` (the first word, already stripped of path/extension) is a PowerShell cmdlet or alias. */
+export function isPowerShellCmdlet(command: string): boolean {
+  return resolvePowerShellCmdlet(command) !== null;
+}
+
+function parameterCandidates(cmdlet: string): readonly string[] {
+  const specific = CMDLET_PARAMETERS.get(cmdlet);
+  return specific ? [...specific, ...COMMON_PARAMETERS] : COMMON_PARAMETERS;
+}
+
+/**
+ * Resolve `name` to a canonical parameter for `cmdlet`: exact match first, then a unique prefix.
+ * Returns null when the name is unknown or ambiguous (PowerShell rejects both).
+ */
+function resolveParameterPrefix(cmdlet: string, name: string): string | null {
   const lower = name.toLowerCase();
-  const exact = REMOVE_ITEM_PARAMETERS.find((param) => param.toLowerCase() === lower);
+  const candidates = parameterCandidates(cmdlet);
+  const exact = candidates.find((param) => param.toLowerCase() === lower);
   if (exact) return exact;
-  const matches = REMOVE_ITEM_PARAMETERS.filter((param) => param.toLowerCase().startsWith(lower));
+  const matches = candidates.filter((param) => param.toLowerCase().startsWith(lower));
   return matches.length === 1 ? matches[0] : null;
 }
 
 /**
- * Expand unambiguous parameter abbreviations on delete cmdlets (`-Rec` → `-Recurse`, `-Fo` → `-Force`).
- * Returns the same array when nothing changed.
+ * Normalize a PowerShell segment's argv into canonical parameters and separate operands.
+ * Returns the same array when nothing changed so callers can cheaply skip rebuilding the segment.
  */
-export function normalizePowerShellDeleteParameters(argv: string[], command: string): string[] {
-  if (argv.length < 2 || !DELETE_CMDLETS.has(command.toLowerCase())) return argv;
-  let changed = false;
-  const out: string[] = [argv[0]];
-  for (const arg of argv.slice(1)) {
-    const match = /^-([A-Za-z][A-Za-z0-9]*)$/.exec(arg);
-    const resolved = match ? resolveParameterPrefix(match[1]) : null;
-    if (!resolved) {
-      out.push(arg);
-      continue;
-    }
-    const canonical = `-${resolved}`;
-    if (canonical !== arg) changed = true;
-    out.push(canonical);
-  }
-  return changed ? out : argv;
-}
-
-/** Aliases (and legacy cmd names) that PowerShell resolves to cmdlets taking `-Name:value`. */
-const POWERSHELL_ALIASES = new Set([
-  "rm", "ri", "del", "erase", "rd", "rmdir",
-  "cat", "gc", "type", "sc", "ac", "clc",
-  "cp", "cpi", "copy", "mv", "mi", "move", "ren", "rni",
-  "ls", "dir", "gci", "gi", "gp", "gl", "sl", "cd", "chdir",
-  "ni", "mkdir", "md", "ii", "sls", "select", "tee",
-  "iex", "saps", "start", "sasv",
-]);
-
-const VERB_NOUN = /^[A-Za-z]+-[A-Za-z][A-Za-z0-9]*$/;
-const COLON_PARAM = /^-([A-Za-z][A-Za-z0-9]*):([\s\S]*)$/;
-const SWITCH_VALUE = /^\$(?:true|false)$/i;
-
-/** True when `command` (the first word, already stripped of path/extension) is a PowerShell cmdlet or alias. */
-export function isPowerShellCmdlet(command: string): boolean {
-  return VERB_NOUN.test(command) || POWERSHELL_ALIASES.has(command.toLowerCase());
-}
-
-/**
- * Split `-Name:value` into `-Name`, `value` for cmdlet segments. Returns the same array when nothing
- * changed so callers can cheaply skip rebuilding the segment.
- */
-export function splitColonParameters(argv: string[], command: string): string[] {
-  if (argv.length < 2 || !isPowerShellCmdlet(command)) return argv;
+export function normalizePowerShellParameters(argv: string[], command: string): string[] {
+  if (argv.length < 2) return argv;
+  const cmdlet = resolvePowerShellCmdlet(command);
+  if (!cmdlet) return argv;
   let changed = false;
   const out: string[] = [argv[0]];
   for (let i = 1; i < argv.length; i += 1) {
-    const arg = argv[i];
-    const match = COLON_PARAM.exec(arg);
+    const match = PARAMETER.exec(argv[i]);
     if (!match) {
-      out.push(arg);
+      out.push(argv[i]);
       continue;
     }
-    changed = true;
-    out.push(`-${match[1]}`);
-    const value = match[2];
-    if (value.length > 0 && !SWITCH_VALUE.test(value)) out.push(value);
+    const name = match[1];
+    const colonValue = match[2];
+    const canonical = resolveParameterPrefix(cmdlet, name);
+    const resolved = canonical ?? name;
+    if (resolved !== name || colonValue !== undefined) changed = true;
+    out.push(`-${resolved}`);
+    if (colonValue !== undefined && colonValue.length > 0 && !SWITCH_VALUE.test(colonValue)) {
+      out.push(colonValue);
+    }
   }
   return changed ? out : argv;
 }

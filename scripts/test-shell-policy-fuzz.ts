@@ -51,7 +51,10 @@ const SEEDS: Seed[] = [
   // hard deny — protected files
   { id: "env_posix", shell: "posix", kind: "deny", command: "cat .env" },
   { id: "env_powershell", shell: "powershell", kind: "deny", command: "Get-Content -Path .env" },
+  { id: "env_powershell_prefix", shell: "powershell", kind: "deny", command: "Get-Content -LiteralPath .env" },
   { id: "env_cmd", shell: "cmd", kind: "deny", command: "type .env" },
+  { id: "env_robocopy_log", shell: "cmd", kind: "deny", command: "robocopy src dst /log .env" },
+  { id: "env_xcopy_exclude", shell: "cmd", kind: "deny", command: "xcopy a b /exclude .env" },
   // hard deny — Windows drive/home deletion
   { id: "drive_root_powershell", shell: "powershell", kind: "deny", command: "Remove-Item -Recurse -Force C:\\" },
   { id: "home_powershell", shell: "powershell", kind: "deny", command: "Remove-Item -Recurse -Force $HOME" },
@@ -77,7 +80,9 @@ const SEEDS: Seed[] = [
   { id: "chmod_file", shell: "posix", kind: "ask", command: "chmod 777 file.txt" },
   { id: "write_manifest", shell: "posix", kind: "ask", command: "echo hi > package.json" },
   { id: "write_manifest_powershell", shell: "powershell", kind: "ask", command: "Set-Content -Path package.json -Value x" },
+  { id: "write_manifest_powershell_prefix", shell: "powershell", kind: "ask", command: "Set-Content -LiteralPath package.json -Value x" },
   { id: "copy_outside", shell: "cmd", kind: "ask", command: "copy a.txt ..\\outside.txt" },
+  { id: "robocopy_log_outside", shell: "cmd", kind: "ask", command: "robocopy src dst /log ../outside.log" },
   // safe — the fuzzer must never turn these into denies
   { id: "git_status", shell: "posix", kind: "safe", command: "git status" },
   { id: "read_readme", shell: "posix", kind: "safe", command: "cat README.md" },
@@ -166,6 +171,54 @@ const TRANSFORMS: Transform[] = [
       // Also glue every following switch onto the first one (`rd /s /q` -> `rd/s/q`).
       while (glue.length > 1 && glue[1].startsWith("/")) glue.splice(0, 2, glue[0] + glue[1]);
       return glue;
+    },
+  },
+  {
+    id: "cmd-cluster-switches",
+    applies: (tokens, shell) => {
+      if (shell !== "cmd" || tokens.length < 3) return false;
+      if (!["del", "erase", "rd", "rmdir"].includes(tokens[0].toLowerCase())) return false;
+      let count = 0;
+      for (let i = 1; i < tokens.length && /^\/(?:f|s|q|p)$/i.test(tokens[i]); i += 1) count += 1;
+      return count >= 2;
+    },
+    apply: (tokens) => {
+      let i = 1;
+      const flags: string[] = [];
+      while (i < tokens.length && /^\/(?:f|s|q|p)$/i.test(tokens[i])) {
+        flags.push(tokens[i]);
+        i += 1;
+      }
+      return [tokens[0], flags.join(""), ...tokens.slice(i)];
+    },
+  },
+  {
+    id: "cmd-attached-value",
+    applies: (tokens, shell) => {
+      if (shell !== "cmd") return false;
+      const command = tokens[0].toLowerCase();
+      if (!["robocopy", "xcopy", "attrib"].includes(command)) return false;
+      return tokens.some((token, index) => {
+        const next = tokens[index + 1];
+        return ["/log", "/exclude", "/a"].includes(token.toLowerCase()) && next !== undefined && !next.startsWith("/");
+      });
+    },
+    apply: (tokens) => {
+      const out: string[] = [];
+      for (let i = 0; i < tokens.length; i += 1) {
+        const next = tokens[i + 1];
+        if (
+          ["/log", "/exclude", "/a"].includes(tokens[i].toLowerCase()) &&
+          next !== undefined &&
+          !next.startsWith("/")
+        ) {
+          out.push(`${tokens[i]}:${next}`);
+          i += 1;
+        } else {
+          out.push(tokens[i]);
+        }
+      }
+      return out;
     },
   },
   {
