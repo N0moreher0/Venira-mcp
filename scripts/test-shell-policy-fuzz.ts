@@ -62,12 +62,29 @@ const SEEDS: Seed[] = [
   { id: "recursive_powershell", shell: "powershell", kind: "ask", command: "Remove-Item -Recurse -Force ./probe-dir" },
   { id: "recursive_rd", shell: "cmd", kind: "ask", command: "rd /s /q ./probe-dir" },
   { id: "forced_del", shell: "cmd", kind: "ask", command: "del /f /q ./probe-file.txt" },
+  // ask — git/provider and package/network actions that leave the workspace or run fetched code
+  { id: "git_push", shell: "posix", kind: "ask", command: "git push origin main" },
+  { id: "git_reset_hard", shell: "posix", kind: "ask", command: "git reset --hard HEAD~1" },
+  { id: "git_clean", shell: "posix", kind: "ask", command: "git clean -fdx" },
+  { id: "npm_publish", shell: "posix", kind: "ask", command: "npm publish" },
+  { id: "curl", shell: "posix", kind: "ask", command: "curl https://example.com" },
+  { id: "find_delete", shell: "posix", kind: "ask", command: "find . -delete" },
+  { id: "docker_run", shell: "posix", kind: "ask", command: "docker run alpine" },
+  { id: "network_powershell", shell: "powershell", kind: "ask", command: "Invoke-WebRequest https://example.com" },
+  // ask — write tiers that must stay gated (build/config files, outside the workspace)
+  { id: "chmod_file", shell: "posix", kind: "ask", command: "chmod 777 file.txt" },
+  { id: "write_manifest", shell: "posix", kind: "ask", command: "echo hi > package.json" },
+  { id: "write_manifest_powershell", shell: "powershell", kind: "ask", command: "Set-Content -Path package.json -Value x" },
+  { id: "copy_outside", shell: "cmd", kind: "ask", command: "copy a.txt ..\\outside.txt" },
+  { id: "delete_home_tree", shell: "powershell", kind: "ask", command: "Remove-Item -Recurse -Force C:\\Users" },
   // safe — the fuzzer must never turn these into denies
   { id: "git_status", shell: "posix", kind: "safe", command: "git status" },
   { id: "read_readme", shell: "posix", kind: "safe", command: "cat README.md" },
   { id: "typecheck", shell: "posix", kind: "safe", command: "tsc --noEmit" },
   { id: "git_status_cmd", shell: "cmd", kind: "safe", command: "git status" },
   { id: "read_readme_powershell", shell: "powershell", kind: "safe", command: "Get-Content README.md" },
+  { id: "dir_cmd", shell: "cmd", kind: "safe", command: "dir" },
+  { id: "list_powershell", shell: "powershell", kind: "safe", command: "Get-ChildItem" },
 ];
 
 /** Commands whose `/switch` glue is accepted by cmd (see lib/shell-parser.ts). */
