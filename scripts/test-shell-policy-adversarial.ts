@@ -265,6 +265,51 @@ try {
     );
   });
 
+  check("policy_adv_dialect_cmd_glued_switches", () => {
+    const cmd = (command: string, mode: "balanced" | "permissive") =>
+      policy.evaluateShellCommand(command, workspaceDir, { shell: "cmd", mode });
+    // cmd accepts `rd/s/q` and `del/f/s/q`: the parser normalizes them before the rules run.
+    const denied: Array<[string, string]> = [
+      ["rd/s/q C:\\Windows", "deny.windows_mass_delete"],
+      ["rd /s/q C:\\Windows", "deny.windows_mass_delete"],
+      ["rmdir/s/q C:\\Users", "deny.windows_mass_delete"],
+      ["cmd /c rd/s/q C:\\Users", "deny.windows_mass_delete"],
+      ["cmd/c rd/s/q C:\\", "deny.windows_mass_delete"],
+    ];
+    for (const [command, rule] of denied) {
+      const balanced = cmd(command, "balanced");
+      assert.equal(balanced.rule, rule, `${command}: ${JSON.stringify(balanced)}`);
+      const permissive = cmd(command, "permissive");
+      assert.equal(permissive.rule, `ask.${rule}`, `${command}: ${JSON.stringify(permissive)}`);
+    }
+    // Workspace-scoped cluster spellings keep asking instead of becoming hard denies.
+    for (const command of ["rd /s/q ./dist", "del/f/q ./probe-missing.txt"]) {
+      const decision = cmd(command, "balanced");
+      assert.equal(decision.tier, "ask", `${command}: ${JSON.stringify(decision)}`);
+    }
+  });
+
+  check("policy_adv_dialect_powershell_parameter_abbreviations", () => {
+    const ps = (command: string, mode: "balanced" | "permissive") =>
+      policy.evaluateShellCommand(command, workspaceDir, { shell: "powershell", mode });
+    const denied: Array<[string, string]> = [
+      ["Remove-Item -Rec -Fo C:\\", "deny.filesystem_root_delete"],
+      ["Remove-Item -Pa:C:\\ -Rec -Fo", "deny.filesystem_root_delete"],
+      ["ri -rec -fo $HOME", "deny.filesystem_root_delete"],
+      ["rm -r -fo C:\\", "deny.root_delete"],
+    ];
+    for (const [command, rule] of denied) {
+      const balanced = ps(command, "balanced");
+      assert.equal(balanced.rule, rule, `${command}: ${JSON.stringify(balanced)}`);
+      const permissive = ps(command, "permissive");
+      assert.equal(permissive.rule, `ask.${rule}`, `${command}: ${JSON.stringify(permissive)}`);
+    }
+    // `-Rec`/`-Fo` are the same parameters as `-Recurse`/`-Force`, so the destructive-delete rule sees them.
+    assert.equal(ps("Remove-Item -Rec -Fo ./dist", "balanced").rule, "ask.destructive_delete");
+    // Ambiguous prefixes are rejected by PowerShell itself and stay unclassified (approval required).
+    assert.equal(ps("Remove-Item -F ./probe-missing.txt", "balanced").tier, "ask");
+  });
+
   check("policy_adv_dialect_protected_across_shells", () => {
     for (const shell of ["bash", "powershell", "cmd"]) {
       const decision = policy.evaluateShellCommand("cat .e[n]v", workspaceDir, { shell, mode: "balanced" });

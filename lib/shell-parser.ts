@@ -1,7 +1,7 @@
 import { PLATFORM } from "./workspace.js";
 import { resolveShellDialect, type ShellDialect } from "./shell-dialect.js";
 import { tokenize, type Token } from "./shell-tokenizer.js";
-import { splitColonParameters } from "./shell-powershell-params.js";
+import { normalizePowerShellDeleteParameters, splitColonParameters } from "./shell-powershell-params.js";
 
 export type Segment = {
   raw: string;
@@ -170,7 +170,7 @@ export function parseShellCommand(raw: string, options?: { shell?: string }): Pa
   const dialect = resolveShellDialect(options?.shell);
   const normalizedSegments =
     dialect === "cmd"
-      ? segments.map((segment) => unwrapCmdSegment(segment))
+      ? segments.map((segment) => normalizeCmdSegment(unwrapCmdSegment(segment)))
       : dialect === "powershell"
         ? segments.map((segment) => splitPowerShellSegment(segment))
         : segments;
@@ -200,9 +200,62 @@ export function parseShellCommand(raw: string, options?: { shell?: string }): Pa
 
 /** PowerShell `-Name:value` is the same parameter as `-Name value`; expose the operand to the policy rules. */
 function splitPowerShellSegment(segment: Segment): Segment {
-  const argv = splitColonParameters(segment.argv, segment.command);
+  const colonSplit = splitColonParameters(segment.argv, segment.command);
+  const argv = normalizePowerShellDeleteParameters(colonSplit, segment.command);
   if (argv === segment.argv) return segment;
   return makeSegment(argv, segment.raw);
+}
+
+/**
+ * cmd.exe built-ins whose switches are accepted glued to the command name and to each other
+ * (`rd/s/q`, `del /f/s/q`). Policy rules read argv entries, so normalize the spellings the shell
+ * accepts into the canonical `del /f /s /q` form.
+ */
+const CMD_DELETE_COMMANDS = new Set(["del", "erase", "rd", "rmdir"]);
+const CMD_DELETE_SWITCHES = new Set(["f", "s", "q", "p"]);
+
+function cmdBaseName(token: string): string {
+  const base = token.split(/[\\/]/).pop() ?? token;
+  return base.replace(/\.(exe|cmd|bat|ps1)$/i, "").toLowerCase();
+}
+
+/** Split a clustered delete switch (`/f/s/q`, `/fsq`) into plain `/f /s /q`; leave paths untouched. */
+function splitCmdDeleteSwitches(token: string): string[] | null {
+  if (!token.startsWith("/") || token.length < 3) return null;
+  // `/tmp/x` and `/a:r` are paths/attribute switches, not clusters: every part must be a single known letter.
+  const parts = token.slice(1).split("/");
+  if (parts.length < 2) return null;
+  if (!parts.every((part) => part.length === 1 && CMD_DELETE_SWITCHES.has(part.toLowerCase()))) return null;
+  return parts.map((part) => `/${part.toLowerCase()}`);
+}
+
+/** Canonical argv for the cmd delete built-ins (command-name glue plus clustered switches). */
+function normalizeCmdDeleteArgv(argv: string[]): string[] {
+  if (argv.length === 0) return argv;
+  let head = argv[0];
+  let rest = argv.slice(1);
+  const glued = /^([A-Za-z]+)((?:\/[A-Za-z]+)+)$/.exec(head);
+  if (glued && CMD_DELETE_COMMANDS.has(glued[1].toLowerCase())) {
+    const flags = glued[2].slice(1).split("/");
+    if (flags.every((flag) => flag.length === 1 && CMD_DELETE_SWITCHES.has(flag.toLowerCase()))) {
+      head = glued[1];
+      rest = [...flags.map((flag) => `/${flag.toLowerCase()}`), ...rest];
+    }
+  }
+  if (!CMD_DELETE_COMMANDS.has(cmdBaseName(head))) return argv;
+  const out: string[] = [head];
+  for (const arg of rest) {
+    const split = splitCmdDeleteSwitches(arg);
+    if (split) out.push(...split);
+    else out.push(arg);
+  }
+  return out;
+}
+
+function normalizeCmdSegment(segment: Segment): Segment {
+  const argv = normalizeCmdDeleteArgv(segment.argv);
+  if (argv === segment.argv) return segment;
+  return makeSegment(argv, argv.join(" "));
 }
 
 /**
@@ -210,13 +263,16 @@ function splitPowerShellSegment(segment: Segment): Segment {
  * inner command. Unwrap the interpreter shim so policy rules evaluate the inner
  * command's flags and operands (`del /f /s /q C:\Windows`, `git push`,
  * `npm publish`, `powershell -enc …`) instead of the shim plus the literal `/c`
- * flag.
+ * flag. `cmd/c` (no space) is the same invocation.
  */
 function unwrapCmdSegment(segment: Segment): Segment {
-  if (segment.command !== "cmd") return segment;
-  const flag = segment.subcommand;
+  let argv = segment.argv;
+  const gluedShell = /^(cmd(?:\.exe)?)(\/[ck])$/i.exec(argv[0] ?? "");
+  if (gluedShell) argv = [gluedShell[1], gluedShell[2], ...argv.slice(1)];
+  if (cmdBaseName(argv[0] ?? "") !== "cmd") return segment;
+  const flag = (argv[1] ?? "").toLowerCase();
   if (flag !== "/c" && flag !== "/k") return segment;
-  const inner = segment.argv.slice(2);
+  const inner = normalizeCmdDeleteArgv(argv.slice(2));
   if (inner.length === 0) return segment;
   const firstLower = inner[0].toLowerCase();
   const isInterpreter = [...CMD_INTERPRETERS].some((name) => name === firstLower);

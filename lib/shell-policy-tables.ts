@@ -378,11 +378,29 @@ export const HARD_DENY: HardDenyRule[] = [
   {
     id: "windows_mass_delete",
     reason: "This deletes a drive root, entire drives, and massively recursive files on Windows.",
-    test: (_p, raw) =>
-      /\b(rd|rmdir|del|erase)\b[^\n]*\/s[^\n]*\b[a-z]:\\?(\s|$|\*)/i.test(raw) ||
-      /\b(rd|rmdir)\b\s+\/s[\s\S]*?\b[A-Za-z]:/i.test(raw) ||
-      /(\\\\.NUL|>\\\\.NUL|>NUL:)/i.test(raw) ||
-      /\b(rd|rmdir)\b\s+\/s[^\n]*\b[A-Za-z]:\??[\s\S]*$/i.test(raw),
+    test: (parsed, raw) => {
+      if (/(\\\\.NUL|>\\\\.NUL|>NUL:)/i.test(raw)) return true;
+      // cmd accepts the switches glued to the command and to each other (`rd/s/q C:\Windows`);
+      // the parser normalizes them, so judge the operands instead of the raw spelling.
+      const parsedHit = parsed.segments.some((segment) => {
+        if (!["rd", "rmdir", "del", "erase"].includes(segment.command)) return false;
+        const args = segment.argv.slice(1);
+        const recursive = args.some((arg) => /^\/s$/i.test(arg) || arg.toLowerCase() === "--recursive");
+        if (!recursive) return false;
+        const targets = args.filter((arg) => !arg.startsWith("/") && !arg.startsWith("-"));
+        if (segment.command === "rd" || segment.command === "rmdir") {
+          return targets.some((target) => /^[A-Za-z]:/.test(target));
+        }
+        return targets.some((target) => /^[A-Za-z]:[\\/]?$/i.test(target) || /^[A-Za-z]:[\\/]\*$/.test(target));
+      });
+      if (parsedHit) return true;
+      // Keep the raw fallback: a command hidden inside an interpreter string is not a parsed segment.
+      return (
+        /\b(rd|rmdir|del|erase)\b[^\n]*\/s[^\n]*\b[a-z]:\\?(\s|$|\*)/i.test(raw) ||
+        /\b(rd|rmdir)\b\s+\/s[\s\S]*?\b[A-Za-z]:/i.test(raw) ||
+        /\b(rd|rmdir)\b\s+\/s[^\n]*\b[A-Za-z]:\??[\s\S]*$/i.test(raw)
+      );
+    },
   },
   {
     id: "windows_file_delete_wrong_targets",
