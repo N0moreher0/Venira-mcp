@@ -10,11 +10,12 @@ git clone <repo-url>
 cd venira-mcp
 npm install
 npm run build
-npm run doctor          # preflight: workspace, corehost, data dir, audit DB, tools
+npm run doctor          # preflight: workspace, data dir, audit DB, tools
 ```
 
-You need a working `venira_corehost_rs` binary (see [README §2](./README.md#2-quick-start)).
-If you don't have one, set `VENIRA_COREHOST_EXE` in your environment and re-run doctor.
+The standalone build is pure Node: no external binary or Rust toolchain is
+required. `better-sqlite3` is the only native dependency and ships prebuilt
+binaries for the supported Node × OS combinations.
 
 ## Development loop
 
@@ -36,7 +37,7 @@ compact output mode, and tool annotations.
 - **Zod v3** for tool input schemas. Keep schemas declarative and small.
 - **No new runtime dependencies.** The whole point is one `node` + one `zod` + one
   `@modelcontextprotocol/sdk`. A new dep needs a strong justification in the PR.
-- **Cache invariants** (see [README §10](./README.md#10-interesting-details--things-you-should-know)):
+- **Cache invariants** (see [README §7](./README.md#7-security-model) and the cache notes in `lib/`):
   - Reads/info: mtime+size validated.
   - List/search/recent: short TTL, wiped on any mutation.
   - Search with 0 hits: **never cached**.
@@ -50,16 +51,38 @@ compact output mode, and tool annotations.
 1. Add the registration in `tools/project.ts` → `registerProjectTools`.
 2. Route it through `executeCached` if it's read-only; add it to `MUTATING` if it writes.
 3. Envelope + hint: use `buildEnvelope` / `errorEnvelope` from `lib/output.ts` — never hand-roll.
-4. `scripts/verify/`: add a `check("…", …)` block in the matching section module; update `expectedCount` (currently 16).
+4. `scripts/verify/`: add a `check("…", …)` block in the matching section module; update `expectedCount` in that section module (section modules own their counts; `scripts/verify.ts` only orchestrates).
 5. `server.ts` → `INSTRUCTIONS` decision tree: one line if it belongs in the flow.
 6. `README.md` → tool table + §4 section for the family it belongs to.
 7. `npm run build && npm run verify && npm run bench:mcp` — paste bench output in the PR.
 
 ## Release process
 
-- Bump `package.json` version **and** `lib/version.ts` (they must match; `verify.ts` checks).
-- `npm run build`, tag the commit, publish.
-- Changelog lives in the PR / release notes; there is no separate `CHANGELOG.md` (yet).
+Checklist, in order. Do not skip the verification steps; they are what keeps the
+published artifacts and the public listings honest.
+
+- [ ] Bump `package.json` version **and** `lib/version.ts` (they must match; `verify.ts` checks).
+- [ ] `npm run build && npm run check:docs && npm run check:source-shape && npm run verify`.
+- [ ] `npm run bench:mcp` and paste the numbers into the release notes.
+- [ ] Update `README.md` where behaviour changed (tool counts, env defaults, security
+      notes). The README is the source of truth for catalogs that scrape this repo.
+- [ ] Commit, tag `v<version>`, push the tag. `release.yml` builds the npm package,
+      the standalone zip and the multi-arch GHCR image, then publishes to npm.
+- [ ] Verify the published artifacts: `npm view venira-mcp@<version> version`,
+      `docker pull ghcr.io/<owner>/<repo>:<version>`.
+- [ ] **Public catalog sync** (the step that used to drift):
+  1. **Glama** (`glama.ai/mcp/servers`) — the listing is built from the GitHub repo.
+     After the tag is public, open the server page and use its refresh action; confirm
+     name, description, version, tool list and required env vars match this repo.
+     Claim the listing if it is still unowned, so future updates can be pushed.
+  2. **Official MCP registry / Smithery** — if the project is listed there, refresh the
+     entry from the same release and re-check the install command.
+  3. Record the catalog check in the release notes (`Glama: refreshed <date>`), so the
+     next release has a visible baseline.
+- [ ] Post-release: `project_health` and `project_read_audit verify=1` on a fresh
+      install; confirm the shell policy profile and protected paths behave as documented.
+
+Changelog lives in the PR / release notes; there is no separate `CHANGELOG.md` (yet).
 
 ## Security-sensitive changes
 
