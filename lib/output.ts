@@ -463,13 +463,13 @@ const DEFAULT_HINTS: Record<string, string> = {
   host_unavailable: "The backend is unavailable; it restarts on the next call. Retry once.",
   internal: "Unexpected error; check project_health and the server stderr log.",
   feature_disabled:
-    "This feature is switched off by the operator, so no approval can enable it and no approval_id will come. Do not retry. Tell the user the hint (which VENIRA_* flag the operator must set) or ask them to do it manually.",
+    "Switched off by the operator; no approval will enable it. Do not retry; tell the user the hint (VENIRA_* flag) or ask them to do it manually.",
   approval_required:
-    "The call did NOT run: a human must approve it. Stop and tell the user the approval_id and the exact command from `data.approval.approve_command` (interactive PowerShell, or the client dialog when elicitation is on). Do not loop or rephrase. After they confirm, retry the same call once with approval_id. Never invent or reuse an approval_id; the scope (once/session) is chosen by the human, not by you.",
+    "NOT run: a human must approve. Stop; tell the user the approval_id and data.approval.approve_command. After they confirm, retry the same call once with approval_id. Never invent or reuse an id.",
   approval_invalid:
-    "An approval_id is single-use, bound to the exact command/shell/cwd/secret_env and expires after VENIRA_SHELL_APPROVAL_TTL_MS. approval_token was removed in v1.15. Call the tool again without approval_id to get a fresh approval_required envelope; a human must grant the new id.",
+    "approval_id is single-use, bound to the exact command/shell/cwd/secret_env, and expires. Call again without it for a fresh approval_required; a human must grant the new id.",
   command_denied:
-    "The policy refuses this command in every mode. Do not retry or rephrase to bypass it; ask the user to run it manually if it is genuinely required.",
+    "Policy refuses this command in every mode. Do not retry or rephrase; ask the user to run it manually if needed.",
   old_text_not_found: "Re-read the file with project_read_file, copy the exact text, retry.",
   old_text_ambiguous: "Add surrounding lines to old_text to make it unique, or set replace_all=1.",
   batch_failed: "Check data.atomic for rollback state, fix the failed item, resubmit the rest.",
@@ -517,6 +517,8 @@ function classify(raw: string): string {
 const DEFAULT_NEXT_ACTIONS: Record<string, unknown[]> = {
   not_found: [{ tool: "project_list_files", arguments: { relative_path: "." }, why: "locate the correct path" }],
   path_escape: [{ tool: "project_list_files", arguments: { relative_path: "." }, why: "stay inside the workspace" }],
+  snapshot_corrupt: [{ tool: "project_snapshot", arguments: { action: "list" }, why: "pick another checkpoint" }],
+  secret_missing: [{ tool: "project_secret", arguments: { action: "list" }, why: "see stored names" }],
 };
 
 /** A not_found about a shell run id is not a path problem: listing files would not help. */
@@ -565,6 +567,16 @@ const INVALID_REQUEST_HINTS: Array<[RegExp, string]> = [
   [/git\.repos|has no host/i, 'Fix git.repos / remote URL (expected "owner/name").'],
   [/root\/relative_path required/i, "Pass relative_path (workspace-relative)."],
   [/Unknown method/i, "Server/backend mismatch; restart and check project_health."],
+  [/Refusing to delete the workspace root/i, "Delete a path inside the workspace; the root is protected."],
+  [/value_env .* is not set/i, "Export that variable in the server environment, or pass value."],
+  [/must be a PR number or/i, "Pass pr as a number or a PR/MR URL."],
+  [/is not valid JSON/i, "Fix the JSON syntax in that config file."],
+  [/must be https|is not in the allowed list/i, "Provider host must be https and on the allowed host list in git config."],
+  [/must be an integer between/i, "Use an integer within the stated range."],
+  [/`ref` must be a branch/i, "ref: branch name or commit sha."],
+  [/safe_edit tool removed/i, "Use project_edit_file with guard=sha256."],
+  [/Pass error_text/i, "Pass error_text or log_tail."],
+  [/Provider path must start/i, 'Internal: provider paths start with "/"; report a bug.'],
 ];
 
 function invalidRequestHint(body: string): string | undefined {

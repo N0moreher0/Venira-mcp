@@ -659,6 +659,45 @@ try {
     assert.equal(typeof env.hint, "string");
     assert.ok(env.hint.length > 0);
   });
+  await check("every_invalid_request_throw_has_a_specific_hint", async () => {
+    const { readdir, readFile } = await import("node:fs/promises");
+    const generic = fail("[invalid_request] something unmapped").hint;
+    const unmapped: string[] = [];
+    let seen = 0;
+    const walk = async (dir: string): Promise<void> => {
+      for (const entry of await readdir(path.join(repoRoot, dir), {
+        withFileTypes: true,
+      })) {
+        const rel = `${dir}/${entry.name}`;
+        if (entry.isDirectory()) await walk(rel);
+        else if (entry.name.endsWith(".ts")) {
+          const src = await readFile(path.join(repoRoot, rel), "utf8");
+          for (const m of src.matchAll(/\[invalid_request\]/g)) {
+            const lineStart = src.lastIndexOf("\n", m.index) + 1;
+            if (/^\s*(\*|\/\/|\/\*)/.test(src.slice(lineStart, m.index))) continue;
+            const end = src.indexOf(");", m.index);
+            const stmt = src.slice(m.index, end < 0 ? m.index + 400 : end + 2);
+            if (/Hint:/.test(stmt)) continue;
+            seen += 1;
+            const msg = stmt
+              .slice("[invalid_request]".length)
+              .replace(/\s+/g, " ")
+              .replace(/\$\{[^}]*\}/g, "x")
+              .replace(/\\`/g, "`")
+              .replace(/\\"/g, '"')
+              .trim()
+              .slice(0, 160);
+            if (fail(`[invalid_request] ${msg}`).hint === generic)
+              unmapped.push(`${rel}: ${msg.slice(0, 70)}`);
+          }
+        }
+      }
+    };
+    await walk("lib");
+    await walk("tools");
+    assert.ok(seen > 40, "the scan should find the invalid_request throws");
+    assert.deepEqual(unmapped, [], `generic hint for:\n${unmapped.join("\n")}`);
+  });
   await check("invalid_request_messages_get_specific_hints", () => {
     const samples: Array<[string, RegExp]> = [
       ["[invalid_request] symbol_name is required.", /symbol_name/],
