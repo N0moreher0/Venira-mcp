@@ -1,6 +1,7 @@
 import { PLATFORM } from "./workspace.js";
 import { resolveShellDialect, type ShellDialect } from "./shell-dialect.js";
 import { tokenize, type Token } from "./shell-tokenizer.js";
+import { splitColonParameters } from "./shell-powershell-params.js";
 
 export type Segment = {
   raw: string;
@@ -167,7 +168,12 @@ export function parseShellCommand(raw: string, options?: { shell?: string }): Pa
   flushSegment();
 
   const dialect = resolveShellDialect(options?.shell);
-  const normalizedSegments = dialect === "cmd" ? segments.map((segment) => unwrapCmdSegment(segment)) : segments;
+  const normalizedSegments =
+    dialect === "cmd"
+      ? segments.map((segment) => unwrapCmdSegment(segment))
+      : dialect === "powershell"
+        ? segments.map((segment) => splitPowerShellSegment(segment))
+        : segments;
 
   const cd_targets: string[] = [];
   for (const segment of normalizedSegments) {
@@ -190,6 +196,13 @@ export function parseShellCommand(raw: string, options?: { shell?: string }): Pa
     empty: segments.length === 0,
     dialect,
   };
+}
+
+/** PowerShell `-Name:value` is the same parameter as `-Name value`; expose the operand to the policy rules. */
+function splitPowerShellSegment(segment: Segment): Segment {
+  const argv = splitColonParameters(segment.argv, segment.command);
+  if (argv === segment.argv) return segment;
+  return makeSegment(argv, segment.raw);
 }
 
 /**

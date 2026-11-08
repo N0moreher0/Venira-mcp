@@ -1,9 +1,9 @@
 /**
- * Safety checkpoint before `git restore` (lib/restore-checkpoint.ts + opShellRun).
+ * Safety checkpoint before `git restore` and single-file deletes (lib/restore-checkpoint.ts + opShellRun).
  *
- * balanced.local_dev lets `git restore <file>` run unattended; this suite pins the other half of that
- * bargain: the overwritten bytes are in a checkpoint the agent can restore, and the command does not
- * run when that checkpoint cannot be taken.
+ * balanced.local_dev lets `git restore <file>` and balanced.workspace_delete lets `rm <file>` run
+ * unattended; this suite pins the other half of that bargain: the overwritten or deleted bytes are in a
+ * checkpoint the agent can restore, and the command does not run when that checkpoint cannot be taken.
  */
 import "./clean-env.js";
 import assert from "node:assert/strict";
@@ -142,6 +142,88 @@ await check("balanced.local_dev restore does NOT run when its checkpoint cannot 
   } finally {
     process.env.VENIRA_SNAPSHOT_DIR = savedStoreDir;
   }
+});
+
+// ---- balanced.workspace_delete -------------------------------------------------------------------------
+const delTargets = (command: string) => checkpoint.deleteTargets(parse(command), workspaceDir, workspaceDir);
+
+await check("deleteTargets: explicit existing files are captured; missing, recursive and cd-relative deletes are not", async () => {
+  await writeFile(path.join(workspaceDir, "scratch.txt"), "scratch\n");
+  const t = await delTargets("rm scratch.txt");
+  assert.deepEqual(t?.paths, ["scratch.txt"]);
+  assert.equal(t?.explicitFilesOnly, true);
+  assert.equal(await delTargets("rm no-such-file.txt"), null);
+  assert.equal(await delTargets("rm -rf lib"), null);
+  assert.equal(await delTargets("cd lib && rm b.ts"), null);
+  assert.equal(await delTargets("echo rm scratch.txt"), null);
+});
+
+await check("rm <file> under balanced.workspace_delete checkpoints first and recovery works", async () => {
+  await writeFile(path.join(workspaceDir, "scratch.txt"), "PRECIOUS BYTES\n");
+  const data = await run("rm scratch.txt");
+  assert.equal(data.exit_code, 0);
+  assert.equal(data.policy.rule, "balanced.workspace_delete");
+  assert.ok(data.checkpoint?.id, "checkpoint id reported");
+  assert.deepEqual(data.checkpoint?.paths, ["scratch.txt"]);
+  await assert.rejects(readFile(path.join(workspaceDir, "scratch.txt"), "utf8"), "file must be gone");
+
+  await snapshots.opSnapshotRestore({ id: data.checkpoint.id }, workspaceDir);
+  assert.equal(await readFile(path.join(workspaceDir, "scratch.txt"), "utf8"), "PRECIOUS BYTES\n");
+});
+
+await check("deleting bytes a checkpoint already holds reuses it; deleting a missing file needs no checkpoint", async () => {
+  // The previous test restored the file, so the covering checkpoint still matches byte-for-byte.
+  const again = await run("rm scratch.txt");
+  assert.equal(again.exit_code, 0);
+  assert.equal(again.checkpoint?.reused, true);
+  const missing = await run("rm scratch.txt");
+  assert.equal(missing.policy.rule, "balanced.workspace_delete");
+  assert.equal(missing.checkpoint, undefined);
+});
+
+await check("rm <file> does NOT run when its checkpoint cannot be stored", async () => {
+  await writeFile(path.join(workspaceDir, "keep.txt"), "KEEP ME\n");
+  await writeFile(path.join(workspaceDir, "c-blocker"), "x");
+  const savedStoreDir = process.env.VENIRA_SNAPSHOT_DIR;
+  process.env.VENIRA_SNAPSHOT_DIR = path.join(workspaceDir, "c-blocker", "store"); // parent is a file: mkdir must fail
+  try {
+    const outcome = await run("rm keep.txt").then((d) => JSON.stringify(d), (e: Error) => `REJECTED:${e.message}`);
+    assert.match(outcome, /^REJECTED:.*checkpoint_failed/, outcome);
+    assert.equal(await readFile(path.join(workspaceDir, "keep.txt"), "utf8"), "KEEP ME\n", "file must be untouched");
+  } finally {
+    process.env.VENIRA_SNAPSHOT_DIR = savedStoreDir;
+  }
+});
+
+await check("PowerShell -Path:file is seen by the checkpoint exactly like -Path file (no unattended delete without a checkpoint)", async () => {
+  await writeFile(path.join(workspaceDir, "colon.txt"), "COLON BYTES\n");
+  const psTargets = (command: string) =>
+    checkpoint.deleteTargets(policy.parseShellCommand(command, { shell: "powershell" }), workspaceDir, workspaceDir);
+  for (const command of ["Remove-Item -Path:colon.txt", "Remove-Item -LiteralPath:colon.txt", "Remove-Item -Force:$true -Path:colon.txt"]) {
+    const t = await psTargets(command);
+    assert.deepEqual(t?.paths, ["colon.txt"], command);
+  }
+  assert.equal(await psTargets("Remove-Item -Recurse:$true -Path:colon.txt"), null, "recursive form is not a single-file delete");
+  if (shell === "powershell") {
+    const data = await run("Remove-Item -Path:colon.txt");
+    assert.equal(data.exit_code, 0);
+    assert.equal(data.policy.rule, "balanced.workspace_delete");
+    assert.deepEqual(data.checkpoint?.paths, ["colon.txt"]);
+    await assert.rejects(readFile(path.join(workspaceDir, "colon.txt"), "utf8"), "file must be gone");
+    await snapshots.opSnapshotRestore({ id: data.checkpoint!.id }, workspaceDir);
+    assert.equal(await readFile(path.join(workspaceDir, "colon.txt"), "utf8"), "COLON BYTES\n");
+  }
+});
+
+await check("git restore and rm in one command share one checkpoint", async () => {
+  await writeFile(path.join(workspaceDir, "a.txt"), "EDITED A\n");
+  const data = await run("git restore a.txt; rm keep.txt");
+  assert.equal(data.exit_code, 0);
+  assert.equal(data.policy.rule, "balanced.workspace_delete");
+  assert.deepEqual([...(data.checkpoint?.paths ?? [])].sort(), ["a.txt", "keep.txt"]);
+  await snapshots.opSnapshotRestore({ id: data.checkpoint!.id }, workspaceDir);
+  assert.equal(await readFile(path.join(workspaceDir, "keep.txt"), "utf8"), "KEEP ME\n");
+  assert.equal(await readFile(path.join(workspaceDir, "a.txt"), "utf8"), "EDITED A\n");
 });
 
 if (failures.length > 0) {

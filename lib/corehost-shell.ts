@@ -279,9 +279,9 @@ export async function opShellRun(
   // -------------------------------------------------------------------------
   // 2. Execution with hardening: env scrub, output cap, timeout, tree kill.
   // -------------------------------------------------------------------------
-  // `git restore` overwrites uncommitted edits. balanced.local_dev lets it run unattended only because
-  // the overwrite is recoverable, so that tier must get its checkpoint or the command does not run;
-  // a human-approved restore is checkpointed best-effort.
+  // `git restore` overwrites uncommitted edits and balanced.workspace_delete removes files. Both tiers run
+  // unattended only because the change is recoverable, so they must get their checkpoint or the command
+  // does not run; a human-approved restore is checkpointed best-effort.
   let checkpoint: RestoreCheckpoint | null = null;
   let checkpointError: string | null = null;
   try {
@@ -289,11 +289,14 @@ export async function opShellRun(
   } catch (error) {
     checkpointError = error instanceof Error ? error.message : String(error);
   }
-  if (decision.rule === "balanced.local_dev" && (checkpointError || checkpoint?.truncated)) {
+  if (
+    (decision.rule === "balanced.local_dev" || decision.rule === "balanced.workspace_delete") &&
+    (checkpointError || checkpoint?.truncated)
+  ) {
     throw new Error(
-      `[checkpoint_failed] git restore was not run because its safety checkpoint could not be completed ` +
+      `[checkpoint_failed] the command was not run because its safety checkpoint could not be completed ` +
         `(${checkpointError ?? "checkpoint truncated by snapshot limits"}). ` +
-        `Hint: create a narrower project_snapshot of the files yourself, or ask the user to approve the restore.`,
+        `Hint: create a narrower project_snapshot of the files yourself, or ask the user to approve the command.`,
     );
   }
   const timeoutMs = clampTimeout(args.timeout_ms);

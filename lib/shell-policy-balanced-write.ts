@@ -10,7 +10,8 @@
  * `balanced.install`: dependency installs that reproduce what the project already declares with
  *   lifecycle scripts disabled (`npm ci --ignore-scripts`, `go mod tidy|download|verify`, `dotnet restore`).
  *
- * Deletion is deliberately NOT here: `rm`, `del`, `Remove-Item` keep asking.
+ * Deletion is deliberately NOT here: explicit single files live in `balanced.workspace_delete`
+ * (shell-policy-balanced-delete.ts, checkpointed first); recursive deletes keep asking.
  * Installing a new package, running install scripts, `pip install`, `cargo add` also keep asking:
  * they fetch and later execute code the project did not already contain.
  */
