@@ -398,6 +398,10 @@ try {
     assert.deepEqual(argvOf("Remove-Item -Recurse:$false -Force:$true ./dist", "powershell"), ["Remove-Item", "-Recurse", "-Force", "./dist"]);
     // External programs keep their own parameter conventions.
     assert.deepEqual(argvOf("dotnet build -p:Configuration=Release", "powershell"), ["dotnet", "build", "-p:Configuration=Release"]);
+    // Unknown verb-nouns use the common-parameter fallback; known read cmdlets get full tables.
+    assert.deepEqual(argvOf("Get-Item -Pa:C:\\outside", "powershell"), ["Get-Item", "-Path", "C:\\outside"]);
+    assert.equal(ps("Get-Item -Pa:C:\\outside", "balanced").rule, "ask.read_outside_workspace");
+    assert.equal(ps("Start-Process -Verb:RunAs -FilePath C:\\outside\\x", "balanced").rule, "deny.privilege_escalation");
   });
 
   check("policy_adv_snapshot_store_is_protected", () => {

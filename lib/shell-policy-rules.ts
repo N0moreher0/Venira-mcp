@@ -85,6 +85,9 @@ export const READ_COMMANDS = new Set([
   "gc",
   "bat",
   "strings",
+  "get-item",
+  "get-process",
+  "select-object",
 ]);
 
 export const STRICT_ALLOW: Array<{ command: string; subcommands?: string[] }> = [

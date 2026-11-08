@@ -334,6 +334,15 @@ export const HARD_DENY: HardDenyRule[] = [
       // Check parsed commands too: quoting, a path prefix (`/usr/bin/sudo`)
       // or a shell escape must not hide an elevation from the raw regex.
       parsed.segments.some((segment) => ["sudo", "doas", "pkexec", "runas"].includes(segment.command)) ||
+      // With the PowerShell parameter model, `-Verb:RunAs` is normalized to `-Verb` + `RunAs`, so the
+      // elevation target is an operand of the segment and must be judged from parsed argv.
+      parsed.segments.some(
+        (segment) =>
+          (segment.command === "start-process" || segment.command === "start-process") &&
+          segment.argv.some(
+            (arg, index) => arg.toLowerCase() === "-verb" && (segment.argv[index + 1] ?? "").toLowerCase() === "runas",
+          ),
+      ) ||
       /(^|[\s;&|`("'\\/])(sudo|doas|pkexec|runas)\b/i.test(raw) ||
       /\bstart-process\b[^\n]*\s-verb\s+runas\b/i.test(raw),
   },
