@@ -38,6 +38,9 @@ dist/
 *.bak
 *.venira-bak
 .edit-test.txt
+.tmp-baseline/
+.tmp-split-*.mjs
+/Bug.txt
 
 # Runtime state & logs
 data/
