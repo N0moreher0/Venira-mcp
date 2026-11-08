@@ -21,9 +21,11 @@ export function createWorkflowRunners({ runOne }: WorkflowRunnerDeps) {
           ? "snapshot_restore"
           : action === "delete"
             ? "snapshot_delete"
-            : action === "create"
-              ? "snapshot_create"
-              : null;
+            : action === "mirror"
+              ? "snapshot_mirror"
+              : action === "create"
+                ? "snapshot_create"
+                : null;
     if (!operation) {
       const requestId = newRequestId();
       const elapsedMs = performance.now() - started;
@@ -31,7 +33,7 @@ export function createWorkflowRunners({ runOne }: WorkflowRunnerDeps) {
       return toolResult(
         errorEnvelope(
           "snapshot",
-          new Error(`[invalid_request] action must be create|list|restore|delete. Received: ${JSON.stringify(action)}.`),
+          new Error(`[invalid_request] action must be create|list|restore|delete|mirror. Received: ${JSON.stringify(action)}.`),
           { requestId, elapsedMs },
         ),
         true,

@@ -177,13 +177,14 @@ export function registerWorkflowTools(server: McpServer, deps: WorkflowToolsDeps
             "create walks/hashes the captured files (skips .git/node_modules/dist, symlinks, huge files); repeats only store new blobs. restore is atomic per file, concurrency 4, SHA-256 verified by default; dry_run previews path/size only, not same-size content changes.",
           output_kind:
             "snapshot_create: id, label, file_count, total_bytes, new_blob_bytes, skipped[], truncated; " +
-            "snapshot_list: checkpoints[]; snapshot_restore: restored_count/restored[], deleted_count, skipped[]; snapshot_delete: deleted, bytes_freed.",
+            "snapshot_list: checkpoints[]; snapshot_restore: restored_count/restored[], deleted_count, skipped[]; snapshot_delete: deleted, bytes_freed; " +
+            "snapshot_mirror: status, copied_blobs, copied_indexes, bytes, failed[] (needs VENIRA_SNAPSHOT_MIRROR_DIR); snapshot_create adds mirror{} when configured.",
           batch_safe: false,
         },
         { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
       ),
       inputSchema: {
-        action: z.enum(["create", "list", "restore", "delete"]).default("create"),
+        action: z.enum(["create", "list", "restore", "delete", "mirror"]).default("create"),
         id: z.string().optional().describe("Checkpoint id (required for restore/delete; returned by create/list)."),
         label: z
           .string()
@@ -207,7 +208,9 @@ export function registerWorkflowTools(server: McpServer, deps: WorkflowToolsDeps
         max_files: z.number().int().min(1).max(20000).optional(),
         max_total_bytes: z.number().int().min(1).max(512 * 1024 * 1024).optional(),
         dry_run: flag01.optional().describe("restore only: 1 previews path/size changes without writing (same-size content changes are not detected); inspect current user edits before applying."),
-        verify: flag01.optional().describe("restore only: 1 verifies each blob before writing (default); 0 disables verification."),
+        verify: flag01
+          .optional()
+          .describe("restore: 1 verifies each blob before writing (default); 0 disables verification. mirror: 1 re-hashes every blob already at the mirror and re-copies bad ones (default 0 trusts existing files)."),
         delete_extra: flag01
           .optional()
           .describe("restore only: 1 also deletes files inside captured dirs not in the checkpoint (capped at 500); default/0 keeps them. Use 1 only when deletion is explicitly intended."),

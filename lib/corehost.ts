@@ -23,6 +23,7 @@ import type { HostSnapshot } from "./types.js";
 import { redactSecrets, type Decision } from "./shell-policy.js";
 import { WORKSPACE, dynamicWorkspaceEnabled, switchWorkspaceRoot, allowedWorkspaceRoots } from "./workspace.js";
 import { opSnapshotCreate, opSnapshotDelete, opSnapshotList, opSnapshotRestore, sanitizeReason } from "./snapshots.js";
+import { opSnapshotMirror } from "./snapshot-mirror.js";
 import { opCiControl, opCiLogs, opCiStatus, opCiTrigger, opPrClose, opPrComment, opPrCreate, opPrList, opPrMerge, opPrReopen } from "./git-provider.js";
 import { assertSecretName, deleteSecret, getSecretValueSync, listSecrets, MAX_EXPIRY_DAYS, redactSecretValues, setSecret } from "./secrets.js";
 import { GithubDeviceFlow } from "./github-device-flow.js";
@@ -364,6 +365,7 @@ const operations: Record<string, OperationHandler> = {
   snapshot_list: (args: Record<string, unknown>) => opSnapshotList(args),
   snapshot_restore: opSnapshotRestore,
   snapshot_delete: opSnapshotDelete,
+  snapshot_mirror: opSnapshotMirror,
   // Git provider / CI provider / secrets
   pr_create: opPrCreate,
   pr_comment: opPrComment,

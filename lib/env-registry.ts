@@ -308,6 +308,8 @@ export const ENV_REGISTRY: readonly EnvVarSpec[] = [
   snapPath("VENIRA_SNAPSHOT_ROOT", "Shared root folder for per-project checkpoint stores.", true),
   snapPath("VENIRA_SNAPSHOT_DIR", "Exact checkpoint store folder (single project, no sub-folders).", true),
   snapInt("VENIRA_SNAPSHOT_KEEP", "Checkpoints kept per project before pruning.", true, { default: "20" }),
+  snapPath("VENIRA_SNAPSHOT_MIRROR_DIR", "Existing folder that receives an append-only copy of the checkpoint store.", true),
+  snapInt("VENIRA_SNAPSHOT_MIRROR_TIMEOUT_MS", "Time budget of one snapshot mirror run (milliseconds).", true, { default: "20000" }),
   snapInt("VENIRA_SNAPSHOT_MAX_BYTES", "Total size cap of a project checkpoint.", false, {
     default: "536870912",
     reason: NOT_DOC,

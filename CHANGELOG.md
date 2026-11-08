@@ -2,6 +2,13 @@
 
 Local release notes for venira-mcp. Not published (not listed in `package.json` `files`) and not pushed to git.
 
+## Unreleased
+
+### Added
+- Optional snapshot mirror: set `VENIRA_SNAPSHOT_MIRROR_DIR` (absolute, existing folder) and the checkpoint store is copied there in its own layout, append-only (blobs, then indexes, then `project.json`; every copy verified before it gets its final name). Runs after `project_snapshot action=create` (reported as `mirror{}` in the result, never changes the checkpoint's status) and on demand with `action=mirror` (`verify=1` re-hashes and repairs the mirror). Time-bounded by `VENIRA_SNAPSHOT_MIRROR_TIMEOUT_MS`; a stopped run is `partial` and the next run resumes. Closes the 1.18.0 "Still open" item.
+- The mirror folder is a protected root for file tools and shell commands, like the store.
+- New test `npm run test:snapshot-mirror` (15 checks), included in `npm run verify`.
+
 ## 1.18.0 — 2026-11-08
 
 ### Added

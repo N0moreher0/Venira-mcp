@@ -86,7 +86,7 @@ export function requestTimeout(operation: string, args: Args): number {
     }
     return 30_000;
   }
-  if (operation === "snapshot_create" || operation === "snapshot_restore") return 120_000;
+  if (operation === "snapshot_create" || operation === "snapshot_restore" || operation === "snapshot_mirror") return 120_000;
   if (operation === "ci_logs") return 90_000;
   if (operation === "ci_wait") {
     const wait = Number(args.timeout_ms ?? 45_000);

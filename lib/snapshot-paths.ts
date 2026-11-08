@@ -65,6 +65,14 @@ export function snapshotRootDir(userDataDir: string): string {
   return absoluteEnvPath("VENIRA_SNAPSHOT_ROOT") ?? path.join(userDataDir, "snapshots");
 }
 
+/**
+ * Optional off-machine copy target (`VENIRA_SNAPSHOT_MIRROR_DIR`, absolute), or null when unset.
+ * A plain directory: OneDrive/Dropbox folder, NAS share, USB drive or rclone mount.
+ */
+export function snapshotMirrorRootDir(): string | null {
+  return absoluteEnvPath("VENIRA_SNAPSHOT_MIRROR_DIR");
+}
+
 /** Exact store override, or null. */
 export function snapshotExactDir(): string | null {
   return absoluteEnvPath("VENIRA_SNAPSHOT_DIR");
@@ -133,5 +141,9 @@ export function snapshotProtectedRoots(userDataDir: string, workspace: string): 
   const roots = new Set<string>();
   try { roots.add(snapshotStoreDir(workspace, userDataDir)); } catch { /* bad env: ignore */ }
   try { roots.add(snapshotRootDir(userDataDir)); } catch { /* bad env: ignore */ }
+  try {
+    const mirror = snapshotMirrorRootDir(); // the backup must be as unreachable for tools as the store itself
+    if (mirror) roots.add(mirror);
+  } catch { /* bad env: ignore */ }
   return [...roots];
 }

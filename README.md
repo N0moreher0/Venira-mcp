@@ -333,6 +333,8 @@ Full reference: the source reads 90+ distinct `VENIRA_*` names; this table lists
 | `VENIRA_SNAPSHOT_ROOT` | `<per-user data dir>/snapshots` | Shared checkpoint root for every project and client; each workspace gets its own sub-folder (absolute path) |
 | `VENIRA_SNAPSHOT_DIR` | unset | Exact checkpoint store for a single project, no sub-folders; wins over `VENIRA_SNAPSHOT_ROOT` (absolute path) |
 | `VENIRA_SNAPSHOT_KEEP` | `20` | Checkpoints kept per project (oldest pruned on create) |
+| `VENIRA_SNAPSHOT_MIRROR_DIR` | unset | Optional append-only copy of the checkpoint store in this existing folder (OneDrive/Dropbox, NAS share, USB drive, rclone mount); absolute path, must be outside the store and the workspace |
+| `VENIRA_SNAPSHOT_MIRROR_TIMEOUT_MS` | `20000` after `create`, `100000` for `action=mirror` | Time budget of one mirror run; it stops between files (`partial`) and the next run resumes |
 | `VENIRA_DISABLE_TOOLS` | unset | Comma-separated tool names to hide from `tools/list` |
 | `VENIRA_GIT_PROVIDER` | inferred | `github` / `gitlab` / `bitbucket` |
 | `VENIRA_GIT_TOKEN` | unset | Fallback token when no provider-specific secret found |
@@ -427,6 +429,19 @@ The store is plain files: immutable content-addressed `blobs\<ab>\<sha256>`, gzi
 - Copy the shared root (`VENIRA_SNAPSHOT_ROOT`) to cover every project, or one project folder. Windows: `robocopy "%LOCALAPPDATA%\venira\snapshots" "D:\backup\venira-snapshots" /E`; Linux/macOS: `rsync -a ~/.local/share/venira/snapshots/ /mnt/backup/venira-snapshots/` (macOS: the `Application Support` path above).
 - Do it while no agent is creating or deleting checkpoints. If you copy in two passes, take `index\` first and `blobs\` second: a blob is always written before the manifest that references it, so that order cannot capture a manifest without its blobs, while the reverse order can. Blobs without a manifest are harmless leftovers.
 - After restoring a backup, `project_snapshot action=list` should show the expected count and no `unreadable` entries.
+
+**Mirroring the store (optional)**
+
+Set `VENIRA_SNAPSHOT_MIRROR_DIR` to an existing absolute folder and venira keeps a second copy there, with no cloud SDKs, credentials or network code of its own (point it at a OneDrive/Dropbox folder, NAS share, USB drive or rclone mount and let that tool move the bytes).
+
+- Same layout as the store (`<mirror>\<project>\project.json`, `index\`, `blobs\`), so restoring is copying the folder back to the store location; there is no separate format.
+- After every `project_snapshot action=create` the result carries `mirror` (`status`, `copied_blobs`, `copied_indexes`, `bytes`, `failed[]`, `error`). It is best-effort: a mirror problem never changes the checkpoint's own status. `project_snapshot action=mirror` runs the same sync on demand; add `verify=1` to re-hash every blob already at the mirror and re-copy bad ones.
+- Order is blobs, then indexes, then `project.json`, so the mirror never holds a checkpoint whose blobs are missing. Every copy is verified (blob sha256 equals its file name; index bytes equal the source) before it gets its final name. A corrupt local blob blocks only the checkpoints that use it.
+- Append-only: venira never deletes anything at the mirror. A checkpoint pruned locally (`VENIRA_SNAPSHOT_KEEP`) or deleted stays at the mirror until you remove it by hand, so expect it to grow; the only overwrite is `verify=1` replacing a file that no longer matches its source.
+- Bounded: a run stops between files once its time budget is spent and reports `partial` / `timed_out`; run it again to resume (only missing files are copied). A first sync of a large store may need a few runs.
+- Refused (`[config_invalid]`): a relative path, a folder that does not exist (venira never creates the mirror root, so an unmounted drive is not silently replaced by a local folder), and a folder that equals, contains or sits inside the local store or sits inside the workspace. A mirror folder already owned by a different workspace fails with `[mirror_conflict]`.
+- The mirror folder is a protected root like the store: file tools refuse it and shell commands that read, write or delete inside it are denied.
+- To restore after losing the store: copy `<mirror>\<project>` back to the store location (for example `%LOCALAPPDATA%\venira\snapshots\<project>`) with venira stopped, then `project_snapshot action=list`. Unreadable local indexes are not mirrored (they are counted in `skipped_unreadable`).
 
 **Threats this does NOT protect against**: a malicious prompt can still instruct the agent to run destructive commands. Use a container/VM for untrusted workspaces — see [`ISOLATION.md`](./ISOLATION.md) for Docker, WSL 2 and Windows Sandbox setups, including mounts, network controls and their limits.
 

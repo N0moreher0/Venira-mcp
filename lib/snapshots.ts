@@ -23,6 +23,7 @@ import { resolveWithin } from "./workspace.js";
 import type { RustResponse } from "./output.js";
 import { MANIFEST_VERSION, MAX_TOTAL_BYTES, KEEP_CHECKPOINTS, MAX_DELETE_EXTRA, effectiveMaxFiles, DEFAULT_EXCLUDES, snapshotDataDir, indexPath, blobRoot, blobPath, protectedPrefixes, isProtected, isAuditDbFile, newId, validId, sanitizeReason, type SnapshotManifest, readManifest, writeManifest, listManifests, listManifestsDetailed, hashBuffer, fileSignature, normalizeRel, pathHasSymlinkAncestor } from "./snapshot-store.js";
 import { walkForSnapshot, storeBlob } from "./snapshot-walk.js";
+import { runMirrorAfterCreate } from "./snapshot-mirror.js";
 export { snapshotDataDir, sanitizeReason, type SnapshotManifest } from "./snapshot-store.js";
 
 export async function opSnapshotCreate(
@@ -149,6 +150,9 @@ export async function opSnapshotCreate(
   }
   if (pruned > 0) await gcBlobs();
 
+  // Optional off-machine copy: best-effort, bounded, never changes this checkpoint's status.
+  const mirror = await runMirrorAfterCreate(root);
+
   return {
     status: "completed",
     result: {
@@ -164,6 +168,7 @@ export async function opSnapshotCreate(
         truncated: manifest.truncated,
         skipped: manifest.skipped.slice(0, 50),
         store: snapshotDataDir(),
+        ...(mirror ? { mirror } : {}),
         hint: manifest.truncated
           ? "Checkpoint truncated by max_files/max_total_bytes. Narrow paths or raise the limits."
           : undefined,
