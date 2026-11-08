@@ -17,7 +17,8 @@ section*.txt
 
 # Owner-only notes, roadmap, progress tracking and local dev helpers
 /PUSH-NOTES.md
-!/ROADMAP.md
+/ROADMAP.md
+/ROADMAP_*.md
 /ROADMAP_HARDENING.md
 /TODO.md
 /TOOL-ROADMAP.md
