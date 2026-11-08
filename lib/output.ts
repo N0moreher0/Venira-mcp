@@ -479,6 +479,8 @@ const DEFAULT_HINTS: Record<string, string> = {
   override_not_enabled: "Override not enabled by the operator; do not retry, ask the user to run it manually.",
   override_scope_mismatch: "Override does not cover this command; ask the user to run it manually.",
   checkpoint_failed: "Pre-command snapshot failed, command not run. Create a scoped project_snapshot, then retry.",
+  shell_unavailable:
+    "The shell binary is not installed or not on PATH; nothing ran. Follow error.message to install it or pick another shell; do not retry unchanged.",
   snapshot_corrupt: "Snapshot is damaged; pick another id from project_snapshot action=list.",
   snapshot_version_unsupported: "Snapshot format not supported by this version; use a newer snapshot or upgrade.",
   mirror_conflict: "Snapshot mirror differs from primary; change nothing and check project_health.",

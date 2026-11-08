@@ -85,6 +85,11 @@
       "lines": 96,
       "branches": 96,
       "functions": 96
+    },
+    "lib/shell-unavailable.ts": {
+      "lines": 80,
+      "branches": 96,
+      "functions": 96
     }
   }
 }

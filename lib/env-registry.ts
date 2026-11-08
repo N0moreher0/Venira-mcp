@@ -256,7 +256,7 @@ export const ENV_REGISTRY: readonly EnvVarSpec[] = [
     default: "1",
     reason: NOT_DOC,
   }),
-  shStr("VENIRA_DEFAULT_SHELL", "Shell used when a call does not name one (powershell, cmd or bash).", false, {
+  shStr("VENIRA_DEFAULT_SHELL", "Shell used when a call does not name one (powershell, pwsh, cmd or bash).", false, {
     reason: NOT_DOC,
   }),
 

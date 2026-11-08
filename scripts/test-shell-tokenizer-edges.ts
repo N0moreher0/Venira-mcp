@@ -94,4 +94,29 @@ check("backtick_powershell_line_continuation_joins_lines", () => {
   assert.deepEqual(values("echo a`\r\nb", "powershell"), ["echo", "ab"]);
 });
 
+// ---------------------------------------------------------------------------
+// PowerShell groups and script blocks cannot be judged, so they count as substitution
+// ---------------------------------------------------------------------------
+
+check("powershell_group_and_block_mark_substitution", () => {
+  for (const shell of ["powershell", "pwsh"]) {
+    for (const raw of ["git status (Get-Date)", "git status @(Get-Date)", "1..3 | ForEach-Object { $_ }", "git status ?? (Get-Date)"]) {
+      assert.equal(tokenize(raw, { shell }).has_substitution, true, `${shell}: ${raw}`);
+    }
+  }
+});
+
+check("powershell_quoted_group_and_block_stay_literal", () => {
+  for (const raw of ['git log --grep="(fix)"', "git log --grep='{x}'", 'echo "a {b}"']) {
+    assert.equal(tokenize(raw, { shell: "powershell" }).has_substitution, false, raw);
+  }
+  assert.equal(tokenize('echo "$(Get-Date)"', { shell: "powershell" }).has_substitution, true, "$( inside double quotes still counts");
+});
+
+check("group_and_block_are_ordinary_characters_in_other_dialects", () => {
+  for (const shell of ["bash", "cmd"]) {
+    assert.equal(tokenize("echo (a) {b}", { shell }).has_substitution, false, shell);
+  }
+});
+
 console.log(`\n${checks} checks passed`);

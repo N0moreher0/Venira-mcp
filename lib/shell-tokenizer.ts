@@ -129,6 +129,11 @@ export function tokenize(raw: string, options?: { shell?: string }): { tokens: T
       continue;
     }
 
+    // PowerShell runs ( ... ), @( ... ) and { ... } blocks before or instead of the command that owns them, so
+    // `git status (Remove-Item -Recurse -Force $HOME)` deletes although its segment looks like read-only git.
+    // Treat them like $( ... ): the policy cannot judge what they run, so no allowlist may cover the command.
+    if (dialect === "powershell" && (ch === "(" || ch === "{")) hasSubstitution = true;
+
     if (";&|<>".includes(ch)) {
       if (ch === ">" && raw[i + 1] === "&" && /^[0-9]*$/.test(word)) {
         let j = i + 2;

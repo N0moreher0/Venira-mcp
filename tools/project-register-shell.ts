@@ -49,7 +49,7 @@ export function registerShellTools(server: McpServer, deps: ShellToolsDeps): voi
         { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
       ),
       inputSchema: {
-        shell: z.enum(["powershell", "cmd", "bash"]).optional(),
+        shell: z.enum(["powershell", "pwsh", "cmd", "bash"]).optional(),
         command: z.string().describe("Command line to run. Use the file tools for file changes; project_snapshot first if it overwrites or deletes files git does not hold."),
         relative_cwd: z.string().optional().describe("Working directory inside the workspace (default: workspace root)."),
         background: backgroundFlag.optional(),

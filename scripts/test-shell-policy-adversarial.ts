@@ -161,9 +161,15 @@ try {
       "ts-node probe.ts",
       "tsx --eval console.log(1)",
     ]) {
-      const decision = evaluate(command, "balanced");
+      // Pin the dialect: with the host default (PowerShell on Windows) the unquoted `(1)` is flagged as a group
+      // first (`ask.command_substitution`), so the rule id would depend on the machine running the suite.
+      const decision = evaluate(command, "balanced", "bash");
       assert.equal(decision.tier, "ask", `${command}: ${JSON.stringify(decision)}`);
       assert.equal(decision.rule, "ask.dynamic_execution", command);
+    }
+    for (const shell of ["powershell", "pwsh"]) {
+      const decision = evaluate("tsx --eval console.log(1)", "balanced", shell);
+      assert.equal(decision.tier, "ask", `${shell}: ${JSON.stringify(decision)}`);
     }
     assert.equal(evaluate("tsx --version", "balanced").tier, "allow");
     assert.equal(evaluate("node -e \"console.log(1)\"", "balanced").rule, "ask.dynamic_execution");
@@ -220,6 +226,83 @@ try {
     for (const command of ["Get-Content .e`nv", 'Get-Content ".e`nv"']) {
       const decision = policy.evaluateShellCommand(command, workspaceDir, { shell: "powershell", mode: "balanced" });
       assert.equal(decision.rule, "deny.protected_file_access", `${command}: ${JSON.stringify(decision)}`);
+    }
+  });
+
+  check("policy_adv_dialect_powershell_grouping_expressions", () => {
+    // PowerShell evaluates `( ... )` and `@( ... )` arguments before the command that owns them runs, so
+    // `git status (Remove-Item -Recurse -Force $HOME)` deletes although its segment looks like read-only git.
+    // Measured before the fix: balanced and strict returned allow/safe_command for it. The `??`, `?.` and ternary
+    // spellings of PowerShell 7 are the same hole. A group or script block must never ride on an allowlisted
+    // command: balanced and strict ask in both PowerShell shells.
+    const run = (command: string, shell: string, mode: "balanced" | "strict") =>
+      policy.evaluateShellCommand(command, workspaceDir, { shell, mode });
+    const hidden = [
+      "git status (Remove-Item -Recurse -Force $HOME)",
+      "git log (Remove-Item -Recurse -Force C:\\Users)",
+      "git status @(Remove-Item -Recurse -Force $HOME)",
+      "git status (git push --force)",
+      "git status (npm publish)",
+      "git status ?? (Remove-Item -Recurse -Force $HOME)",
+      "Write-Output (Remove-Item -Recurse -Force $HOME)",
+      "git status | Select-Object -Property @{e={Remove-Item -Recurse -Force $HOME}}",
+      "$true ? (Remove-Item -Recurse -Force $HOME) : 1",
+      "1..3 | ForEach-Object -Parallel { Remove-Item -Recurse -Force $HOME }",
+    ];
+    for (const command of hidden) {
+      for (const shell of ["powershell", "pwsh"]) {
+        for (const mode of ["balanced", "strict"] as const) {
+          const decision = run(command, shell, mode);
+          assert.equal(decision.tier, "ask", `${shell}/${mode}: ${command}: ${JSON.stringify(decision)}`);
+        }
+      }
+    }
+    // The group itself is what is flagged, with the substitution rule, not a generic default.
+    for (const shell of ["powershell", "pwsh"]) {
+      const decision = run("git status (Remove-Item -Recurse -Force $HOME)", shell, "balanced");
+      assert.equal(decision.rule, "ask.command_substitution", `${shell}: ${JSON.stringify(decision)}`);
+    }
+    // Hard denies that already see the operand keep winning over the new ask.
+    for (const shell of ["powershell", "pwsh"]) {
+      const env = run("git status (Get-Content .env)", shell, "balanced");
+      assert.deepEqual([env.tier, env.rule], ["deny", "deny.protected_file_access"], `${shell}: ${JSON.stringify(env)}`);
+      const runAs = run("git status (Start-Process -Verb RunAs cmd)", shell, "balanced");
+      assert.deepEqual([runAs.tier, runAs.rule], ["deny", "deny.privilege_escalation"], `${shell}: ${JSON.stringify(runAs)}`);
+    }
+    // Quoted parentheses and braces are literal text, and other dialects are untouched.
+    for (const shell of ["powershell", "pwsh"]) {
+      for (const command of ['git log --grep="(fix)"', "git log --grep='{x}'"]) {
+        const decision = run(command, shell, "balanced");
+        assert.equal(decision.tier, "allow", `${shell}: ${command}: ${JSON.stringify(decision)}`);
+      }
+    }
+    assert.equal(run("git log --format=%h", "bash", "balanced").tier, "allow");
+  });
+
+  check("policy_adv_dialect_pwsh_chain_operators", () => {
+    // PowerShell 7 (`shell: "pwsh"`) accepts `&&` / `||`. Every segment of a chain must be judged on its own, and
+    // `pwsh` must give the same verdict as Windows PowerShell for the same command.
+    const verdict = (command: string, shell: string) => policy.evaluateShellCommand(command, workspaceDir, { shell, mode: "balanced" });
+    const denied: Array<[string, string]> = [
+      ["git status && Remove-Item -Recurse -Force $HOME", "deny.filesystem_root_delete"],
+      ["git status || Remove-Item -Recurse -Force $HOME", "deny.filesystem_root_delete"],
+      ["Remove-Item -Recurse -Force $HOME && git status", "deny.filesystem_root_delete"],
+      ["git status && Get-Content .env", "deny.protected_file_access"],
+      ["git status&&sudo ls", "deny.privilege_escalation"],
+      ["git status && Start-Process -Verb RunAs cmd", "deny.privilege_escalation"],
+    ];
+    for (const [command, rule] of denied) {
+      for (const shell of ["powershell", "pwsh"]) {
+        const decision = verdict(command, shell);
+        assert.equal(decision.tier, "deny", `${shell}: ${command}: ${JSON.stringify(decision)}`);
+        assert.equal(decision.rule, rule, `${shell}: ${command}: ${JSON.stringify(decision)}`);
+      }
+    }
+    for (const command of ["git status && npm --version", "git status || npm --version"]) {
+      const ps = verdict(command, "powershell");
+      const pwsh = verdict(command, "pwsh");
+      assert.equal(pwsh.tier, "allow", `${command}: ${JSON.stringify(pwsh)}`);
+      assert.deepEqual([pwsh.tier, pwsh.rule], [ps.tier, ps.rule], command);
     }
   });
 

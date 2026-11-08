@@ -15,12 +15,13 @@ import { checkpointBeforeRestore, type RestoreCheckpoint } from "./restore-check
 import { assertSecretUsable, getSecretValueSync, markSecretUsed, redactSecretValues } from "./secrets.js";
 import { parseBackgroundFlag } from "./env.js";
 import { resolveInWorkspace, type RustResponse } from "./corehost-common.js";
+import { isSpawnNotFound, shellUnavailableMessage } from "./shell-unavailable.js";
 import { shellRuns, pruneShellRuns, TAIL_LIMIT, MAX_OUTPUT_BYTES, trimTail, appendCapped, buildShellEnv, normalizeSecretEnv, killTree, SHELL_EXIT_EARLY, SHELL_MAX_TIMEOUT_MS, SHELL_TIMEOUT_POLICY, type ShellRun } from "./corehost-shell-state.js";
 
 function defaultShellForPlatform(): string {
   // OPTIMIZATION: cmd.exe starts ~99% faster than PowerShell on Windows
   // (8ms vs 2300ms). Most agent commands work in both shells.
-  // Users can override with VENIRA_DEFAULT_SHELL=powershell if needed.
+  // Users can override with VENIRA_DEFAULT_SHELL=powershell (5.1) or pwsh (7+) if needed.
   if (PLATFORM === "win32") return "cmd";
   // macOS: respect $SHELL (zsh/bash); Linux: fall back to bash/zsh.
   if (process.env.SHELL && process.env.SHELL !== "") {
@@ -34,6 +35,9 @@ function shellCommandFor(shell: string, command: string): { file: string; args: 
   switch (shell) {
     case "powershell":
       return { file: "powershell.exe", args: ["-NoProfile", "-NonInteractive", "-Command", command] };
+    case "pwsh":
+      // PowerShell 7+ (cross-platform): supports `&&` / `||` pipeline chains, unlike Windows PowerShell 5.1.
+      return { file: "pwsh", args: ["-NoProfile", "-NonInteractive", "-Command", command] };
     case "cmd":
       return { file: "cmd.exe", args: ["/c", command] };
     case "bash":
@@ -324,6 +328,7 @@ export async function opShellRun(
   }
 
   let child: ChildProcess;
+  let spawnError: Error | null = null;
   try {
     child = spawn(file, spawnArgs, {
       cwd,
@@ -428,6 +433,9 @@ export async function opShellRun(
     resolveClosed();
   });
   child.on("error", (error) => {
+    spawnError = error;
+    // Foreground results return stderr_full, so the failure must be there too, not only in the tail.
+    run.stderr_full = appendCapped(run.stderr_full, `[spawn error] ${error.message}\n`, MAX_OUTPUT_BYTES).text;
     run.running = false;
     run.finished_at = Date.now();
     resolveClosed();
@@ -487,6 +495,12 @@ export async function opShellRun(
       setTimeout(check, 50);
       setTimeout(resolve, 2000);
     });
+  }
+
+  // The shell binary is not installed: nothing ran, so say so instead of returning exit_code -1.
+  if (spawnError && isSpawnNotFound(spawnError)) {
+    shellRuns.delete(runId);
+    throw new Error(shellUnavailableMessage(shell, file, PLATFORM));
   }
 
   // Foreground: output is final now (we awaited 'close'), so trim tails and

@@ -517,7 +517,7 @@ export const HARD_DENY: HardDenyRule[] = [
 export const ASK_RULES: AskRule[] = [
   {
     id: "command_substitution",
-    reason: "This command embeds a substitution ($(..) or backticks) the policy cannot fully inspect.",
+    reason: "This command embeds a substitution ($(..), backticks, or in PowerShell a (..) group or {..} block) the policy cannot fully inspect.",
     test: (parsed) => parsed.has_substitution,
   },
   {

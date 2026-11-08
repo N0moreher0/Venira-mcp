@@ -248,7 +248,7 @@ All tools return the standard envelope (`ok`, `kind`, `data`, `hint`, `elapsed_m
 | `project_search` | Search by file/dir name, content, regex, or symbol; `hybrid: 1` tags hits with `source`+`confidence` |
 | `project_recent_files` | Recently modified files (index-first, scan-fallback) |
 | `project_read_batch` | Up to 8 read-only ops in one call; each item takes the same arguments as its standalone tool (`search` items support `regex`, `case_sensitive`, `hybrid`, ...) |
-| `project_health` | Diagnostics: capability, queue, cache hit-rates, p50/p95, and security limits notice |
+| `project_health` | Diagnostics: capability, queue, cache hit-rates, p50/p95, security limits notice, and `server.workspace_switching` (`enabled`, `allowed_roots`) |
 | `project_read_audit` | Read recent audit log rows |
 
 **Write (mutating, pass `reason`)**
@@ -280,10 +280,12 @@ All tools return the standard envelope (`ok`, `kind`, `data`, `hint`, `elapsed_m
 
 | Tool | Purpose |
 |---|---|
-| `project_shell_run` | Run a command; `background: 0` blocks for final output; `1` returns `run_id` |
+| `project_shell_run` | Run a command; `background: 0` blocks for final output; `1` returns `run_id`. `shell`: `powershell` (Windows PowerShell 5.1), `pwsh` (PowerShell 7+), `cmd` or `bash`; omitted → `VENIRA_DEFAULT_SHELL`, else `cmd` on Windows and `$SHELL`/`bash` elsewhere |
 | `project_shell_status` | Poll a running command (not queued, not audit-logged) |
 | `project_shell_cancel` | Kill a running command by `run_id` |
 | `project_shell_cancel_session` | Kill all shell runs in this session |
+
+**Choosing a shell on Windows.** `powershell` starts `powershell.exe` (5.1), which has no `&&` / `||` pipeline-chain operators; `pwsh` starts PowerShell 7+ (`winget install --id Microsoft.PowerShell`), which has them. `pwsh` must be on the `PATH` of the server process, so restart the MCP client after installing it. Policy treats both as the same PowerShell dialect: every segment of an `&&` / `||` chain is classified on its own, so a denied command after `&&` is still denied (`policy_adv_dialect_pwsh_chain_operators`). `pwsh` starts slower than `cmd`; set `VENIRA_DEFAULT_SHELL=pwsh` only if you want it for every call. A shell binary that is not installed fails with `[shell_unavailable]` and an install hint instead of returning exit code -1. In PowerShell an unquoted `(...)`, `@(...)` or `{...}` counts as a substitution the policy cannot inspect, so a command that carries one asks for approval in `balanced` and `strict`: PowerShell evaluates the group before the command runs, so `git status (Remove-Item -Recurse -Force $HOME)` would otherwise delete while looking like read-only git (`policy_adv_dialect_powershell_grouping_expressions`).
 
 **Git provider: PR/CI (GitHub, GitLab, Bitbucket)**
 
@@ -326,6 +328,7 @@ Full reference: the source reads 90+ distinct `VENIRA_*` names; this table lists
 | `VENIRA_SHELL_EXIT_EARLY` | `"1"` | `"1"` pollers return as soon as exit code is known |
 | `VENIRA_SHELL_TIMEOUT_POLICY` | `"soft"` | `"soft"` warns on timeout · `"hard"` kills process tree |
 | `VENIRA_SHELL_ENV_PASS_ALL` | `"0"` | `"1"` passes full host env to shell (build tools that need it) |
+| `VENIRA_DEFAULT_SHELL` | `cmd` on Windows, `$SHELL` / `bash` elsewhere | Shell used when a call does not name one: `powershell` (5.1), `pwsh` (7+), `cmd`, `bash` |
 | `VENIRA_ALLOW_JS_EXEC` | `"0"` | `"1"` registers `project_execute_js` |
 | `VENIRA_JS_EXEC_APPROVAL` | Profile mapping | Advanced override for per-call JavaScript approval |
 | `VENIRA_USE_RIPGREP` | `"1"` | `"1"` uses ripgrep if installed (faster on big repos) |

@@ -26,6 +26,8 @@ import {
   UNRESTRICTED,
   WORKSPACE,
   activeDataDir,
+  allowedWorkspaceRoots,
+  dynamicWorkspaceEnabled,
 } from "../lib/workspace.js";
 import { auditHealth } from "./project-audit.js";
 
@@ -121,6 +123,8 @@ export async function runHealth(args: Args, deps: HealthDeps): Promise<ToolResul
         session_id: SESSION_ID,
         uptime_ms: Date.now() - deps.startedAt,
         workspace: WORKSPACE,
+        // Runtime switching is off by default; when on, these are the only roots a switch may reach.
+        workspace_switching: { enabled: dynamicWorkspaceEnabled(), allowed_roots: allowedWorkspaceRoots() },
         unrestricted: UNRESTRICTED,
         permission_mode: deps.permissionMode,
         output_mode: OUTPUT_MODE,
