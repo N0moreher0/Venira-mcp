@@ -415,9 +415,9 @@ Checkpoints live outside every workspace, in one shared per-user folder, so ever
 - Override with `VENIRA_SNAPSHOT_ROOT` (shared root) or `VENIRA_SNAPSHOT_DIR` (exact folder, single project). Both must be absolute paths; a relative one fails with `[config_invalid]`.
 - The file tools (read, write, edit, search, delete) refuse anything under the snapshot root or exact dir, the same way they refuse the data dir. Only `project_snapshot` touches the store.
 - Retention is per project (`VENIRA_SNAPSHOT_KEEP`), so one busy project cannot push out another's checkpoints.
-- Limit: this guard covers the file tools, not the shell. In `balanced` / `strict` a recursive delete of the store asks for approval; in `permissive` and `off` it does not. Keep a separate copy of checkpoints you cannot afford to lose.
+- Shell commands are guarded too: any read, write or delete operand inside the snapshot store is a hard deny in `balanced` / `strict` (`deny.protected_file_access`) and needs approval in `permissive`. `off` disables shell policy entirely, so keep checkpoints you cannot afford to lose in a separate backup as well.
 
-**Threats this does NOT protect against**: a malicious prompt can still instruct the agent to run destructive commands. Use a container/VM for untrusted workspaces.
+**Threats this does NOT protect against**: a malicious prompt can still instruct the agent to run destructive commands. Use a container/VM for untrusted workspaces — see [`ISOLATION.md`](./ISOLATION.md) for Docker, WSL 2 and Windows Sandbox setups, including mounts, network controls and their limits.
 
 ## 8. Envelopes & error codes
 

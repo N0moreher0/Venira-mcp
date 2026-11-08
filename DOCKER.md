@@ -58,3 +58,5 @@ support; most use the "command" form that pipes stdio into the container):
   reach the host shell, mount the host binary and set `VENIRA_DEFAULT_SHELL`.
 - The audit DB is written to `/workspace/data/venira.db` (or `VENIRA_DATA_DIR`).
   If the volume is read-only, set `VENIRA_DATA_DIR` to a writable path.
+
+Full mount/network/limit guidance: [`ISOLATION.md`](./ISOLATION.md).
