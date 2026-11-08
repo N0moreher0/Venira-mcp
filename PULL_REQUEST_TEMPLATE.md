@@ -40,4 +40,4 @@ Confirm the following are still true after your change (see README §10):
 - [ ] `verify.ts` has a check for the new behaviour (if applicable)
 - [ ] Decision tree in `server.ts` (`INSTRUCTIONS`) updated if a new tool was added
 - [ ] `README.md` tool table + env-var table updated if applicable
-- [ ] `TODO.md` / `TOOL-ROADMAP.md` updated if a roadmap item was closed
+- [ ] README changelog updated if the change is user-visible

@@ -7,7 +7,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Please describe the idea and why it's needed. Check `TODO.md` / `TOOL-ROADMAP.md` for
+        Please describe the idea and why it's needed. Check the README changelog and existing issues for
         already-scoped work before filing.
 
   - type: textarea
