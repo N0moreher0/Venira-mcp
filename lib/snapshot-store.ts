@@ -13,6 +13,61 @@ import { redactSecrets } from "./shell-policy.js";
 const SNAPSHOT_DIR_NAME = "snapshots";
 export const MANIFEST_VERSION = 1;
 
+/**
+ * Manifest migrations: `MIGRATIONS[n]` turns a version-n manifest into version n+1 (it must set `version`
+ * to n+1). Empty while v1 is the only layout ever shipped. When the layout changes: bump MANIFEST_VERSION,
+ * add the step here, and extend scripts/test-snapshot-lifecycle.ts. Old checkpoints are upgraded in memory
+ * on read; the file on disk is never rewritten, so a downgrade of venira-mcp keeps working on old data.
+ */
+export type ManifestMigration = (manifest: Record<string, unknown>) => Record<string, unknown>;
+const MIGRATIONS: Record<number, ManifestMigration> = {};
+
+/**
+ * Bring a parsed manifest to `target` (default: this build's MANIFEST_VERSION).
+ * - missing / non-integer version -> `[snapshot_corrupt]`
+ * - newer than this build         -> `[snapshot_version_unsupported]` (data is fine, the build is old)
+ * - older with no migration step  -> `[snapshot_version_unsupported]`
+ */
+export function migrateManifest(
+  value: unknown,
+  options: { target?: number; migrations?: Record<number, ManifestMigration> } = {},
+): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("[snapshot_corrupt] Checkpoint manifest must be an object.");
+  }
+  const target = options.target ?? MANIFEST_VERSION;
+  const migrations = options.migrations ?? MIGRATIONS;
+  let current = value as Record<string, unknown>;
+  const rawVersion = current.version;
+  if (typeof rawVersion !== "number" || !Number.isInteger(rawVersion) || rawVersion < 1) {
+    throw new Error("[snapshot_corrupt] Checkpoint manifest has a missing or invalid version.");
+  }
+  let version: number = rawVersion;
+  const label = typeof current.id === "string" ? current.id : "?";
+  if (version > target) {
+    throw new Error(
+      `[snapshot_version_unsupported] Checkpoint '${label}' uses manifest v${version}, newer than the v${target} this venira-mcp reads. ` +
+        "Hint: upgrade venira-mcp. The checkpoint and its blobs are kept untouched.",
+    );
+  }
+  while (version < target) {
+    const step = migrations[version];
+    if (!step) {
+      throw new Error(
+        `[snapshot_version_unsupported] Checkpoint '${label}' uses manifest v${version} and this venira-mcp has no migration to v${target}. ` +
+          "Hint: restore it with the venira-mcp version that wrote it. The checkpoint and its blobs are kept untouched.",
+      );
+    }
+    current = step({ ...current });
+    const next = current.version;
+    if (typeof next !== "number" || next !== version + 1) {
+      throw new Error(`[snapshot_corrupt] Migration from manifest v${version} did not produce v${version + 1}.`);
+    }
+    version = next;
+  }
+  return current;
+}
+
 const envInt = (name: string, fallback: number): number => {
   const value = Number(process.env[name]);
   return Number.isFinite(value) && value >= 0 ? value : fallback;
@@ -175,7 +230,7 @@ function validateManifest(value: unknown, expectedId: string): SnapshotManifest 
     throw new Error("[snapshot_corrupt] Checkpoint manifest must be an object.");
   }
   const manifest = value as Partial<SnapshotManifest>;
-  if (manifest.version !== 1 || manifest.id !== expectedId || typeof manifest.workspace !== "string" ||
+  if (manifest.version !== MANIFEST_VERSION || manifest.id !== expectedId || typeof manifest.workspace !== "string" ||
       !Number.isFinite(manifest.created_at) || !Array.isArray(manifest.files) ||
       !Array.isArray(manifest.roots) || !Array.isArray(manifest.dirs)) {
     throw new Error("[snapshot_corrupt] Checkpoint manifest has an invalid header.");
@@ -236,11 +291,12 @@ export async function readManifest(id: string): Promise<SnapshotManifest> {
   }
   try {
     const json = gunzipSync(raw, { maxOutputLength: 64 * 1024 * 1024 }).toString("utf8");
-    return validateManifest(JSON.parse(json), id);
+    return validateManifest(migrateManifest(JSON.parse(json)), id);
   } catch (error) {
-    throw new Error(
-      `[snapshot_corrupt] Cannot read checkpoint '${id}' manifest: ${error instanceof Error ? error.message : String(error)}`,
-    );
+    const message = error instanceof Error ? error.message : String(error);
+    // Keep the specific code: a newer/unmigratable manifest is not a corrupt one.
+    if (message.startsWith("[snapshot_version_unsupported]")) throw new Error(message);
+    throw new Error(`[snapshot_corrupt] Cannot read checkpoint '${id}' manifest: ${message}`);
   }
 }
 
@@ -254,27 +310,50 @@ export async function writeManifest(manifest: SnapshotManifest): Promise<void> {
   await fs.rename(tmp, indexPath(manifest.id));
 }
 
-export async function listManifests(): Promise<SnapshotManifest[]> {
+export type UnreadableManifest = {
+  id: string;
+  code: "snapshot_corrupt" | "snapshot_version_unsupported";
+  message: string;
+};
+
+/**
+ * Every checkpoint index in the store, split into readable manifests and ones that could not be read.
+ * Callers that delete anything based on "what is referenced" (blob gc) must look at `unreadable`:
+ * an unreadable manifest still owns blobs, we just cannot say which.
+ */
+export async function listManifestsDetailed(): Promise<{ manifests: SnapshotManifest[]; unreadable: UnreadableManifest[] }> {
   const dir = path.join(snapshotDataDir(), "index");
   let names: string[];
   try {
     names = await fs.readdir(dir);
   } catch {
-    return [];
+    return { manifests: [], unreadable: [] };
   }
   const manifests: SnapshotManifest[] = [];
+  const unreadable: UnreadableManifest[] = [];
   for (const name of names) {
     if (!name.endsWith(".json.gz")) continue;
     const id = name.slice(0, -".json.gz".length);
     if (!ID_RE.test(id)) continue;
     try {
       manifests.push(await readManifest(id));
-    } catch {
-      /* a corrupt manifest must not hide the other checkpoints */
+    } catch (error) {
+      // a bad manifest must not hide the other checkpoints, but it must not vanish silently either
+      const message = error instanceof Error ? error.message : String(error);
+      unreadable.push({
+        id,
+        code: message.startsWith("[snapshot_version_unsupported]") ? "snapshot_version_unsupported" : "snapshot_corrupt",
+        message,
+      });
     }
   }
   manifests.sort((a, b) => b.created_at - a.created_at);
-  return manifests;
+  unreadable.sort((a, b) => a.id.localeCompare(b.id));
+  return { manifests, unreadable };
+}
+
+export async function listManifests(): Promise<SnapshotManifest[]> {
+  return (await listManifestsDetailed()).manifests;
 }
 
 export function hashBuffer(buffer: Buffer): string {

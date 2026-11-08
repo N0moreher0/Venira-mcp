@@ -11,6 +11,7 @@
  *
  * Run with: npm run test:shell-policy-adversarial
  */
+import "./clean-env.js"; // must stay first: inherited VENIRA_UNRESTRICTED/SHELL_MODE make isOutsideWorkspace always false
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, rm } from "node:fs/promises";
 import os from "node:os";
@@ -369,6 +370,28 @@ try {
       const argv = argvOf(command, "cmd");
       assert.equal(argv[argv.length - 1], command.split(" ").pop(), `${command}: ${JSON.stringify(argv)}`);
     }
+  });
+
+  check("policy_adv_dialect_powershell_remaining_cmdlet_tables", () => {
+    const ps = (command: string, mode: "balanced" | "permissive") =>
+      policy.evaluateShellCommand(command, workspaceDir, { shell: "powershell", mode });
+    // Unique prefixes resolve to canonical parameters for the cmdlets added to the model.
+    assert.deepEqual(argvOf("Export-Csv -Lit:out.csv", "powershell"), ["Export-Csv", "-LiteralPath", "out.csv"]);
+    assert.deepEqual(
+      argvOf("Expand-Archive -Lit:a.zip -Dest:out -Fo", "powershell"),
+      ["Expand-Archive", "-LiteralPath", "a.zip", "-DestinationPath", "out", "-Force"],
+    );
+    assert.deepEqual(
+      argvOf("Start-BitsTransfer -Source:http://x -Dest:../out.bin", "powershell"),
+      ["Start-BitsTransfer", "-Source", "http://x", "-Destination", "../out.bin"],
+    );
+    // Aliases map to their cmdlet, so abbreviations and colon forms work through them too.
+    assert.deepEqual(argvOf("irm -Ur:http://x", "powershell"), ["irm", "-Uri", "http://x"]);
+    // Ambiguous prefixes stay untouched (Path/PassThru), mirroring PowerShell, which rejects them.
+    assert.deepEqual(argvOf("Set-ItemProperty -Pa:x -Name n", "powershell"), ["Set-ItemProperty", "-Pa", "x", "-Name", "n"]);
+    // The glued/abbreviated spelling can no longer hide a protected operand.
+    assert.equal(ps("Set-ItemProperty -Lit:.env -Name x -Value y", "balanced").rule, "deny.protected_file_access");
+    assert.equal(ps("Export-Csv -Lit:.env", "balanced").rule, "deny.protected_file_access");
   });
 
   check("policy_adv_dialect_powershell_generic_parameter_model", () => {

@@ -168,6 +168,70 @@ const CMDLET_PARAMETERS: ReadonlyMap<string, readonly string[]> = new Map<string
     ["InputObject", "Name", "Id", "Force", "ErrorAction", "ErrorVariable", "WarningAction", "WarningVariable", "InformationAction", "InformationVariable", "OutBuffer", "PipelineVariable", "WhatIf", "Confirm"],
   ],
   ["tee-object", ["FilePath", "LiteralPath", "InputObject", "Append", "Variable"]],
+  [
+    "invoke-restmethod",
+    [
+      "Uri", "Method", "Body", "Headers", "OutFile", "InFile", "Credential", "UseBasicParsing",
+      "UserAgent", "WebSession", "TimeoutSec", "Proxy", "MaximumRedirection", "ContentType",
+    ],
+  ],
+  [
+    "start-bitstransfer",
+    ["Source", "Destination", "Credential", "Asynchronous", "Priority", "DisplayName", "Description"],
+  ],
+  [
+    "set-itemproperty",
+    [
+      "Path", "LiteralPath", "Name", "Value", "Type", "Force", "PassThru", "Filter", "Include",
+      "Exclude", "Credential", "InputObject",
+    ],
+  ],
+  [
+    "remove-itemproperty",
+    ["Path", "LiteralPath", "Name", "Force", "Filter", "Include", "Exclude", "Credential"],
+  ],
+  [
+    "export-csv",
+    [
+      "Path", "LiteralPath", "InputObject", "Delimiter", "UseCulture", "NoTypeInformation",
+      "IncludeTypeInformation", "NoClobber", "Append", "Force", "Encoding", "NoHeader", "QuoteFields",
+    ],
+  ],
+  ["import-csv", ["Path", "LiteralPath", "Delimiter", "Header", "Encoding", "UseCulture"]],
+  [
+    "export-clixml",
+    ["Path", "LiteralPath", "InputObject", "Depth", "Force", "NoClobber", "Encoding"],
+  ],
+  ["import-clixml", ["Path", "LiteralPath", "IncludeTotalCount", "Skip", "First"]],
+  [
+    "compress-archive",
+    ["Path", "LiteralPath", "DestinationPath", "CompressionLevel", "Update", "PassThru"],
+  ],
+  ["expand-archive", ["Path", "LiteralPath", "DestinationPath", "Force", "PassThru"]],
+  ["set-location", ["Path", "LiteralPath", "PassThru", "StackName"]],
+  ["push-location", ["Path", "LiteralPath", "PassThru", "StackName"]],
+  ["invoke-item", ["Path", "LiteralPath", "Filter", "Include", "Exclude", "Credential"]],
+  ["get-filehash", ["Path", "LiteralPath", "Algorithm", "InputStream"]],
+  ["unblock-file", ["Path", "LiteralPath"]],
+  [
+    "set-acl",
+    [
+      "Path", "LiteralPath", "AclObject", "InputObject", "ClearCentralAccessPolicy", "PassThru",
+      "Filter", "Include", "Exclude",
+    ],
+  ],
+  ["restart-service", ["Name", "DisplayName", "Force", "InputObject", "Include", "Exclude", "PassThru"]],
+  [
+    "set-service",
+    ["Name", "DisplayName", "Description", "StartupType", "Status", "InputObject", "PassThru"],
+  ],
+  [
+    "new-service",
+    ["Name", "BinaryPathName", "DisplayName", "Description", "StartupType", "Credential", "DependsOn"],
+  ],
+  ["remove-service", ["Name", "InputObject"]],
+  ["invoke-expression", ["Command"]],
+  ["set-executionpolicy", ["ExecutionPolicy", "Scope", "Force"]],
   ["select-object", ["Property", "InputObject", "First", "Last", "Skip", "Unique", "ExpandProperty", "ExcludeProperty", "Index", "Wait"]],
 ]);
 
@@ -213,6 +277,13 @@ const ALIAS_CMDLETS: ReadonlyMap<string, string> = new Map<string, string>([
   ["saps", "start-process"],
   ["start", "start-process"],
   ["sasv", "start-service"],
+  ["irm", "invoke-restmethod"],
+  ["iwr", "invoke-webrequest"],
+  ["sp", "set-itemproperty"],
+  ["rp", "remove-itemproperty"],
+  ["ipcsv", "import-csv"],
+  ["epcsv", "export-csv"],
+  ["pushd", "push-location"],
 ]);
 
 const VERB_NOUN = /^[A-Za-z]+-[A-Za-z][A-Za-z0-9]*$/;

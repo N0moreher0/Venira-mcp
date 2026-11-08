@@ -416,6 +416,17 @@ Checkpoints live outside every workspace, in one shared per-user folder, so ever
 - The file tools (read, write, edit, search, delete) refuse anything under the snapshot root or exact dir, the same way they refuse the data dir. Only `project_snapshot` touches the store.
 - Retention is per project (`VENIRA_SNAPSHOT_KEEP`), so one busy project cannot push out another's checkpoints.
 - Shell commands are guarded too: any read, write or delete operand inside the snapshot store is a hard deny in `balanced` / `strict` (`deny.protected_file_access`) and needs approval in `permissive`. `off` disables shell policy entirely, so keep checkpoints you cannot afford to lose in a separate backup as well.
+- Unreadable checkpoints are reported, never dropped silently. `project_snapshot action=list` adds `unreadable[]` (`snapshot_version_unsupported` = written by a newer venira-mcp, `snapshot_corrupt` = broken index file) and a hint. While any index is unreadable, blob cleanup is paused (`gc_skipped: "unreadable_manifests"` on delete), because that index still owns blobs this build cannot enumerate. For the first case upgrade venira-mcp; for the second, remove the broken `index\<id>.json.gz` yourself (agent shell access to the store is denied by design) and cleanup resumes.
+- Manifests carry a `version`. Older layouts are upgraded in memory when read (`MIGRATIONS` in `lib/snapshot-store.ts`); the file on disk is never rewritten.
+
+**Backing up the store**
+
+The store is plain files: immutable content-addressed `blobs\<ab>\<sha256>`, gzip manifests in `index\` written by write-then-rename, and `project.json` naming the owning workspace. A backup is a folder copy; a restore is copying it back to the same location (a checkpoint only restores into the workspace recorded in its manifest).
+
+- Run the copy yourself, outside the agent: shell policy denies the store to agent commands.
+- Copy the shared root (`VENIRA_SNAPSHOT_ROOT`) to cover every project, or one project folder. Windows: `robocopy "%LOCALAPPDATA%\venira\snapshots" "D:\backup\venira-snapshots" /E`; Linux/macOS: `rsync -a ~/.local/share/venira/snapshots/ /mnt/backup/venira-snapshots/` (macOS: the `Application Support` path above).
+- Do it while no agent is creating or deleting checkpoints. If you copy in two passes, take `index\` first and `blobs\` second: a blob is always written before the manifest that references it, so that order cannot capture a manifest without its blobs, while the reverse order can. Blobs without a manifest are harmless leftovers.
+- After restoring a backup, `project_snapshot action=list` should show the expected count and no `unreadable` entries.
 
 **Threats this does NOT protect against**: a malicious prompt can still instruct the agent to run destructive commands. Use a container/VM for untrusted workspaces — see [`ISOLATION.md`](./ISOLATION.md) for Docker, WSL 2 and Windows Sandbox setups, including mounts, network controls and their limits.
 

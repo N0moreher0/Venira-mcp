@@ -1,6 +1,6 @@
 {
   "name": "venira-mcp",
-  "version": "1.17.2",
+  "version": "1.18.0",
   "description": "venira-mcp — a standalone Model Context Protocol (MCP) server that gives coding agents (OpenCode, Claude Desktop, any MCP client) workspace-scoped tools in default/expert modes: file read/write/edit/delete, batch reads, line-range reads, content search, recent files, code intelligence, dependency graph + change impact, async shell run/poll/cancel, git-free checkpoints/rollback, pull requests + GitLab/GitHub/Bitbucket CI integrations (including bounded CI waiting), encrypted secrets with rotation metadata, deterministic error diagnosis + read planning, and a SQLite WAL audit trail where mutations can record a reason. Pure Node, no external binary. Structured JSON envelopes with hints and cached validated reads. npm i venira-mcp, then point your MCP client at `venira` or `venira-mcp`.",
   "keywords": [
     "mcp",
@@ -79,7 +79,7 @@
     "bench": "tsx scripts/bench.ts",
     "bench:mcp": "tsx scripts/bench-mcp.ts",
     "bench:tools": "npm run build && tsx scripts/bench-tools.ts",
-    "verify": "npm run test:provider-secret-guard && npm run test:github-device-flow && npm run test:shell-security && npm run test:approval-lifecycle && npm run test:shell-elicitation && npm run test:protected-snapshot-paths && npm run test:config-posture && npm run test:env-registry && npm run test:shell-policy-adversarial && npm run test:shell-policy-fuzz && npm run test:balanced-read-only && npm run test:restore-checkpoint && npm run test:audit-verify && tsx scripts/verify.ts",
+    "verify": "npm run test:provider-secret-guard && npm run test:github-device-flow && npm run test:shell-security && npm run test:approval-lifecycle && npm run test:shell-elicitation && npm run test:protected-snapshot-paths && npm run test:config-posture && npm run test:env-registry && npm run test:shell-policy-adversarial && npm run test:shell-policy-fuzz && npm run test:balanced-read-only && npm run test:restore-checkpoint && npm run test:shell-session-cache && npm run test:shell-policy-file && npm run test:snapshot-lifecycle && npm run test:audit-verify && tsx scripts/verify.ts",
     "doctor": "tsx scripts/doctor.ts",
     "test:github-device-flow": "tsx scripts/test-github-device-flow.ts",
     "test:provider-secret-guard": "tsx scripts/test-provider-secret-guard.ts",
@@ -91,15 +91,18 @@
     "test:env-registry": "tsx scripts/test-env-registry.ts",
     "test:shell-policy-adversarial": "tsx scripts/test-shell-policy-adversarial.ts",
     "test:shell-policy-fuzz": "tsx scripts/test-shell-policy-fuzz.ts",
-    "coverage:shell": "node --import tsx --test --experimental-test-coverage --enable-source-maps \"--test-coverage-include=lib/shell-*.ts\" scripts/test-shell-policy-adversarial.ts scripts/test-shell-policy-fuzz.ts scripts/test-balanced-read-only.ts scripts/test-restore-checkpoint.ts scripts/test-shell-security-regressions.ts",
+    "coverage:shell": "node --import tsx --test --experimental-test-coverage --enable-source-maps \"--test-coverage-include=lib/shell-*.ts\" scripts/test-shell-policy-adversarial.ts scripts/test-shell-policy-fuzz.ts scripts/test-balanced-read-only.ts scripts/test-restore-checkpoint.ts scripts/test-shell-security-regressions.ts scripts/test-shell-session-cache.ts scripts/test-shell-policy-file.ts",
     "test:balanced-read-only": "tsx scripts/test-balanced-read-only.ts",
     "test:restore-checkpoint": "tsx scripts/test-restore-checkpoint.ts",
+    "test:shell-session-cache": "tsx scripts/test-shell-session-cache.ts",
+    "test:shell-policy-file": "tsx scripts/test-shell-policy-file.ts",
     "measure:shell-asks": "tsx scripts/measure-shell-asks.ts",
     "test:audit-fallback": "npm run build && node scripts/test-audit-fallback.mjs",
     "test:audit-verify": "tsx scripts/test-audit-verify.ts",
     "check:docs": "tsx scripts/check-docs.ts",
     "check:source-shape": "tsx scripts/check-source-shape.ts",
-    "test:policy-corpus": "tsx scripts/policy-corpus-runner.ts"
+    "test:policy-corpus": "tsx scripts/policy-corpus-runner.ts",
+    "test:snapshot-lifecycle": "tsx scripts/test-snapshot-lifecycle.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",

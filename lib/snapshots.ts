@@ -21,7 +21,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { resolveWithin } from "./workspace.js";
 import type { RustResponse } from "./output.js";
-import { MANIFEST_VERSION, MAX_TOTAL_BYTES, KEEP_CHECKPOINTS, MAX_DELETE_EXTRA, effectiveMaxFiles, DEFAULT_EXCLUDES, snapshotDataDir, indexPath, blobRoot, blobPath, protectedPrefixes, isProtected, isAuditDbFile, newId, validId, sanitizeReason, type SnapshotManifest, readManifest, writeManifest, listManifests, hashBuffer, fileSignature, normalizeRel, pathHasSymlinkAncestor } from "./snapshot-store.js";
+import { MANIFEST_VERSION, MAX_TOTAL_BYTES, KEEP_CHECKPOINTS, MAX_DELETE_EXTRA, effectiveMaxFiles, DEFAULT_EXCLUDES, snapshotDataDir, indexPath, blobRoot, blobPath, protectedPrefixes, isProtected, isAuditDbFile, newId, validId, sanitizeReason, type SnapshotManifest, readManifest, writeManifest, listManifests, listManifestsDetailed, hashBuffer, fileSignature, normalizeRel, pathHasSymlinkAncestor } from "./snapshot-store.js";
 import { walkForSnapshot, storeBlob } from "./snapshot-walk.js";
 export { snapshotDataDir, sanitizeReason, type SnapshotManifest } from "./snapshot-store.js";
 
@@ -175,7 +175,7 @@ export async function opSnapshotCreate(
 
 export async function opSnapshotList(args: Record<string, unknown>): Promise<RustResponse> {
   const limit = Math.min(100, Math.max(1, Number(args.limit ?? 20) || 20));
-  const manifests = await listManifests();
+  const { manifests, unreadable } = await listManifestsDetailed();
   const rows = manifests.slice(0, limit).map((m) => ({
     id: m.id,
     label: m.label,
@@ -196,6 +196,10 @@ export async function opSnapshotList(args: Record<string, unknown>): Promise<Rus
         latest: rows[0]?.id,
         store: snapshotDataDir(),
         checkpoints: rows,
+        unreadable: unreadable.length > 0 ? unreadable.map((u) => ({ id: u.id, code: u.code })) : undefined,
+        hint: unreadable.length > 0
+          ? "Some checkpoint indexes could not be read (see unreadable[].code). They are kept, and blob cleanup is paused until they are resolved: snapshot_version_unsupported -> upgrade venira-mcp; snapshot_corrupt -> delete the index file by hand if it is truly broken."
+          : undefined,
       },
     },
     truncated: manifests.length > rows.length,
@@ -444,14 +448,21 @@ export async function opSnapshotDelete(
         deleted: true,
         blobs_removed: gc.removed,
         bytes_freed: gc.bytes,
+        gc_skipped: gc.skipped,
+        unreadable_manifests: gc.unreadable,
       },
     },
   };
 }
 
-/** Remove blobs that no remaining checkpoint references. */
-async function gcBlobs(): Promise<{ removed: number; bytes: number }> {
-  const manifests = await listManifests();
+/**
+ * Remove blobs that no remaining checkpoint references.
+ * Refuses to run while any manifest is unreadable: such a manifest still owns blobs we cannot enumerate
+ * (corrupt index, or written by a newer venira-mcp), so deleting "unreferenced" blobs could destroy its data.
+ */
+async function gcBlobs(): Promise<{ removed: number; bytes: number; skipped?: "unreadable_manifests"; unreadable?: number }> {
+  const { manifests, unreadable } = await listManifestsDetailed();
+  if (unreadable.length > 0) return { removed: 0, bytes: 0, skipped: "unreadable_manifests", unreadable: unreadable.length };
   const referenced = new Set<string>();
   for (const manifest of manifests) {
     for (const file of manifest.files) referenced.add(file.sha256);
@@ -492,13 +503,15 @@ async function gcBlobs(): Promise<{ removed: number; bytes: number }> {
 export async function snapshotHealth(): Promise<{
   store: string;
   checkpoints: number;
+  unreadable: number;
   logical_bytes: number;
   latest?: string;
 }> {
-  const manifests = await listManifests();
+  const { manifests, unreadable } = await listManifestsDetailed();
   return {
     store: snapshotDataDir(),
     checkpoints: manifests.length,
+    unreadable: unreadable.length,
     logical_bytes: manifests.reduce((sum, m) => sum + m.total_bytes, 0),
     latest: manifests[0]?.id,
   };
