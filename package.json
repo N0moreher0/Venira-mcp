@@ -91,6 +91,7 @@
     "test:env-registry": "tsx scripts/test-env-registry.ts",
     "test:shell-policy-adversarial": "tsx scripts/test-shell-policy-adversarial.ts",
     "test:shell-policy-fuzz": "tsx scripts/test-shell-policy-fuzz.ts",
+    "coverage:shell": "node --import tsx --test --experimental-test-coverage --enable-source-maps \"--test-coverage-include=lib/shell-*.ts\" scripts/test-shell-policy-adversarial.ts scripts/test-shell-policy-fuzz.ts scripts/test-balanced-read-only.ts scripts/test-restore-checkpoint.ts scripts/test-shell-security-regressions.ts",
     "test:balanced-read-only": "tsx scripts/test-balanced-read-only.ts",
     "test:restore-checkpoint": "tsx scripts/test-restore-checkpoint.ts",
     "measure:shell-asks": "tsx scripts/measure-shell-asks.ts",

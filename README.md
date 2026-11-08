@@ -456,7 +456,8 @@ Venira MCP rules:
 npm run build       # tsc → dist/  (verify launches dist/server.js, so rebuild before verifying)
 npm run smoke       # in-process sanity check
 npm run doctor      # 15 preflight checks
-npm run verify      # 504 behavioural + security checks
+npm run verify      # 518 behavioural + security checks
+npm run coverage:shell  # V8 coverage for lib/shell-*.ts (report only, no thresholds)
 npm run bench:mcp   # end-to-end numbers
 ```
 
