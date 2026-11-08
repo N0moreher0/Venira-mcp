@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { UNRESTRICTED, WORKSPACE, activeDataDir } from "./workspace.js";
 import { isNullSink, type ParsedCommand, type Segment } from "./shell-parser.js";
+import { dockerReadOnlySegment } from "./shell-policy-balanced-docker.js";
 import {
   NETWORK_COMMANDS,
   PKG_MANAGERS,
@@ -517,7 +518,10 @@ export const ASK_RULES: AskRule[] = [
   {
     id: "container_control",
     reason: "This controls containers or images on the host.",
-    test: (parsed) => parsed.segments.some((segment) => ["docker", "podman", "nerdctl"].includes(segment.command)),
+    test: (parsed) =>
+      parsed.segments.some(
+        (segment) => ["docker", "podman", "nerdctl"].includes(segment.command) && !dockerReadOnlySegment(segment),
+      ),
   },
   {
     id: "process_control",

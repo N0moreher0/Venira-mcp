@@ -264,6 +264,41 @@ for (const shell of ["bash", "powershell"] as const) {
 }
 check("strict mode does not use balanced.install", decide("npm ci --ignore-scripts", "bash", "strict").rule !== "balanced.install");
 
+// 2e. Read-only container queries: list and read logs only.
+const DOCKER_ALLOWED: string[] = [
+  "docker ps", "docker ps -a", "docker ps -aq", "docker ps --all --no-trunc", "docker images", "docker image ls",
+  "docker container ls -a", "docker compose ps", "docker logs app", "docker logs --tail 100 app",
+  "docker logs -t --tail all web-1", "podman ps", "docker ps | head -5",
+];
+const DOCKER_MUST_NOT_ALLOW: string[] = [
+  // anything that changes or runs containers
+  "docker run alpine", "docker rm x", "docker stop x", "docker exec app sh", "docker pull x", "docker build .",
+  "docker image rm x", "docker container prune", "docker compose up", "docker cp app:/etc/passwd .", "docker inspect app",
+  // remote daemons, followers, templates, filters and unknown flags
+  "docker ps -H tcp://evil:2375", "docker -H tcp://evil ps", "docker --context x ps", "docker compose -f x.yml ps",
+  "docker logs -f app", "docker logs --follow app", "docker logs --since 1h app", "docker logs", "docker logs app web",
+  "docker logs ../x", "docker ps --format {{.Names}}", "docker ps --filter name=x", "nerdctl ps",
+  // injection through combination
+  "docker ps $(whoami)", "docker ps > ../x", "docker logs app | sh", "docker ps; docker rm x", "docker images && docker rmi x",
+  "docker ps &",
+  // redirecting the daemon or wrapping the command must not slip through
+  "DOCKER_HOST=tcp://evil:2375 docker ps", "env DOCKER_HOST=tcp://evil docker ps", "sudo docker ps", "docker -- ps",
+  "docker compose --project-directory .. ps", "docker compose ps -f x.yml", "docker ps -l -H x", "docker context use x && docker ps",
+  "$env:DOCKER_HOST='tcp://evil'; docker ps", "docker.exe -H tcp://evil ps", "docker ps -a --format {{.Command}}",
+];
+for (const shell of ["bash", "powershell"] as const) {
+  for (const command of DOCKER_ALLOWED) {
+    const d = decide(command, shell);
+    check(`docker allow [${shell}] ${command}`, d.tier === "allow" && d.rule === "balanced.read_only", `${d.tier}/${d.rule}`);
+  }
+  for (const command of DOCKER_MUST_NOT_ALLOW) {
+    const d = decide(command, shell);
+    check(`docker not allowed [${shell}] ${command}`, d.tier !== "allow", `${d.tier}/${d.rule}`);
+  }
+}
+check("strict mode does not allow docker ps", decide("docker ps", "bash", "strict").tier !== "allow");
+check("permissive mode does not use balanced.read_only for docker", decide("docker ps", "bash", "permissive").rule !== "balanced.read_only");
+
 // 3. The tier only exists in balanced mode.
 check("strict mode does not use balanced.read_only", decide("cat README.md", "bash", "strict").rule !== "balanced.read_only");
 check("permissive mode does not use balanced.read_only", decide("cat README.md", "bash", "permissive").rule !== "balanced.read_only");

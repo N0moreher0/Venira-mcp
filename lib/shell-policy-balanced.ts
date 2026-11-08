@@ -22,6 +22,7 @@ import path from "node:path";
 import type { ParsedCommand, Segment } from "./shell-parser.js";
 import { balancedSegmentOk, gitSubcommandIndex, isOutsideWorkspace } from "./shell-policy-tables.js";
 import { extraReadOnlyOk, installSegmentOk, redirectKind, writeSegmentOk } from "./shell-policy-balanced-write.js";
+import { dockerReadOnlySegment } from "./shell-policy-balanced-docker.js";
 
 export type BalancedAllow = { rule: string; reason: string };
 
@@ -286,7 +287,7 @@ export function balancedAllow(parsed: ParsedCommand, cwd: string): BalancedAllow
 
   let cdSeen = false;
   for (const segment of parsed.segments) {
-    if (balancedSegmentOk(segment, parsed, cwd) || extraReadOnlyOk(segment, parsed, cwd)) {
+    if (balancedSegmentOk(segment, parsed, cwd) || extraReadOnlyOk(segment, parsed, cwd) || dockerReadOnlySegment(segment)) {
       if (CD_COMMANDS.has(segment.command)) cdSeen = true;
       continue;
     }

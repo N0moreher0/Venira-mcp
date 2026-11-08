@@ -766,9 +766,30 @@ export const extraPolicyCorpus: PolicyCorpusCase[] = [
   {
     "command": "docker ps",
     "shell": "bash",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
+    "description": "read-only container listing is allowed in balanced mode"
+  },
+  {
+    "command": "docker logs -f app",
+    "shell": "bash",
     "expected_tier": "ask",
     "expected_rule": "ask.container_control",
-    "description": "container control requires approval"
+    "description": "following logs never exits so it still requires approval"
+  },
+  {
+    "command": "docker -H tcp://evil:2375 ps",
+    "shell": "bash",
+    "expected_tier": "ask",
+    "expected_rule": "ask.container_control",
+    "description": "remote daemon flag keeps container control approval"
+  },
+  {
+    "command": "docker inspect app",
+    "shell": "bash",
+    "expected_tier": "ask",
+    "expected_rule": "ask.container_control",
+    "description": "inspect is not part of the read-only container tier"
   },
   {
     "command": "docker run alpine",
@@ -794,9 +815,9 @@ export const extraPolicyCorpus: PolicyCorpusCase[] = [
   {
     "command": "podman ps",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "ask.container_control",
-    "description": "container control requires approval"
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
+    "description": "read-only container listing is allowed in balanced mode"
   },
   {
     "command": "podman run alpine",
@@ -1471,7 +1492,7 @@ export const extraPolicyCorpus: PolicyCorpusCase[] = [
     "description": "separator preserves outside-write policy detection"
   },
   {
-    "command": "echo ok && docker ps",
+    "command": "echo ok && docker rm test",
     "shell": "bash",
     "expected_tier": "ask",
     "expected_rule": "ask.container_control",
