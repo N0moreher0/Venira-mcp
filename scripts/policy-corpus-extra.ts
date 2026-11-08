@@ -45,351 +45,351 @@ export const extraPolicyCorpus: PolicyCorpusCase[] = [
   {
     "command": "cat README.md",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "workspace file read"
   },
   {
     "command": "cat package.json",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "workspace file read"
   },
   {
     "command": "cat server.ts",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "workspace file read"
   },
   {
     "command": "cat lib/corehost.ts",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "workspace file read"
   },
   {
     "command": "cat scripts/verify.ts",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "workspace file read"
   },
   {
     "command": "cat TODO.md",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "workspace file read"
   },
   {
     "command": "cat LICENSE-MIT",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "workspace file read"
   },
   {
     "command": "cat LICENSE-APACHE",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "workspace file read"
   },
   {
     "command": "cat tsconfig.json",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "workspace file read"
   },
   {
     "command": "cat opencode.example.json",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "workspace file read"
   },
   {
     "command": "head -n 5 README.md",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "bounded workspace file read"
   },
   {
     "command": "head -n 5 package.json",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "bounded workspace file read"
   },
   {
     "command": "head -n 5 server.ts",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "bounded workspace file read"
   },
   {
     "command": "head -n 5 lib/corehost.ts",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "bounded workspace file read"
   },
   {
     "command": "head -n 5 scripts/verify.ts",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "bounded workspace file read"
   },
   {
     "command": "head -n 5 TODO.md",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "bounded workspace file read"
   },
   {
     "command": "head -n 5 LICENSE-MIT",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "bounded workspace file read"
   },
   {
     "command": "head -n 5 LICENSE-APACHE",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "bounded workspace file read"
   },
   {
     "command": "head -n 5 tsconfig.json",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "bounded workspace file read"
   },
   {
     "command": "head -n 5 opencode.example.json",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "bounded workspace file read"
   },
   {
     "command": "tail -n 5 README.md",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "bounded workspace file read"
   },
   {
     "command": "tail -n 5 package.json",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "bounded workspace file read"
   },
   {
     "command": "tail -n 5 server.ts",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "bounded workspace file read"
   },
   {
     "command": "tail -n 5 lib/corehost.ts",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "bounded workspace file read"
   },
   {
     "command": "tail -n 5 scripts/verify.ts",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "bounded workspace file read"
   },
   {
     "command": "tail -n 5 TODO.md",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "bounded workspace file read"
   },
   {
     "command": "tail -n 5 LICENSE-MIT",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "bounded workspace file read"
   },
   {
     "command": "tail -n 5 LICENSE-APACHE",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "bounded workspace file read"
   },
   {
     "command": "tail -n 5 tsconfig.json",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "bounded workspace file read"
   },
   {
     "command": "tail -n 5 opencode.example.json",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "bounded workspace file read"
   },
   {
     "command": "Get-Content README.md",
     "shell": "powershell",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "PowerShell workspace file read"
   },
   {
     "command": "Get-Content package.json",
     "shell": "powershell",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "PowerShell workspace file read"
   },
   {
     "command": "Get-Content server.ts",
     "shell": "powershell",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "PowerShell workspace file read"
   },
   {
     "command": "Get-Content lib/corehost.ts",
     "shell": "powershell",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "PowerShell workspace file read"
   },
   {
     "command": "Get-Content scripts/verify.ts",
     "shell": "powershell",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "PowerShell workspace file read"
   },
   {
     "command": "Get-Content TODO.md",
     "shell": "powershell",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "PowerShell workspace file read"
   },
   {
     "command": "Get-Content LICENSE-MIT",
     "shell": "powershell",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "PowerShell workspace file read"
   },
   {
     "command": "Get-Content LICENSE-APACHE",
     "shell": "powershell",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "PowerShell workspace file read"
   },
   {
     "command": "Get-Content tsconfig.json",
     "shell": "powershell",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "PowerShell workspace file read"
   },
   {
     "command": "Get-Content opencode.example.json",
     "shell": "powershell",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "PowerShell workspace file read"
   },
   {
     "command": "type README.md",
     "shell": "cmd",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "cmd workspace file read"
   },
   {
     "command": "type package.json",
     "shell": "cmd",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "cmd workspace file read"
   },
   {
     "command": "type server.ts",
     "shell": "cmd",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "cmd workspace file read"
   },
   {
     "command": "type lib/corehost.ts",
     "shell": "cmd",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "cmd workspace file read"
   },
   {
     "command": "type scripts/verify.ts",
     "shell": "cmd",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "cmd workspace file read"
   },
   {
     "command": "type TODO.md",
     "shell": "cmd",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "cmd workspace file read"
   },
   {
     "command": "type LICENSE-MIT",
     "shell": "cmd",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "cmd workspace file read"
   },
   {
     "command": "type LICENSE-APACHE",
     "shell": "cmd",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "cmd workspace file read"
   },
   {
     "command": "type tsconfig.json",
     "shell": "cmd",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "cmd workspace file read"
   },
   {
     "command": "type opencode.example.json",
     "shell": "cmd",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "cmd workspace file read"
   },
   {
@@ -836,50 +836,50 @@ export const extraPolicyCorpus: PolicyCorpusCase[] = [
   {
     "command": "pwd",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "workspace-safe or informational command"
   },
   {
     "command": "ls",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "workspace-safe or informational command"
   },
   {
     "command": "ls -la",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "workspace-safe or informational command"
   },
   {
     "command": "find . -maxdepth 1 -type f",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "workspace-safe or informational command"
   },
   {
     "command": "find . -maxdepth 2 -type d",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "workspace-safe or informational command"
   },
   {
     "command": "grep -n TODO TODO.md",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "workspace-safe or informational command"
   },
   {
     "command": "grep -R Venira README.md",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "workspace-safe or informational command"
   },
   {
@@ -892,15 +892,15 @@ export const extraPolicyCorpus: PolicyCorpusCase[] = [
   {
     "command": "sort TODO.md",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "workspace-safe or informational command"
   },
   {
     "command": "wc -l README.md",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "workspace-safe or informational command"
   },
   {
@@ -913,29 +913,29 @@ export const extraPolicyCorpus: PolicyCorpusCase[] = [
   {
     "command": "echo hello",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "workspace-safe or informational command"
   },
   {
     "command": "true",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "workspace-safe or informational command"
   },
   {
     "command": "false",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "workspace-safe or informational command"
   },
   {
     "command": "date",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "workspace-safe or informational command"
   },
   {
@@ -948,15 +948,15 @@ export const extraPolicyCorpus: PolicyCorpusCase[] = [
   {
     "command": "whoami",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "workspace-safe or informational command"
   },
   {
     "command": "npm --version",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "workspace-safe or informational command"
   },
   {
@@ -1501,36 +1501,36 @@ export const extraPolicyCorpus: PolicyCorpusCase[] = [
   {
     "command": "git rev-parse --show-toplevel",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "additional safe command false-positive regression"
   },
   {
     "command": "git ls-files",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "additional safe command false-positive regression"
   },
   {
     "command": "git shortlog -n",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "additional safe command false-positive regression"
   },
   {
     "command": "git tag --list",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "additional safe command false-positive regression"
   },
   {
     "command": "git remote -v",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "additional safe command false-positive regression"
   },
   {
@@ -1543,36 +1543,36 @@ export const extraPolicyCorpus: PolicyCorpusCase[] = [
   {
     "command": "echo corpus-01",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "additional safe command false-positive regression"
   },
   {
     "command": "echo corpus-02",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "additional safe command false-positive regression"
   },
   {
     "command": "echo corpus-03",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "additional safe command false-positive regression"
   },
   {
     "command": "echo corpus-04",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "additional safe command false-positive regression"
   },
   {
     "command": "echo corpus-05",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "additional safe command false-positive regression"
   },
   {
@@ -1676,15 +1676,15 @@ export const extraPolicyCorpus: PolicyCorpusCase[] = [
   {
     "command": "grep -n \"(foo)\" README.md",
     "shell": "powershell",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "regex-looking arguments are not treated as paths"
   },
   {
     "command": "Select-String -Pattern \"a(b)\" README.md",
     "shell": "powershell",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "regex-looking arguments are not treated as paths"
   },
   {

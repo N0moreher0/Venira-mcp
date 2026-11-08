@@ -47,6 +47,7 @@ import { resolveSecurityProfile, securityProfileIsExplicit, securityProfileSetti
 
 export { tokenize } from "./shell-tokenizer.js";
 import { HARD_DENY, ASK_RULES, isSafeSegment, isOutsideWorkspace } from "./shell-policy-tables.js";
+import { balancedAllow } from "./shell-policy-balanced.js";
 export { isOutsideWorkspace } from "./shell-policy-tables.js";
 
 // ---------------------------------------------------------------------------
@@ -295,6 +296,7 @@ export function evaluateShellCommand(
     STRICT_ALLOW,
     isSafeSegment,
     override,
+    balancedAllow,
   );
 }
 

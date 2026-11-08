@@ -65,6 +65,7 @@ export function evaluateParsedShellCommand(
   strictAllowRules: StrictAllowRule[],
   isSafeSegment: (segment: Segment) => boolean,
   override?: OverrideDecision,
+  balancedAllow?: (parsed: ParsedCommand, cwd: string) => { rule: string; reason: string } | null,
 ): Decision {
   const hash = crypto.createHash("sha256").update(command.replace(/\r\n/g, "\n").trim()).digest("hex").slice(0, 32);
 
@@ -199,6 +200,10 @@ export function evaluateParsedShellCommand(
       if (matchCustomRule(parsed, rule)) {
         return { tier: "allow", rule: rule.id, reason: rule.reason ?? "Allowed by policy file.", mode, command_hash: hash };
       }
+    }
+    const balanced = balancedAllow?.(parsed, cwd);
+    if (balanced) {
+      return { tier: "allow", rule: balanced.rule, reason: balanced.reason, mode, command_hash: hash };
     }
   }
   // In balanced mode, default to ask (not allow) for unclassified commands

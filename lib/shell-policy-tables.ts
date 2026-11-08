@@ -674,6 +674,9 @@ export function isSafeSegment(segment: Segment): boolean {
   if (segment.command === "git") {
     const safeSubs = new Set(["status", "diff", "log", "show", "add", "commit", "branch"]);
     if (!segment.subcommand || !safeSubs.has(segment.subcommand)) return false;
+    // `git -c core.fsmonitor=... status`, `--output=...`, `--no-index <outside>` run or touch
+    // things the policy cannot see; same guard as the balanced read-only tier.
+    if (gitSubcommandIndex(segment) < 0) return false;
     if (segment.subcommand === "branch" && /\s-D\b/.test(segment.argv.join(" "))) return false;
     return true;
   }
@@ -687,6 +690,140 @@ export function isSafeSegment(segment: Segment): boolean {
     return segment.argv.includes("--no-install");
   }
   return true;
+}
+
+/**
+ * Balanced-mode read-only / inspect allowlist. Narrower than STRICT_ALLOW on
+ * purpose: no interpreters (node/python), no `git config|tag|branch`, no
+ * `npm config`. Everything here only reads, but several tools can write or run
+ * code through flags, so `isBalancedReadOnly` also rejects those flags.
+ */
+const BALANCED_READ_ONLY: Array<{ command: string; subcommands?: string[] }> = [
+  ...[
+    "ls", "dir", "pwd", "echo", "write-output", "cat", "type", "head", "tail", "wc", "which", "where",
+    "whoami", "date", "stat", "file", "tree", "du", "df", "sort", "uniq", "cut", "grep", "rg", "find",
+    "findstr", "test", "true", "false", "cd", "chdir", "set-location", "sl", "get-childitem", "gci",
+    "get-content", "gc", "select-string", "sls", "get-location", "test-path", "get-item",
+    "get-process", "select-object",
+  ].map((command) => ({ command })),
+  {
+    command: "git",
+    subcommands: [
+      "status", "log", "diff", "show", "rev-parse", "remote", "describe", "blame", "ls-files", "shortlog",
+      "cat-file", "ls-tree", "rev-list", "merge-base", "show-ref", "name-rev", "for-each-ref", "diff-tree",
+      "diff-index", "count-objects", "grep", "stash", "config", "tag", "branch",
+    ],
+  },
+  { command: "npm", subcommands: ["ls", "list", "outdated", "view"] },
+];
+
+const GIT_GLOBAL_FLAGS_OK = new Set(["--no-pager", "--no-optional-locks", "--paginate", "-p", "-P"]);
+const GIT_UNSAFE_FLAG = /^--(output|ext-diff|textconv|open-files-in-pager|exec-path|no-index)/i;
+const FIND_UNSAFE_FLAGS = new Set([
+  "-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls",
+]);
+
+/**
+ * Index of the git subcommand token in argv, or -1 when the invocation carries a
+ * global option (`-c`, `-C`, `--git-dir`, `--exec-path` ...) or a subcommand flag that
+ * can redirect config/repo/helpers, run programs, or write/read outside the policy's view.
+ * Only pager/lock global flags are tolerated before the subcommand.
+ */
+export function gitSubcommandIndex(segment: Segment, cwd?: string): number {
+  let i = 1;
+  for (;;) {
+    const arg = segment.argv[i];
+    if (!arg) break;
+    if (GIT_GLOBAL_FLAGS_OK.has(arg)) {
+      i += 1;
+      continue;
+    }
+    // `-C <dir>` is fine only when <dir> is provably inside the workspace (needs cwd).
+    if (arg === "-C" && cwd !== undefined) {
+      const dir = segment.argv[i + 1];
+      if (!dir || dir.startsWith("-") || /\$|%[A-Za-z_][A-Za-z0-9_]*%|`/.test(dir) || isOutsideWorkspace(dir, cwd)) return -1;
+      i += 2;
+      continue;
+    }
+    break;
+  }
+  if (!segment.argv[i] || segment.argv[i].startsWith("-")) return -1;
+  // `-O` (case-sensitive: `ls-files -o` is a harmless lowercase flag) runs a pager/helper;
+  // `--filters` runs configured smudge/clean drivers.
+  if (segment.argv.slice(i + 1).some((arg) => GIT_UNSAFE_FLAG.test(arg) || arg.startsWith("-O") || arg === "--filters")) return -1;
+  return i;
+}
+
+const GIT_MUTATING_TAG_FLAG = /^(-[dDfamsuF]|--delete|--force|--annotate|--message|--sign|--local-user|--file)$/;
+const GIT_MUTATING_BRANCH_FLAG = /^(-[dDmMcCfu]|--delete|--move|--copy|--force|--set-upstream-to.*|--unset-upstream|--edit-description|--track|--no-track)$/;
+const GIT_CONFIG_READ_FLAGS = new Set(["--get", "--get-all", "--get-regexp", "--list", "-l"]);
+const GIT_CONFIG_UNSAFE_FLAG = /^(--add|--unset|--unset-all|--replace-all|--edit|-e|--file|-f|--global-file|--blob|--includes|--system|--rename-section|--remove-section)/;
+
+/** Per-subcommand read-only check: some subcommands read or write depending on their arguments. */
+function gitReadOnlySubcommandOk(segment: Segment, i: number): boolean {
+  const rest = segment.argv.slice(i + 1);
+  switch (segment.subcommand) {
+    case "remote":
+      return rest.every((arg) => arg.startsWith("-"));
+    case "stash":
+      return rest[0] === "list" || rest[0] === "show";
+    case "config":
+      return rest.length > 0 && GIT_CONFIG_READ_FLAGS.has(rest[0]) && !rest.some((arg) => GIT_CONFIG_UNSAFE_FLAG.test(arg));
+    case "tag":
+      return (
+        rest.length === 0 ||
+        (rest.some((arg) => arg === "-l" || arg === "--list") && !rest.some((arg) => GIT_MUTATING_TAG_FLAG.test(arg)))
+      );
+    case "branch":
+      return (
+        !rest.some((arg) => GIT_MUTATING_BRANCH_FLAG.test(arg)) &&
+        (rest.every((arg) => arg.startsWith("-")) || rest.some((arg) => arg === "-l" || arg === "--list"))
+      );
+    default:
+      return true;
+  }
+}
+
+export function balancedSegmentOk(segment: Segment, parsed: ParsedCommand, cwd: string): boolean {
+  const entry = BALANCED_READ_ONLY.find((rule) => rule.command === segment.command);
+  if (!entry) return false;
+  if (entry.subcommands && segment.subcommand && !entry.subcommands.includes(segment.subcommand)) return false;
+  const args = segment.argv.slice(1);
+  const lower = args.map((arg) => arg.toLowerCase());
+
+  for (const arg of args) {
+    // Unresolved variables / substitutions hide the real target from the policy.
+    if (/\$|%[A-Za-z_][A-Za-z0-9_]*%|`/.test(arg)) return false;
+    if (arg.startsWith("-")) continue;
+    if (parsed.dialect === "cmd" && arg.startsWith("/")) continue;
+    if (isOutsideWorkspace(arg, cwd)) return false;
+  }
+
+  switch (segment.command) {
+    case "find":
+      return !lower.some((arg) => FIND_UNSAFE_FLAGS.has(arg));
+    case "sort":
+      return !lower.some((arg) => arg === "-o" || arg.startsWith("--output"));
+    case "tree":
+      return !lower.includes("-o");
+    case "rg":
+      return !lower.some((arg) => arg.startsWith("--pre") || arg.startsWith("--hostname-bin"));
+    case "date":
+      return !lower.some((arg) => arg === "-s" || arg.startsWith("--set"));
+    case "git": {
+      const i = gitSubcommandIndex(segment, cwd);
+      if (i < 0) return false;
+      return gitReadOnlySubcommandOk(segment, i);
+    }
+    default:
+      return true;
+  }
+}
+
+/** True when every segment is a read-only/inspect command (pipes allowed, redirects are not). */
+export function isBalancedReadOnly(parsed: ParsedCommand, cwd: string): boolean {
+  if (parsed.has_redirect || parsed.has_background || parsed.has_substitution) return false;
+  return parsed.segments.every((segment) => balancedSegmentOk(segment, parsed, cwd));
 }
 
 // ---------------------------------------------------------------------------

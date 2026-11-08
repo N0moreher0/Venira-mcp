@@ -14,7 +14,7 @@ let passed = 0;
 let failed = 0;
 
 for (const test of corpus) {
-  const result = evaluateShellCommand(test.command, process.cwd(), { mode: "balanced" });
+  const result = evaluateShellCommand(test.command, process.cwd(), { mode: "balanced", shell: test.shell });
   const ok = result.tier === test.expected_tier && result.rule === test.expected_rule;
   if (ok) {
     console.log(`✅ ${test.command}`);

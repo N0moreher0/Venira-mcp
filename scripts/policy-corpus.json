@@ -79,8 +79,8 @@
   {
     "command": "ls 2>&1",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "balanced.default_ask",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.read_only",
     "description": "stderr redirect should be allowed (default_allow due to redirect)"
   },
   {
