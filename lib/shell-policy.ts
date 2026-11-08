@@ -141,7 +141,69 @@ export function enabledShellOverrides(): Set<ShellOverride> {
   return enabled;
 }
 
+/**
+ * Flags a fast-forward publish needs. Anything else (force, delete, mirror, prune, --no-verify, --exec,
+ * --receive-pack, --repo, config injection) is not covered by the override and goes through the normal verdict.
+ */
+const PUSH_SAFE_FLAGS = new Set([
+  "-u", "--set-upstream", "--follow-tags", "--tags", "--atomic", "-n", "--dry-run",
+  "-v", "--verbose", "-q", "--quiet", "--progress", "--porcelain", "--no-progress",
+]);
+/** Remote names and branch/tag refs: no leading `-`/`+`/`:` (option, force, delete), no URLs or shell characters. */
+const PUSH_REF_RE = /^[A-Za-z0-9_][A-Za-z0-9._/@-]{0,199}$/;
+
+/** `git push [safe flags] [<remote> [<ref>[:<ref>]]]`: never a force, a delete, a URL or an option that runs code. */
+function isPlainPush(args: string[]): boolean {
+  const positional: string[] = [];
+  for (const arg of args) {
+    if (arg.startsWith("-")) {
+      if (!PUSH_SAFE_FLAGS.has(arg)) return false;
+    } else {
+      positional.push(arg);
+    }
+  }
+  if (positional.length > 2) return false;
+  for (const item of positional) {
+    const parts = item.split(":");
+    if (parts.length > 2) return false;
+    // `src:dst` needs both sides (an empty src deletes the remote ref); `+src` is a force, rejected by the regex.
+    if (!parts.every((part) => PUSH_REF_RE.test(part) && !part.includes("..") && !part.endsWith(".lock"))) return false;
+  }
+  // The remote is a name, not a URL: `git push <url>` could publish to an unreviewed destination.
+  if (positional[0] && /[:@]/.test(positional[0])) return false;
+  return true;
+}
+
+/** A `git add` / `git commit` step that may precede the push in the same call (no hook bypass, no amend). */
+function isPlainStage(argv: string[]): boolean {
+  const sub = argv[1]?.toLowerCase();
+  if (argv[0] !== "git" || (sub !== "add" && sub !== "commit")) return false;
+  const rest = argv.slice(2);
+  if (rest.some((arg) => /^(?:-n|--no-verify|--amend|--no-gpg-sign|-c|--exec)$/i.test(arg) || /^--(?:git-dir|work-tree)/i.test(arg))) return false;
+  if (sub === "add") {
+    // Never stage ignored files (`-f`) or anything that looks like a secret or lives outside the workspace.
+    if (rest.some((arg) => /^(?:-f|--force)$/i.test(arg) || /^-[A-Za-z]*f[A-Za-z]*$/.test(arg))) return false;
+    const paths = rest.filter((arg) => arg !== "--" && !arg.startsWith("-"));
+    if (paths.some((p) => /(?:^|[\\/])\.env(?:\.|$)|\.(?:pem|key|p12|pfx)$|id_(?:rsa|ed25519|ecdsa)|secret|credential|^\.\.|[*?\[\]$%`]/i.test(p))) return false;
+  }
+  return true;
+}
+
+/**
+ * `git push` on its own, or `git add|commit ... && git push`: the usual "commit then publish" step in one call.
+ * Pipes, redirects, background jobs and substitutions never qualify; neither does anything but add/commit before the push.
+ */
+function matchesGitPushOverride(parsed: ParsedCommand): boolean {
+  if (parsed.segments.length < 1 || parsed.segments.length > 3) return false;
+  if (parsed.has_pipe || parsed.has_redirect || parsed.has_background || parsed.has_substitution) return false;
+  const last = parsed.segments[parsed.segments.length - 1];
+  const pushOk =
+    last.command === "git" && last.subcommand === "push" && last.argv[1]?.toLowerCase() === "push" && isPlainPush(last.argv.slice(2));
+  return pushOk && parsed.segments.slice(0, -1).every((segment) => isPlainStage(segment.argv));
+}
+
 function matchesOverride(parsed: ParsedCommand, cwd: string, name: ShellOverride): boolean {
+  if (name === "ALLOW_GIT_PUSH") return matchesGitPushOverride(parsed);
   if (
     parsed.segments.length !== 1 ||
     parsed.has_pipe ||
@@ -152,9 +214,6 @@ function matchesOverride(parsed: ParsedCommand, cwd: string, name: ShellOverride
     return false;
   }
   const segment = parsed.segments[0];
-  if (name === "ALLOW_GIT_PUSH") {
-    return segment.command === "git" && segment.subcommand === "push" && segment.argv[1]?.toLowerCase() === "push";
-  }
   if (!READ_COMMANDS.has(segment.command)) return false;
   const paths = segment.argv.slice(1).filter((arg) => arg !== "--" && !arg.startsWith("-"));
   if (paths.length !== 1) return false;

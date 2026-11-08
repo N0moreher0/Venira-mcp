@@ -386,6 +386,8 @@ Full reference: the source reads 90+ distinct `VENIRA_*` names; this table lists
 | Self-install | `project_install_self` writes another client's config | `VENIRA_ALLOW_SELF_INSTALL` (`0`) |
 | Named shell override | `ALLOW_GIT_PUSH` / `ALLOW_ENV_READ` | `VENIRA_SHELL_OVERRIDES` (unset), plus `override` and a `reason` on the call |
 
+`ALLOW_GIT_PUSH` covers `git push` with publish flags only (`-u`, `--follow-tags`, `--tags`, `--atomic`, `--dry-run`, ...) to a remote *name* and plain refs, optionally preceded by `git add` / `git commit` in the same call (`git add -A && git commit -m "x" && git push`). Force (`-f`, `+ref`, `--force-with-lease`), deletes (`:ref`, `--delete`), `--mirror`, `--prune`, `--no-verify`, `--amend`, `git add -f`, staging secret-looking files, URLs as remotes, pipes, redirects and substitutions fall back to the normal verdict (ask/deny).
+
 Granting a shell or JS approval:
 
 1. The call fails with `[approval_required]` and returns `data.approval_id` (valid for 5 minutes) together with the command or code, the rule and the reason. Shell and JS share one payload, `data.approval`: `{ approval_id, gate, rule, reason, subject_preview, expires_at, approve_command, retry_with: { tool, arguments } }`.

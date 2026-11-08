@@ -182,7 +182,7 @@ export async function runShellPolicy(
   );
   process.env.VENIRA_SHELL_OVERRIDES = "ALLOW_GIT_PUSH,ALLOW_ENV_READ";
   const explicitGitPush = policyModule.evaluateShellCommand(
-    "git push --no-verify origin main",
+    "git push -u origin main",
     ws,
     {
       mode: "strict",
@@ -195,6 +195,21 @@ export async function runShellPolicy(
     explicitGitPush.tier === "allow" &&
       explicitGitPush.rule === "override.ALLOW_GIT_PUSH",
     explicitGitPush,
+  );
+  const unsafeGitPush = policyModule.evaluateShellCommand(
+    "git push --no-verify origin main",
+    ws,
+    {
+      mode: "strict",
+      override: "ALLOW_GIT_PUSH",
+      overrideReason: "the override must not cover hook bypass",
+    },
+  );
+  check(
+    "named_git_push_override_excludes_hook_bypass",
+    unsafeGitPush.tier !== "allow" &&
+      unsafeGitPush.rule !== "override.ALLOW_GIT_PUSH",
+    unsafeGitPush,
   );
   const overrideWorkspace = path.resolve(dir);
   await fs.writeFile(
