@@ -103,6 +103,8 @@ function hasRecursiveForce(argv: string[]): boolean {
 const POSIX_ROOT_TARGET = /^\/+(?:\.\/+)*\*?$/;
 const WINDOWS_ROOT_TARGET = /^[A-Za-z]:[\\/](?:\*)?$/;
 const HOME_TARGET = /^(?:~|\$HOME|\$\{HOME\}|%USERPROFILE%)(?:[\\/]\*)?$/i;
+/** The Windows user-profiles tree: deleting it destroys every home directory on the drive. */
+const WINDOWS_USER_TREE_TARGET = /^[A-Za-z]:[\\/]Users(?:[\\/]\*)?$/i;
 
 /**
  * True for a delete target that is a filesystem root, the whole home
@@ -113,6 +115,9 @@ function catastrophicDeleteTarget(target: string, cwd: string): boolean {
   const raw = target.trim();
   if (!raw) return false;
   if (POSIX_ROOT_TARGET.test(raw) || WINDOWS_ROOT_TARGET.test(raw) || HOME_TARGET.test(raw)) return true;
+  // `C:\Users` is the parent of every profile: same catastrophe as deleting `~`, and a plain
+  // `Remove-Item -Recurse -Force C:\Users` used to only ask. Wildcards one level down match too.
+  if (WINDOWS_USER_TREE_TARGET.test(raw)) return true;
   const expanded = expandHome(
     raw
       .replace(/^\$\{HOME\}/i, os.homedir())

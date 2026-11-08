@@ -85,6 +85,9 @@ const PRIVILEGE_CASES: HardDenyCase[] = [
 const ROOT_DELETE_WINDOWS_CASES: HardDenyCase[] = [
   { id: "filesystem_drive_root_remove_item", command: "Remove-Item -Recurse -Force C:\\", rule: "deny.filesystem_root_delete" },
   { id: "filesystem_home_remove_item", command: "Remove-Item -Recurse -Force $HOME", rule: "deny.filesystem_root_delete" },
+  { id: "filesystem_users_tree_remove_item", command: "Remove-Item -Recurse -Force C:\\Users", rule: "deny.filesystem_root_delete" },
+  { id: "filesystem_users_tree_wildcard", command: "Remove-Item -Recurse -Force C:\\Users\\*", rule: "deny.filesystem_root_delete" },
+  { id: "filesystem_users_tree_prefixes", command: "ri -Rec -Fo C:\\Users", rule: "deny.filesystem_root_delete" },
   { id: "filesystem_drive_root_rm", command: "rm -rf C:\\", rule: "deny.root_delete" },
 ];
 

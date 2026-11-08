@@ -55,6 +55,8 @@ const SEEDS: Seed[] = [
   // hard deny — Windows drive/home deletion
   { id: "drive_root_powershell", shell: "powershell", kind: "deny", command: "Remove-Item -Recurse -Force C:\\" },
   { id: "home_powershell", shell: "powershell", kind: "deny", command: "Remove-Item -Recurse -Force $HOME" },
+  { id: "users_tree_powershell", shell: "powershell", kind: "deny", command: "Remove-Item -Recurse -Force C:\\Users" },
+  { id: "users_tree_wildcard", shell: "powershell", kind: "deny", command: "Remove-Item -Recurse -Force C:\\Users\\*" },
   { id: "drive_tree_rd", shell: "cmd", kind: "deny", command: "rd /s /q C:\\Windows" },
   { id: "drive_wildcard_del", shell: "cmd", kind: "deny", command: "del /f /s /q C:\\*" },
   // ask — destructive but workspace-scoped
@@ -76,7 +78,6 @@ const SEEDS: Seed[] = [
   { id: "write_manifest", shell: "posix", kind: "ask", command: "echo hi > package.json" },
   { id: "write_manifest_powershell", shell: "powershell", kind: "ask", command: "Set-Content -Path package.json -Value x" },
   { id: "copy_outside", shell: "cmd", kind: "ask", command: "copy a.txt ..\\outside.txt" },
-  { id: "delete_home_tree", shell: "powershell", kind: "ask", command: "Remove-Item -Recurse -Force C:\\Users" },
   // safe — the fuzzer must never turn these into denies
   { id: "git_status", shell: "posix", kind: "safe", command: "git status" },
   { id: "read_readme", shell: "posix", kind: "safe", command: "cat README.md" },
