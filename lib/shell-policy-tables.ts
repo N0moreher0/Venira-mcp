@@ -7,6 +7,7 @@ import path from "node:path";
 import { UNRESTRICTED, WORKSPACE, activeDataDir } from "./workspace.js";
 import { isNullSink, type ParsedCommand, type Segment } from "./shell-parser.js";
 import { dockerReadOnlySegment } from "./shell-policy-balanced-docker.js";
+import { pythonModuleRunOk } from "./shell-policy-python.js";
 import {
   NETWORK_COMMANDS,
   PKG_MANAGERS,
@@ -540,9 +541,11 @@ export const ASK_RULES: AskRule[] = [
   {
     id: "dynamic_execution",
     reason: "This executes code that the policy cannot safely inspect.",
-    test: (parsed) =>
+    test: (parsed, cwd) =>
       parsed.segments.some((segment) => {
         if (["eval", "exec", "source", ".", "invoke-expression", "iex"].includes(segment.command)) return true;
+        // `python -m pytest|mypy` is judged like the bare tool (flag guard + no shadowing module in the cwd).
+        if (pythonModuleRunOk(segment, cwd)) return false;
         const flags = segment.argv;
         // Interpreter + a script file / code operand the policy cannot statically
         // analyze (`bash ./probe.sh`, `python3 ./probe.py`, `perl x.pl`, …) is

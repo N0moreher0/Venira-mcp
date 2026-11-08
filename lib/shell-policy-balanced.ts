@@ -2,6 +2,8 @@
  * Shell policy — balanced-mode allow tiers.
  *
  * `balanced.read_only`  : pure inspection (see `balancedSegmentOk` in shell-policy-tables.ts).
+ * `balanced.workspace_write` / `balanced.install` / `balanced.workspace_delete`: see the sibling modules
+ *   (`workspace_delete` = explicit single-file deletes, run only after a checkpoint).
  * `balanced.local_dev`  : routine local development inside the workspace:
  *   - build / test / lint toolchain commands (npm|pnpm|yarn scripts with conventional names,
  *     cargo, go, dotnet, pytest, eslint, prettier --check, vitest, jest, mocha, tsc ...);
@@ -26,6 +28,8 @@ import type { ParsedCommand, Segment } from "./shell-parser.js";
 import { balancedSegmentOk, devToolFlagsOk, gitSubcommandIndex, isOutsideWorkspace, TSC_UNSAFE_FLAG } from "./shell-policy-tables.js";
 import { extraReadOnlyOk, installSegmentOk, redirectKind, writeSegmentOk, writeTargetOk } from "./shell-policy-balanced-write.js";
 import { dockerReadOnlySegment } from "./shell-policy-balanced-docker.js";
+import { deleteSegmentOk } from "./shell-policy-balanced-delete.js";
+import { pythonModuleRunOk } from "./shell-policy-python.js";
 
 export type BalancedAllow = { rule: string; reason: string };
 
@@ -46,8 +50,15 @@ const INSTALL: BalancedAllow = {
   rule: "balanced.install",
   reason: "Dependency install that only reproduces what the project declares, with lifecycle scripts disabled.",
 };
-/** Ordered by how much a tier can change: read-only < local dev < workspace write < install. */
-const LEVELS: BalancedAllow[] = [READ_ONLY, LOCAL_DEV, WORKSPACE_WRITE, INSTALL];
+const WORKSPACE_DELETE: BalancedAllow = {
+  rule: "balanced.workspace_delete",
+  reason: "Delete of explicit single files inside the workspace; a checkpoint is stored first and the command does not run without it.",
+};
+/**
+ * Ordered by how much a tier can change: read-only < local dev < workspace write < install < delete.
+ * Delete is last so any command containing one reports the rule that makes `opShellRun` take a checkpoint.
+ */
+const LEVELS: BalancedAllow[] = [READ_ONLY, LOCAL_DEV, WORKSPACE_WRITE, INSTALL, WORKSPACE_DELETE];
 
 const CD_COMMANDS = new Set(["cd", "chdir", "set-location", "sl", "pushd", "popd"]);
 const UNRESOLVED = /\$|%[A-Za-z_][A-Za-z0-9_]*%|`/;
@@ -234,7 +245,8 @@ function toolchainOk(segment: Segment): boolean {
     case "python3":
     case "py":
       if (segment.argv.length === 2 && (segment.argv[1] === "--version" || segment.argv[1] === "-V")) return true;
-      return sub === "-m" && ["pytest", "unittest", "mypy", "flake8"].includes(lower[2] ?? "");
+      // `-m <module>` needs the working directory (shadowing check): see pythonModuleRunOk in localDevSegmentOk.
+      return false;
     case "eslint":
       return devToolFlagsOk("eslint", segment.argv);
     case "prettier":
@@ -327,11 +339,12 @@ function localDevSegmentOk(segment: Segment, parsed: ParsedCommand, cwd: string,
     return scriptRunnerOk(segment, cwd, cdSeen);
   }
   if (segment.command === "npx") return npxToolchainOk(segment, cwd, cdSeen);
+  if (pythonModuleRunOk(segment, cwd)) return !cdSeen;
   return toolchainOk(segment);
 }
 
 /**
- * Tier of a segment that is not read-only: 1 local dev, 2 workspace write, 3 install.
+ * Tier of a segment that is not read-only: 1 local dev, 2 workspace write, 3 install, 4 single-file delete.
  * Combined balanced-mode allow decision: every segment must be read-only, local-dev,
  * a workspace write or a declared-deps install; the result is the highest tier any
  * segment (or redirect) needed. Returns null when the command still needs approval.
@@ -339,6 +352,7 @@ function localDevSegmentOk(segment: Segment, parsed: ParsedCommand, cwd: string,
 function segmentLevel(segment: Segment, parsed: ParsedCommand, cwd: string, cdSeen: boolean): number {
   if (localDevSegmentOk(segment, parsed, cwd, cdSeen)) return 1;
   if (writeSegmentOk(segment, parsed, cwd)) return 2;
+  if (deleteSegmentOk(segment, parsed, cwd, cdSeen)) return 4;
   return 3;
 }
 
@@ -360,7 +374,8 @@ export function balancedAllow(parsed: ParsedCommand, cwd: string): BalancedAllow
     if (
       localDevSegmentOk(segment, parsed, cwd, cdSeen) ||
       writeSegmentOk(segment, parsed, cwd) ||
-      installSegmentOk(segment, parsed, cwd)
+      installSegmentOk(segment, parsed, cwd) ||
+      deleteSegmentOk(segment, parsed, cwd, cdSeen)
     ) {
       level = Math.max(level, segmentLevel(segment, parsed, cwd, cdSeen));
       continue;

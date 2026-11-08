@@ -9,7 +9,7 @@
  * still need approval.
  */
 import "./clean-env.js";
-import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, symlink, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -47,6 +47,16 @@ await mkdir(path.join(workspaceDir, "node_modules", ".bin"), { recursive: true }
 await mkdir(path.join(workspaceDir, "lib"));
 for (const bin of ["tsc", "eslint", "prettier", "vitest", "tsx"]) {
   await writeFile(path.join(workspaceDir, "node_modules", ".bin", bin), "#!/bin/sh\n");
+}
+// Fixture for the single-file delete tier: a regular file, a directory with content, and (when permitted) a symlink.
+await writeFile(path.join(workspaceDir, "stale.log"), "old\n");
+await mkdir(path.join(workspaceDir, "scratch"));
+await writeFile(path.join(workspaceDir, "scratch", "x.txt"), "x\n");
+let symlinkMade = true;
+try {
+  await symlink(path.join(workspaceDir, "stale.log"), path.join(workspaceDir, "link.log"));
+} catch {
+  symlinkMade = false; // Windows without symlink privilege
 }
 process.env.VENIRA_WORKSPACE = workspaceDir;
 process.env.VENIRA_DATA_DIR = path.join(tempDir, "data");
@@ -106,7 +116,7 @@ const MUST_NOT_ALLOW: string[] = [
   "cat ../outside.txt", "ls ~", "grep x /etc/passwd", "cat $HOME/x", "ls $(whoami)", "cat %USERPROFILE%\\x",
   "git diff --no-index /etc/passwd a.txt",
   // redirects, background, chaining into non-allowlisted commands
-  "ls &", "cat a && rm b", "ls | sh", "cat a.txt | node",
+  "ls &", "cat a && rm -rf b", "ls | sh", "cat a.txt | node",
   // interpreters and package mutation
   "node -e 1", "python x.py", "npm config set x y", "npm install",
   // protected files stay denied/asked
@@ -220,13 +230,13 @@ const WRITE_MUST_NOT_ALLOW: string[] = [
   "tar -czf out.tgz -I x dist", "cp -s a b", "cp -L a b", "mv -t dir a", "cp --parents a b",
   "chmod 4755 scripts/run.sh", "chmod u+s x", "chmod -R 777 .", "chmod 777 x", "chmod o+w x",
   // links and deletion keep asking
-  "ln -s /etc x", "rm tmp.txt", "rm -rf dist", "del tmp.txt", "rmdir /s /q dist",
+  "ln -s /etc x", "rm -rf dist", "rmdir /s /q dist",
 ];
 const POWERSHELL_WRITE_MUST_NOT_ALLOW: string[] = [
   "Set-Content -Path ../x -Value hi", "Set-Content -Path package.json -Value x", "Copy-Item a.txt ~/b",
   "New-Item -Path .git/hooks/x", "Out-File -FilePath ../x.txt", "Set-Content -Path out.txt -Value $env:X",
   "Set-Content -Path out.txt -Credential x", "New-Item -ItemType SymbolicLink -Path l -Value /etc",
-  "New-Item -ItemType Junction -Path j -Value C:\\", "Remove-Item tmp.txt", "Remove-Item -Recurse -Force dist",
+  "New-Item -ItemType Junction -Path j -Value C:\\", "Remove-Item -Recurse -Force dist",
 ];
 for (const [shell, commands] of [
   ["bash", WRITE_MUST_NOT_ALLOW],
@@ -350,6 +360,120 @@ for (const shell of ["bash", "powershell"] as const) {
 check("npx tsc --noEmit uses balanced.local_dev", decide("npx tsc --noEmit", "bash").rule === "balanced.local_dev");
 check("strict mode does not use balanced.local_dev for npx", decide("npx tsc --noEmit", "bash", "strict").rule !== "balanced.local_dev");
 check("permissive mode does not use balanced.local_dev for npx", decide("npx tsc --noEmit", "bash", "permissive").rule !== "balanced.local_dev");
+
+// 2e. balanced.workspace_delete: explicit single files only; the checkpoint half is pinned in test-restore-checkpoint.
+const DELETE_ALLOWED: string[] = [
+  "rm stale.log", "rm tmp.txt", "rm lib/gone.ts", "rm stale.log tmp.txt", "mkdir -p out && rm stale.log",
+  "rm stale.log && echo done",
+];
+// POSIX-only spellings: in PowerShell `rm -f` is a -Force abbreviation family, so it is judged by the PS rules (asks).
+const POSIX_DELETE_ALLOWED: string[] = ["rm -f stale.log", "rm -fv stale.log", "rm --force stale.log"];
+const POWERSHELL_DELETE_ALLOWED: string[] = [
+  "Remove-Item stale.log", "Remove-Item -Path stale.log -Force", "Remove-Item -LiteralPath stale.log", "ri stale.log",
+  "del stale.log", "Remove-Item tmp.txt", "Remove-Item -Path:stale.log", "Remove-Item -LiteralPath:stale.log", "Remove-Item -Force:$true stale.log",
+];
+const CMD_DELETE_ALLOWED: string[] = ["del stale.log", "erase stale.log", "del tmp.txt"];
+for (const [shell, commands] of [
+  ["bash", [...DELETE_ALLOWED, ...POSIX_DELETE_ALLOWED]],
+  ["powershell", [...DELETE_ALLOWED, ...POWERSHELL_DELETE_ALLOWED]],
+  ["cmd", CMD_DELETE_ALLOWED],
+] as const) {
+  for (const command of commands) {
+    const d = decide(command, shell);
+    check(`delete allow [${shell}] ${command}`, d.tier === "allow" && d.rule === "balanced.workspace_delete", `${d.tier}/${d.rule}`);
+  }
+}
+const DELETE_MUST_NOT_ALLOW: string[] = [
+  // recursive, directories, interactive and unknown flags
+  "rm -rf dist", "rm -r lib", "rm -R scratch", "rm --recursive scratch", "rm scratch", "rm lib", "rm -d scratch",
+  "rm -i stale.log", "rm -I stale.log", "rm -- stale.log", "rm --no-preserve-root /", "rm", "rm -f",
+  // globs, lists, braces and expansion
+  "rm *.log", "rm stale.*", "rm stale.l?g", "rm stale.[l]og", "rm {stale.log,package.json}", "rm stale.log,package.json",
+  "rm stale.log;package.json", "rm $HOME/x", "rm ~/x", "rm $(echo stale.log)",
+  // outside the workspace, the root itself, directories by spelling
+  "rm ../x", "rm /etc/passwd", "rm /", "rm .", "rm ..", "rm scratch/", "rm stale.log/", "rm ../../stale.log",
+  // protected, build, config and hook files
+  "rm package.json", "rm .env", "rm .git/config", "rm .git/hooks/pre-commit", "rm node_modules/.bin/tsc", "rm tsconfig.json",
+  "rm yarn.lock", "rm Makefile", "rm jest.config.js", "rm .github/workflows/ci.yml", "rm stale.log package.json",
+  // stream syntax, look-alike programs, context changes, side channels
+  "rm stale.log:stream", "./rm stale.log", "cd lib && rm a.ts", "cd scratch && rm x.txt",
+  "rm stale.log &", "rm stale.log > ../x", "rm stale.log | sh", "echo x > package.json && rm stale.log", "sudo rm stale.log",
+  "xargs rm", "find . -name '*.log' -delete", "git clean -f", "unlink stale.log", "shred stale.log", "truncate -s 0 stale.log",
+];
+const POWERSHELL_DELETE_MUST_NOT_ALLOW: string[] = [
+  "Remove-Item -Recurse stale.log", "Remove-Item -r stale.log", "rm -r scratch", "rm -f stale.log", "rm -fv stale.log", "rm --force stale.log", "Remove-Item scratch",
+  "Remove-Item -Force -Recurse scratch", "Remove-Item stale.log,package.json", "Remove-Item -Path stale.log -Include *.log",
+  "Remove-Item *.log", "Remove-Item -Path:*.log", "Remove-Item -Path:../x", "Remove-Item -Path:package.json", "Remove-Item -Recurse:$true stale.log",
+  "Remove-Item -Path", "Remove-Item -Path -Force", "Remove-Item -Confirm:$false stale.log",
+  "Remove-Item -Path $env:TEMP\\x", "Remove-Item -Stream * stale.log", "Remove-Item -Exclude a stale.log", "Remove-Item",
+  "Remove-Item stale.log; Remove-Item package.json", "Remove-Item ..\\x", "Remove-Item C:\\Windows\\x", "ri -Recurse scratch",
+  "Remove-Item -Path stale.log -Filter *", "Remove-Item (Get-ChildItem *.log)", "Set-Location lib; Remove-Item a.ts",
+];
+const CMD_DELETE_MUST_NOT_ALLOW: string[] = [
+  "del /s stale.log", "del /s /q *.log", "del *.log", "del /p stale.log", "del /a:h stale.log", "del /f /q stale.log", "del /q stale.log", "rmdir /s /q dist", "rd scratch",
+  "rd /s scratch", "del scratch", "del package.json", "del ..\\x", "del stale.log,package.json", "del stale.log package.json",
+  "cd lib && del a.ts", "del stale.log > ..\\x", "del %USERPROFILE%\\x", "del C:\\Windows\\x", "del /f /q /s stale.log", "del stale.log^",
+  "del", "del /f",
+];
+for (const [shell, commands] of [
+  ["bash", DELETE_MUST_NOT_ALLOW],
+  ["powershell", [...DELETE_MUST_NOT_ALLOW, ...POWERSHELL_DELETE_MUST_NOT_ALLOW]],
+  ["cmd", CMD_DELETE_MUST_NOT_ALLOW],
+] as const) {
+  for (const command of commands) {
+    const d = decide(command, shell);
+    check(`delete not allowed [${shell}] ${command}`, d.tier !== "allow", `${d.tier}/${d.rule}`);
+  }
+}
+if (symlinkMade) {
+  for (const shell of ["bash", "powershell"] as const) {
+    check(`delete of a symlink asks [${shell}]`, decide("rm link.log", shell).tier !== "allow");
+  }
+}
+check("a compound with a delete reports the delete rule", decide("npm ci --ignore-scripts && rm stale.log", "bash").rule === "balanced.workspace_delete");
+check("git restore + rm reports the delete rule", decide("git restore lib/a.ts && rm stale.log", "bash").rule === "balanced.workspace_delete");
+check("strict mode does not use balanced.workspace_delete", decide("rm stale.log", "bash", "strict").rule !== "balanced.workspace_delete");
+check("permissive mode does not use balanced.workspace_delete", decide("rm stale.log", "bash", "permissive").rule !== "balanced.workspace_delete");
+check("rm -rf / is still hard-denied", decide("rm -rf /", "bash").tier === "deny");
+
+// 2f. `python -m pytest|mypy` is judged like the bare tool; anything else behind `python` stays dynamic execution.
+const PYTHON_MODULE_ALLOWED: string[] = [
+  "python -m pytest", "python3 -m pytest -q tests", "python -m pytest -x -k name", "python -m pytest tests/test_a.py",
+  "py -m pytest", "python -m mypy lib", "python -m pytest && python -m mypy lib",
+];
+const PYTHON_MODULE_MUST_NOT_ALLOW: string[] = [
+  "python -m pytest -p evil", "python -m pytest -pevil", "python -m pytest -c ../x.ini", "python -m pytest -c../x.ini",
+  "python -m pytest --rootdir=/x", "python -m pytest --rootdir ..", "python -m pytest --basetemp=../t", "python -m pytest -qc x",
+  "python -m pytest --junitxml=../r.xml", "python -m pytest -o addopts=x", "python -m pytest --pyargs os", "python -m pytest ../tests",
+  "python -m pytest $HOME", "python -m pytest > ../x", "python -m pytest &", "python -m pytest | sh", "cd lib && python -m pytest",
+  "python -m unittest", "python -m http.server", "python -m pip install x", "python -m venv x", "python -m evil", "python -m",
+  "python -I -m pytest", "python -c 1", "python x.py", "python3 ./probe.py", "./python -m pytest", "python -m mypy --config-file ../x",
+  "python -m mypy --shadow-file a b",
+];
+for (const shell of ["bash", "powershell"] as const) {
+  for (const command of PYTHON_MODULE_ALLOWED) {
+    const d = decide(command, shell);
+    check(`python -m allow [${shell}] ${command}`, d.tier === "allow" && d.rule !== "balanced.default_ask", `${d.tier}/${d.rule}`);
+  }
+  for (const command of PYTHON_MODULE_MUST_NOT_ALLOW) {
+    const d = decide(command, shell);
+    check(`python -m not allowed [${shell}] ${command}`, d.tier !== "allow", `${d.tier}/${d.rule}`);
+  }
+}
+check("python -m pytest uses balanced.local_dev", decide("python -m pytest", "bash").rule === "balanced.local_dev");
+check("strict mode does not use balanced.local_dev for python -m", decide("python -m pytest", "bash", "strict").rule !== "balanced.local_dev");
+check("strict mode still asks for python -m pytest", decide("python -m pytest", "bash", "strict").tier === "ask");
+check("python --version stays allowed in strict mode", decide("python --version", "bash", "strict").tier === "allow");
+// A workspace module named like the tool would be imported instead of the real one (cwd leads sys.path).
+for (const shadow of ["pytest.py", "_pytest.py", "mypy.pyi"]) {
+  await writeFile(path.join(workspaceDir, shadow), "raise SystemExit\n");
+  const target = shadow.startsWith("mypy") ? "python -m mypy lib" : "python -m pytest";
+  for (const shell of ["bash", "powershell"] as const) {
+    check(`python -m shadowed by ${shadow} asks [${shell}]`, decide(target, shell).tier !== "allow");
+  }
+  await unlink(path.join(workspaceDir, shadow));
+}
+check("python -m pytest is allowed again once the shadow file is gone", decide("python -m pytest", "bash").tier === "allow");
 
 // 3. The tier only exists in balanced mode.
 check("strict mode does not use balanced.read_only", decide("cat README.md", "bash", "strict").rule !== "balanced.read_only");

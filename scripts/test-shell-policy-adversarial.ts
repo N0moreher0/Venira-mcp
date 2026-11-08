@@ -209,6 +209,35 @@ try {
     }
   });
 
+  check("policy_adv_dialect_powershell_colon_params", () => {
+    const ps = (command: string, mode: "balanced" | "permissive") =>
+      policy.evaluateShellCommand(command, workspaceDir, { shell: "powershell", mode });
+    // `-Name:value` is the same parameter as `-Name value`: the operand must stay visible to hard-deny rules.
+    const denied: Array<[string, string]> = [
+      ["Get-Content -Path:.env", "deny.protected_file_access"],
+      ["Get-Content -LiteralPath:.env", "deny.protected_file_access"],
+      ["Select-String -Path:.env -Pattern x", "deny.protected_file_access"],
+      ["Remove-Item -Path:.env", "deny.protected_file_access"],
+      ["Remove-Item -Path:C:\\ -Recurse -Force", "deny.filesystem_root_delete"],
+      ["Remove-Item -LiteralPath:C:\\ -Rec -Fo", "deny.filesystem_root_delete"],
+      ["Remove-Item -Recurse -Force -Path:$HOME", "deny.filesystem_root_delete"],
+      ["Remove-Item -Recurse:$true -Force:$true C:\\", "deny.filesystem_root_delete"],
+    ];
+    for (const [command, rule] of denied) {
+      const balanced = ps(command, "balanced");
+      assert.equal(balanced.rule, rule, `${command}: ${JSON.stringify(balanced)}`);
+      const permissive = ps(command, "permissive");
+      assert.equal(permissive.rule, `ask.${rule}`, `${command}: ${JSON.stringify(permissive)}`);
+    }
+    // Writes outside the workspace stay on approval in the colon spelling.
+    for (const command of ["Out-File -FilePath:../x.txt", "Set-Content -Path:../x.txt -Value 1", "Copy-Item a.txt -Destination:../b.txt"]) {
+      const decision = ps(command, "balanced");
+      assert.equal(decision.tier, "ask", `${command}: ${JSON.stringify(decision)}`);
+    }
+    // External programs keep their own `-name:value` convention: only cmdlets and known aliases are split.
+    assert.equal(ps("dotnet build -p:Configuration=Release", "balanced").rule, "balanced.local_dev");
+  });
+
   check("policy_adv_dialect_cmd", () => {
     assert.equal(
       policy.evaluateShellCommand("cmd /c type .env", workspaceDir, { shell: "cmd", mode: "balanced" }).rule,

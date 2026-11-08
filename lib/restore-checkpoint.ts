@@ -1,10 +1,11 @@
 /**
- * Automatic checkpoint before `git restore` overwrites the working tree.
+ * Automatic checkpoint before `git restore` overwrites the working tree or a single-file delete
+ * (`balanced.workspace_delete`) removes files.
  *
- * The balanced policy lets `git restore <file>` run without approval because the overwrite is
+ * The balanced policy lets `git restore <file>` and `rm <file>` run without approval because the change is
  * recoverable. The policy itself is a synchronous pure function and cannot take a checkpoint, so
  * `opShellRun` calls this right before spawning: it works out which workspace paths the command
- * would overwrite, and stores them with `opSnapshotCreate`.
+ * would overwrite or delete, and stores them with `opSnapshotCreate`.
  *
  *   - explicit files that an existing checkpoint already holds byte-for-byte are not captured again
  *     (the older checkpoint is reused), so repeated restores do not push manual checkpoints out of
@@ -17,6 +18,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { ParsedCommand } from "./shell-parser.js";
 import { opSnapshotCreate } from "./snapshots.js";
+import { deleteSegmentOperands } from "./shell-policy-balanced-delete.js";
 import { hashBuffer, listManifests, normalizeRel } from "./snapshot-store.js";
 
 const CD_COMMANDS = new Set(["cd", "chdir", "set-location", "sl", "pushd", "popd"]);
@@ -114,6 +116,27 @@ export async function restoreTargets(parsed: ParsedCommand, cwd: string, root: s
   return { paths: [...found], explicitFilesOnly };
 }
 
+/**
+ * Existing regular files that the single-file delete segments of `parsed` (the ones `balanced.workspace_delete`
+ * would run unattended) are about to remove, or null when none. Missing operands are no-ops.
+ */
+export async function deleteTargets(parsed: ParsedCommand, cwd: string, root: string): Promise<RestoreTargets | null> {
+  const found = new Set<string>();
+  let cdSeen = false;
+  for (const segment of parsed.segments) {
+    if (CD_COMMANDS.has(segment.command)) {
+      cdSeen = true;
+      continue;
+    }
+    for (const operand of deleteSegmentOperands(segment, parsed, cwd, cdSeen)) {
+      const abs = path.resolve(cwd, operand);
+      const stat = await statOrNull(abs);
+      if (stat?.isFile()) found.add(normalizeRel(root, abs));
+    }
+  }
+  return found.size === 0 ? null : { paths: [...found], explicitFilesOnly: true };
+}
+
 /** True when some existing checkpoint holds every file byte-for-byte; returns its id. */
 async function findCoveringCheckpoint(paths: string[], root: string): Promise<string | null> {
   const hashes = new Map<string, string>();
@@ -132,23 +155,29 @@ async function findCoveringCheckpoint(paths: string[], root: string): Promise<st
 }
 
 /**
- * Take (or reuse) the checkpoint for the `git restore` segments in `parsed`.
- * Returns null when the command overwrites nothing. Throws when the checkpoint cannot be stored.
+ * Take (or reuse) the checkpoint for the `git restore` and single-file delete segments in `parsed`.
+ * Returns null when the command overwrites or deletes nothing. Throws when the checkpoint cannot be stored.
  */
 export async function checkpointBeforeRestore(
   parsed: ParsedCommand,
   cwd: string,
   root: string,
 ): Promise<RestoreCheckpoint | null> {
-  const targets = await restoreTargets(parsed, cwd, root);
-  if (!targets) return null;
+  const restore = await restoreTargets(parsed, cwd, root);
+  const removal = await deleteTargets(parsed, cwd, root);
+  if (!restore && !removal) return null;
+  const targets: RestoreTargets = {
+    paths: [...new Set([...(restore?.paths ?? []), ...(removal?.paths ?? [])])],
+    explicitFilesOnly: (restore?.explicitFilesOnly ?? true) && (removal?.explicitFilesOnly ?? true),
+  };
 
   if (targets.explicitFilesOnly) {
     const covering = await findCoveringCheckpoint(targets.paths, root);
     if (covering) return { id: covering, paths: targets.paths, reused: true, truncated: false };
   }
 
-  const label = `auto: before git restore ${targets.paths.join(" ")}`.slice(0, 300);
+  const kind = restore && removal ? "git restore + delete" : removal ? "delete" : "git restore";
+  const label = `auto: before ${kind} ${targets.paths.join(" ")}`.slice(0, 300);
   const response = await opSnapshotCreate({ paths: targets.paths, label }, root);
   const data = (response.result?.data ?? {}) as { id?: unknown; truncated?: unknown };
   if (typeof data.id !== "string") throw new Error("snapshot_create returned no checkpoint id");

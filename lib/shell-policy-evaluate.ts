@@ -46,6 +46,11 @@ function matchCustomRule(parsed: ParsedCommand, rule: ShellRule): boolean {
 
 function strictAllow(parsed: ParsedCommand, rules: StrictAllowRule[]): boolean {
   return parsed.segments.every((segment) => {
+    // The dynamic_execution ask rule exempts `python -m pytest|mypy` for the balanced tiers only; strict keeps
+    // asking for any python run that names a module or script.
+    if (["python", "python3", "py"].includes(segment.command) && segment.argv.slice(1).some((arg) => !arg.startsWith("-"))) {
+      return false;
+    }
     const entry = rules.find((rule) => rule.command === segment.command);
     if (!entry) return false;
     if (!entry.subcommands || entry.subcommands.length === 0) return true;
