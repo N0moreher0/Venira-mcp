@@ -5,7 +5,7 @@
 import os from "node:os";
 import path from "node:path";
 import { UNRESTRICTED, WORKSPACE, activeDataDir } from "./workspace.js";
-import { type ParsedCommand, type Segment } from "./shell-parser.js";
+import { isNullSink, type ParsedCommand, type Segment } from "./shell-parser.js";
 import {
   NETWORK_COMMANDS,
   PKG_MANAGERS,
@@ -122,6 +122,7 @@ function catastrophicDeleteTarget(target: string, cwd: string): boolean {
 function writeTargetsOutside(parsed: ParsedCommand, cwd: string): string[] {
   const targets: string[] = [];
   for (const target of parsed.redirect_targets) {
+    if (isNullSink(target, parsed.dialect)) continue;
     if (isOutsideWorkspace(target, cwd)) targets.push(target);
   }
   for (const segment of parsed.segments) {
@@ -256,6 +257,7 @@ const FILE_INSPECT_COMMANDS = new Set(["select-string", "sls", "findstr"]);
 
 function hasUnresolvableFileArgument(parsed: ParsedCommand): boolean {
   for (const target of parsed.redirect_targets) {
+    if (isNullSink(target, parsed.dialect)) continue;
     if (isUnresolvableToken(target)) return true;
   }
   for (const segment of parsed.segments) {

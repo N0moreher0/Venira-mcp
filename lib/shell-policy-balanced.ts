@@ -21,6 +21,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { ParsedCommand, Segment } from "./shell-parser.js";
 import { balancedSegmentOk, gitSubcommandIndex, isOutsideWorkspace } from "./shell-policy-tables.js";
+import { extraReadOnlyOk, installSegmentOk, redirectKind, writeSegmentOk } from "./shell-policy-balanced-write.js";
 
 export type BalancedAllow = { rule: string; reason: string };
 
@@ -32,6 +33,17 @@ const LOCAL_DEV: BalancedAllow = {
   rule: "balanced.local_dev",
   reason: "Local build/test command or reversible git branch/stash operation inside the workspace.",
 };
+
+const WORKSPACE_WRITE: BalancedAllow = {
+  rule: "balanced.workspace_write",
+  reason: "File write inside the workspace (not a protected, build-config or hook file).",
+};
+const INSTALL: BalancedAllow = {
+  rule: "balanced.install",
+  reason: "Dependency install that only reproduces what the project declares, with lifecycle scripts disabled.",
+};
+/** Ordered by how much a tier can change: read-only < local dev < workspace write < install. */
+const LEVELS: BalancedAllow[] = [READ_ONLY, LOCAL_DEV, WORKSPACE_WRITE, INSTALL];
 
 const CD_COMMANDS = new Set(["cd", "chdir", "set-location", "sl", "pushd", "popd"]);
 const UNRESOLVED = /\$|%[A-Za-z_][A-Za-z0-9_]*%|`/;
@@ -252,24 +264,41 @@ function localDevSegmentOk(segment: Segment, parsed: ParsedCommand, cwd: string,
 }
 
 /**
- * Combined balanced-mode allow decision. Every segment must be read-only or local-dev;
- * the result is `balanced.local_dev` when any segment needed that tier, otherwise
- * `balanced.read_only`. Returns null when the command still needs approval.
+ * Tier of a segment that is not read-only: 1 local dev, 2 workspace write, 3 install.
+ * Combined balanced-mode allow decision: every segment must be read-only, local-dev,
+ * a workspace write or a declared-deps install; the result is the highest tier any
+ * segment (or redirect) needed. Returns null when the command still needs approval.
+ */
+function segmentLevel(segment: Segment, parsed: ParsedCommand, cwd: string, cdSeen: boolean): number {
+  if (localDevSegmentOk(segment, parsed, cwd, cdSeen)) return 1;
+  if (writeSegmentOk(segment, parsed, cwd)) return 2;
+  return 3;
+}
+
+/**
+ * Combined balanced-mode allow decision (see segmentLevel).
  */
 export function balancedAllow(parsed: ParsedCommand, cwd: string): BalancedAllow | null {
-  if (parsed.has_redirect || parsed.has_background || parsed.has_substitution) return null;
-  let localDev = false;
+  if (parsed.has_background || parsed.has_substitution) return null;
+  const redirect = redirectKind(parsed, cwd);
+  if (redirect === null) return null;
+  let level = redirect === "write" ? 2 : 0;
+
   let cdSeen = false;
   for (const segment of parsed.segments) {
-    if (balancedSegmentOk(segment, parsed, cwd)) {
+    if (balancedSegmentOk(segment, parsed, cwd) || extraReadOnlyOk(segment, parsed, cwd)) {
       if (CD_COMMANDS.has(segment.command)) cdSeen = true;
       continue;
     }
-    if (localDevSegmentOk(segment, parsed, cwd, cdSeen)) {
-      localDev = true;
+    if (
+      localDevSegmentOk(segment, parsed, cwd, cdSeen) ||
+      writeSegmentOk(segment, parsed, cwd) ||
+      installSegmentOk(segment, parsed, cwd)
+    ) {
+      level = Math.max(level, segmentLevel(segment, parsed, cwd, cdSeen));
       continue;
     }
     return null;
   }
-  return localDev ? LOCAL_DEV : READ_ONLY;
+  return LEVELS[level];
 }

@@ -34,6 +34,19 @@ const RUNNERS = new Set([
 ]);
 
 const REDIRECT_NEEDS_TARGET = new Set([">", ">>", ">|", "<", "<<", "&>", "&>>"]);
+
+/**
+ * Redirect targets that discard output instead of writing a file. The spelling is dialect-specific:
+ * `$null` is only a sink in PowerShell (in POSIX it is an ordinary, possibly attacker-set, variable)
+ * and `nul` only in cmd/PowerShell (in POSIX it is a regular file name).
+ */
+export function isNullSink(target: string, dialect: ShellDialect): boolean {
+  const lower = target.toLowerCase();
+  if (lower === "/dev/null") return true;
+  if (dialect === "powershell") return lower === "$null" || lower === "nul";
+  if (dialect === "cmd") return lower === "nul";
+  return false;
+}
 const GIT_OPTIONS_WITH_VALUE = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env", "--super-prefix"]);
 
 /** Interpreter names (with/without `.exe`) usable as the inner target of `cmd /c <script|command>`. */

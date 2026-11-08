@@ -34,7 +34,7 @@ for (const key of Object.keys(process.env)) {
   if (key.startsWith("VENIRA_")) delete process.env[key];
 }
 process.env.VENIRA_WORKSPACE = workspaceDir;
-process.env.VENIRA_DATA_DIR = tempDir;
+process.env.VENIRA_DATA_DIR = path.join(tempDir, "data");
 process.env.VENIRA_SECURITY_PROFILE = "balanced";
 
 const policy = (await import(
