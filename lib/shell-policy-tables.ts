@@ -586,7 +586,15 @@ export const ASK_RULES: AskRule[] = [
   {
     id: "process_control",
     reason: "This kills or signals processes it does not own.",
-    test: (parsed) => parsed.segments.some((segment) => ["kill", "killall", "pkill", "taskkill", "stop-process"].includes(segment.command)),
+    test: (parsed) =>
+      parsed.segments.some(
+        (segment) => ["kill", "killall", "pkill", "taskkill", "stop-process"].includes(segment.command),
+      ) ||
+      parsed.segments.some(
+        (segment) =>
+          segment.command === "stop-process" &&
+          segment.argv.some((arg) => arg.toLowerCase() === "-force"),
+      ),
   },
   {
     id: "secret_dump",

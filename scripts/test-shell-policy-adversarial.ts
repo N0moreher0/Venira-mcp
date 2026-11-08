@@ -341,6 +341,9 @@ try {
     assert.equal(ps("Remove-Item -Rec -Fo ./dist", "balanced").rule, "ask.destructive_delete");
     // Ambiguous prefixes are rejected by PowerShell itself and stay unclassified (approval required).
     assert.equal(ps("Remove-Item -F ./probe-missing.txt", "balanced").tier, "ask");
+    // `stop-process -Force` is a process kill and must be judged by the process-control ask rule.
+    assert.equal(ps("stop-process -Force 1234", "balanced").rule, "ask.process_control");
+    assert.equal(ps("Stop-Process -Force -Name probe", "balanced").rule, "ask.process_control");
   });
 
   check("policy_adv_dialect_cmd_attached_switch_values", () => {
