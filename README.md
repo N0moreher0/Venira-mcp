@@ -34,6 +34,8 @@ Set up Venira MCP for this workspace.
 | Codex | `~/.codex/config.toml` | TOML |
 
 All use the same `npx` command. See §2 for ready-to-copy JSON/TOML.
+
+In this repo `.vscode/mcp.json` is git-ignored because it holds machine-specific settings (and may relax security flags). Copy `.vscode/mcp.example.json` to `.vscode/mcp.json` and adjust it locally.
 ## 2. Client configs (copy-paste)
 
 The examples use four environment variables: workspace, tool set, output size, and security posture. For most users, change only `VENIRA_WORKSPACE` and keep `VENIRA_SECURITY_PROFILE=balanced`.
