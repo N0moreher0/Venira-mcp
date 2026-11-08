@@ -174,32 +174,17 @@ function isPlainPush(args: string[]): boolean {
   return true;
 }
 
-/** A `git add` / `git commit` step that may precede the push in the same call (no hook bypass, no amend). */
-function isPlainStage(argv: string[]): boolean {
-  const sub = argv[1]?.toLowerCase();
-  if (argv[0] !== "git" || (sub !== "add" && sub !== "commit")) return false;
-  const rest = argv.slice(2);
-  if (rest.some((arg) => /^(?:-n|--no-verify|--amend|--no-gpg-sign|-c|--exec)$/i.test(arg) || /^--(?:git-dir|work-tree)/i.test(arg))) return false;
-  if (sub === "add") {
-    // Never stage ignored files (`-f`) or anything that looks like a secret or lives outside the workspace.
-    if (rest.some((arg) => /^(?:-f|--force)$/i.test(arg) || /^-[A-Za-z]*f[A-Za-z]*$/.test(arg))) return false;
-    const paths = rest.filter((arg) => arg !== "--" && !arg.startsWith("-"));
-    if (paths.some((p) => /(?:^|[\\/])\.env(?:\.|$)|\.(?:pem|key|p12|pfx)$|id_(?:rsa|ed25519|ecdsa)|secret|credential|^\.\.|[*?\[\]$%`]/i.test(p))) return false;
-  }
-  return true;
-}
-
 /**
- * `git push` on its own, or `git add|commit ... && git push`: the usual "commit then publish" step in one call.
- * Pipes, redirects, background jobs and substitutions never qualify; neither does anything but add/commit before the push.
+ * The unattended override covers one plain push only. Staging and committing can
+ * publish arbitrary repository contents, so those actions stay behind normal policy.
  */
 function matchesGitPushOverride(parsed: ParsedCommand): boolean {
-  if (parsed.segments.length < 1 || parsed.segments.length > 3) return false;
+  if (parsed.segments.length !== 1) return false;
   if (parsed.has_pipe || parsed.has_redirect || parsed.has_background || parsed.has_substitution) return false;
   const last = parsed.segments[parsed.segments.length - 1];
   const pushOk =
     last.command === "git" && last.subcommand === "push" && last.argv[1]?.toLowerCase() === "push" && isPlainPush(last.argv.slice(2));
-  return pushOk && parsed.segments.slice(0, -1).every((segment) => isPlainStage(segment.argv));
+  return pushOk;
 }
 
 function matchesOverride(parsed: ParsedCommand, cwd: string, name: ShellOverride): boolean {

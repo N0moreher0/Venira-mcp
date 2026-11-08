@@ -71,39 +71,7 @@ export async function opShellRun(
   }
   const shell = (args.shell as string | undefined) ?? process.env.VENIRA_DEFAULT_SHELL ?? defaultShellForPlatform();
   const cwd = resolveInWorkspace(args.relative_cwd as string | undefined, root);
-  
-  // Shell output cache: check if we have a cached result for this exact command
-  const cached = getShellCache(command, cwd);
-  if (cached && !args.approval_token && !args.approval_id && !args.override) {
-    // Return cached result without spawning process
-    const runId = crypto.randomUUID().slice(0, 12);
-    return {
-      status: "completed",
-      result: {
-        kind: "shell_run",
-        data: {
-          run_id: runId,
-          shell_id: runId,
-          // Cached result has no live process -> cancellation is not applicable.
-          kill_key: "",
-          shell: (args.shell as string | undefined) ?? process.env.VENIRA_DEFAULT_SHELL ?? defaultShellForPlatform(),
-          running: false,
-          exit_code: cached.exitCode,
-          background: false,
-          foreground: true,
-          // Foreground results carry full stdout/stderr below; *_tail is only for background runs and status.
-          truncated: false,
-          dropped_bytes: 0,
-          timed_out: false,
-          timeout_ms: 0,
-          stdout: cached.output,
-          stderr: cached.error,
-          policy: { decision: "allow", rule: "cache.hit", mode: "permissive", approver: null },
-        },
-      },
-    };
-  }
-  
+
   const runId = crypto.randomUUID().slice(0, 12);
   const killKey = crypto.randomBytes(16).toString("hex");
   const secretNames = normalizeSecretEnv(args.secret_env);
@@ -185,6 +153,42 @@ export async function opShellRun(
         },
       },
     };
+  }
+
+  if (
+    decision.tier === "allow" &&
+    secretNames.length === 0 &&
+    !override &&
+    !args.approval_token &&
+    !args.approval_id &&
+    !parseBackgroundFlag(args.background)
+  ) {
+    const cached = getShellCache(command, cwd, shell);
+    if (cached) {
+      return {
+        status: "completed",
+        result: {
+          kind: "shell_run",
+          data: {
+            run_id: runId,
+            shell_id: runId,
+            kill_key: "",
+            shell,
+            running: false,
+            exit_code: cached.exitCode,
+            background: false,
+            foreground: true,
+            truncated: false,
+            dropped_bytes: 0,
+            timed_out: false,
+            timeout_ms: 0,
+            stdout: redactSecretValues(cached.output),
+            stderr: redactSecretValues(cached.error),
+            policy: { decision: decision.tier, rule: decision.rule, mode: decision.mode, approver },
+          },
+        },
+      };
+    }
   }
 
   if (decision.tier === "deny") {
@@ -428,7 +432,14 @@ export async function opShellRun(
     run.stdout_tail = trimTail(run.stdout_full);
     run.stderr_tail = trimTail(run.stderr_full);
     if (run.exit_code === 0 && run.stdout_full.length < 10000) {
-      setShellCache(command, cwd, run.stdout_full, run.stderr_full, run.exit_code ?? 0);
+      setShellCache(
+        command,
+        cwd,
+        redactSecretValues(run.stdout_full),
+        redactSecretValues(run.stderr_full),
+        run.exit_code ?? 0,
+        shell,
+      );
     }
     resolveClosed();
   });
@@ -510,7 +521,14 @@ export async function opShellRun(
     run.stdout_tail = trimTail(run.stdout_full);
     run.stderr_tail = trimTail(run.stderr_full);
     if (run.exit_code === 0 && run.stdout_full.length < 10000) {
-      setShellCache(command, cwd, run.stdout_full, run.stderr_full, run.exit_code ?? 0);
+      setShellCache(
+        command,
+        cwd,
+        redactSecretValues(run.stdout_full),
+        redactSecretValues(run.stderr_full),
+        run.exit_code ?? 0,
+        shell,
+      );
     }
   }
 

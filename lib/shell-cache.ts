@@ -3,7 +3,7 @@
  *
  * Only commands classified as read-only by {@link isReadOnlyCommand} are cached;
  * anything mutating, networked, or writing (redirection, chains, subshells) is
- * never stored. The key is `${cwd}::${command}`.
+ * never stored. The key is `${shell}::${cwd}::${command}`.
  *
  *   import { getShellCache, setShellCache } from "./shell-cache.js";
  *   const cached = getShellCache(command, cwd);
@@ -12,16 +12,18 @@
  *   setShellCache(command, cwd, result);
  *
  * `VENIRA_SHELL_CACHE=0` disables the cache entirely (default on).
- * `VENIRA_SHELL_CACHE_READ_ONLY=0` restores the legacy behaviour (cache every
- * successful command) — kept only for transitional use; prefer the read-only
- * allowlist.
+ * `VENIRA_SHELL_CACHE_READ_ONLY=0` is retained for compatibility but cannot
+ * disable the read-only restriction.
  */
 
 // Simple LRU cache with max 100 entries
 import { envFlag } from "./env.js";
+import { parseShellCommand } from "./shell-parser.js";
 const MAX_CACHE_ENTRIES = 100;
 const CACHE_DISABLED = !envFlag("VENIRA_SHELL_CACHE", true);
-const LEGACY_CACHE_ALL = !envFlag("VENIRA_SHELL_CACHE_READ_ONLY", true);
+if (!envFlag("VENIRA_SHELL_CACHE_READ_ONLY", true)) {
+  console.error("[shell-cache] VENIRA_SHELL_CACHE_READ_ONLY=0 is ignored; only read-only shell commands can be cached.");
+}
 const CACHE_TTL_MS = 5000; // 5 seconds TTL
 
 interface CacheEntry {
@@ -33,13 +35,14 @@ interface CacheEntry {
 
 const cache = new Map<string, CacheEntry>();
 
-function getCacheKey(command: string, cwd: string): string {
-  return `${cwd}::${command}`;
+function getCacheKey(command: string, cwd: string, shell: string): string {
+  return `${shell}::${cwd}::${command}`;
 }
 
-export function getShellCache(command: string, cwd: string): CacheEntry | null {
+export function getShellCache(command: string, cwd: string, shell = "default"): CacheEntry | null {
   if (CACHE_DISABLED) return null;
-  const key = getCacheKey(command, cwd);
+  if (!isReadOnlyCommand(command, shell)) return null;
+  const key = getCacheKey(command, cwd, shell);
   const entry = cache.get(key);
 
   if (!entry) return null;
@@ -57,10 +60,17 @@ export function getShellCache(command: string, cwd: string): CacheEntry | null {
   return entry;
 }
 
-export function setShellCache(command: string, cwd: string, output: string, error: string, exitCode: number): void {
+export function setShellCache(
+  command: string,
+  cwd: string,
+  output: string,
+  error: string,
+  exitCode: number,
+  shell = "default",
+): void {
   if (CACHE_DISABLED) return;
-  if (!LEGACY_CACHE_ALL && !isReadOnlyCommand(command)) return;
-  const key = getCacheKey(command, cwd);
+  if (!isReadOnlyCommand(command, shell)) return;
+  const key = getCacheKey(command, cwd, shell);
 
   // If key already exists, delete it first (to update position)
   if (cache.has(key)) {
@@ -223,9 +233,19 @@ const READ_ONLY_PROGRAMS = new Set([
 
 const READ_ONLY_VERSION = new Set(["node", "npm", "npx", "yarn", "pnpm", "cargo", "rustc", "go", "python", "python3", "py"]);
 
-export function isReadOnlyCommand(command: string): boolean {
-  if (hasRawShellSyntax(command)) return false;
-  const argv = tokenize(command);
+export function isReadOnlyCommand(command: string, shell?: string): boolean {
+  if (!shell && hasRawShellSyntax(command)) return false;
+  const parsed = parseShellCommand(command, { shell });
+  if (
+    parsed.has_operator ||
+    parsed.has_redirect ||
+    parsed.has_background ||
+    parsed.has_substitution ||
+    parsed.segments.length !== 1
+  ) {
+    return false;
+  }
+  const argv = parsed.segments[0].argv;
   if (argv.length === 0) return false;
   const prog = baseName(argv[0]);
   const stripped = stripExe(prog);

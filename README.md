@@ -389,7 +389,7 @@ Full reference: the source reads 90+ distinct `VENIRA_*` names; this table lists
 | Self-install | `project_install_self` writes another client's config | `VENIRA_ALLOW_SELF_INSTALL` (`0`) |
 | Named shell override | `ALLOW_GIT_PUSH` / `ALLOW_ENV_READ` | `VENIRA_SHELL_OVERRIDES` (unset), plus `override` and a `reason` on the call |
 
-`ALLOW_GIT_PUSH` covers `git push` with publish flags only (`-u`, `--follow-tags`, `--tags`, `--atomic`, `--dry-run`, ...) to a remote *name* and plain refs, optionally preceded by `git add` / `git commit` in the same call (`git add -A && git commit -m "x" && git push`). Force (`-f`, `+ref`, `--force-with-lease`), deletes (`:ref`, `--delete`), `--mirror`, `--prune`, `--no-verify`, `--amend`, `git add -f`, staging secret-looking files, URLs as remotes, pipes, redirects and substitutions fall back to the normal verdict (ask/deny).
+`ALLOW_GIT_PUSH` covers one `git push` command with publish flags only (`-u`, `--follow-tags`, `--tags`, `--atomic`, `--dry-run`, ...) to a remote *name* and plain refs. It does not cover staging, committing, or chained commands; run those separately under normal policy so the operator can review repository changes before publishing. Force (`-f`, `+ref`, `--force-with-lease`), deletes (`:ref`, `--delete`), `--mirror`, `--prune`, `--no-verify`, URLs as remotes, pipes, redirects and substitutions fall back to the normal verdict (ask/deny).
 
 Granting a shell or JS approval:
 

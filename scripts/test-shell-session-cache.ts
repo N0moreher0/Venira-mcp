@@ -105,6 +105,11 @@ check("cache_set_get_roundtrip_and_key_isolation", () => {
   assert.equal(cache.getShellCache("git status", "/other"), null, "key includes cwd");
   assert.equal(cache.getShellCache("git log", "/w"), null, "key includes command");
   assert.equal(cache.getShellCacheStats().size, 1);
+  assert.equal(cache.getShellCache("git status", "/w", "cmd"), null, "key includes shell dialect");
+  cache.setShellCache("git status", "/w", "cmd-output", "", 0, "cmd");
+  assert.equal(cache.getShellCache("git status", "/w")?.output, "out");
+  assert.equal(cache.getShellCache("git status", "/w", "cmd")?.output, "cmd-output");
+  assert.equal(cache.getShellCacheStats().size, 2);
   cache.clearShellCache();
   assert.equal(cache.getShellCacheStats().size, 0);
 });
@@ -152,6 +157,9 @@ check("cache_refuses_non_read_only_commands", () => {
     cache.setShellCache(command, "/w", "o", "", 0);
     assert.equal(cache.getShellCache(command, "/w"), null, `${command} must not be cached`);
   }
+  assert.equal(cache.isReadOnlyCommand("echo 'first & second'", "cmd"), false, "cmd single quotes do not quote operators");
+  cache.setShellCache("echo 'first & second'", "/w", "o", "", 0, "cmd");
+  assert.equal(cache.getShellCache("echo 'first & second'", "/w", "cmd"), null, "cmd structural syntax is not cacheable");
   assert.equal(cache.getShellCacheStats().size, 0);
 });
 
@@ -222,7 +230,7 @@ check("read_only_classification_git", () => {
 
 check("read_only_classification_rejects_shell_structure", () => {
   for (const command of ["ls > out", "cat a | wc", "ls; rm a", "git status && git push", "echo $(rm a)", "cat `rm a`", "ls &"]) {
-    assert.equal(cache.isReadOnlyCommand(command), false, command);
+    assert.equal(cache.isReadOnlyCommand(command, "bash"), false, command);
   }
 });
 

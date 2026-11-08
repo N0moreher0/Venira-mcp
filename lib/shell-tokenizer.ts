@@ -59,7 +59,7 @@ export function tokenize(raw: string, options?: { shell?: string }): { tokens: T
         hasWord = true;
         continue;
       }
-      if (ch === "\\" && dialect !== "powershell" && i + 1 < raw.length) {
+      if (ch === "\\" && dialect === "posix" && i + 1 < raw.length) {
         word += raw[i + 1];
         i += 1;
         hasWord = true;
@@ -90,6 +90,25 @@ export function tokenize(raw: string, options?: { shell?: string }): { tokens: T
       }
       continue;
     }
+    if (ch === "^" && dialect === "cmd") {
+      if (raw[i + 1] === "\n") {
+        i += 1;
+        continue;
+      }
+      if (raw[i + 1] === "\r") {
+        i += raw[i + 2] === "\n" ? 2 : 1;
+        continue;
+      }
+      if (i + 1 < raw.length) {
+        word += raw[i + 1];
+        i += 1;
+        hasWord = true;
+      } else {
+        word += ch;
+        hasWord = true;
+      }
+      continue;
+    }
     if (ch === "\\") {
       if (dialect === "posix" && i + 1 < raw.length) {
         word += raw[i + 1];
@@ -101,7 +120,7 @@ export function tokenize(raw: string, options?: { shell?: string }): { tokens: T
       }
       continue;
     }
-    if (ch === "'" || ch === '"') {
+    if (ch === '"' || (ch === "'" && dialect !== "cmd")) {
       quote = ch;
       hasWord = true;
       continue;
@@ -128,6 +147,7 @@ export function tokenize(raw: string, options?: { shell?: string }): { tokens: T
       hasWord = true;
       continue;
     }
+    if (dialect === "cmd" && (ch === "(" || ch === ")")) hasSubstitution = true;
 
     // PowerShell runs ( ... ), @( ... ) and { ... } blocks before or instead of the command that owns them, so
     // `git status (Remove-Item -Recurse -Force $HOME)` deletes although its segment looks like read-only git.

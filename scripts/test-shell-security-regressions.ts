@@ -27,7 +27,9 @@ function pipeServerStderr(transport: StdioClientTransport, label: string) {
 
 const tempDir = await mkdtemp(path.join(os.tmpdir(), "venira-shell-security-"));
 const workspaceDir = path.join(tempDir, "workspace");
+const dataDir = path.join(tempDir, "data");
 await mkdir(workspaceDir);
+await mkdir(dataDir);
 const sessionId = `shell-security-${Date.now()}`;
 const transport = new StdioClientTransport({
   command: process.execPath,
@@ -36,7 +38,7 @@ const transport = new StdioClientTransport({
   env: {
     ...process.env,
     VENIRA_WORKSPACE: workspaceDir,
-    VENIRA_DATA_DIR: tempDir,
+    VENIRA_DATA_DIR: dataDir,
     VENIRA_SESSION_ID: sessionId,
     VENIRA_SECRET_KEYCHAIN: "off",
     VENIRA_SHELL_MODE: "balanced",
@@ -53,10 +55,34 @@ try {
   await client.connect(transport, RPC_OPTS);
   const shell = process.platform === "win32" ? "powershell" : "bash";
   const callShell = async (command: string) => {
-    const result = await callTool(client, { name: "project_shell_run", arguments: { command, shell } });
+    const result = await callTool(client, { name: "project_shell_run", arguments: { command, shell, background: 0 } });
     const text = (result as { content?: Array<{ text?: string }> }).content?.[0]?.text ?? "{}";
     return { result, envelope: JSON.parse(text) as { error?: { code?: string }; data?: Record<string, unknown> } };
   };
+
+  const cacheSecret = "shell-cache-redaction-fixture-9f31";
+  await writeFile(path.join(workspaceDir, "cache-redaction-fixture.txt"), `before ${cacheSecret} after\n`);
+  const secretSet = await callTool(client, {
+    name: "project_secret",
+    arguments: { action: "set", name: "SHELL_CACHE_REDACTION_FIXTURE", value: cacheSecret },
+  });
+  assert.equal((secretSet as { isError?: boolean }).isError, undefined);
+  const firstCachedRead = await callShell("cat cache-redaction-fixture.txt");
+  assert.match(String(firstCachedRead.envelope.data?.stdout), /^before \[REDACTED\] after\r?\n$/, JSON.stringify(firstCachedRead.envelope));
+  await writeFile(path.join(workspaceDir, "cache-redaction-fixture.txt"), "after cache refresh\n");
+  const cachedRead = await callShell("cat cache-redaction-fixture.txt");
+  assert.match(String(cachedRead.envelope.data?.stdout), /^before \[REDACTED\] after\r?\n$/);
+  assert.notEqual((cachedRead.envelope.data?.policy as { rule?: string } | undefined)?.rule, "cache.hit");
+  assert.equal(JSON.stringify(cachedRead.envelope).includes(cacheSecret), false);
+  const dryRunText = (
+    (await callTool(client, {
+      name: "project_shell_run",
+      arguments: { command: "cat cache-redaction-fixture.txt", shell, dry_run: 1 },
+    })) as { content?: Array<{ text?: string }> }
+  ).content?.[0]?.text ?? "{}";
+  const dryRunEnvelope = JSON.parse(dryRunText) as { kind?: string; data?: Record<string, unknown> };
+  assert.equal(dryRunEnvelope.kind, "shell_dry_run", dryRunText);
+  assert.equal(dryRunEnvelope.data?.dry_run, true);
 
   const envRead = await callShell("cat .env");
   assert.equal((envRead.result as { isError?: boolean }).isError, true);
@@ -119,7 +145,7 @@ try {
     env: {
       ...process.env,
       VENIRA_WORKSPACE: workspaceDir,
-      VENIRA_DATA_DIR: tempDir,
+      VENIRA_DATA_DIR: dataDir,
       VENIRA_SESSION_ID: overrideSession,
       VENIRA_SECRET_KEYCHAIN: "off",
       VENIRA_SHELL_MODE: "strict",
@@ -223,7 +249,7 @@ try {
     assert.equal(pushEnvelope.data?.exit_code, 0, pushEnvelope.data?.stderr);
     await assert.rejects(access(path.join(remotePath, "refs", "heads", "main")));
 
-    const audit = new Database(path.join(tempDir, "venira.db"), { readonly: true });
+    const audit = new Database(path.join(dataDir, "venira.db"), { readonly: true });
     try {
       const row = audit.prepare(
         "SELECT decision, policy_rule, reason, approver FROM project_tool_audit WHERE session_id = ? AND operation = 'shell_run' ORDER BY id DESC LIMIT 1",

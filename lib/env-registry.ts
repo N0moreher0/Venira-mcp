@@ -252,7 +252,7 @@ export const ENV_REGISTRY: readonly EnvVarSpec[] = [
     reason: NOT_DOC,
   }),
   shFlag("VENIRA_SHELL_CACHE", "Cache read-only shell results.", false, { default: "1", reason: NOT_DOC }),
-  shFlag("VENIRA_SHELL_CACHE_READ_ONLY", "Cache only read-only commands (0 restores the legacy cache-everything mode).", false, {
+  shFlag("VENIRA_SHELL_CACHE_READ_ONLY", "Compatibility flag; shell output caching always stays read-only.", false, {
     default: "1",
     reason: NOT_DOC,
   }),

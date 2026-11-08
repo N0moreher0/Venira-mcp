@@ -21,9 +21,11 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const tempDir = await mkdtemp(path.join(os.tmpdir(), "venira-shell-adversarial-"));
 const workspaceDir = path.join(tempDir, "workspace");
+const dataDir = path.join(tempDir, "data");
 await mkdir(workspaceDir);
+await mkdir(dataDir);
 process.env.VENIRA_WORKSPACE = workspaceDir;
-process.env.VENIRA_DATA_DIR = tempDir;
+process.env.VENIRA_DATA_DIR = dataDir;
 // Keep the suite independent from the caller's profile/overrides.
 delete process.env.VENIRA_SHELL_MODE;
 delete process.env.VENIRA_SHELL_POLICY_FILE;

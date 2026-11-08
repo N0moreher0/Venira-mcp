@@ -4,7 +4,7 @@
  */
 import os from "node:os";
 import path from "node:path";
-import { UNRESTRICTED, WORKSPACE, activeDataDir, defaultDataDir } from "./workspace.js";
+import { UNRESTRICTED, WORKSPACE, activeDataDir, defaultDataDir, isProtectedPath, resolveWithin } from "./workspace.js";
 import { snapshotProtectedRoots } from "./snapshot-paths.js";
 import { isNullSink, type ParsedCommand, type Segment } from "./shell-parser.js";
 import { dockerReadOnlySegment } from "./shell-policy-balanced-docker.js";
@@ -44,7 +44,13 @@ export function isOutsideWorkspace(target: string, cwd: string): boolean {
   if (process.platform !== "win32" && /^[A-Za-z]:/.test(expanded)) return true;
   const abs = path.resolve(cwd, expanded);
   const rel = path.relative(WORKSPACE, abs);
-  return rel === ".." || rel.startsWith(".." + path.sep) || path.isAbsolute(rel);
+  if (rel === ".." || rel.startsWith(".." + path.sep) || path.isAbsolute(rel)) return true;
+  try {
+    resolveWithin(WORKSPACE, abs);
+    return false;
+  } catch {
+    return true;
+  }
 }
 
 const WRITE_COMMANDS = new Set([
@@ -501,6 +507,7 @@ export const HARD_DENY: HardDenyRule[] = [
           if (/(^|[\\/])venira[\\/](approvals|approval\.key)/i.test(t)) return true;
           if (/\.ssh[\\/]/i.test(t)) return true;
           if (hitsSnapshotStore(t)) return true;
+          if (isProtectedPath(path.resolve(cwd, t))) return true;
         }
         return false;
       };

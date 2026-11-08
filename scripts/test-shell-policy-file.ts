@@ -182,14 +182,50 @@ await check("override_names_are_validated", () => {
 await writeFile(path.join(workspaceDir, ".env"), "SECRET=1\n");
 await writeFile(path.join(workspaceDir, ".env.local"), "SECRET=2\n");
 await writeFile(path.join(workspaceDir, "config.json"), "{}\n");
+await writeFile(path.join(tempDir, ".env"), "OUTSIDE_SECRET=1\n");
+await writeFile(path.join(tempDir, "outside-report.txt"), "outside\n");
 await mkdir(path.join(workspaceDir, ".env.d"));
 let symlinkCreated = false;
+let outsideSymlinksCreated = false;
 try {
   await symlink(path.join(workspaceDir, ".env"), path.join(workspaceDir, ".env.link"));
   symlinkCreated = true;
 } catch {
   // Symlinks may need elevated rights on Windows; the symlink assertion is skipped there.
 }
+try {
+  await symlink(path.join(tempDir, ".env"), path.join(workspaceDir, "benign-config.txt"));
+  await symlink(path.join(tempDir, "outside-report.txt"), path.join(workspaceDir, "outside-link.txt"));
+  outsideSymlinksCreated = true;
+} catch {
+  // Symlinks may need elevated rights on Windows; the symlink assertion is skipped there.
+}
+
+await check("cmd_caret_cannot_obfuscate_protected_file_access", () => {
+  const caretRead = policy.evaluateShellCommand("type .e^nv", workspaceDir, { shell: "cmd", mode: "balanced" });
+  assert.deepEqual([caretRead.tier, caretRead.rule], ["deny", "deny.protected_file_access"]);
+  const quotedRead = policy.evaluateShellCommand('type "C:\\Users\\.env"', workspaceDir, { shell: "cmd", mode: "balanced" });
+  assert.deepEqual([quotedRead.tier, quotedRead.rule], ["deny", "deny.protected_file_access"]);
+  const singleQuoteEscape = policy.evaluateShellCommand("echo 'before & rd /s /q C:\\Users'", workspaceDir, {
+    shell: "cmd",
+    mode: "balanced",
+  });
+  assert.equal(singleQuoteEscape.tier, "deny");
+  const groupedDelete = policy.evaluateShellCommand("(rd /s /q C:\\Users)", workspaceDir, { shell: "cmd", mode: "permissive" });
+  assert.equal(groupedDelete.tier, "ask");
+  const groupedCommand = policy.evaluateShellCommand("(echo safe)", workspaceDir, { shell: "cmd", mode: "permissive" });
+  assert.deepEqual([groupedCommand.tier, groupedCommand.rule], ["ask", "ask.command_substitution"]);
+});
+
+await check("read_paths_resolve_symlinks_for_workspace_and_protected_checks", () => {
+  if (!outsideSymlinksCreated) return;
+  const protectedAlias = policy.evaluateShellCommand("cat benign-config.txt", workspaceDir, { shell: "bash", mode: "balanced" });
+  assert.deepEqual([protectedAlias.tier, protectedAlias.rule], ["deny", "deny.protected_file_access"]);
+  const outsideRead = policy.evaluateShellCommand("cat outside-link.txt", workspaceDir, { shell: "bash", mode: "balanced" });
+  assert.deepEqual([outsideRead.tier, outsideRead.rule], ["ask", "ask.read_outside_workspace"]);
+  const outsideCd = policy.evaluateShellCommand("cd outside-link.txt && cat report.txt", workspaceDir, { shell: "bash", mode: "balanced" });
+  assert.deepEqual([outsideCd.tier, outsideCd.rule], ["ask", "ask.cd_outside_workspace"]);
+});
 
 await check("allow_git_push_override_matches_only_a_plain_single_push", () => {
   const m = (command: string) => policy.shellOverrideMatches("ALLOW_GIT_PUSH", command, workspaceDir, "bash");
@@ -219,22 +255,19 @@ await check("allow_git_push_override_matches_only_a_plain_single_push", () => {
   ]) assert.equal(m(bad), false, bad);
 });
 
-await check("allow_git_push_override_allows_add_or_commit_then_push_in_one_call", () => {
+await check("allow_git_push_override_rejects_staging_or_committing_in_the_same_call", () => {
   const m = (command: string) => policy.shellOverrideMatches("ALLOW_GIT_PUSH", command, workspaceDir, "bash");
-  assert.equal(m("git add -A && git commit -m 'feat: x' && git push origin main"), true);
-  assert.equal(m("git commit -m 'fix' && git push"), true);
-  assert.equal(m("git add lib/a.ts scripts/b.ts && git commit -m x && git push -u origin main"), true);
-  assert.equal(m("git push && git commit -m x"), false, "push must be last");
-  assert.equal(m("git commit -m x && rm -rf dist && git push"), false, "only add/commit may precede the push");
-  assert.equal(m("git commit -m x && git push && git push"), false, "one push");
-  assert.equal(m("git add a && git add b && git commit -m x && git push"), false, "at most three segments");
-  assert.equal(m("git commit --no-verify -m x && git push"), false, "no hook bypass");
-  assert.equal(m("git commit --amend -m x && git push"), false, "no history rewrite");
-  assert.equal(m("git add -f build/ && git push"), false, "no force-adding ignored files");
-  assert.equal(m("git add .env && git push"), false, "no staging secrets");
+  assert.equal(m("git add -A && git commit -m 'feat: x' && git push origin main"), false);
+  assert.equal(m("git commit -m 'fix' && git push"), false);
+  assert.equal(m("git add lib/a.ts scripts/b.ts && git commit -m x && git push -u origin main"), false);
+  assert.equal(m("git push && git commit -m x"), false, "chained commands never qualify");
+  assert.equal(m("git commit -m x && rm -rf dist && git push"), false);
+  assert.equal(m("git commit -m x && git push && git push"), false, "multiple pushes never qualify");
+  assert.equal(m("git add -f build/ && git push"), false);
+  assert.equal(m("git add .env && git push"), false);
   assert.equal(m("git add -A -- config/secrets.json && git push"), false);
   assert.equal(m("git add ../outside && git push"), false);
-  assert.equal(m("git add * && git push"), false, "no globs");
+  assert.equal(m("git add * && git push"), false);
   assert.equal(m("git commit -m x | cat && git push"), false, "pipes never match");
   assert.equal(m("git commit -m \"$(whoami)\" && git push"), false, "substitutions never match");
   assert.equal(m("git commit -m x && git push > out.txt"), false);
@@ -313,7 +346,7 @@ await check("overrides_need_env_enablement_a_reason_and_a_matching_command", () 
     assert.equal(ev("git push", "ALLOW_GIT_PUSH", "   ").tier, "ask", "a blank reason is no reason");
     assert.equal(ev("git push && echo hi", "ALLOW_GIT_PUSH", "release").tier, "ask", "other chains do not qualify");
     const staged = ev("git add -A && git commit -m 'release' && git push origin main", "ALLOW_GIT_PUSH", "release v1");
-    assert.deepEqual([staged.tier, staged.rule], ["allow", "override.ALLOW_GIT_PUSH"]);
+    assert.notEqual(staged.rule, "override.ALLOW_GIT_PUSH", "the override never stages or commits files");
     assert.notEqual(ev("git push --force origin main", "ALLOW_GIT_PUSH", "release v1").rule, "override.ALLOW_GIT_PUSH", "force never rides on the override");
     const hiddenPush = policy.evaluateShellCommand("git push $(echo main)", workspaceDir, {
       shell: "bash",

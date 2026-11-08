@@ -76,6 +76,15 @@ check("backtick_cmd_is_a_plain_character", () => {
   );
 });
 
+check("cmd_caret_escapes_are_normalized_before_policy", () => {
+  assert.deepEqual(values("type .e^nv", "cmd"), ["type", ".env"]);
+  assert.deepEqual(values('type "C:\\Users\\.env"', "cmd"), ["type", "C:\\Users\\.env"]);
+  assert.deepEqual(values("echo 'first & second'", "cmd"), ["echo", "'first", "&", "second'"]);
+  assert.deepEqual(values("echo first^&second", "cmd"), ["echo", "first&second"]);
+  assert.deepEqual(values("echo first^\nsecond", "cmd"), ["echo", "firstsecond"]);
+  assert.equal(tokenize("(rd /s /q C:\\Users)", { shell: "cmd" }).has_substitution, true);
+});
+
 check("backtick_powershell_escapes_the_next_character", () => {
   const result = tokenize("echo a`b", { shell: "powershell" });
   assert.equal(result.has_substitution, false);
@@ -114,9 +123,8 @@ check("powershell_quoted_group_and_block_stay_literal", () => {
 });
 
 check("group_and_block_are_ordinary_characters_in_other_dialects", () => {
-  for (const shell of ["bash", "cmd"]) {
-    assert.equal(tokenize("echo (a) {b}", { shell }).has_substitution, false, shell);
-  }
+  assert.equal(tokenize("echo (a) {b}", { shell: "bash" }).has_substitution, false, "bash");
+  assert.equal(tokenize("echo {b}", { shell: "cmd" }).has_substitution, false, "cmd braces are ordinary characters");
 });
 
 console.log(`\n${checks} checks passed`);
