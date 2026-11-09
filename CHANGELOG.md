@@ -2,6 +2,30 @@
 
 Local release notes for venira-mcp. Not published (not listed in `package.json` `files`) and not pushed to git.
 
+## 1.20.0 — 2026-11-10
+
+### Breaking
+- `project_execute_js` is now gated by a single setting, `VENIRA_JS_EXEC_MODE`: `off` (default, tool hidden) | `ask` | `semi-auto` | `auto`. The old flags `VENIRA_ALLOW_JS_EXEC` and `VENIRA_JS_EXEC_APPROVAL` are removed and no longer read.
+- Migration: `ask` = per-call approval plus containment. `semi-auto` = no approval, containment kept (network blocked). `auto` = no approval and no containment, so a config that used `auto` before now runs uncontained; set `semi-auto` to keep the previous behavior.
+
+### Added
+- `semi-auto` mode and contained JS execution (`JS_EXEC_CONTAINED` in `lib/workspace.ts`, `contained` option in `lib/js-executor.ts`).
+- `lib/config-posture.ts` and `lib/env-registry.ts` report the JS exec mode and warn on uncontained setups.
+- New test `npm run test:js-executor` (24 checks), included in `npm run verify`.
+- Short actionable hints and `next_actions` for every tool error code; fail-fast key validation with did-you-mean for `edit_batch` / `read_batch`.
+- Shell policy: `ALLOW_GIT_PUSH` covers add/commit then push (never force, delete or hook bypass); `shell: "pwsh"` supported.
+- Mirror status in `project_health`, per-module coverage floors in `verify`, hybrid symbol bench, PR/MR URL fuzz.
+- Tool schema and description clarity pass (roadmap item 16).
+
+### Changed
+- Docs (README, SECURITY.md, shell-security.md) rewritten to match the real JS execution and containment behavior.
+
+### Security
+- Hardened `shell_run` policy against 4 HIGH pentest findings; command substitutions and PowerShell `( )` / `@( )` / `{ }` now require approval or are treated as uninspectable (`[shell_unavailable]`).
+
+### Verification
+- `tsc` clean, `npm run verify`: 520 checks passed.
+
 ## 1.19.0 — 2026-11-08
 
 ### Added
