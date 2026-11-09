@@ -1663,35 +1663,35 @@ export const extraPolicyCorpus: PolicyCorpusCase[] = [
     "command": "Get-Content ('.e'+'nv')",
     "shell": "powershell",
     "expected_tier": "ask",
-    "expected_rule": "ask.unresolved_file_argument",
+    "expected_rule": "ask.command_substitution",
     "description": "path assembled at run time requires approval"
   },
   {
     "command": "Copy-Item ('.e'+'nv') leaked.txt",
     "shell": "powershell",
     "expected_tier": "ask",
-    "expected_rule": "ask.unresolved_file_argument",
+    "expected_rule": "ask.command_substitution",
     "description": "path assembled at run time requires approval"
   },
   {
     "command": "cp .e{nv} leaked.txt",
     "shell": "powershell",
     "expected_tier": "ask",
-    "expected_rule": "ask.unresolved_file_argument",
+    "expected_rule": "ask.command_substitution",
     "description": "path assembled at run time requires approval"
   },
   {
     "command": "Select-String -Path ('.e'+'nv') -Pattern TOKEN",
     "shell": "powershell",
     "expected_tier": "ask",
-    "expected_rule": "ask.unresolved_file_argument",
+    "expected_rule": "ask.command_substitution",
     "description": "path assembled at run time requires approval"
   },
   {
     "command": "cat .e{nv}",
     "shell": "powershell",
     "expected_tier": "ask",
-    "expected_rule": "ask.unresolved_file_argument",
+    "expected_rule": "ask.command_substitution",
     "description": "path assembled at run time requires approval"
   },
   {
