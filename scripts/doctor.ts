@@ -73,7 +73,7 @@ function mcpEnv(extra: Record<string, string> = {}) {
     VENIRA_UNRESTRICTED: "0",
     VENIRA_SESSION_ID: SESSION_ID,
     VENIRA_TOOL_MODE: "expert",
-    VENIRA_ALLOW_JS_EXEC: "0",
+    VENIRA_JS_EXEC_MODE: "off",
     ...extra,
   };
 }

@@ -150,7 +150,7 @@ export async function runShellEnvAudit(
     env: verifyEnv(
       {
         VENIRA_SESSION_ID: `${SESSION_ID}-mode-expert`,
-        VENIRA_ALLOW_JS_EXEC: "1",
+        VENIRA_JS_EXEC_MODE: "ask",
       },
       "full",
     ),
@@ -186,7 +186,7 @@ export async function runShellEnvAudit(
       {
         VENIRA_SESSION_ID: `${SESSION_ID}-mode-default`,
         VENIRA_TOOL_MODE: "default",
-        VENIRA_ALLOW_JS_EXEC: "1",
+        VENIRA_JS_EXEC_MODE: "ask",
       },
       "full",
     ),

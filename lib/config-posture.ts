@@ -140,9 +140,9 @@ export function evaluateConfigPosture(input: ConfigPostureInput): ConfigPosture 
     add({
       id: "js.exec_without_approval",
       severity: "warning",
-      summary: "`project_execute_js` runs without per-call approval.",
+      summary: "`project_execute_js` runs without per-call approval (mode `auto`).",
       detail: "Arbitrary JavaScript executes outside the shell policy and protected-path guard with no human step.",
-      recommendation: "Re-enable the JS approval gate unless the server only serves fully trusted automation.",
+      recommendation: "Set VENIRA_JS_EXEC_MODE=ask unless the server only serves fully trusted automation.",
     });
   }
 
@@ -249,16 +249,23 @@ export function configPostureInput(overrides: {
       return fallback; // validateBooleanEnvironment() reports the bad value at startup
     }
   };
+  // Same resolution as lib/workspace.ts `resolveJsExecMode`, but defensive:
+  // an invalid mode would already have failed closed at startup, so posture
+  // only needs to reflect the effective mode, never to throw.
+  const rawMode = (process.env.VENIRA_JS_EXEC_MODE ?? "").trim().toLowerCase();
+  const modeKnown = rawMode === "off" || rawMode === "ask" || rawMode === "auto";
   return {
     securityProfile,
     securityProfileExplicit: securityProfileIsExplicit(),
     shellMode: overrides.shellMode,
-    jsExecEnabled: overrides.jsExecEnabled ?? readFlag("VENIRA_ALLOW_JS_EXEC", false),
+    jsExecEnabled: overrides.jsExecEnabled ?? (modeKnown ? rawMode !== "off" : readFlag("VENIRA_ALLOW_JS_EXEC", false)),
     jsExecApproval:
       overrides.jsExecApproval ??
-      (process.env.VENIRA_JS_EXEC_APPROVAL === undefined
-        ? settings.jsExecApproval
-        : readFlag("VENIRA_JS_EXEC_APPROVAL", settings.jsExecApproval)),
+      (modeKnown
+        ? rawMode === "ask"
+        : process.env.VENIRA_JS_EXEC_APPROVAL === undefined
+          ? settings.jsExecApproval
+          : readFlag("VENIRA_JS_EXEC_APPROVAL", settings.jsExecApproval)),
     unrestricted: readFlag("VENIRA_UNRESTRICTED", false),
     allowSelfInstall: readFlag("VENIRA_ALLOW_SELF_INSTALL", false),
     secretAllowReveal: readFlag("VENIRA_SECRET_ALLOW_REVEAL", false),

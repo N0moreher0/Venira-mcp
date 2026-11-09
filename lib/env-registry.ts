@@ -172,8 +172,18 @@ export const ENV_REGISTRY: readonly EnvVarSpec[] = [
   secEnum("VENIRA_SHELL_MODE", "Advanced override of the shell policy mode; wins over the security profile.", true, {
     choices: ["strict", "balanced", "permissive", "off"],
   }),
-  secFlag("VENIRA_JS_EXEC_APPROVAL", "Require human approval for each `project_execute_js` call.", true),
-  secFlag("VENIRA_ALLOW_JS_EXEC", "Register the `project_execute_js` tool.", true, { default: "0" }),
+  secEnum("VENIRA_JS_EXEC_MODE", "`project_execute_js` gate: `off` hides the tool, `ask` requires per-call approval, `auto` runs without approval.", true, {
+    default: "off",
+    choices: ["off", "ask", "auto"],
+    allowEmpty: true,
+  }),
+  secFlag("VENIRA_JS_EXEC_APPROVAL", "Legacy alias for the `ask` mode; honored for one release when VENIRA_JS_EXEC_MODE is unset.", false, {
+    reason: "legacy; replaced by VENIRA_JS_EXEC_MODE",
+  }),
+  secFlag("VENIRA_ALLOW_JS_EXEC", "Legacy alias for enabling `project_execute_js`; honored for one release when VENIRA_JS_EXEC_MODE is unset.", false, {
+    default: "0",
+    reason: "legacy; replaced by VENIRA_JS_EXEC_MODE",
+  }),
   secFlag("VENIRA_UNRESTRICTED", "Disable the workspace lock (absolute paths outside the workspace allowed).", true, {
     default: "0",
   }),

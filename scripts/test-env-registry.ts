@@ -109,6 +109,7 @@ const ENV_CASES: Array<{ id: string; env: Record<string, string | undefined>; ex
     id: "typical valid settings are clean",
     env: {
       VENIRA_SECURITY_PROFILE: "strict",
+      VENIRA_JS_EXEC_MODE: "ask",
       VENIRA_ALLOW_JS_EXEC: "1",
       VENIRA_SNAPSHOT_KEEP: "10",
       VENIRA_TOOL_MODE: "expert",
@@ -157,6 +158,16 @@ const ENV_CASES: Array<{ id: string; env: Record<string, string | undefined>; ex
     id: "an unknown enum value is reported",
     env: { VENIRA_TOOL_MODE: "everything" },
     expect: [{ code: "invalid_enum", name: "VENIRA_TOOL_MODE" }],
+  },
+  {
+    id: "an unknown js exec mode is reported",
+    env: { VENIRA_JS_EXEC_MODE: "sometimes" },
+    expect: [{ code: "invalid_enum", name: "VENIRA_JS_EXEC_MODE" }],
+  },
+  {
+    id: "js exec mode values are compared trimmed and case-insensitively",
+    env: { VENIRA_JS_EXEC_MODE: " Auto " },
+    expect: [],
   },
   {
     id: "empty enum is accepted only where documented as unset",

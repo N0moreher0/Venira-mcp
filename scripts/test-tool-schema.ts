@@ -18,7 +18,7 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-process.env.VENIRA_ALLOW_JS_EXEC = "1"; // so project_execute_js registers too
+process.env.VENIRA_JS_EXEC_MODE = "ask"; // so project_execute_js registers too
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const load = (rel: string) => import(pathToFileURL(path.join(repoRoot, rel)).href);

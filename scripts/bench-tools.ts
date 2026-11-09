@@ -326,7 +326,7 @@ const main = async () => {
       VENIRA_OUTPUT_MODE: "full",
       VENIRA_PRETTY: "0",
       VENIRA_UNRESTRICTED: "0",
-      VENIRA_ALLOW_JS_EXEC: "0",
+      VENIRA_JS_EXEC_MODE: "off",
       VENIRA_TOOL_MODE: "expert",
       VENIRA_SECRET_KEYCHAIN: "off",
     },

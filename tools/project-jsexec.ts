@@ -51,7 +51,7 @@ export async function runExecuteJs(args: Args): Promise<ToolResult> {
   if (!ALLOW_JS_EXEC) {
     const elapsedMs = performance.now() - started;
     return toolResult(
-      errorEnvelope("execute_js", new Error("[unsupported] project_execute_js is disabled. Set VENIRA_ALLOW_JS_EXEC=1 to enable."), { requestId, elapsedMs }),
+      errorEnvelope("execute_js", new Error("[unsupported] project_execute_js is disabled. Set VENIRA_JS_EXEC_MODE=ask or auto to enable."), { requestId, elapsedMs }),
       true,
     );
   }

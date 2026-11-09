@@ -652,8 +652,7 @@ export async function runCheckpointsErrors(
     env: verifyEnv(
       {
         VENIRA_SESSION_ID: `${SESSION_ID}-js-exec`,
-        VENIRA_ALLOW_JS_EXEC: "1",
-        VENIRA_JS_EXEC_APPROVAL: "0",
+        VENIRA_JS_EXEC_MODE: "auto",
       },
       "full",
     ),
@@ -689,8 +688,7 @@ export async function runCheckpointsErrors(
     env: verifyEnv(
       {
         VENIRA_SESSION_ID: `${SESSION_ID}-js-approval`,
-        VENIRA_ALLOW_JS_EXEC: "1",
-        VENIRA_JS_EXEC_APPROVAL: "1",
+        VENIRA_JS_EXEC_MODE: "ask",
       },
       "full",
     ),

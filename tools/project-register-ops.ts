@@ -105,7 +105,7 @@ export function registerOpsTools(server: McpServer, deps: OpsToolsDeps): void {
       "project_execute_js",
       {
         ...config(
-          "Evaluate JavaScript code. Runs `node` in the workspace, capturing stdout/stderr; supports top-level await and `require`. For hard-to-reverse workspace file changes, create and verify a scoped project_snapshot first; prefer project file tools for targeted edits. Each call needs human approval by default (`VENIRA_JS_EXEC_APPROVAL=1`): call without `approval_id` to receive one, then retry after the user grants it.",
+          "Evaluate JavaScript code. Runs `node` in the workspace, capturing stdout/stderr; supports top-level await and `require`. For hard-to-reverse workspace file changes, create and verify a scoped project_snapshot first; prefer project file tools for targeted edits. In `ask` mode (`VENIRA_JS_EXEC_MODE=ask`) each call needs human approval: call without `approval_id` to receive one, then retry after the user grants it. In `auto` mode no approval is required.",
           "Execute JS",
           {
             use_when: "you need a small JS computation or prototype. Before hard-to-reverse workspace file I/O, create and verify a scoped project_snapshot; prefer project_write_file/project_edit_file for targeted changes.",
