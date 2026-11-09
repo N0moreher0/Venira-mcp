@@ -1,3 +1,4 @@
+import { checkReadItemKeys, validateEditBatchItems } from "../lib/arg-hints.js";
 import { recordMetric } from "../lib/metrics.js";
 import {
   batchEnvelope,
@@ -120,6 +121,8 @@ export async function runReadBatch(
 
     const itemStarted = performance.now();
     try {
+      const keyError = checkReadItemKeys(request.operation, request.arguments as Args);
+      if (keyError) throw new VeniraError("invalid_request", keyError);
       const itemArgs = normalizeBatchArgs(request.operation, request.arguments as Args);
       // Same routing rule as the standalone project_search tool: hybrid only applies to literal_content.
       const useHybrid = request.operation === "search" && itemArgs.hybrid === true && itemArgs.kind === "literal_content";
@@ -200,6 +203,41 @@ export async function runEditBatch(args: Args, deps: BatchDeps): Promise<ToolRes
   const maxItemBytes = Number(args.max_response_bytes_per_item ?? 1_048_576);
   const responses: unknown[] = [];
   let totalBytes = 0;
+  // Fail fast: validate every item's field names BEFORE the snapshot or any edit runs, so a
+  // misspelled key (e.g. `path` for `relative_path`) rejects the whole batch with nothing applied.
+  const argErrors = validateEditBatchItems(items);
+  if (argErrors.length > 0) {
+    const rejectedMs = performance.now() - started;
+    recordMetric("edit_batch", rejectedMs, false);
+    return toolResult(
+      batchEnvelope(
+        requestId,
+        [],
+        rejectedMs,
+        {
+          total_bytes_returned: 0,
+          atomic: true,
+          applied: false,
+          failed: true,
+          failed_index: -1,
+          executed: [],
+          skipped: items.map((_, index) => index),
+          rollback_attempted: false,
+          rollback_succeeded: false,
+          validation_errors: argErrors,
+        },
+        {
+          kind: "edit_batch",
+          failure: {
+            code: "invalid_request",
+            message: `Batch rejected before running; nothing was applied. ${argErrors.join("; ")}`,
+            hint: "Use the exact edit_file field names (relative_path, old_text, new_text, ...) and resend the whole batch.",
+          },
+        },
+      ),
+      true,
+    );
+  }
   // Capture affected files before edits; atomicity depends on a complete checkpoint.
   const distinctPaths = [...new Set(items.map((i) => String(i?.relative_path ?? "")).filter(Boolean))];
   let snapshotId: string | undefined;

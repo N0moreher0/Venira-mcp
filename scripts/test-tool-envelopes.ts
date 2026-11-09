@@ -426,6 +426,71 @@ try {
       ),
     );
   });
+  await check("edit_batch_rejects_unknown_key_before_running", async () => {
+    const { deps, calls } = makeDeps({ snapshot: true });
+    const r = await batch.runEditBatch(
+      {
+        edits: [
+          { relative_path: "a.ts", old_text: "one", new_text: "1" },
+          { path: "a.ts", old_text: "two", new_text: "2" },
+        ],
+      },
+      deps,
+    );
+    const env = parse(r);
+    assert.equal(r.isError, true);
+    assert.equal(env.ok, false);
+    assert.equal(env.kind, "edit_batch");
+    assert.equal(env.error.code, "invalid_request");
+    assert.match(env.error.message, /edits\[1\]\.path.*relative_path/);
+    assert.match(env.error.message, /nothing was applied/i);
+    assert.deepEqual(env.data.executed, []);
+    assert.equal(env.data.applied, false);
+    assert.equal(calls.length, 0, "no snapshot or edit may run when validation fails");
+  });
+  await check("edit_batch_rejects_missing_relative_path", async () => {
+    const { deps, calls } = makeDeps({ snapshot: true });
+    const env = parse(await batch.runEditBatch({ edits: [{ old_text: "one", new_text: "1" }] }, deps));
+    assert.equal(env.error.code, "invalid_request");
+    assert.match(env.error.message, /edits\[0\].*missing required field 'relative_path'/);
+    assert.equal(calls.length, 0);
+  });
+  await check("edit_batch_rejects_bad_nested_edit_key", async () => {
+    const { deps, calls } = makeDeps({ snapshot: true });
+    const env = parse(
+      await batch.runEditBatch(
+        { edits: [{ relative_path: "a.ts", edits: [{ old_string: "x", new_text: "y" }] }] },
+        deps,
+      ),
+    );
+    assert.equal(env.error.code, "invalid_request");
+    assert.match(env.error.message, /edits\[0\]\.edits\[0\]\.old_string.*old_text/);
+    assert.equal(calls.length, 0);
+  });
+  await check("read_batch_flags_path_alias_per_item", async () => {
+    const { deps, calls } = makeDeps({ snapshot: true });
+    const r = await batch.runReadBatch(
+      [{ operation: "read_file", arguments: { path: "a.ts" } }],
+      1_048_576,
+      { ...(deps as object), maxBatchResponseBytes: 4_000_000 } as unknown as Parameters<typeof batch.runReadBatch>[2],
+    );
+    const env = parse(r);
+    const item = env.data.responses[0];
+    assert.equal(item.ok, false);
+    assert.equal(item.error.code, "invalid_request");
+    assert.match(item.error.message, /did you mean 'relative_path'/);
+    assert.equal(calls.length, 0);
+  });
+  await check("arg_hints_suggest_key", async () => {
+    const hints = await import("../lib/arg-hints.js");
+    assert.equal(hints.suggestKey("path", hints.EDIT_ITEM_KEYS), "relative_path");
+    assert.equal(hints.suggestKey("relative_pth", hints.EDIT_ITEM_KEYS), "relative_path");
+    assert.equal(hints.suggestKey("zzzzzz", hints.EDIT_ITEM_KEYS), undefined);
+    assert.deepEqual(
+      hints.validateEditBatchItems([{ relative_path: "a.ts", old_text: "x", new_text: "y" }]),
+      [],
+    );
+  });
   await check("edit_batch_failure_rollback_failed_says_so", async () => {
     const { deps } = makeDeps({ snapshot: true, restoreFails: true });
     const env = parse(await batch.runEditBatch(edits("BAD"), deps));
