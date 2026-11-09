@@ -174,17 +174,38 @@ function isPlainPush(args: string[]): boolean {
   return true;
 }
 
+/** Upper bound on steps in one overridden command line, so a long script cannot ride along with a push. */
+const OVERRIDE_MAX_SEGMENTS = 8;
+
+function isPushSegment(segment: Segment): boolean {
+  return (
+    segment.command === "git" &&
+    segment.subcommand === "push" &&
+    segment.argv[1]?.toLowerCase() === "push" &&
+    isPlainPush(segment.argv.slice(2))
+  );
+}
+
 /**
- * The unattended override covers one plain push only. Staging and committing can
- * publish arbitrary repository contents, so those actions stay behind normal policy.
+ * The unattended override authorizes plain fast-forward pushes. A command line may chain steps
+ * (`git add . && git commit -m x && git push origin main`): each segment must then be either such a
+ * push or a segment normal policy already treats as routine (`isSafeSegment`), and at least one must
+ * be a push. Hard-deny and always-ask rules are evaluated before the override, so they still win.
+ * Pipes, redirects, background jobs and substitutions stay out of scope, as do force/delete pushes.
  */
 function matchesGitPushOverride(parsed: ParsedCommand): boolean {
-  if (parsed.segments.length !== 1) return false;
+  const count = parsed.segments.length;
+  if (count < 1 || count > OVERRIDE_MAX_SEGMENTS) return false;
   if (parsed.has_pipe || parsed.has_redirect || parsed.has_background || parsed.has_substitution) return false;
-  const last = parsed.segments[parsed.segments.length - 1];
-  const pushOk =
-    last.command === "git" && last.subcommand === "push" && last.argv[1]?.toLowerCase() === "push" && isPlainPush(last.argv.slice(2));
-  return pushOk;
+  let pushes = 0;
+  for (const segment of parsed.segments) {
+    if (isPushSegment(segment)) {
+      pushes += 1;
+    } else if (!isSafeSegment(segment)) {
+      return false;
+    }
+  }
+  return pushes > 0;
 }
 
 function matchesOverride(parsed: ParsedCommand, cwd: string, name: ShellOverride): boolean {

@@ -120,9 +120,19 @@ const BASE_ENV_ALLOW = [
   "PROCESSOR_IDENTIFIER", "PROCESSOR_LEVEL", "PROCESSOR_REVISION",
 ];
 
+/**
+ * Defaults that make git and Git Credential Manager fail fast instead of waiting
+ * for a prompt nobody can answer (stdin is closed and windows are hidden), which
+ * would otherwise hang a foreground run. An explicit host or secret_env value wins.
+ */
+const NON_INTERACTIVE_ENV: Record<string, string> = {
+  GIT_TERMINAL_PROMPT: "0",
+  GCM_INTERACTIVE: "never",
+};
+
 export function buildShellEnv(overrides: Record<string, string> = {}): NodeJS.ProcessEnv {
   if (envFlag("VENIRA_SHELL_ENV_PASS_ALL", false)) {
-    return { ...process.env, ...overrides };
+    return { ...NON_INTERACTIVE_ENV, ...process.env, ...overrides };
   }
   const extra = (process.env.VENIRA_SHELL_ENV_ALLOW ?? "")
     .split(",")
@@ -141,7 +151,7 @@ export function buildShellEnv(overrides: Record<string, string> = {}): NodeJS.Pr
   if (!env.PATH && !env.Path && process.env.PATH) env.PATH = process.env.PATH;
   // Explicit `secret_env` injections are added last so they win over inherited
   // values of the same name; they never come from the audit-visible args.
-  return { ...env, ...overrides };
+  return { ...NON_INTERACTIVE_ENV, ...env, ...overrides };
 }
 
 /**

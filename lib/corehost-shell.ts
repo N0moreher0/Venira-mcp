@@ -352,6 +352,12 @@ export async function opShellRun(
   const closedPromise = new Promise<void>((resolve) => {
     resolveClosed = resolve;
   });
+  // Soft timeouts leave the command running, but a foreground caller must not stay
+  // blocked (and block the serialized request queue) past its own deadline.
+  let releaseForeground!: () => void;
+  const foregroundReleased = new Promise<void>((resolve) => {
+    releaseForeground = resolve;
+  });
   const run: ShellRun = {
     run_id: runId,
     kill_key: killKey,
@@ -485,6 +491,7 @@ export async function opShellRun(
       } else {
         // soft: only warn; the command keeps running and can still be polled/cancelled.
         recordApproval("timeout_warn");
+        releaseForeground();
       }
     }, timeoutMs);
     run.timer.unref?.();
@@ -494,7 +501,7 @@ export async function opShellRun(
     // Foreground: block until the process has exited *and* stdout/stderr are
     // flushed, so the call returns the complete final output. There is no 2 s
     // cap here: the only bound is timeout_ms (plus the tool-call budget).
-    await run.closedPromise;
+    await Promise.race([run.closedPromise, foregroundReleased]);
   } else {
     // Async: wait briefly for the process to actually start (or fail
     // immediately), then return the run_id for polling.

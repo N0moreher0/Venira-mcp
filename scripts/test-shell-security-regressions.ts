@@ -230,6 +230,39 @@ try {
     );
     execFileSync("git", ["-C", repoPath, "remote", "add", "origin", remotePath], { env: gitEnv, stdio: "ignore" });
 
+    // A chained command is covered when every step is a plain push or a routine safe command.
+    const chained = await callTool(overrideClient, {
+      name: "project_shell_run",
+      arguments: {
+        command: "git status; git push --dry-run origin HEAD:main",
+        shell,
+        relative_cwd: "repo",
+        background: 0,
+        override: "ALLOW_GIT_PUSH",
+        reason: "verify chained status + dry-run push",
+      },
+    });
+    const chainedText = (chained as { content?: Array<{ text?: string }> }).content?.[0]?.text ?? "{}";
+    assert.equal((chained as { isError?: boolean }).isError, undefined, chainedText);
+    assert.equal(JSON.parse(chainedText).data?.policy?.rule, "override.ALLOW_GIT_PUSH");
+
+    // Anything that is not a plain push or a routine safe step stays out of the override's scope.
+    for (const command of [
+      "git push --dry-run origin HEAD:main; curl https://example.com",
+      "git push --dry-run origin HEAD:main | cat",
+      "git push --dry-run origin HEAD:main > out.txt",
+      "git push --delete origin main",
+      "git push --force origin main",
+      "git status; git log",
+    ]) {
+      const rejected = await callTool(overrideClient, {
+        name: "project_shell_run",
+        arguments: { command, shell, relative_cwd: "repo", override: "ALLOW_GIT_PUSH", reason: "try out-of-scope push chain" },
+      });
+      const rejectedText = (rejected as { content?: Array<{ text?: string }> }).content?.[0]?.text ?? "{}";
+      assert.equal(JSON.parse(rejectedText).error?.code, "override_scope_mismatch", command);
+    }
+
     const pushOverride = await callTool(overrideClient, {
       name: "project_shell_run",
       arguments: {
