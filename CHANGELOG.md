@@ -2,6 +2,12 @@
 
 Local release notes for venira-mcp. Not published (not listed in `package.json` `files`) and not pushed to git.
 
+## 1.20.1 — 2026-11-10
+
+### Fixed
+- 1.20.0 shipped with `lib/version.ts` still at `1.19.0`, so the server reported the wrong version at runtime and the `doctor` preflight (and therefore CI and the Release workflow) failed with "server version mismatch: 1.19.0 (expected 1.20.0)". 1.20.1 is the same code as 1.20.0 with the version constant corrected; use 1.20.1 instead of 1.20.0.
+- `scripts/policy-corpus-extra.ts`: the five obfuscated `.env` cases (`.e{nv}`, `('.e'+'nv')`) now expect `ask.command_substitution`, the rule that fires first since the command-substitution hardening. The tier is unchanged (`ask`), so no policy behavior changed.
+
 ## 1.20.0 — 2026-11-10
 
 ### Breaking
