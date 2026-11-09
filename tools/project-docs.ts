@@ -50,7 +50,7 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
     out: "entries[] {relative_path, size_bytes, modified_ago_seconds}, session_edits, truncated.",
   },
   project_read_batch: {
-    about: "Run up to 8 read-only ops (list_files, read_file, get_file_info, search) in one call. Each item is {operation, arguments} using that tool's arguments.",
+    about: "Run up to 8 read-only ops in one call. operation is the short name (list_files|read_file|get_file_info|search) mapping to project_list_files|project_read_file|project_get_file_info|project_search; arguments hold exactly that tool's parameters.",
     use: "you need 2+ reads or mixed read steps. Items run in order and one failing item does not stop the rest.",
     avoid: "a single read (project_read_file) or any edit (project_edit_batch).",
     out: "responses[] each {ok, response | error}, total_bytes_returned.",
@@ -64,8 +64,8 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
     out: "action (created|overwritten|appended), bytes_written, sha256_after. mode=create on an existing path gives conflict.",
   },
   project_edit_file: {
-    about: "Replace exact text: old_text to new_text, or edits[] for several replacements in one file.",
-    use: "you make a targeted change. old_text must match exactly once; replace_all=1 replaces every match. guard=sha256 with expected_sha256 makes it atomic and verified.",
+    about: "Replace exact text: old_text to new_text, or edits[] for several replacements in one file (edits[] wins). Fuzzy matching of old_text needs VENIRA_EDIT_FUZZY=1 on the host.",
+    use: "you make a targeted change. old_text must match exactly once; replace_all=1 replaces every match. guard=sha256 requires expected_sha256 and makes it atomic and verified.",
     avoid: "you rewrite the whole file (project_write_file) or change several files at once (project_edit_batch).",
     out: "replacements, sha256_before, sha256_after, verified (guard mode). Failures: old_text_not_found, old_text_ambiguous (returns each match with line context).",
   },
@@ -83,7 +83,7 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
   },
   project_create: {
     about: "Create a directory, or a file (kind=directory|file; a file takes content, mode and create_dirs like project_write_file).",
-    use: "you need a directory. For files prefer project_write_file.",
+    use: "you need a directory. For files use project_write_file (the one path for file content).",
     avoid: "you edit existing content (project_edit_file).",
     out: "directory_created or file_written.",
   },
@@ -160,7 +160,7 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
     out: "lines_added, lines_removed, unified_diff, truncated.",
   },
   project_symbol_references: {
-    about: "Find occurrences of a symbol name. scope=file (one file) or scope=workspace.",
+    about: "Find occurrences of a symbol name. scope=file needs relative_path (one file); scope=workspace (default) searches all files. limit caps the workspace scan, max_references caps the returned list.",
     use: "you check where a symbol is used before renaming or changing it.",
     avoid: "you only need its declaration (project_outline_symbol) or arbitrary text (project_search).",
     out: "count, references[] {relative_path, line_number, context}.",
@@ -178,7 +178,7 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
     out: "nodes[], edges[] {from, to, type, confidence}, external[], unresolved[], stats, truncated. dot and mermaid return data.graph.",
   },
   project_change_impact: {
-    about: "List the files and symbols affected by changing given files or symbols (direction: dependents, dependencies or both).",
+    about: "List the files and symbols affected by changing given files or symbols (direction: dependents, dependencies or both). At least one of files/symbols; a symbol seed takes {name, relative_path} (file is an alias).",
     use: "you are about to rename or change something and need which files to read and which tests to run.",
     avoid: "you want the whole graph (project_dependency_graph).",
     out: "affected[] {id, distance, path, confidence}, summary {affected_files, affected_symbols, tests_affected}, unresolved[].",
@@ -198,7 +198,7 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
     out: "matched, summary, diagnoses[] {title, likely_cause, suggested_fix[], next_actions[]}.",
   },
   project_snapshot: {
-    about: "Checkpoint and roll back workspace files. action: create (label, paths) | list | restore (id) | delete (id). Content-addressed, deduplicated, SHA-256 verified.",
+    about: "Checkpoint and roll back workspace files. action: create (label, paths) | list | restore (id) | delete (id) | mirror (copy to VENIRA_SNAPSHOT_MIRROR_DIR). Content-addressed, deduplicated, SHA-256 verified.",
     use: "before multi-file refactors, or before overwriting or deleting files that git does not hold. Scope paths to what you will touch, keep the returned id and check file_count and skipped. Roll back with restore dry_run=1 (path and size preview only), then restore the same id with verify=1; keep delete_extra=0 unless files created after the checkpoint must go.",
     avoid: "tiny single-file edits, generated output, or states git already holds.",
     out: "create: id, file_count, total_bytes, truncated, skipped[]. restore: restored[], deleted_count, skipped[]. Unknown id gives invalid_request.",
@@ -256,19 +256,19 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
 
   // ---- git provider: CI ---------------------------------------------------
   project_ci_status: {
-    about: "Read CI state: recent runs (filter by branch or workflow), one run with its jobs (run_id), or check-runs for a PR or ref (pr, ref). GitHub Actions, GitLab pipelines, Bitbucket Pipelines.",
+    about: "Read CI state: recent runs (filter by branch or workflow), one run with its jobs (run_id), or check-runs for a PR or ref (pr, ref). Selector precedence: ref > pr > run_id > branch/workflow; give none for recent runs. GitHub Actions, GitLab pipelines, Bitbucket Pipelines.",
     use: "after a push or trigger, to see whether checks passed.",
     avoid: "you need the failure detail (project_ci_logs) or want to wait (project_ci_wait).",
     out: "overall (success|failure|in_progress|no_runs|no_checks), runs[] {id, name, status, conclusion, branch, sha, url}.",
   },
   project_ci_wait: {
-    about: "Wait for a run, ref, PR or branch to reach a final state, and include the failure log tail. One call lasts at most timeout_ms (default 45s, max 110s); terminal=false means still running, so call again with the same selector.",
+    about: "Wait for a run, ref, PR or branch to reach a final state, and include the failure log tail. Selector precedence: run_id > ref > pr > branch. One call lasts at most timeout_ms (default 45s, max 110s); terminal=false means still running, so call again with the same selector.",
     use: "after project_ci_trigger or a push: the result and the failure tail in one call.",
     avoid: "you want an instant snapshot (project_ci_status) or a full job log (project_ci_logs).",
     out: "overall, terminal, changed, waited_ms, run, failure_tail.",
   },
   project_ci_logs: {
-    about: "Read the tail of CI logs for a whole run or a single job (tail_lines default 500, max_bytes default 512 KB).",
+    about: "Read the tail of CI logs for a whole run or a single job. At least one of run_id/job_id; job_id wins (tail_lines default 500, max_bytes default 512 KB).",
     use: "a run failed and you need the error. Pass job_id to isolate the failing job.",
     avoid: "you only need pass or fail (project_ci_status).",
     out: "text (tail), lines, truncated, entries[].",

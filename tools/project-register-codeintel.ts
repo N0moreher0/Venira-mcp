@@ -35,10 +35,10 @@ export function registerCodeIntelTools(server: McpServer, deps: CodeIntelDeps): 
       ),
       inputSchema: {
         relative_path: path_,
-        language: z.string().optional(),
-        include_functions: flag01.optional(),
-        include_classes: flag01.optional(),
-        max_symbols: z.number().int().min(1).max(500).optional(),
+        language: z.string().optional().describe("Optional language hint (e.g. 'ts', 'py'); the parser auto-detects from the file extension when omitted. The hint is advisory."),
+        include_functions: flag01.optional().describe("1 includes function symbols (default 1)."),
+        include_classes: flag01.optional().describe("1 includes class/interface symbols (default 1)."),
+        max_symbols: z.number().int().min(1).max(500).optional().describe("Max symbols returned (default 200, max 500)."),
       },
     },
     (args) => runOutlineSymbol(args as Args),
@@ -62,8 +62,8 @@ export function registerCodeIntelTools(server: McpServer, deps: CodeIntelDeps): 
       inputSchema: {
         relative_path_a: path_,
         relative_path_b: path_,
-        context_lines: z.number().int().min(0).max(50).optional(),
-        max_lines: z.number().int().min(10).max(10000).optional(),
+        context_lines: z.number().int().min(0).max(50).optional().describe("Unchanged context lines around each hunk (default 3, max 50)."),
+        max_lines: z.number().int().min(10).max(10000).optional().describe("Max diff lines returned (default 500, max 10000)."),
       },
     },
     (args) => runDiffFiles(args as Args),
@@ -85,11 +85,11 @@ export function registerCodeIntelTools(server: McpServer, deps: CodeIntelDeps): 
         { readOnlyHint: true, openWorldHint: false },
       ),
       inputSchema: {
-        symbol_name: z.string(),
-        scope: z.enum(["file", "workspace"]).optional(),
-        relative_path: path_.optional(),
-        limit: z.number().int().min(1).max(200).optional(),
-        max_references: z.number().int().min(1).max(500).optional(),
+        symbol_name: z.string().describe("Symbol name to find (matched as a whole word)."),
+        scope: z.enum(["file", "workspace"]).optional().describe("workspace = search all files (default); file = search one file. scope=file requires relative_path."),
+        relative_path: path_.optional().describe("Required when scope=file; with scope=workspace it narrows the search to this subtree."),
+        limit: z.number().int().min(1).max(200).optional().describe("scope=workspace only: max search hits to scan (default 50). Ignored for scope=file."),
+        max_references: z.number().int().min(1).max(500).optional().describe("Max references returned (default 100, max 500). Applies in both scopes."),
       },
     },
     (args) => runSymbolReferences(args as Args),
@@ -112,13 +112,13 @@ export function registerCodeIntelTools(server: McpServer, deps: CodeIntelDeps): 
       ),
       inputSchema: {
         queries: z.array(z.object({
-          pattern: z.string(),
-          must: flag01.optional(),
-          weight: z.number().int().optional(),
-        })).min(1),
-        files_hint: z.array(z.string()).optional(),
-        relative_path: path_.optional(),
-        limit: z.number().int().min(1).max(500).optional(),
+          pattern: z.string().describe("Case-insensitive substring matched against each line."),
+          must: flag01.optional().describe("1 excludes files that do not contain this pattern (default 0)."),
+          weight: z.number().int().optional().describe("Score multiplier for hits on this pattern (default 1; higher wins)."),
+        })).min(1).describe("One or more patterns. Files are scored by how many patterns they match (must patterns are required)."),
+        files_hint: z.array(z.string()).optional().describe("Workspace paths to search instead of a shallow listing (first 20 are used)."),
+        relative_path: path_.optional().describe("Directory to list when files_hint is omitted (default: workspace root, depth 2, first 40 files)."),
+        limit: z.number().int().min(1).max(500).optional().describe("Max hits returned (default 100, max 500)."),
       },
     },
     (args) => runSelectiveSearch(args as Args),
@@ -178,21 +178,21 @@ export function registerCodeIntelTools(server: McpServer, deps: CodeIntelDeps): 
         { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
       ),
       inputSchema: {
-        files: z.array(z.string().max(500)).max(32).optional().describe("Workspace paths you plan to edit."),
+        files: z.array(z.string().max(500)).max(32).optional().describe("Workspace paths you plan to edit. At least one of files/symbols is required."),
         symbols: z
           .array(
             z.union([
               z.string().max(200),
               z.object({
-                name: z.string().max(200),
-                file: z.string().max(500).optional(),
-                relative_path: z.string().max(500).optional(),
+                name: z.string().max(200).describe("Symbol name."),
+                file: z.string().max(500).optional().describe("Alias of relative_path (relative_path wins when both are given)."),
+                relative_path: z.string().max(500).optional().describe("File the symbol is declared in; preferred over file."),
               }),
             ]),
           )
           .max(32)
           .optional()
-          .describe('Symbols you plan to rename/change; pass a name, or {name, file} when the name is ambiguous.'),
+          .describe('Symbols you plan to rename/change; pass a name, or {name, relative_path} (or {name, file}) when the name is ambiguous. At least one of files/symbols is required.'),
         direction: z.enum(["dependents", "dependencies", "both"]).optional().describe("Traversal direction (default dependents)."),
         depth: z.number().int().min(1).max(10).optional().describe("BFS hop cap (default 5)."),
         include_tests: flag01.optional().describe("1 includes test files (default) and counts them in tests_affected."),

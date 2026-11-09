@@ -69,7 +69,7 @@ export function registerWorkflowTools(server: McpServer, deps: WorkflowToolsDeps
           "kimi",
           "deepseek",
           "antigravity",
-        ]),
+        ]).describe("Which client's config to update (see project_detect_harnesses)."),
         workspace: z.string().optional().describe("VENIRA_WORKSPACE value to write (default: process.cwd())."),
         data_dir: z.string().optional().describe("VENIRA_DATA_DIR value to write (default: the per-user Venira data directory)."),
         dry_run: flag01.optional().describe("1 reports what would happen without writing; 0 performs the action."),
@@ -110,7 +110,8 @@ export function registerWorkflowTools(server: McpServer, deps: WorkflowToolsDeps
           .string()
           .max(32 * 1024)
           .optional()
-          .describe("Tail of the failing output (e.g. project_ci_logs / project_shell_status text)."),
+          .describe("Tail of the failing output (e.g. project_ci_logs / project_shell_status text). One of error_text/log_tail is required."),
+
         language: z
           .string()
           .max(40)
@@ -184,7 +185,7 @@ export function registerWorkflowTools(server: McpServer, deps: WorkflowToolsDeps
         { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
       ),
       inputSchema: {
-        action: z.enum(["create", "list", "restore", "delete", "mirror"]).default("create"),
+        action: z.enum(["create", "list", "restore", "delete", "mirror"]).default("create").describe("create (default) captures paths; list shows checkpoints; restore rolls back an id; delete removes an id; mirror copies the store to VENIRA_SNAPSHOT_MIRROR_DIR (needs that env var)."),
         id: z.string().optional().describe("Checkpoint id (required for restore/delete; returned by create/list)."),
         label: z
           .string()
@@ -195,18 +196,14 @@ export function registerWorkflowTools(server: McpServer, deps: WorkflowToolsDeps
           .array(z.string())
           .max(64)
           .optional()
-          .describe("Capture affected paths (default ['.'] only when scope is unclear); restore accepts a subset to filter files."),
-        scope: z
-          .array(z.string())
-          .max(64)
-          .optional()
-          .describe("Deprecated alias for paths."),
+          .describe("Workspace-relative paths to capture (default: ['.'] the whole workspace — scope narrowly). For restore: a subset of the checkpoint's files to restore."),
+        scope: z.array(z.string()).max(64).optional().describe("Deprecated alias for paths (kept one release so old clients fail closed instead of capturing the whole workspace). Use paths."),
         exclude: z.array(z.string()).max(64).optional().describe("Extra directory/file names to skip."),
         respect_default_excludes: flag01
           .optional()
           .describe("1 skips standard generated/cache directories (default); 0 disables those exclusions."),
-        max_files: z.number().int().min(1).max(20000).optional(),
-        max_total_bytes: z.number().int().min(1).max(512 * 1024 * 1024).optional(),
+        max_files: z.number().int().min(1).max(20000).optional().describe("Max files captured (default 20000, max 20000)."),
+        max_total_bytes: z.number().int().min(1).max(512 * 1024 * 1024).optional().describe("Max total bytes captured (default 536,870,912 = 512 MiB, max 512 MiB)."),
         dry_run: flag01.optional().describe("restore only: 1 previews path/size changes without writing (same-size content changes are not detected); inspect current user edits before applying."),
         verify: flag01
           .optional()

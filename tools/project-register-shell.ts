@@ -49,7 +49,7 @@ export function registerShellTools(server: McpServer, deps: ShellToolsDeps): voi
         { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
       ),
       inputSchema: {
-        shell: z.enum(["powershell", "pwsh", "cmd", "bash"]).optional(),
+        shell: z.enum(["powershell", "pwsh", "cmd", "bash"]).optional().describe("Shell to run the command in. Default: VENIRA_DEFAULT_SHELL if set, otherwise the host default. pwsh = PowerShell 7+, powershell = 5.1; a missing binary fails with [shell_unavailable]."),
         command: z.string().describe("Command line to run. Use the file tools for file changes; project_snapshot first if it overwrites or deletes files git does not hold."),
         relative_cwd: z.string().optional().describe("Working directory inside the workspace (default: workspace root)."),
         background: backgroundFlag.optional(),
@@ -67,10 +67,8 @@ export function registerShellTools(server: McpServer, deps: ShellToolsDeps): voi
           .min(0)
           .optional()
           .describe("Kill the whole process tree after this many milliseconds. Unset or 0 uses the default 10-minute timeout; capped by VENIRA_SHELL_MAX_TIMEOUT_MS."),
-        approval_token: z
-          .string()
-          .optional()
-          .describe("Removed; use approval_id."),
+        // Removed from the schema in item 16 (approval_token: "Removed", approval_scope:
+        // "Ignored"). Handlers still tolerate both when an older client sends them.
         approval_id: z
           .string()
           .optional()
@@ -88,7 +86,7 @@ export function registerShellTools(server: McpServer, deps: ShellToolsDeps): voi
           .min(0)
           .max(1)
           .optional()
-          .describe("1 = evaluate policy only: returns tier, rule and whether approval would be needed. Nothing runs and no approval is created."),
+          .describe("1 = evaluate policy only: returns tier, rule and whether approval would be needed. Nothing runs and no approval is created. (default 0)"),
         override: z
           .enum(["ALLOW_GIT_PUSH", "ALLOW_ENV_READ"])
           .optional()
@@ -99,10 +97,7 @@ export function registerShellTools(server: McpServer, deps: ShellToolsDeps): voi
           .max(400)
           .optional()
           .describe("Required with override: one-line intent (audit-logged)."),
-        approval_scope: z
-          .enum(["once", "session"])
-          .optional()
-          .describe("Ignored; the human picks the approval scope."),
+        // (approval_scope removed with approval_token; see above.)
       },
     },
     (args) => runShell(args, server, shellDeps),
@@ -124,8 +119,8 @@ export function registerShellTools(server: McpServer, deps: ShellToolsDeps): voi
         { readOnlyHint: true, openWorldHint: false },
       ),
       inputSchema: {
-        run_id: z.string(),
-        wait_seconds: z.number().int().min(0).max(30).optional(),
+        run_id: z.string().describe("Run id from project_shell_run."),
+        wait_seconds: z.number().int().min(0).max(30).optional().describe("Wait up to this many seconds for the run to finish (default 0, max 30). Observation window only, not a timeout."),
       },
     },
     (args) => runOne("shell_status", args),
@@ -141,7 +136,7 @@ export function registerShellTools(server: McpServer, deps: ShellToolsDeps): voi
         output_kind: "cancellation: accepted, cleanup_complete.",
         batch_safe: false,
       }, { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false }),
-      inputSchema: { run_id: z.string(), kill_key: z.string() },
+      inputSchema: { run_id: z.string().describe("Run id from project_shell_run."), kill_key: z.string().describe("Kill key from project_shell_run; proves this caller started the run.") },
     },
     (args) => runOne("cancel", args),
   );

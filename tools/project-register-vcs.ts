@@ -231,18 +231,18 @@ export function registerVcsTools(server: McpServer, deps: VcsDeps): void {
         run_id: z
           .union([z.number().int().positive(), z.string().max(80)])
           .optional()
-          .describe("Inspect one run: GitHub/GitLab numeric id, or a Bitbucket pipeline UUID."),
+          .describe("Inspect one run: GitHub/GitLab numeric id, or a Bitbucket pipeline UUID. Ignored when ref or pr is given."),
         ref: z
           .string()
           .max(200)
           .optional()
-          .describe("Commit sha or branch: read check-runs (GitHub) or the newest pipeline for that ref."),
+          .describe("Commit sha or branch: read check-runs (GitHub) or the newest pipeline for that ref. Wins over pr and run_id."),
         pr: z
           .union([z.number().int().positive(), z.string().max(300)])
           .optional()
-          .describe("PR number or PR URL: read check-runs for the PR head commit."),
-        branch: z.string().max(200).optional().describe("Filter runs by branch."),
-        workflow: z.string().max(200).optional().describe("Workflow file name (ci.yml) or numeric id."),
+          .describe("PR number or PR URL: read check-runs for the PR head commit. Ignored when ref is given; wins over run_id."),
+        branch: z.string().max(200).optional().describe("Filter runs by branch. Used only when no ref/pr/run_id is given."),
+        workflow: z.string().max(200).optional().describe("Workflow file name (ci.yml) or numeric id. Narrows the runs list with branch."),
         limit: z.number().int().min(1).max(50).optional().describe("Max runs (or check-runs) to list (default 10 / 20)."),
         repo: repoArg,
         provider: providerArg,
@@ -302,7 +302,7 @@ export function registerVcsTools(server: McpServer, deps: VcsDeps): void {
           .optional()
           .describe("GitHub: workflow file name (ci.yml) or id (required). GitLab: optional label. Bitbucket: custom pipeline pattern (default: default)."),
         ref: z.string().max(200).optional().describe("Branch/tag to run on (default: current branch, else default branch)."),
-        inputs: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
+        inputs: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional().describe("Workflow inputs/variables to pass (GitHub workflow_dispatch / GitLab variables)."),
         repo: repoArg,
         provider: providerArg,
         reason: reason_,
@@ -331,11 +331,11 @@ export function registerVcsTools(server: McpServer, deps: VcsDeps): void {
         run_id: z
           .union([z.number().int().positive(), z.string().max(80)])
           .optional()
-          .describe("Whole run: GitHub/GitLab id, or a Bitbucket pipeline UUID."),
+          .describe("Whole run: GitHub/GitLab id, or a Bitbucket pipeline UUID. At least one of run_id/job_id is required; when both are given, job_id wins."),
         job_id: z
           .union([z.number().int().positive(), z.string().max(161)])
           .optional()
-          .describe('Single job: GitHub/GitLab job id, or a Bitbucket step UUID (or "pipelineUuid:stepUuid").'),
+          .describe('Single job: GitHub/GitLab job id, or a Bitbucket step UUID (or "pipelineUuid:stepUuid"). At least one of run_id/job_id is required; job_id wins.'),
         tail_lines: z.number().int().min(1).max(5000).optional().describe("Keep only the last N lines (default 500)."),
         max_bytes: z.number().int().min(1).max(4 * 1024 * 1024).optional().describe("Max text bytes returned (default 512KB, cap 4MB)."),
         repo: repoArg,
@@ -368,10 +368,10 @@ export function registerVcsTools(server: McpServer, deps: VcsDeps): void {
         run_id: z
           .union([z.number().int().positive(), z.string().max(80)])
           .optional()
-          .describe("Wait on one run: GitHub/GitLab numeric id, or a Bitbucket pipeline UUID."),
-        ref: z.string().max(200).optional().describe("Commit sha or branch: wait on check-runs (GitHub) or the newest pipeline."),
-        pr: z.union([z.number().int().positive(), z.string().max(300)]).optional().describe("PR number or URL: wait on its head-sha check-runs."),
-        branch: z.string().max(200).optional().describe("Wait on the newest run/pipeline for this branch (optionally narrow with workflow)."),
+          .describe("Wait on one run: GitHub/GitLab numeric id, or a Bitbucket pipeline UUID. Wins over ref, pr and branch."),
+        ref: z.string().max(200).optional().describe("Commit sha or branch: wait on check-runs (GitHub) or the newest pipeline. Wins over pr and branch; loses to run_id."),
+        pr: z.union([z.number().int().positive(), z.string().max(300)]).optional().describe("PR number or URL: wait on its head-sha check-runs. Wins over branch; loses to run_id and ref."),
+        branch: z.string().max(200).optional().describe("Wait on the newest run/pipeline for this branch (optionally narrow with workflow). Used only when no run_id/ref/pr is given."),
         workflow: z.string().max(200).optional().describe("Workflow file name (ci.yml) or numeric id; narrows a branch selector."),
         until: z.enum(["terminal", "any_change"]).optional().describe("Stop at a terminal state (default) or on the first state change."),
         timeout_ms: z.number().int().min(1000).max(110_000).optional().describe("Max wait in ms (default 45_000, max 110_000). Values > ~55 s need a client request timeout > 60 s."),
@@ -409,7 +409,7 @@ export function registerVcsTools(server: McpServer, deps: VcsDeps): void {
         { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
       ),
       inputSchema: {
-        action: z.enum(["start", "poll"]),
+        action: z.enum(["start", "poll"]).describe("start: begin the device flow (returns verification_uri + user_code). poll: check with pending_id whether the user authorized."),
         replace_existing: flag01
           .optional()
           .describe("action=start: 1 explicitly authorizes replacing an existing GitHub credential; 0 does not."),
@@ -449,7 +449,7 @@ export function registerVcsTools(server: McpServer, deps: VcsDeps): void {
         { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
       ),
       inputSchema: {
-        action: z.enum(["get", "set", "list", "delete"]).default("list"),
+        action: z.enum(["get", "set", "list", "delete"]).default("list").describe("set stores a secret; get returns metadata only (plaintext needs reveal=1); list shows all stored secrets; delete removes one."),
         name: z
           .string()
           .max(64)

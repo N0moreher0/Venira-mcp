@@ -46,11 +46,11 @@ export function registerOpsTools(server: McpServer, deps: OpsToolsDeps): void {
       ),
       inputSchema: {
         relative_path: path_,
-        kind: z.enum(["file", "directory"]),
-        content: z.string().optional(),
-        mode: z.enum(["create", "overwrite", "append"]).optional().describe("overwrite replaces existing contents; create and verify a scoped project_snapshot first. create fails if the path exists; append adds to the end."),
-        create_dirs: flag01.optional(),
-        expected_sha256: z.string().optional(),
+        kind: z.enum(["file", "directory"]).describe("directory creates a folder. file is a shortcut for project_write_file — prefer project_write_file for files so there is one path for file content."),
+        content: z.string().optional().describe("Required when kind=file (same field as project_write_file content)."),
+        mode: z.enum(["create", "overwrite", "append"]).optional().describe("kind=file only. Default overwrite: replaces existing contents; create and verify a scoped project_snapshot first. create fails if the path exists; append adds to the end."),
+        create_dirs: flag01.optional().describe("kind=file only. 1 creates missing parent directories (default 0)."),
+        expected_sha256: z.string().optional().describe("Hex SHA-256 of the file's current full content. The write is refused if the file on disk differs. Use sha256_after from your last write/edit of this file."),
         reason: reason_,
       },
     },
@@ -72,7 +72,7 @@ export function registerOpsTools(server: McpServer, deps: OpsToolsDeps): void {
         },
         { readOnlyHint: true, openWorldHint: false },
       ),
-      inputSchema: { include_audit: flag01.optional() },
+      inputSchema: { include_audit: flag01.optional().describe("1 includes the audit-log summary in the result (default 1); 0 skips the audit DB query.") },
     },
     (args) => runHealth(args as Args, healthDeps),
 
@@ -118,8 +118,8 @@ export function registerOpsTools(server: McpServer, deps: OpsToolsDeps): void {
         ),
         inputSchema: {
           code: z.string().min(1).describe("JavaScript to evaluate. If it modifies/deletes existing workspace files in a hard-to-reverse way, create and verify a scoped project_snapshot first."),
-          timeout_ms: z.number().int().min(1).max(600_000).optional(),
-          argv: z.array(z.string()).optional(),
+          timeout_ms: z.number().int().min(1).max(600_000).optional().describe("Kill the node process after this many ms (default 30,000, max 600,000)."),
+          argv: z.array(z.string()).optional().describe("Extra string arguments exposed to the script as process.argv values; part of what the human approves."),
           approval_id: z
             .string()
             .optional()
@@ -198,11 +198,11 @@ export function registerOpsTools(server: McpServer, deps: OpsToolsDeps): void {
         { readOnlyHint: true, openWorldHint: false },
       ),
       inputSchema: {
-        session_id: z.string().optional(),
-        operation: z.string().optional(),
-        outcome: z.enum(["success", "failure", "running"]).optional(),
-        limit: z.number().int().min(1).max(200).optional(),
-        since_unix: z.number().int().min(0).optional(),
+        session_id: z.string().optional().describe("Only rows from this session."),
+        operation: z.string().optional().describe("Only rows for this operation (e.g. edit_file, shell_run)."),
+        outcome: z.enum(["success", "failure", "running"]).optional().describe("Only rows with this outcome."),
+        limit: z.number().int().min(1).max(200).optional().describe("Max rows, newest first (default 50, max 200)."),
+        since_unix: z.number().int().min(0).optional().describe("Only rows at or after this Unix timestamp (seconds)."),
         verify: flag01.optional().describe("1 verifies the audit hash chain and returns chain_ok; 0 disables verification."),
       },
     },

@@ -5,7 +5,18 @@ import type { Args } from "./project-cache.js";
 import { runEditBatch, runReadBatch, type BatchDeps } from "./project-batch.js";
 import { runHybridSearch, type HybridDeps } from "./project-hybrid.js";
 import { runRecentFiles, type RecentFilesDeps } from "./project-recent.js";
-import { config, editOp, flag01, path_, reason_ } from "./project-schema.js";
+import {
+  config,
+  editBatchItem,
+  editOp,
+  flag01,
+  path_,
+  readBatchGetFileInfoArgs,
+  readBatchListFilesArgs,
+  readBatchReadFileArgs,
+  readBatchSearchArgs,
+  reason_,
+} from "./project-schema.js";
 
 // File tool registrations: list/read/info/search/recent/read_batch (read side) and
 // write/edit/edit_batch/delete (write side). Extracted from registerProjectTools in tools/project.ts
@@ -39,9 +50,9 @@ export function registerFileTools(server: McpServer, deps: FileToolsDeps): void 
       ),
       inputSchema: {
         relative_path: path_.optional(),
-        include_ignored: flag01.optional(),
-        limit: z.number().int().min(1).max(200).optional(),
-        depth: z.number().int().min(1).max(3).optional(),
+        include_ignored: flag01.optional().describe("1 also lists ignored folders (default 0)."),
+        limit: z.number().int().min(1).max(200).optional().describe("Max entries (default 200, max 200)."),
+        depth: z.number().int().min(1).max(3).optional().describe("Tree depth (default 1, max 3)."),
       },
     },
     (args) => runOne("list_files", args),
@@ -64,16 +75,16 @@ export function registerFileTools(server: McpServer, deps: FileToolsDeps): void 
       ),
       inputSchema: {
         relative_path: path_,
-        start_line: z.number().int().min(0).optional(),
-        end_line: z.number().int().min(0).optional(),
-        line_numbers: flag01.optional(),
-        max_bytes: z.number().int().min(1).max(1048576).optional(),
+        start_line: z.number().int().min(1).optional().describe("First line (1-based). Together with end_line it selects one line range. When truncated, read again with start_line=next_start_line."),
+        end_line: z.number().int().min(1).optional().describe("Last line (1-based, inclusive)."),
+        line_numbers: flag01.optional().describe("1 prefixes each line with its line number (default 0)."),
+        max_bytes: z.number().int().min(1).max(1048576).optional().describe("Max text bytes returned (default 1,048,576 = 1 MiB, max 1 MiB)."),
         ranges: z
           .array(
             z.object({
-              start_line: z.number().int().min(1),
-              end_line: z.number().int().min(1).optional(),
-              max_bytes: z.number().int().min(1).optional(),
+              start_line: z.number().int().min(1).describe("First line (1-based)."),
+              end_line: z.number().int().min(1).optional().describe("Last line (1-based, inclusive)."),
+              max_bytes: z.number().int().min(1).optional().describe("Max text bytes for this range (default: the top-level max_bytes)."),
             })
           )
           .min(1)
@@ -125,19 +136,19 @@ export function registerFileTools(server: McpServer, deps: FileToolsDeps): void 
         { readOnlyHint: true, openWorldHint: false },
       ),
       inputSchema: {
-        query: z.string(),
-        kind: z.enum(["file_name", "directory_name", "literal_content", "definition"]),
+        query: z.string().describe("What to find (meaning depends on kind)."),
+        kind: z.enum(["file_name", "directory_name", "literal_content", "definition"]).describe("name substring | content (substring, or regex when regex=1) | declaration lines."),
         relative_path: path_.optional(),
-        glob: z.string().optional(),
-        exclude_glob: z.string().optional(),
-        regex: flag01.optional(),
-        case_sensitive: flag01.optional(),
+        glob: z.string().optional().describe("rg glob filter ('*.ts' = any depth, 'tools/*.ts' = that dir)."),
+        exclude_glob: z.string().optional().describe("rg glob exclusion (same dialect as glob)."),
+        regex: flag01.optional().describe("1 treats query as a regular expression for literal_content/definition (default 0 = plain substring)."),
+        case_sensitive: flag01.optional().describe("1 makes literal_content/definition matching case-sensitive (default 0)."),
         whole_word: flag01.optional().describe("1 = whole-word match only (rg -w / JS word boundaries) for literal_content and definition."),
-        include_hidden: flag01.optional().describe("1 = include hidden files (default); 0 = skip dotfiles (rg-style). Secrets (.env*, credentials, keys) are always excluded either way."),
-        context_lines: z.number().int().min(0).max(20).optional(),
-        count_only: flag01.optional(),
-        limit: z.number().int().min(1).max(200).optional(),
-        hybrid: flag01.optional().describe("1 = tag each hit with source (symbol_index|symbol_reference|content) and confidence (exact_match|text_match); a scoped identifier query with 0 hits widens once to the workspace (scope_widened:true). literal_content only."),
+        include_hidden: flag01.optional().describe("1 = include hidden files (default); 0 = skip dotfiles. Secrets always excluded."),
+        context_lines: z.number().int().min(0).max(20).optional().describe("Context lines around each hit (default 0)."),
+        count_only: flag01.optional().describe("1 returns only match counts; limit is then ignored. 0 (default) returns hits."),
+        limit: z.number().int().min(1).max(200).optional().describe("Max hits returned (ignored when count_only=1)."),
+        hybrid: flag01.optional().describe("1 = tag hits with source/confidence; literal_content only."),
       },
     },
     (args) =>
@@ -163,9 +174,9 @@ export function registerFileTools(server: McpServer, deps: FileToolsDeps): void 
       ),
       inputSchema: {
         relative_path: path_.optional(),
-        limit: z.number().int().min(1).max(100).optional(),
-        depth: z.number().int().min(1).max(6).optional(),
-        include_ignored: flag01.optional(),
+        limit: z.number().int().min(1).max(100).optional().describe("Max entries (default 20, max 100)."),
+        depth: z.number().int().min(1).max(6).optional().describe("Directory recursion cap (default 2, max 6)."),
+        include_ignored: flag01.optional().describe("1 also lists ignored folders (default 0)."),
       },
     },
     (args) => runRecentFiles(args as Args, recentFilesDeps),
@@ -189,14 +200,29 @@ export function registerFileTools(server: McpServer, deps: FileToolsDeps): void 
       inputSchema: {
         requests: z
           .array(
-            z.object({
-              operation: z.enum(["list_files", "read_file", "get_file_info", "search"]),
-              arguments: z.record(z.string(), z.unknown()),
-            }),
+            z.union([
+              z.object({
+                operation: z.literal("list_files").describe("Short op name for project_list_files."),
+                arguments: readBatchListFilesArgs.describe("Same as project_list_files."),
+              }),
+              z.object({
+                operation: z.literal("read_file").describe("Short op name for project_read_file."),
+                arguments: readBatchReadFileArgs.describe("Same as project_read_file."),
+              }),
+              z.object({
+                operation: z.literal("get_file_info").describe("Short op name for project_get_file_info."),
+                arguments: readBatchGetFileInfoArgs.describe("Same as project_get_file_info."),
+              }),
+              z.object({
+                operation: z.literal("search").describe("Short op name for project_search."),
+                arguments: readBatchSearchArgs.describe("Same as project_search."),
+              }),
+            ]),
           )
           .min(1)
-          .max(8),
-        max_response_bytes_per_item: z.number().int().min(1024).max(2 * 1024 * 1024).optional(),
+          .max(8)
+          .describe("1-8 read items; one failing item does not stop the rest."),
+        max_response_bytes_per_item: z.number().int().min(1024).max(2 * 1024 * 1024).optional().describe("Max serialized bytes per item (default 1 MiB)."),
       },
     },
     ({ requests, max_response_bytes_per_item }) =>
@@ -220,10 +246,10 @@ export function registerFileTools(server: McpServer, deps: FileToolsDeps): void 
       ),
       inputSchema: {
         relative_path: path_,
-        content: z.string(),
-        mode: z.enum(["create", "overwrite", "append"]).optional().describe("overwrite replaces existing contents; create and verify a scoped project_snapshot first. create fails if the path exists; append adds to the end."),
-        create_dirs: flag01.optional(),
-        expected_sha256: z.string().optional(),
+        content: z.string().describe("Full file content to write."),
+        mode: z.enum(["create", "overwrite", "append"]).optional().describe("Default overwrite: replaces existing contents; create and verify a scoped project_snapshot first. create fails if the path exists; append adds to the end."),
+        create_dirs: flag01.optional().describe("1 creates missing parent directories (default 0)."),
+        expected_sha256: z.string().optional().describe("Hex SHA-256 of the file's current full content. The write is refused if the file on disk differs. Use sha256_after from your last write/edit of this file; read_file's sha256 only matches when the whole file was returned."),
         reason: reason_,
       },
     },
@@ -234,7 +260,7 @@ export function registerFileTools(server: McpServer, deps: FileToolsDeps): void 
     "project_edit_file",
     {
       ...config(
-        "Edit a file by exact text replacement: one old_text/new_text pair, or edits[] for multiple sections. Supports TOCTOU guard mode (guard=sha256) for atomic read-edit-verify cycle.",
+        "Edit a file by exact text replacement: one old_text/new_text pair, or edits[] for multiple sections (edits[] takes precedence over old_text/new_text). Supports TOCTOU guard mode (guard=sha256, which requires expected_sha256) for an atomic read-edit-verify cycle. Fuzzy matching of old_text needs VENIRA_EDIT_FUZZY=1 on the host.",
         "Edit file",
         {
           use_when: "change one or a few text sections whose exact content you know; pair with expected_sha256 to guard against blind overwrites. Use guard=sha256 for atomic read-edit-verify. Before editing 2+ files or 2+ sections, create a scoped project_snapshot and confirm coverage.",
@@ -247,18 +273,16 @@ export function registerFileTools(server: McpServer, deps: FileToolsDeps): void 
       ),
       inputSchema: {
         relative_path: path_,
-        old_text: z.string().min(1).optional(),
-        new_text: z.string().optional(),
-        replace_all: flag01.optional(),
-        edits: z.array(editOp).max(64).optional().describe("Multiple section replacements in this file. Create a scoped project_snapshot first when applying 2+ edits or when the change is hard to recreate."),
-        expected_sha256: z.string().optional(),
-        // P2: Fuzzy edit args
-        old_text_fuzzy: z.string().optional().describe("Fuzzy fallback for old_text (needs VENIRA_EDIT_FUZZY=1)."),
-        fuzzy_distance: z.number().int().min(0).max(10).optional().describe("Max edit distance for the fuzzy match (default 3)."),
-        ignore_indentation: flag01.optional().describe("Fuzzy match ignores leading whitespace."),
-        case_insensitive: flag01.optional().describe("Fuzzy match ignores case."),
-        // TOCTOU guard: "sha256" = read fresh, verify content unchanged vs expected_sha256, apply edits, write, re-read and verify
-        guard: z.enum(["sha256"]).optional().describe("TOCTOU guard: 'sha256' reads fresh content, verifies expected_sha256, applies edits, writes, then re-reads to verify content+sha256 match. Provides atomic read-edit-verify cycle."),
+        old_text: z.string().min(1).optional().describe("Exact text to replace. Must match exactly once unless replace_all=1. With VENIRA_EDIT_FUZZY=1 a near-match is used instead when there is no exact match. Ignored when edits[] is given."),
+        new_text: z.string().optional().describe("Replacement text (paired with old_text; ignored when edits[] is given)."),
+        replace_all: flag01.optional().describe("1 replaces every match; 0 (default) requires exactly one match."),
+        edits: z.array(editOp).max(64).optional().describe("Multiple section replacements in this file; takes precedence over old_text/new_text. Create a scoped project_snapshot first when applying 2+ edits or when the change is hard to recreate."),
+        expected_sha256: z.string().optional().describe("Hex SHA-256 of the file's current full content. The edit is refused if the file on disk differs. Use sha256_after from your last write/edit of this file; read_file's sha256 only matches when the whole file was returned. With guard=sha256 this value is required."),
+        old_text_fuzzy: z.string().optional().describe("Ignored: fuzzy matching applies to old_text when VENIRA_EDIT_FUZZY=1 is set. Send old_text instead."),
+        fuzzy_distance: z.number().int().min(0).max(10).optional().describe("Max edit distance for fuzzy matching of old_text (default 3). Needs VENIRA_EDIT_FUZZY=1."),
+        ignore_indentation: flag01.optional().describe("Fuzzy matching ignores leading whitespace. Fuzzy path only (needs VENIRA_EDIT_FUZZY=1)."),
+        case_insensitive: flag01.optional().describe("Fuzzy matching ignores case. Fuzzy path only (needs VENIRA_EDIT_FUZZY=1)."),
+        guard: z.enum(["sha256"]).optional().describe("TOCTOU guard: 'sha256' reads fresh content, verifies expected_sha256, applies edits, writes, then re-reads to verify content+sha256 match. Provides atomic read-edit-verify cycle. Requires expected_sha256."),
         reason: reason_,
       },
     },
@@ -280,8 +304,8 @@ export function registerFileTools(server: McpServer, deps: FileToolsDeps): void 
         { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
       ),
       inputSchema: {
-        edits: z.array(z.record(z.string(), z.any())).min(1).max(64).describe("Array of edit_file arguments. For existing files across multiple edits, create a scoped project_snapshot first if later validation may require full rollback; automatic rollback only handles in-batch failures."),
-        max_response_bytes_per_item: z.number().int().min(256).max(1048576).optional(),
+        edits: z.array(editBatchItem).min(1).max(64).describe("edit_file argument objects (typed like project_edit_file). Unknown fields are rejected with a did-you-mean hint and nothing is applied. Snapshot first when later checks may need a full rollback; automatic rollback covers in-batch failures only."),
+        max_response_bytes_per_item: z.number().int().min(256).max(1048576).optional().describe("Max serialized bytes per edit item (default 1 MiB)."),
       },
     },
     (args) => runEditBatch(args as Args, batchDeps),
