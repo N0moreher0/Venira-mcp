@@ -128,8 +128,7 @@ Shell and JavaScript approval requests return a common `data.approval` payload, 
 | `VENIRA_UNRESTRICTED` | `"0"` | `"1"` removes the workspace lock. Highest-risk setting. |
 | `VENIRA_SECURITY_PROFILE` | `balanced` | `strict` is most restrictive; `balanced` is recommended; `trusted` lets ask-rule and unclassified commands run and turns hard-deny into approval; `off` disables shell checks and per-call JS approval. |
 | `VENIRA_SHELL_MODE` | Profile mapping | Advanced override: `strict`, `balanced`, `permissive`, or `off`. |
-| `VENIRA_JS_EXEC_APPROVAL` | Profile mapping | Advanced override for per-call JS approval. |
-| `VENIRA_ALLOW_JS_EXEC` | `"0"` | `"1"` registers `project_execute_js`; still governed by the profile or JS override. |
+| `VENIRA_JS_EXEC_MODE` | `"off"` | `project_execute_js` gate: `off` hides it, `ask` per-call approval (contained), `semi-auto` no approval (contained: network blocked, workspace-only fs, scrubbed env), `auto` no approval and no containment. |
 | `VENIRA_SHELL_OVERRIDES` | unset | Operator allowlist for specific named shell exceptions. Each tool call must pass the exact name and a reason; the reason is redacted and audited, but is not proof of human identity. |
 | `VENIRA_DATA_DIR` | Per-user OS data directory | Contains the audit DB, encrypted secrets, approval key and pending approvals. Keep it private and don't point it at a shared directory. |
 | `VENIRA_SESSION_GRANT_RULES` | `cd_outside_workspace` | Additional rules eligible for human-approved session grants. Do not include network or history-rewrite rules unless the environment is disposable. |

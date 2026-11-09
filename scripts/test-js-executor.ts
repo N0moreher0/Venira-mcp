@@ -1,0 +1,135 @@
+// Tests for `project_execute_js` containment and the VENIRA_JS_EXEC_MODE resolution table.
+//   semi-auto: no approval, contained (network guard, workspace-only fs, scrubbed env)
+//   auto:      no approval, nothing contained
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { executeJs } from "../lib/js-executor.js";
+
+let n = 0;
+let failed = 0;
+function check(name: string, ok: boolean, detail?: unknown): void {
+  n += 1;
+  if (ok) {
+    console.log(`ok ${n} - ${name}`);
+  } else {
+    failed += 1;
+    console.log(`not ok ${n} - ${name}`);
+    if (detail !== undefined) console.log(`  detail: ${typeof detail === "string" ? detail : JSON.stringify(detail)}`);
+  }
+}
+
+const cwd = process.cwd();
+const marker = "venira-js-test-marker";
+process.env.VENIRA_TEST_JS_MARKER = marker;
+
+// A file outside the workspace, to probe the fs permission model.
+const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), "venira-js-exec-"));
+const outsideFile = path.join(outsideDir, "outside.txt");
+fs.writeFileSync(outsideFile, "outside-content");
+
+const probe = `
+const out = {};
+try { require("node:https"); out.https = "ok"; } catch (e) { out.https = e.code || "error"; }
+try { require("node:net"); out.net = "ok"; } catch (e) { out.net = e.code || "error"; }
+out.fetch = typeof fetch;
+out.websocket = typeof WebSocket;
+out.marker = process.env.VENIRA_TEST_JS_MARKER || "";
+out.home = process.env.USERPROFILE || process.env.HOME || "";
+try { out.outside = require("node:fs").readFileSync(${JSON.stringify(outsideFile)}, "utf8"); } catch (e) { out.outside = e.code || "error"; }
+console.log(JSON.stringify(out));
+`;
+
+function run(options: Parameters<typeof executeJs>[1]): Record<string, string> {
+  const r = executeJs(probe, { cwd, ...options });
+  if (!r.ok) throw new Error(`probe failed: ${r.error ?? ""} ${r.stderr_tail}`);
+  return JSON.parse(r.stdout_tail.trim()) as Record<string, string>;
+}
+
+try {
+  // --- containment (default and explicit) ---
+  for (const [label, options] of [
+    ["default", {}],
+    ["contained: true", { contained: true }],
+  ] as const) {
+    const r = run(options);
+    check(`${label}: network modules are blocked`, r.https === "ERR_ACCESS_DENIED" && r.net === "ERR_ACCESS_DENIED", r);
+    check(`${label}: fetch and WebSocket are removed`, r.fetch === "undefined" && r.websocket === "undefined", r);
+    check(`${label}: environment is scrubbed`, r.marker === "" && r.home === "", r);
+    check(`${label}: reads outside the workspace are denied`, r.outside === "ERR_ACCESS_DENIED", r);
+  }
+
+  // --- no containment ---
+  const open = run({ contained: false });
+  check("contained: false: network modules load", open.https === "ok" && open.net === "ok", open);
+  check("contained: false: fetch is available", open.fetch === "function", open);
+  check("contained: false: environment is inherited", open.marker === marker, open);
+  check("contained: false: reads outside the workspace work", open.outside === "outside-content", open);
+
+  // --- errors keep working in both shapes ---
+  const boomContained = executeJs('throw new Error("boom-contained")', { cwd, contained: true });
+  check(
+    "contained: an uncaught error is reported without the guard echo",
+    !boomContained.ok && boomContained.stderr_tail.includes("boom-contained") && !boomContained.stderr_tail.includes("Module._load"),
+    boomContained.stderr_tail,
+  );
+  const boomOpen = executeJs('throw new Error("boom-open")', { cwd, contained: false });
+  check("uncontained: an uncaught error is reported", !boomOpen.ok && boomOpen.stderr_tail.includes("boom-open"), boomOpen.stderr_tail);
+  const timeoutOpen = executeJs("while (true) {}", { cwd, contained: false, timeout: 300 });
+  check("uncontained: the timeout still applies", !timeoutOpen.ok && timeoutOpen.timed_out, timeoutOpen);
+
+  // --- VENIRA_JS_EXEC_MODE resolution ---
+  const workspaceUrl = pathToFileURL(path.resolve(cwd, "lib", "workspace.ts")).href;
+  const resolveScript =
+    `import(${JSON.stringify(workspaceUrl)})` +
+    `.then(m => console.log(JSON.stringify({ mode: m.JS_EXEC_MODE, allow: m.ALLOW_JS_EXEC, approval: m.JS_EXEC_APPROVAL, contained: m.JS_EXEC_CONTAINED })))` +
+    `.catch(e => { console.log(JSON.stringify({ error: String(e && e.message || e) })); });`;
+  function resolveMode(value: string | undefined): Record<string, unknown> {
+    const env: NodeJS.ProcessEnv = { ...process.env, VENIRA_WORKSPACE: cwd };
+    delete env.VENIRA_JS_EXEC_MODE;
+    if (value !== undefined) env.VENIRA_JS_EXEC_MODE = value;
+    const r = spawnSync(process.execPath, ["--import", "tsx", "-e", resolveScript], { cwd, env, encoding: "utf8", timeout: 60_000 });
+    const lines = (r.stdout ?? "").trim().split(/\r?\n/);
+    try {
+      return JSON.parse(lines[lines.length - 1] ?? "") as Record<string, unknown>;
+    } catch {
+      return { error: `unparseable: ${r.stdout} ${r.stderr}` };
+    }
+  }
+
+  const table: Array<[string | undefined, string, boolean, boolean, boolean]> = [
+    // value, mode, allow, approval, contained
+    [undefined, "off", false, false, true],
+    ["", "off", false, false, true],
+    ["off", "off", false, false, true],
+    ["ask", "ask", true, true, true],
+    ["semi-auto", "semi-auto", true, false, true],
+    ["auto", "auto", true, false, false],
+    ["  SEMI-AUTO ", "semi-auto", true, false, true],
+    ["AUTO", "auto", true, false, false],
+  ];
+  for (const [value, mode, allow, approval, contained] of table) {
+    const r = resolveMode(value);
+    check(
+      `mode ${value === undefined ? "(unset)" : JSON.stringify(value)} -> ${mode} (allow=${allow}, approval=${approval}, contained=${contained})`,
+      r.mode === mode && r.allow === allow && r.approval === approval && r.contained === contained,
+      r,
+    );
+  }
+  const bogus = resolveMode("semi_auto");
+  check(
+    "an unknown mode fails closed and names every valid mode",
+    typeof bogus.error === "string" && bogus.error.includes("[config_invalid]") && bogus.error.includes("semi-auto"),
+    bogus,
+  );
+} finally {
+  fs.rmSync(outsideDir, { recursive: true, force: true });
+}
+
+if (failed > 0) {
+  console.log(`\nJS executor tests FAILED (${failed} of ${n} checks).`);
+  process.exit(1);
+}
+console.log(`\nJS executor tests passed (${n} checks).`);

@@ -172,22 +172,22 @@ export const ENV_REGISTRY: readonly EnvVarSpec[] = [
   secEnum("VENIRA_SHELL_MODE", "Advanced override of the shell policy mode; wins over the security profile.", true, {
     choices: ["strict", "balanced", "permissive", "off"],
   }),
-  secEnum("VENIRA_JS_EXEC_MODE", "`project_execute_js` gate: `off` hides the tool, `ask` requires per-call approval, `auto` runs without approval.", true, {
+  secEnum("VENIRA_JS_EXEC_MODE", "`project_execute_js` gate: `off` hides the tool, `ask` requires per-call approval, `semi-auto` runs without approval but keeps the network guard and workspace-only fs, `auto` runs without approval and without any containment.", true, {
     default: "off",
-    choices: ["off", "ask", "auto"],
+    choices: ["off", "ask", "semi-auto", "auto"],
     allowEmpty: true,
   }),
   removed(
     "VENIRA_JS_EXEC_APPROVAL",
     "flag",
     "Per-call JS approval flag (removed; replaced by VENIRA_JS_EXEC_MODE).",
-    "replaced by VENIRA_JS_EXEC_MODE (off / ask / auto).",
+    "replaced by VENIRA_JS_EXEC_MODE (off / ask / semi-auto / auto).",
   ),
   removed(
     "VENIRA_ALLOW_JS_EXEC",
     "flag",
     "JS exec enable flag (removed; replaced by VENIRA_JS_EXEC_MODE).",
-    "replaced by VENIRA_JS_EXEC_MODE (off / ask / auto).",
+    "replaced by VENIRA_JS_EXEC_MODE (off / ask / semi-auto / auto).",
   ),
   secFlag("VENIRA_UNRESTRICTED", "Disable the workspace lock (absolute paths outside the workspace allowed).", true, {
     default: "0",

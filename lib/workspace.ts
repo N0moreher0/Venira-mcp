@@ -63,23 +63,27 @@ export const UNRESTRICTED = envFlag("VENIRA_UNRESTRICTED", false);
  * `project_execute_js` mode — the single gate for the tool:
  *   - `off`  (default): the tool is not registered at all.
  *   - `ask`: registered; each call needs a human approval bound to the code.
- *   - `auto`: registered; runs with no approval step (trusted automation only).
+ *   - `semi-auto`: registered; no approval step, but the snippet stays contained (network guard,
+ *     workspace-only fs permission, scrubbed env).
+ *   - `auto`: registered; no approval step AND no containment (full network, full fs, inherited env).
+ *     Trusted personal machines only.
  * `VENIRA_ALLOW_JS_EXEC` / `VENIRA_JS_EXEC_APPROVAL` are removed (registry
  * `removed` entries keep them warning).
  */
-export type JsExecMode = "off" | "ask" | "auto";
+export type JsExecMode = "off" | "ask" | "semi-auto" | "auto";
 
 function resolveJsExecMode(): JsExecMode {
   const raw = process.env.VENIRA_JS_EXEC_MODE;
   if (raw === undefined || raw.trim() === "") return "off";
   const value = raw.trim().toLowerCase();
-  if (value === "off" || value === "ask" || value === "auto") return value;
-  throw new Error(`[config_invalid] VENIRA_JS_EXEC_MODE must be one of: off, ask, auto.`);
+  if (value === "off" || value === "ask" || value === "semi-auto" || value === "auto") return value;
+  throw new Error(`[config_invalid] VENIRA_JS_EXEC_MODE must be one of: off, ask, semi-auto, auto.`);
 }
 
 export const JS_EXEC_MODE: JsExecMode = resolveJsExecMode();
 export const ALLOW_JS_EXEC = JS_EXEC_MODE !== "off";
 export const JS_EXEC_APPROVAL = JS_EXEC_MODE === "ask";
+export const JS_EXEC_CONTAINED = JS_EXEC_MODE !== "auto";
 
 export const PROTECTED_BASENAMES = new Set([
   "approval.key",

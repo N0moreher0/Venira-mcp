@@ -42,8 +42,8 @@ export interface WorkspaceConfig {
   shellMode?: "balanced" | "strict" | "permissive" | "off";
   outputMode?: "full" | "compact";
   shellExitEarly?: boolean;
-  /** `project_execute_js` gate: off hides the tool, ask requires per-call approval, auto runs without approval. */
-  jsExecMode?: "off" | "ask" | "auto";
+  /** `project_execute_js` gate: off hides the tool, ask requires per-call approval, semi-auto runs without approval but contained, auto runs without approval and without containment. */
+  jsExecMode?: "off" | "ask" | "semi-auto" | "auto";
   allowSelfInstall?: boolean;
   auditFast?: boolean;
   cacheAll?: boolean;

@@ -10,7 +10,7 @@
  *
  * The individual variable (VENIRA_SHELL_MODE) still wins over the profile;
  * it is the "Advanced" override. JS exec is gated separately by
- * VENIRA_JS_EXEC_MODE (off/ask/auto), not by the profile.
+ * VENIRA_JS_EXEC_MODE (off/ask/semi-auto/auto), not by the profile.
  *
  * Keep this file dependency-free: it is imported by env.ts, workspace.ts and
  * shell-policy.ts, so any import here risks a cycle.

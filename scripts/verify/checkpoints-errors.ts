@@ -642,7 +642,7 @@ export async function runCheckpointsErrors(
   await rootGuardClient.close();
   await fs.rm(rootGuardDir, { recursive: true, force: true });
 
-  // 17d. execute_js output is redacted and the network globals are removed.
+  // 17d. execute_js (semi-auto) output is redacted and the network globals are removed.
   // Approval is switched off here so the redaction/network assertions run in one
   // call; 17e covers the approval gate separately.
   const jsTransport = new StdioClientTransport({
@@ -652,7 +652,7 @@ export async function runCheckpointsErrors(
     env: verifyEnv(
       {
         VENIRA_SESSION_ID: `${SESSION_ID}-js-exec`,
-        VENIRA_JS_EXEC_MODE: "auto",
+        VENIRA_JS_EXEC_MODE: "semi-auto",
       },
       "full",
     ),
@@ -678,6 +678,42 @@ export async function runCheckpointsErrors(
     jsLeak,
   );
   await jsClient.close();
+
+  // 17d-2. Mode `auto` is the uncontained mode: no approval and no network guard,
+  // so the globals that `semi-auto` removes are present. Output is still redacted.
+  const jsOpenTransport = new StdioClientTransport({
+    command: "node",
+    args: ["dist/server.js"],
+    cwd: process.cwd(),
+    env: verifyEnv(
+      {
+        VENIRA_SESSION_ID: `${SESSION_ID}-js-exec-open`,
+        VENIRA_JS_EXEC_MODE: "auto",
+      },
+      "full",
+    ),
+    stderr: "pipe",
+  });
+  const jsOpenClient = new Client(
+    { name: "verify-js-exec-open", version: "0.0.0" },
+    { capabilities: {} },
+  );
+  await jsOpenClient.connect(jsOpenTransport);
+  const jsOpen = asEnvelope(
+    await jsOpenClient.callTool({
+      name: "project_execute_js",
+      arguments: {
+        code: 'console.log("TOP_SECRET=abc123"); console.log("fetch:" + typeof fetch);',
+      },
+    }),
+  );
+  check(
+    "execute_js_auto_is_uncontained_but_redacted",
+    !JSON.stringify(jsOpen).includes("abc123") &&
+      String(jsOpen.data?.stdout_tail ?? "").includes("fetch:function"),
+    jsOpen,
+  );
+  await jsOpenClient.close();
 
   // 17e. execute_js needs a per-call human grant by default, bound to the exact
   // code, single-use, and granted through the same CLI as shell approvals.

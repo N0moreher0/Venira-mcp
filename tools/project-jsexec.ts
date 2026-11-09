@@ -12,7 +12,7 @@ import { buildEnvelope, errorEnvelope, newRequestId, toolResult } from "../lib/o
 import type { RustResponse, ToolResult } from "../lib/output.js";
 import { SESSION_ID } from "../lib/session.js";
 import { redactSecrets } from "../lib/shell-policy.js";
-import { ALLOW_JS_EXEC, JS_EXEC_APPROVAL, WORKSPACE } from "../lib/workspace.js";
+import { ALLOW_JS_EXEC, JS_EXEC_APPROVAL, JS_EXEC_CONTAINED, WORKSPACE } from "../lib/workspace.js";
 
 // project_execute_js handler and its per-call approval binding. Extracted verbatim
 // from tools/project.ts (P1 #6, step 5b); behavior is unchanged.
@@ -51,7 +51,7 @@ export async function runExecuteJs(args: Args): Promise<ToolResult> {
   if (!ALLOW_JS_EXEC) {
     const elapsedMs = performance.now() - started;
     return toolResult(
-      errorEnvelope("execute_js", new Error("[unsupported] project_execute_js is disabled. Set VENIRA_JS_EXEC_MODE=ask or auto to enable."), { requestId, elapsedMs }),
+      errorEnvelope("execute_js", new Error("[unsupported] project_execute_js is disabled. Set VENIRA_JS_EXEC_MODE=ask, semi-auto or auto to enable."), { requestId, elapsedMs }),
       true,
     );
   }
@@ -147,7 +147,7 @@ export async function runExecuteJs(args: Args): Promise<ToolResult> {
   }
 
   try {
-    const r = executeJs(code, { cwd: WORKSPACE, timeout: timeoutMs, args: cliArgs });
+    const r = executeJs(code, { cwd: WORKSPACE, timeout: timeoutMs, args: cliArgs, contained: JS_EXEC_CONTAINED });
     const response: RustResponse = {
       status: "completed",
       result: {

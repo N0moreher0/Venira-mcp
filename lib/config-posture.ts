@@ -139,7 +139,7 @@ export function evaluateConfigPosture(input: ConfigPostureInput): ConfigPosture 
     add({
       id: "js.exec_without_approval",
       severity: "warning",
-      summary: "`project_execute_js` runs without per-call approval (mode `auto`).",
+      summary: "`project_execute_js` runs without per-call approval (mode `semi-auto` or `auto`).",
       detail: "Arbitrary JavaScript executes outside the shell policy and protected-path guard with no human step.",
       recommendation: "Set VENIRA_JS_EXEC_MODE=ask unless the server only serves fully trusted automation.",
     });
@@ -251,7 +251,7 @@ export function configPostureInput(overrides: {
   // an invalid mode would already have failed closed at startup, so posture
   // only needs to reflect the effective mode, never to throw.
   const rawMode = (process.env.VENIRA_JS_EXEC_MODE ?? "").trim().toLowerCase();
-  const modeKnown = rawMode === "off" || rawMode === "ask" || rawMode === "auto";
+  const modeKnown = rawMode === "off" || rawMode === "ask" || rawMode === "semi-auto" || rawMode === "auto";
   return {
     securityProfile,
     securityProfileExplicit: securityProfileIsExplicit(),

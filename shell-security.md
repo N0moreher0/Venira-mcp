@@ -13,7 +13,7 @@ Status: implementation complete for the v1.15.0 approval/profile work. Local val
 | `trusted` | `permissive` | on | Ask-rule and unclassified commands run; hard-deny commands ask for approval |
 | `off` | `off` | off | Shell checks are bypassed with a startup warning and audit record; use only in a trusted environment |
 
-`VENIRA_SHELL_MODE` and `VENIRA_JS_EXEC_APPROVAL` are advanced overrides. `VENIRA_ALLOW_JS_EXEC=1` is still required to register the JavaScript tool. The `secret_env` injection gate always requires approval, including in `off`.
+`VENIRA_SHELL_MODE` is an advanced override. `VENIRA_JS_EXEC_MODE` (`off` / `ask` / `semi-auto` / `auto`) separately gates the JavaScript tool: it is not registered unless the mode is not `off`, `ask` needs per-call approval, `semi-auto` needs none but keeps the snippet contained, and `auto` needs none and removes the containment. The `secret_env` injection gate always requires approval, including in `off`.
 
 ## Approval lifecycle
 

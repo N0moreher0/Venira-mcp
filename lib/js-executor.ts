@@ -47,7 +47,8 @@ function stripGuardEcho(stderr: string): string {
 }
 
 /**
- * Workspace-scoped synchronous JS evaluation.
+ * Workspace-scoped synchronous JS evaluation. With `contained: false` (mode `auto`) every restriction
+ * described below is dropped: no network guard, no permission model, inherited environment.
  * Runs `node` in the workspace, reading code from stdin, capturing stdout/stderr.
  * Node's permission model limits filesystem access to the workspace and does not
  * grant child-process or worker permissions. Protected files inside the workspace
@@ -56,25 +57,26 @@ function stripGuardEcho(stderr: string): string {
  */
 export function executeJs(
   code: string,
-  options: { cwd?: string; timeout?: number; args?: string[] } = {},
+  options: { cwd?: string; timeout?: number; args?: string[]; contained?: boolean } = {},
 ): JsResult {
   const cwd = options.cwd ?? process.cwd();
   const timeout = Math.max(100, Math.min(options.timeout ?? DEFAULT_TIMEOUT, 600_000));
   const nodeMajor = Number.parseInt(process.versions.node.split(".")[0] ?? "0", 10);
-  const permissionArgs = [
+  const contained = options.contained !== false;
+  const permissionArgs: string[] = !contained ? [] : [
     nodeMajor >= 23 ? "--permission" : "--experimental-permission",
     `--allow-fs-read=${cwd}`,
     `--allow-fs-write=${cwd}`,
   ];
   try {
     const r = spawnSync(process.execPath, [...permissionArgs, "-", ...((options.args ?? []) as string[])], {
-      input: `${NETWORK_GUARD};${code}`,
+      input: contained ? `${NETWORK_GUARD};${code}` : code,
       encoding: "utf8",
       cwd,
       timeout,
       maxBuffer: MAX_BUFFER,
       stdio: ["pipe", "pipe", "pipe"],
-      env: {
+      env: !contained ? process.env : {
         PATH: process.env.PATH,
         TERM: process.env.TERM ?? "",
         HOME: "",
@@ -84,7 +86,7 @@ export function executeJs(
     });
     const timed = Boolean(r.signal === "SIGTERM" || r.signal === "SIGKILL");
     const stdout = (r.stdout ?? "").slice(-MAX_BUFFER);
-    const stderr = stripGuardEcho(r.stderr ?? "").slice(-MAX_BUFFER);
+    const stderr = (contained ? stripGuardEcho(r.stderr ?? "") : (r.stderr ?? "")).slice(-MAX_BUFFER);
     if (r.error) {
       return {
         ok: false,

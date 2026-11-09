@@ -114,7 +114,7 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
     out: "cancelled_run_ids[], count.",
   },
   project_execute_js: {
-    about: "Run a short Node.js snippet in the workspace. Top-level await and require work, network modules are blocked, timeout defaults to 30s (max 10 min). In `ask` mode (`VENIRA_JS_EXEC_MODE=ask`) the first call returns approval_required: ask the user, then retry once with approval_id.",
+    about: "Run a short Node.js snippet in the workspace. Top-level await and require work, timeout defaults to 30s (max 10 min). Behaviour depends on `VENIRA_JS_EXEC_MODE`: `ask` needs per-call approval (first call returns approval_required: ask the user, then retry once with approval_id) and is contained; `semi-auto` needs no approval but is contained (network modules, fetch/WebSocket and reads outside the workspace are blocked, env is scrubbed); `auto` needs no approval and is not contained (full network, filesystem and env).",
     use: "you need a quick computation, data transform or prototype.",
     avoid: "you need a shell pipeline or a long-running process (project_shell_run), or a file edit (file tools).",
     out: "stdout_tail, stderr_tail, exit_code, timed_out. The envelope ok=true only means it ran: check data.ok and exit_code.",
