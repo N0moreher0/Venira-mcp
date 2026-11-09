@@ -156,12 +156,12 @@ try {
     const saved = {
       profile: process.env.VENIRA_SECURITY_PROFILE,
       unrestricted: process.env.VENIRA_UNRESTRICTED,
-      jsApproval: process.env.VENIRA_JS_EXEC_APPROVAL,
+      jsMode: process.env.VENIRA_JS_EXEC_MODE,
     };
     try {
       process.env.VENIRA_SECURITY_PROFILE = "trusted";
       process.env.VENIRA_UNRESTRICTED = "1";
-      delete process.env.VENIRA_JS_EXEC_APPROVAL;
+      delete process.env.VENIRA_JS_EXEC_MODE;
       const posture = computeConfigPosture({ shellMode: "permissive", sessionGrantRules: [] });
       const found = posture.findings.map((f) => f.id);
       assert.ok(found.includes("workspace.unrestricted"));
@@ -173,8 +173,8 @@ try {
       else process.env.VENIRA_SECURITY_PROFILE = saved.profile;
       if (saved.unrestricted === undefined) delete process.env.VENIRA_UNRESTRICTED;
       else process.env.VENIRA_UNRESTRICTED = saved.unrestricted;
-      if (saved.jsApproval === undefined) delete process.env.VENIRA_JS_EXEC_APPROVAL;
-      else process.env.VENIRA_JS_EXEC_APPROVAL = saved.jsApproval;
+      if (saved.jsMode === undefined) delete process.env.VENIRA_JS_EXEC_MODE;
+      else process.env.VENIRA_JS_EXEC_MODE = saved.jsMode;
     }
   });
 

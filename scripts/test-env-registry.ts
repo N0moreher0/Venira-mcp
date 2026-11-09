@@ -110,7 +110,6 @@ const ENV_CASES: Array<{ id: string; env: Record<string, string | undefined>; ex
     env: {
       VENIRA_SECURITY_PROFILE: "strict",
       VENIRA_JS_EXEC_MODE: "ask",
-      VENIRA_ALLOW_JS_EXEC: "1",
       VENIRA_SNAPSHOT_KEEP: "10",
       VENIRA_TOOL_MODE: "expert",
       VENIRA_SHELL_TIMEOUT_POLICY: "hard",
@@ -125,8 +124,8 @@ const ENV_CASES: Array<{ id: string; env: Record<string, string | undefined>; ex
   },
   {
     id: "transposed letters are still matched",
-    env: { VENIRA_ALLOW_JS_EXCE: "1" },
-    expect: [{ code: "unknown_name", name: "VENIRA_ALLOW_JS_EXCE", suggestion: "VENIRA_ALLOW_JS_EXEC" }],
+    env: { VENIRA_JS_EXEC_MOD: "1" },
+    expect: [{ code: "unknown_name", name: "VENIRA_JS_EXEC_MOD", suggestion: "VENIRA_JS_EXEC_MODE" }],
   },
   {
     id: "an unrelated unknown name gets no suggestion",
@@ -135,8 +134,10 @@ const ENV_CASES: Array<{ id: string; env: Record<string, string | undefined>; ex
   },
   {
     id: "removed variables are flagged",
-    env: { VENIRA_NETWORK: "off", VENIRA_SHELL_AUTO_APPROVE_TOKEN: "1" },
+    env: { VENIRA_NETWORK: "off", VENIRA_SHELL_AUTO_APPROVE_TOKEN: "1", VENIRA_ALLOW_JS_EXEC: "1", VENIRA_JS_EXEC_APPROVAL: "0" },
     expect: [
+      { code: "removed_var", name: "VENIRA_ALLOW_JS_EXEC" },
+      { code: "removed_var", name: "VENIRA_JS_EXEC_APPROVAL" },
       { code: "removed_var", name: "VENIRA_NETWORK" },
       { code: "removed_var", name: "VENIRA_SHELL_AUTO_APPROVE_TOKEN" },
     ],
@@ -195,7 +196,7 @@ const ENV_CASES: Array<{ id: string; env: Record<string, string | undefined>; ex
   },
   {
     id: "undefined values and non-VENIRA keys are ignored",
-    env: { VENIRA_ALLOW_JS_EXEC: undefined, venira_lowercase_thing: "1", OTHER_TOOL_VENIRA_X: "1" },
+    env: { VENIRA_JS_EXEC_MODE: undefined, venira_lowercase_thing: "1", OTHER_TOOL_VENIRA_X: "1" },
     expect: [],
   },
 ];
@@ -290,9 +291,9 @@ check("every shell mode a profile maps to is an accepted VENIRA_SHELL_MODE value
   }
 });
 
-check("only the `off` profile disables the JS approval gate", () => {
+check("profile entries carry the shell mode only (JS exec is gated by VENIRA_JS_EXEC_MODE)", () => {
   for (const profile of SECURITY_PROFILES) {
-    assert.equal(SECURITY_PROFILE_TABLE[profile].jsExecApproval, profile !== "off", profile);
+    assert.deepEqual(Object.keys(SECURITY_PROFILE_TABLE[profile]), ["shellMode"], profile);
   }
 });
 

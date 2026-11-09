@@ -156,16 +156,16 @@ VENIRA_SECURITY_PROFILE = "balanced"
 
 ### Security profiles
 
-| `VENIRA_SECURITY_PROFILE` | Shell policy | JavaScript approval | Use |
-|---|---|---|---|
-| `strict` | `strict` | Required | Read-only and workspace-local allowlist runs without approval |
-| `balanced` (default) | `balanced` | Required | Recommended general-purpose setting |
-| `trusted` | `permissive` | Required | Ask-rule and unclassified commands run; hard-deny commands require approval |
-| `off` | `off` | Disabled | Trusted environments only; prints a warning and audits shell commands |
+| `VENIRA_SECURITY_PROFILE` | Shell policy | Use |
+|---|---|---|
+| `strict` | `strict` | Read-only and workspace-local allowlist runs without approval |
+| `balanced` (default) | `balanced` | Recommended general-purpose setting |
+| `trusted` | `permissive` | Ask-rule and unclassified commands run; hard-deny commands require approval |
+| `off` | `off` | Trusted environments only; prints a warning and audits shell commands |
 
 `VENIRA_SHELL_MODE` is an advanced override and takes precedence over the profile. `VENIRA_JS_EXEC_MODE` separately gates the JavaScript tool: `off` (default) hides it, `ask` registers it with per-call human approval, `auto` registers it without approval.
 
-> Choose `trusted` when you want fewer prompts on a personal machine. Choose `off` only when you intentionally accept that shell checks and per-call JavaScript approval are disabled. The `secret_env` gate remains active in every profile.
+> Choose `trusted` when you want fewer prompts on a personal machine. Choose `off` only when you intentionally accept that shell checks are disabled; JS exec is still gated by `VENIRA_JS_EXEC_MODE` (a human gate for `project_execute_js` only counts when that mode is `ask`). The `secret_env` gate remains active in every profile.
 
 ### Advanced configuration
 
@@ -322,13 +322,13 @@ Full reference: the source reads 90+ distinct `VENIRA_*` names; this table lists
 | `VENIRA_OUTPUT_MODE` | `full` | `full` or `compact` (summarize/trim payloads > 8 KiB; generic payloads use `preview_text`) |
 | `VENIRA_PROFILE` | `full` | `full` or `core` (disables dependency graph / change impact) |
 | `VENIRA_UNRESTRICTED` | `"0"` | `"1"` disables workspace lock (never in production) |
-| `VENIRA_SECURITY_PROFILE` | `balanced` | Selects shell policy and JS approval defaults: `strict`, `balanced`, `trusted`, or `off` |
+| `VENIRA_SECURITY_PROFILE` | `balanced` | Selects the shell policy: `strict`, `balanced`, `trusted`, or `off` |
 | `VENIRA_SHELL_MODE` | Profile mapping | Advanced override for shell policy: `strict`, `balanced`, `permissive`, or `off` |
 | `VENIRA_SHELL_EXIT_EARLY` | `"1"` | `"1"` pollers return as soon as exit code is known |
 | `VENIRA_SHELL_TIMEOUT_POLICY` | `"soft"` | `"soft"` warns on timeout · `"hard"` kills process tree |
 | `VENIRA_SHELL_ENV_PASS_ALL` | `"0"` | `"1"` passes full host env to shell (build tools that need it) |
 | `VENIRA_DEFAULT_SHELL` | `cmd` on Windows, `$SHELL` / `bash` elsewhere | Shell used when a call does not name one: `powershell` (5.1), `pwsh` (7+), `cmd`, `bash` |
-| `VENIRA_JS_EXEC_MODE` | `"off"` | `"off"` hides `project_execute_js` · `"ask"` registers it with per-call approval · `"auto"` registers it without approval (legacy `VENIRA_ALLOW_JS_EXEC=1` + `VENIRA_JS_EXEC_APPROVAL` still honored when unset) |
+| `VENIRA_JS_EXEC_MODE` | `"off"` | `"off"` hides `project_execute_js` · `"ask"` registers it with per-call approval · `"auto"` registers it without approval |
 | `VENIRA_USE_RIPGREP` | `"1"` | `"1"` uses ripgrep if installed (faster on big repos) |
 | `VENIRA_CACHE_ALL` | `"1"` | `"1"` TTL caches on · `"0"` always-fresh (slower) |
 | `VENIRA_EDIT_FUZZY` | `"0"` | `"1"` enables fuzzy-match fallback for `old_text` |
@@ -362,7 +362,7 @@ Full reference: the source reads 90+ distinct `VENIRA_*` names; this table lists
 
 **Conservative by default:**
 - **Workspace lock**: all paths validated inside `VENIRA_WORKSPACE`; `../` escape rejected (`path_escape`).
-- **Security profile** (`VENIRA_SECURITY_PROFILE`, default `balanced`): sets shell policy and per-call JS approval together. `VENIRA_SHELL_MODE` and `VENIRA_JS_EXEC_APPROVAL` can override either setting individually. Every `project_shell_run` command is classified `allow`, `ask` or `deny`.
+- **Security profile** (`VENIRA_SECURITY_PROFILE`, default `balanced`): sets the shell policy. `VENIRA_SHELL_MODE` can override it. Every `project_shell_run` command is classified `allow`, `ask` or `deny`.
   - `balanced` (default): hard-deny rules refuse the command; ask rules need approval; routine dev-workspace commands run; anything unclassified needs approval.
   - `strict`: like `balanced`, but only a read-only / workspace-local allowlist runs without approval.
   - `permissive` (the `trusted` profile): ordinary ask-rule and unclassified commands run without a prompt; hard-deny matches become approval requests (`ask.deny.<rule>`), and uninspectable command substitutions always require approval.
@@ -382,7 +382,7 @@ Full reference: the source reads 90+ distinct `VENIRA_*` names; this table lists
 | Shell `deny` | A hard-deny rule matches: refused outright, no approval possible | `VENIRA_SECURITY_PROFILE` (`balanced`; `trusted` asks; `off` disables shell checks) |
 | Shell `ask` | An ask rule matches, or the command is unclassified in `balanced` / `strict` | `VENIRA_SECURITY_PROFILE` (`balanced`) · advanced override: `VENIRA_SHELL_MODE` |
 | Secret injection | `project_shell_run` with `secret_env` | always asks, in every mode |
-| `project_execute_js` | Every call | `VENIRA_ALLOW_JS_EXEC` (`0`: tool not registered) · profile JS gate (`strict` / `balanced` / `trusted`: on; `off`: off) · advanced override: `VENIRA_JS_EXEC_APPROVAL` |
+| `project_execute_js` | Every call | `VENIRA_JS_EXEC_MODE` (`off`: tool not registered; `ask`: per-call approval; `auto`: no approval) |
 | Secret plaintext | `project_secret` with `reveal=1` | `VENIRA_SECRET_ALLOW_REVEAL` (`0`) |
 | Self-install | `project_install_self` writes another client's config | `VENIRA_ALLOW_SELF_INSTALL` (`0`) |
 | Named shell override | `ALLOW_GIT_PUSH` / `ALLOW_ENV_READ` | `VENIRA_SHELL_OVERRIDES` (unset), plus `override` and a `reason` on the call |
@@ -405,6 +405,8 @@ Agent helpers:
 Alternative (off by default, `project_shell_run` only): `VENIRA_SHELL_ELICIT=1` shows a confirmation dialog in MCP clients that support elicitation, and accepting it records the grant for you.
 
 Removed in v1.15: `approval_token` and `VENIRA_SHELL_AUTO_APPROVE_TOKEN`. Passing `approval_token` now returns `[approval_invalid]` with a hint to use `approval_id`; setting the env var only logs a warning and is ignored.
+
+Removed: `VENIRA_ALLOW_JS_EXEC` and `VENIRA_JS_EXEC_APPROVAL` — use `VENIRA_JS_EXEC_MODE` (`off` / `ask` / `auto`) instead. Setting the old vars only logs a warning and is ignored.
 
 Approvals are a guard rail, not a sandbox: a process running as the same OS user can read the approval key.
 

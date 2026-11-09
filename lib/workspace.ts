@@ -5,7 +5,6 @@
 import path from "node:path";
 import fs from "node:fs";
 import { envFlag } from "./env.js";
-import { securityProfileSettings } from "./security-profile.js";
 import { snapshotProtectedRoots } from "./snapshot-paths.js";
 export const PLATFORM = process.platform;
 
@@ -61,27 +60,21 @@ export function defaultDataDir(): string {
 export const UNRESTRICTED = envFlag("VENIRA_UNRESTRICTED", false);
 
 /**
- * `project_execute_js` mode (single source of truth, replaces the two legacy
- * flags below):
+ * `project_execute_js` mode — the single gate for the tool:
  *   - `off`  (default): the tool is not registered at all.
  *   - `ask`: registered; each call needs a human approval bound to the code.
  *   - `auto`: registered; runs with no approval step (trusted automation only).
- * `VENIRA_ALLOW_JS_EXEC` / `VENIRA_JS_EXEC_APPROVAL` are still honored for one
- * release when the mode is unset (ALLOW=1 + APPROVAL=1 => "ask", ALLOW=1 +
- * APPROVAL=0 => "auto"); the registry marks them legacy.
+ * `VENIRA_ALLOW_JS_EXEC` / `VENIRA_JS_EXEC_APPROVAL` are removed (registry
+ * `removed` entries keep them warning).
  */
 export type JsExecMode = "off" | "ask" | "auto";
 
 function resolveJsExecMode(): JsExecMode {
   const raw = process.env.VENIRA_JS_EXEC_MODE;
-  if (raw !== undefined && raw.trim() !== "") {
-    const value = raw.trim().toLowerCase();
-    if (value === "off" || value === "ask" || value === "auto") return value;
-    throw new Error(`[config_invalid] VENIRA_JS_EXEC_MODE must be one of: off, ask, auto.`);
-  }
-  // Legacy fallback (one release): the two old flags still work.
-  if (!envFlag("VENIRA_ALLOW_JS_EXEC", false)) return "off";
-  return envFlag("VENIRA_JS_EXEC_APPROVAL", securityProfileSettings().jsExecApproval) ? "ask" : "auto";
+  if (raw === undefined || raw.trim() === "") return "off";
+  const value = raw.trim().toLowerCase();
+  if (value === "off" || value === "ask" || value === "auto") return value;
+  throw new Error(`[config_invalid] VENIRA_JS_EXEC_MODE must be one of: off, ask, auto.`);
 }
 
 export const JS_EXEC_MODE: JsExecMode = resolveJsExecMode();

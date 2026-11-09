@@ -42,12 +42,8 @@ export interface WorkspaceConfig {
   shellMode?: "balanced" | "strict" | "permissive" | "off";
   outputMode?: "full" | "compact";
   shellExitEarly?: boolean;
-  /** `project_execute_js` gate. Preferred over the legacy booleans below. */
+  /** `project_execute_js` gate: off hides the tool, ask requires per-call approval, auto runs without approval. */
   jsExecMode?: "off" | "ask" | "auto";
-  /** Deprecated: use `jsExecMode` ("off"/"ask"/"auto") instead of the two flags. */
-  allowJsExec?: boolean;
-  /** Deprecated: use `jsExecMode` instead. */
-  jsExecApproval?: boolean;
   allowSelfInstall?: boolean;
   auditFast?: boolean;
   cacheAll?: boolean;

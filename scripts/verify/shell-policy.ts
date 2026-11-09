@@ -143,12 +143,12 @@ export async function runShellPolicy(
       profileModes,
     );
     check(
-      "security_profile_js_approval_table",
-      profileMod.securityProfileSettings("strict").jsExecApproval === true &&
-        profileMod.securityProfileSettings("balanced").jsExecApproval ===
-          true &&
-        profileMod.securityProfileSettings("trusted").jsExecApproval === true &&
-        profileMod.securityProfileSettings("off").jsExecApproval === false &&
+      "security_profile_table_maps_shell_mode_only",
+      profileMod.securityProfileSettings("strict").shellMode === "strict" &&
+        profileMod.securityProfileSettings("balanced").shellMode === "balanced" &&
+        profileMod.securityProfileSettings("trusted").shellMode === "permissive" &&
+        profileMod.securityProfileSettings("off").shellMode === "off" &&
+        !("jsExecApproval" in profileMod.securityProfileSettings("off")) &&
         profileMod.resolveSecurityProfile(undefined) === "balanced" &&
         profileMod.resolveSecurityProfile(" Trusted ") === "trusted",
       profileMod.SECURITY_PROFILE_TABLE,

@@ -1,15 +1,16 @@
 /**
- * VENIRA_SECURITY_PROFILE: one variable that picks the approval posture.
+ * VENIRA_SECURITY_PROFILE: one variable that picks the shell-policy posture.
  *
- *   profile   | shell mode | JS approval
- *   ----------|------------|------------
- *   strict    | strict     | on
- *   balanced  | balanced   | on   (default)
- *   trusted   | permissive | on   (personal machine)
- *   off       | off        | off  (loud warning, trusted environments only)
+ *   profile   | shell mode
+ *   ----------|------------
+ *   strict    | strict
+ *   balanced  | balanced   (default)
+ *   trusted   | permissive (personal machine)
+ *   off       | off        (loud warning, trusted environments only)
  *
- * The individual variables (VENIRA_SHELL_MODE, VENIRA_JS_EXEC_APPROVAL) still
- * win over the profile; they are the "Advanced" overrides.
+ * The individual variable (VENIRA_SHELL_MODE) still wins over the profile;
+ * it is the "Advanced" override. JS exec is gated separately by
+ * VENIRA_JS_EXEC_MODE (off/ask/auto), not by the profile.
  *
  * Keep this file dependency-free: it is imported by env.ts, workspace.ts and
  * shell-policy.ts, so any import here risks a cycle.
@@ -22,14 +23,13 @@ export type ProfileShellMode = "strict" | "balanced" | "permissive" | "off";
 
 export interface SecurityProfileSettings {
   shellMode: ProfileShellMode;
-  jsExecApproval: boolean;
 }
 
 export const SECURITY_PROFILE_TABLE: Readonly<Record<SecurityProfile, SecurityProfileSettings>> = {
-  strict: { shellMode: "strict", jsExecApproval: true },
-  balanced: { shellMode: "balanced", jsExecApproval: true },
-  trusted: { shellMode: "permissive", jsExecApproval: true },
-  off: { shellMode: "off", jsExecApproval: false },
+  strict: { shellMode: "strict" },
+  balanced: { shellMode: "balanced" },
+  trusted: { shellMode: "permissive" },
+  off: { shellMode: "off" },
 };
 
 export const DEFAULT_SECURITY_PROFILE: SecurityProfile = "balanced";

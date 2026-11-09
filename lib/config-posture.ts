@@ -17,7 +17,6 @@ import { envFlag } from "./env.js";
 import {
   resolveSecurityProfile,
   securityProfileIsExplicit,
-  securityProfileSettings,
   type SecurityProfile,
 } from "./security-profile.js";
 
@@ -241,7 +240,6 @@ export function configPostureInput(overrides: {
   sessionGrantRules?: string[];
 }): ConfigPostureInput {
   const securityProfile = resolveSecurityProfile();
-  const settings = securityProfileSettings(securityProfile);
   const readFlag = (name: string, fallback: boolean): boolean => {
     try {
       return envFlag(name, fallback);
@@ -258,14 +256,8 @@ export function configPostureInput(overrides: {
     securityProfile,
     securityProfileExplicit: securityProfileIsExplicit(),
     shellMode: overrides.shellMode,
-    jsExecEnabled: overrides.jsExecEnabled ?? (modeKnown ? rawMode !== "off" : readFlag("VENIRA_ALLOW_JS_EXEC", false)),
-    jsExecApproval:
-      overrides.jsExecApproval ??
-      (modeKnown
-        ? rawMode === "ask"
-        : process.env.VENIRA_JS_EXEC_APPROVAL === undefined
-          ? settings.jsExecApproval
-          : readFlag("VENIRA_JS_EXEC_APPROVAL", settings.jsExecApproval)),
+    jsExecEnabled: overrides.jsExecEnabled ?? (modeKnown ? rawMode !== "off" : false),
+    jsExecApproval: overrides.jsExecApproval ?? (modeKnown ? rawMode === "ask" : true),
     unrestricted: readFlag("VENIRA_UNRESTRICTED", false),
     allowSelfInstall: readFlag("VENIRA_ALLOW_SELF_INSTALL", false),
     secretAllowReveal: readFlag("VENIRA_SECRET_ALLOW_REVEAL", false),

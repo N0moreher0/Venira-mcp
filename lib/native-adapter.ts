@@ -218,18 +218,8 @@ export function createCorehost(config: WorkspaceConfig = {}): VeniraCorehost {
   if (config.shellExitEarly !== undefined) {
     process.env.VENIRA_SHELL_EXIT_EARLY = config.shellExitEarly ? "1" : "0";
   }
-  // JS exec mode: the explicit mode wins; the legacy booleans translate to it.
-  const jsExecMode =
-    config.jsExecMode ??
-    (config.allowJsExec !== undefined
-      ? !config.allowJsExec
-        ? "off"
-        : config.jsExecApproval === false
-          ? "auto"
-          : "ask"
-      : undefined);
-  if (jsExecMode !== undefined) {
-    process.env.VENIRA_JS_EXEC_MODE = jsExecMode;
+  if (config.jsExecMode !== undefined) {
+    process.env.VENIRA_JS_EXEC_MODE = config.jsExecMode;
   }
   if (config.allowSelfInstall !== undefined) {
     process.env.VENIRA_ALLOW_SELF_INSTALL = config.allowSelfInstall ? "1" : "0";
@@ -389,16 +379,7 @@ export function createCorehost(config: WorkspaceConfig = {}): VeniraCorehost {
       if (newConfig.shellMode) process.env.VENIRA_SHELL_MODE = newConfig.shellMode;
       if (newConfig.outputMode) process.env.VENIRA_OUTPUT_MODE = newConfig.outputMode;
       if (newConfig.shellExitEarly !== undefined) process.env.VENIRA_SHELL_EXIT_EARLY = newConfig.shellExitEarly ? "1" : "0";
-      const mergedMode =
-        newConfig.jsExecMode ??
-        (newConfig.allowJsExec !== undefined
-          ? !newConfig.allowJsExec
-            ? "off"
-            : (newConfig.jsExecApproval ?? config.jsExecApproval) === false
-              ? "auto"
-              : "ask"
-          : undefined);
-      if (mergedMode !== undefined) process.env.VENIRA_JS_EXEC_MODE = mergedMode;
+      if (newConfig.jsExecMode !== undefined) process.env.VENIRA_JS_EXEC_MODE = newConfig.jsExecMode;
       if (newConfig.allowSelfInstall !== undefined) process.env.VENIRA_ALLOW_SELF_INSTALL = newConfig.allowSelfInstall ? "1" : "0";
       if (newConfig.auditFast !== undefined) process.env.VENIRA_AUDIT_FAST = newConfig.auditFast ? "1" : "0";
       if (newConfig.cacheAll !== undefined) process.env.VENIRA_CACHE_ALL = newConfig.cacheAll ? "1" : "0";

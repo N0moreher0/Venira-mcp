@@ -177,13 +177,18 @@ export const ENV_REGISTRY: readonly EnvVarSpec[] = [
     choices: ["off", "ask", "auto"],
     allowEmpty: true,
   }),
-  secFlag("VENIRA_JS_EXEC_APPROVAL", "Legacy alias for the `ask` mode; honored for one release when VENIRA_JS_EXEC_MODE is unset.", false, {
-    reason: "legacy; replaced by VENIRA_JS_EXEC_MODE",
-  }),
-  secFlag("VENIRA_ALLOW_JS_EXEC", "Legacy alias for enabling `project_execute_js`; honored for one release when VENIRA_JS_EXEC_MODE is unset.", false, {
-    default: "0",
-    reason: "legacy; replaced by VENIRA_JS_EXEC_MODE",
-  }),
+  removed(
+    "VENIRA_JS_EXEC_APPROVAL",
+    "flag",
+    "Per-call JS approval flag (removed; replaced by VENIRA_JS_EXEC_MODE).",
+    "replaced by VENIRA_JS_EXEC_MODE (off / ask / auto).",
+  ),
+  removed(
+    "VENIRA_ALLOW_JS_EXEC",
+    "flag",
+    "JS exec enable flag (removed; replaced by VENIRA_JS_EXEC_MODE).",
+    "replaced by VENIRA_JS_EXEC_MODE (off / ask / auto).",
+  ),
   secFlag("VENIRA_UNRESTRICTED", "Disable the workspace lock (absolute paths outside the workspace allowed).", true, {
     default: "0",
   }),
