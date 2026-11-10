@@ -65,6 +65,34 @@ for (const name of documented) {
   }
 }
 
+// Release versions: package.json, package-lock.json, server.json and lib/version.ts must agree
+// (1.20.0 shipped with lib/version.ts left at 1.19.0, which made the doctor preflight and CI fail).
+{
+  const pkgVersion = (JSON.parse(fs.readFileSync("package.json", "utf8")) as { version: string }).version;
+  const lock = JSON.parse(fs.readFileSync("package-lock.json", "utf8")) as {
+    version?: string;
+    packages?: Record<string, { version?: string }>;
+  };
+  const server = JSON.parse(fs.readFileSync("server.json", "utf8")) as {
+    version?: string;
+    packages?: Array<{ version?: string }>;
+  };
+  const versionTs = /VERSION\s*=\s*"([^"]+)"/.exec(fs.readFileSync("lib/version.ts", "utf8"))?.[1];
+  const found: Array<[string, string | undefined]> = [
+    ["package-lock.json", lock.version],
+    ['package-lock.json packages[""]', lock.packages?.[""]?.version],
+    ["server.json", server.version],
+    ...(server.packages ?? []).map((p, i): [string, string | undefined] => [`server.json packages[${i}]`, p.version]),
+    ["lib/version.ts", versionTs],
+  ];
+  for (const [where, value] of found) {
+    if (value !== pkgVersion) {
+      console.error(`${where} is ${value ?? "missing"}, but package.json is ${pkgVersion}. Bump them together.`);
+      failed = true;
+    }
+  }
+}
+
 if (!failed) {
   console.log(`check:docs ok (tool counts ${EXPECTED_DEFAULT_TOOLS}/${EXPECTED_EXPERT_TOOLS}, ${documented.size} documented env vars found in source)`);
 }

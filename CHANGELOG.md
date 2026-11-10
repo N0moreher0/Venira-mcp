@@ -2,6 +2,11 @@
 
 Local release notes for venira-mcp. Not published (not listed in `package.json` `files`) and not pushed to git.
 
+## Unreleased
+
+### Added
+- `npm run check:docs` now also fails when `package.json`, `package-lock.json`, `server.json` and `lib/version.ts` carry different versions (the 1.20.0 mistake), and it runs as the first step of `npm run verify`, so CI and the Release workflow enforce it before anything is published.
+
 ## 1.20.1 — 2026-11-10
 
 ### Fixed
