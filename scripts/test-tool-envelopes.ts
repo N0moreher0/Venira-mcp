@@ -671,9 +671,7 @@ try {
         },
       });
       const r = await runCreate({
-        kind: "file",
-        relative_path: "a.ts",
-        content: "x",
+        relative_path: "new-dir",
       });
       const env = parse(r);
       assert.equal(r.isError, true);
@@ -683,6 +681,53 @@ try {
       assert.equal(env.error.code, "io_error");
     },
   );
+
+  // Phase 5: project_create makes directories only; the file-writing arguments fail closed.
+  await check("create_makes_directories_and_refuses_removed_file_arguments", async () => {
+    const calls: Array<[string, Record<string, unknown>]> = [];
+    const { runCreate } = operations.createOperationRunners({
+      executeCached: async (operation: string, args: Record<string, unknown>) => {
+        calls.push([operation, args]);
+        return {
+          response: {
+            status: "completed",
+            result: {
+              kind: "directory_created",
+              data: { relative_path: args.relative_path },
+            },
+          },
+          cached: false,
+        };
+      },
+    });
+
+    const dir = parse(await runCreate({ relative_path: "lib/new" }));
+    assert.equal(calls[0][0], "create_directory", "kind omitted must create a directory");
+    assert.equal(dir.ok, true);
+    assert.equal(dir.data.deprecated, undefined, "no deprecation field is emitted any more");
+    assert.equal(calls[0][1].create_parents, true, "create_parents defaults to true");
+
+    const explicit = parse(await runCreate({ relative_path: "lib/other", kind: "directory" }));
+    assert.equal(calls[1][0], "create_directory", "kind=directory is the advertised spelling");
+    assert.equal(explicit.ok, true);
+
+    const file = parse(await runCreate({ relative_path: "a.ts", kind: "file", content: "x" }));
+    assert.equal(file.ok, false);
+    assert.equal(file.error.code, "unsupported", "kind=file must be refused, not silently turned into a directory");
+    assert.match(String(file.hint), /project_write_file/, "the hint must point at project_write_file");
+
+    const bare = parse(await runCreate({ relative_path: "b.ts", content: "y" }));
+    assert.equal(bare.ok, false);
+    assert.equal(bare.error.code, "unsupported", "a bare content from an older client must not create an empty directory");
+    assert.match(String(bare.hint), /project_write_file/);
+
+    const withMode = parse(await runCreate({ relative_path: "c.ts", mode: "append" }));
+    assert.equal(withMode.ok, false);
+    assert.equal(withMode.error.code, "unsupported");
+    assert.match(String(withMode.hint), /project_write_file/);
+
+    assert.equal(calls.length, 2, "a rejected call must not reach the backend");
+  });
 
   // ---- 5. every error code the code base can throw ends with a hint ------
   await check("every_thrown_error_code_has_a_hint", async () => {
@@ -767,8 +812,6 @@ try {
     const samples: Array<[string, RegExp]> = [
       ["[invalid_request] symbol_name is required.", /symbol_name/],
       ["[invalid_request] queries[] is required.", /pattern/],
-      ['[invalid_request] `kind` must be "file" or "directory". Received: "x".', /"directory"/],
-      ["[invalid_request] kind=file requires `content` (a UTF-8 string).", /content/],
       ["[invalid_request] action must be create|list|restore|delete|mirror. Received: \"x\".", /project_snapshot/],
       ["[invalid_request] Invalid checkpoint id. Use the id returned.", /action=list/],
       ["[invalid_request] harness must be one of: a, b. Got: x", /project_detect_harnesses/],

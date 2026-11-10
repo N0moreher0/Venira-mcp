@@ -538,8 +538,6 @@ function defaultNextActions(failure: Failure): unknown[] | undefined {
 const INVALID_REQUEST_HINTS: Array<[RegExp, string]> = [
   [/symbol_name is required/i, "Pass symbol_name (identifier); scope=file with relative_path, or scope=workspace."],
   [/queries\[\] is required/i, "Pass queries: [{ pattern, must?, weight? }]."],
-  [/`kind` must be "file" or "directory"/i, 'Set kind to "file" or "directory".'],
-  [/kind=file requires `content`/i, 'Add content ("" for an empty file).'],
   [/action must be create\|list\|restore/i, "Use project_snapshot action=create|list|restore|delete|mirror; restore/delete need id."],
   [/Invalid checkpoint id/i, "Use an id from project_snapshot action=list."],
   [/paths\[\] is limited/i, "Max 64 paths; pass a directory instead."],
@@ -576,7 +574,7 @@ const INVALID_REQUEST_HINTS: Array<[RegExp, string]> = [
   [/must be https|is not in the allowed list/i, "Provider host must be https and on the allowed host list in git config."],
   [/must be an integer between/i, "Use an integer within the stated range."],
   [/`ref` must be a branch/i, "ref: branch name or commit sha."],
-  [/safe_edit tool removed/i, "Use project_edit_file with guard=sha256."],
+  [/safe_edit tool removed/i, "Use project_edit_file with expected_sha256."],
   [/Pass error_text/i, "Pass error_text or log_tail."],
   [/Provider path must start/i, 'Internal: provider paths start with "/"; report a bug.'],
 ];

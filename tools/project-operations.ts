@@ -55,73 +55,43 @@ export function createOperationRunners({ executeCached }: OperationRunnerDeps) {
     const started = performance.now();
     const requestId = newRequestId();
     const elapsed = () => performance.now() - started;
-    const kind = args.kind;
-    if (kind === "directory") {
-      if (args.content) {
-        const fail = errorEnvelope(
-          "create",
-          new Error("[invalid_request] kind=directory does not accept `content`. Drop content or use kind=file. Hint: use write_file for files, create_directory for directories."),
-          { requestId, elapsedMs: elapsed() },
-        );
-        recordMetric("create", elapsed(), false);
-        return toolResult(fail, true);
-      }
-      const dirParams: Args = {
-        relative_path: args.relative_path,
-        create_parents: args.create_dirs ?? true,
-      };
-      if (typeof args.reason === "string") dirParams.reason = args.reason;
-      let dirResponse: RustResponse;
-      try {
-        ({ response: dirResponse } = await executeCached("create_directory", dirParams));
-      } catch (error) {
-        const elapsedMs = elapsed();
-        recordMetric("create", elapsedMs, false);
-        return toolResult(errorEnvelope("create", error, { requestId, elapsedMs }), true);
-      }
-      recordMetric("create", elapsed(), true);
-      return toolResult(buildEnvelope("create", dirResponse, { requestId, elapsedMs: elapsed() }));
-    }
-    if (kind !== "file") {
+    // Phase 5 (ROADMAP_TOOL_SCHEMA.md): project_create creates directories only. The file-writing
+    // arguments are gone, so an older client's call is refused instead of silently creating an empty
+    // directory where it wanted a file.
+    const removed: string[] = [];
+    if (args.kind !== undefined && args.kind !== "directory") removed.push(`kind=${JSON.stringify(args.kind)}`);
+    if (args.content !== undefined) removed.push("content");
+    if (args.mode !== undefined) removed.push("mode");
+    if (args.expected_sha256 !== undefined) removed.push("expected_sha256");
+    if (removed.length > 0) {
       recordMetric("create", elapsed(), false);
       return toolResult(
         errorEnvelope(
           "create",
-          new Error(`[invalid_request] \`kind\` must be "file" or "directory". Received: ${JSON.stringify(kind)}.`),
+          new Error(
+            `[unsupported] project_create creates directories only; ${removed.join(", ")} ${removed.length === 1 ? "was" : "were"} removed. ` +
+              "Hint: use project_write_file for file content (mode create|overwrite|append), or project_edit_file for a change to an existing file.",
+          ),
           { requestId, elapsedMs: elapsed() },
         ),
         true,
       );
     }
-    if (typeof args.content !== "string") {
-      recordMetric("create", elapsed(), false);
-      return toolResult(
-        errorEnvelope(
-          "create",
-          new Error('[invalid_request] kind=file requires `content` (a UTF-8 string; use an empty string "" for an empty file).'),
-          { requestId, elapsedMs: elapsed() },
-        ),
-        true,
-      );
-    }
-    const fileParams: Args = {
+    const dirParams: Args = {
       relative_path: args.relative_path,
-      content: args.content,
-      create_dirs: args.create_dirs ?? true,
+      create_parents: args.create_dirs ?? true,
     };
-    if (args.mode !== undefined) fileParams.mode = args.mode;
-    if (args.expected_sha256 !== undefined) fileParams.expected_sha256 = args.expected_sha256;
-    if (typeof args.reason === "string") fileParams.reason = args.reason;
-    let result: RustResponse;
+    if (typeof args.reason === "string") dirParams.reason = args.reason;
+    let dirResponse: RustResponse;
     try {
-      result = (await executeCached("write_file", fileParams)).response as RustResponse;
+      ({ response: dirResponse } = await executeCached("create_directory", dirParams));
     } catch (error) {
       const elapsedMs = elapsed();
       recordMetric("create", elapsedMs, false);
       return toolResult(errorEnvelope("create", error, { requestId, elapsedMs }), true);
     }
     recordMetric("create", elapsed(), true);
-    return toolResult(buildEnvelope("create", result, { requestId, elapsedMs: elapsed() }));
+    return toolResult(buildEnvelope("create", dirResponse, { requestId, elapsedMs: elapsed() }));
   }
 
   return { runOne, runCreate };

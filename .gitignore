@@ -58,3 +58,4 @@ Desktop.ini
 .tmp-probe/
 # Local MCP client config (machine-specific env, may hold relaxed security flags): never commit
 .vscode/mcp.json
+.mcp.json

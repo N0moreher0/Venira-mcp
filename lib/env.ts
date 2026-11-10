@@ -12,6 +12,15 @@ export function envFlagValue(name: string, value: string | undefined, defaultVal
   return envFlag(name, defaultValue, value);
 }
 
+/**
+ * `VENIRA_EDIT_FUZZY=1`: project_edit_file may fall back to fuzzy matching. Read at call time so tests can
+ * flip it. The tool schemas are built from it when the tools are registered (ROADMAP_TOOL_SCHEMA.md,
+ * phase 3): `fuzzy_distance`, `ignore_indentation` and `case_insensitive` are only advertised when it is on.
+ */
+export function editFuzzyEnabled(): boolean {
+  return envFlag("VENIRA_EDIT_FUZZY", false);
+}
+
 export function envChoice<const T extends readonly string[]>(
   name: string,
   defaultValue: T[number],

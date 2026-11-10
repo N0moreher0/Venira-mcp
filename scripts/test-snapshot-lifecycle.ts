@@ -210,6 +210,21 @@ await check("retention_after_create_also_leaves_blobs_alone_while_something_is_u
   await snapshots.opSnapshotDelete({ id: String(created.id) }, workspaceDir);
 });
 
+await check("removed_scope_alias_is_refused_and_captures_nothing", async () => {
+  const before = (await store.listManifestsDetailed()).manifests.length;
+  await assert.rejects(
+    () => snapshots.opSnapshotCreate({ scope: ["c.txt"], label: "scope" }, workspaceDir),
+    /scope was removed|\[unsupported\]/,
+    "scope is removed: it must never silently narrow (or widen) the capture",
+  );
+  const after = (await store.listManifestsDetailed()).manifests.length;
+  assert.equal(after, before, "a refused call must not create a checkpoint");
+  const viaPaths = dataOf(await snapshots.opSnapshotCreate({ paths: ["c.txt"], label: "paths" }, workspaceDir));
+  assert.equal(viaPaths.file_count, 1);
+  assert.equal(viaPaths.deprecated, undefined, "paths is the only spelling and is not flagged");
+  await snapshots.opSnapshotDelete({ id: String(viaPaths.id) }, workspaceDir);
+});
+
 await check("gc_resumes_and_sweeps_orphans_once_nothing_is_unreadable", async () => {
   await dropIndex(FUTURE_ID);
   await dropIndex(BROKEN_ID);

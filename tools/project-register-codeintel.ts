@@ -152,7 +152,7 @@ export function registerCodeIntelTools(server: McpServer, deps: CodeIntelDeps): 
         include_tests: flag01.optional().describe("1 includes test files/edges (default); 0 hides them."),
         languages: z.array(z.string().max(20)).max(6).optional().describe('Language filter, e.g. ["ts","py","rs","go","java","kotlin"] (default: all supported).'),
         max_nodes: z.number().int().min(1).max(2000).optional().describe("Max file nodes (default 500)."),
-        max_edges: z.number().int().min(1).max(5000).optional().describe("Max edges (default 2000)."),
+        max_edges: z.number().int().min(1).max(5000).optional().describe("Max edges kept; more sets truncated (default 2000)."),
       },
     },
     (args) => runOne("dependency_graph", args as Args),
@@ -194,7 +194,7 @@ export function registerCodeIntelTools(server: McpServer, deps: CodeIntelDeps): 
           .optional()
           .describe('Symbols you plan to rename/change; pass a name, or {name, relative_path} (or {name, file}) when the name is ambiguous. At least one of files/symbols is required.'),
         direction: z.enum(["dependents", "dependencies", "both"]).optional().describe("Traversal direction (default dependents)."),
-        depth: z.number().int().min(1).max(10).optional().describe("BFS hop cap (default 5)."),
+        depth: z.number().int().min(1).max(10).optional().describe("Max hops from the seeds (default 5)."),
         include_tests: flag01.optional().describe("1 includes test files (default) and counts them in tests_affected."),
         max_nodes: z.number().int().min(1).max(2000).optional().describe("Max affected files (default 300)."),
         format: z.enum(["json", "mermaid"]).optional().describe("Output format (default json)."),

@@ -70,17 +70,19 @@ export async function runCheckpointsErrors(
       (snapCreate.data?.file_count ?? 0) >= 8,
     snapCreate,
   );
-  const badScopeSnapshot = asEnvelope(
+  const removedScopeSnapshot = asEnvelope(
     await call("project_snapshot", {
       action: "create",
       scope: [".verify-definitely-missing-snapshot-scope"],
-      label: "invalid scope must not widen",
+      label: "removed scope must fail closed",
     }),
   );
   check(
-    "snapshot_scope_alias_missing_path_fails_closed",
-    badScopeSnapshot.ok === false && badScopeSnapshot.error?.code === "not_found",
-    badScopeSnapshot,
+    "snapshot_scope_removed_fails_closed",
+    removedScopeSnapshot.ok === false &&
+      removedScopeSnapshot.error?.code === "unsupported" &&
+      /paths/i.test(String(removedScopeSnapshot.hint ?? "")),
+    removedScopeSnapshot,
   );
   const outlineDirectory = asEnvelope(
     await call("project_outline_symbol", { relative_path: ".", max_symbols: 5 }),

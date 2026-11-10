@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { WORKSPACE } from "../lib/workspace.js";
 
-type ToolMode = "default" | "expert";
+export type ToolMode = "default" | "expert";
 
 /**
  * Per-mode tool exclusions layered on top of `VENIRA_DISABLE_TOOLS` and the
@@ -17,7 +17,7 @@ type ToolMode = "default" | "expert";
  * policy in every mode, so `project_delete_path` is the controlled, auditable
  * deletion path.
  */
-const TOOL_MODE_EXCLUDES: Record<ToolMode, string[]> = {
+export const TOOL_MODE_EXCLUDES: Record<ToolMode, string[]> = {
   expert: [],
   default: [
     "project_ci_status",

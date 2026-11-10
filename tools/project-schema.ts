@@ -5,21 +5,27 @@ import { parseBackgroundFlag } from "../lib/env.js";
 // Extracted from tools/project.ts (roadmap item 6, step 5i) so registration groups can import
 // them without importing project.ts.
 
-export const path_ = z.string().describe("Workspace-relative path.");
+/** One shared string for every path parameter (JSON Schema repeats it per use, so keep it short). */
+export const PATH_DESC = "Workspace-relative ('.' = root); absolute/.. outside it rejected.";
+export const path_ = z.string().describe(PATH_DESC);
 /**
  * Boolean convention (item 16): every boolean flag on every tool is the integer 0|1.
- * The only exception is `project_shell_run.background`, which additionally accepts
- * true/false/"1"/"0" so clients that send JSON booleans keep working.
+ * No default description: every use must say what 1 does (`.describe("1 = ...")`), never a generic "1=on, 0=off".
  */
-export const flag01 = z.number().int().min(0).max(1).transform((value) => value === 1).describe("1=on, 0=off.");
-/** `background` accepts 0/1, booleans and strings so `false`/`"False"` works. */
+export const flag01 = z.number().int().min(0).max(1).transform((value) => value === 1);
+/**
+ * `project_shell_run.background` is advertised as the integer 0|1 like every other flag (ROADMAP_TOOL_SCHEMA.md,
+ * phase 4), but the value is still normalised from the older shapes a cached client may send: `true`/`false`,
+ * `"1"`/`"0"`, `"true"`/`"False"`. `.meta()` overrides only the JSON Schema, so `tools/list` stays integer
+ * while `safeParse` keeps a permissive input; never advertise a union here again.
+ */
 export const backgroundFlag = z
-  .union([z.number().int().min(0).max(1), z.boolean(), z.string().max(20)])
+  .unknown()
   .transform((value) => parseBackgroundFlag(value))
+  .meta({ type: "integer", minimum: 0, maximum: 1 })
   .describe(
-    "1/true = background (default): return immediately with run_id. " +
-      "0/false = foreground: block until the command exits, then return the final stdout/stderr in this call. " +
-      "This is the one boolean flag that is not integer-only.",
+    "1 = background (default): return immediately with run_id. " +
+      "0 = foreground: block until the command exits, then return the final stdout/stderr in this call.",
   );
 /**
  * `reason` rule (item 16): optional on every tool, audit-logged when provided.
@@ -40,27 +46,42 @@ export const editOp = z.object({
 });
 
 /**
+ * Fuzzy-match options of `project_edit_file` and of every `project_edit_batch` item. They are only part of
+ * the published schema when `VENIRA_EDIT_FUZZY=1` (ROADMAP_TOOL_SCHEMA.md, phase 3), like `project_execute_js`
+ * and `VENIRA_JS_EXEC_MODE`; with the variable off the shape is empty and `lib/corehost-filewrite.ts` rejects
+ * a caller that still sends them. Since they are only visible when fuzzy is on, the descriptions do not repeat
+ * the variable name. Keys must match `EDIT_ITEM_FUZZY_KEYS` in `lib/arg-hints.ts`.
+ */
+export function editFuzzyShape(enabled: boolean) {
+  if (!enabled) return {};
+  return {
+    fuzzy_distance: z.number().int().min(0).max(10).optional().describe("Max edit distance when old_text has no exact match (default 3)."),
+    ignore_indentation: flag01.optional().describe("1 = fuzzy match ignores leading whitespace."),
+    case_insensitive: flag01.optional().describe("1 = fuzzy match ignores case."),
+  };
+}
+
+/**
  * One `project_edit_batch` item: the full `project_edit_file` shape.
  * Deliberately loose (unknown keys pass through): the runtime validator in
  * `lib/arg-hints.ts` (`EDIT_ITEM_KEYS`) rejects a misspelled key with a
  * did-you-mean message, so the schema must not strip or reject it first.
  * `relative_path` is optional here for the same reason — the handler enforces
- * it per item. Keep these keys in sync with `EDIT_ITEM_KEYS`.
+ * it per item. Keep these keys in sync with `EDIT_ITEM_KEYS`; `fuzzy` decides
+ * whether the fuzzy options are advertised (see `editFuzzyShape`).
  */
-export const editBatchItem = z.looseObject({
-  relative_path: path_.describe("File to edit (required per item)."),
-  old_text: z.string().min(1).optional().describe("Exact text to replace (see project_edit_file)."),
-  new_text: z.string().optional().describe("Replacement text (see project_edit_file)."),
-  replace_all: flag01.optional(),
-  edits: z.array(editOp).max(64).optional().describe("Several replacements in this file; wins over old_text/new_text."),
-  expected_sha256: z.string().optional().describe("Hex SHA-256 of the current full content; edit refused if it differs. Required with guard=sha256."),
-  old_text_fuzzy: z.string().optional().describe("Ignored: fuzzy applies to old_text (needs VENIRA_EDIT_FUZZY=1)."),
-  fuzzy_distance: z.number().int().min(0).max(10).optional().describe("Fuzzy max edit distance (default 3). Needs VENIRA_EDIT_FUZZY=1."),
-  ignore_indentation: flag01.optional().describe("Fuzzy ignores leading whitespace (needs VENIRA_EDIT_FUZZY=1)."),
-  case_insensitive: flag01.optional().describe("Fuzzy ignores case (needs VENIRA_EDIT_FUZZY=1)."),
-  guard: z.enum(["sha256"]).optional().describe("Atomic read-edit-verify; requires expected_sha256."),
-  reason: reason_,
-});
+export function editBatchItemFor(fuzzy: boolean) {
+  return z.looseObject({
+    relative_path: path_.describe("File to edit (required per item)."),
+    old_text: z.string().min(1).optional().describe("Exact text to replace (see project_edit_file)."),
+    new_text: z.string().optional().describe("Replacement text (see project_edit_file)."),
+    replace_all: flag01.optional().describe("1 replaces every match; 0 (default) requires exactly one match."),
+    edits: z.array(editOp).max(64).optional().describe("Several replacements in this file; wins over old_text/new_text."),
+    expected_sha256: z.string().optional().describe("Hex SHA-256 of the current full content; edit refused if it differs; when given, the result also reports verified."),
+    ...editFuzzyShape(fuzzy),
+    reason: reason_,
+  });
+}
 
 /**
  * `project_read_batch` arguments, keyed by `operation`: each variant is a loose

@@ -15,9 +15,39 @@ export const EDIT_ITEM_KEYS = [
   "fuzzy_distance",
   "ignore_indentation",
   "case_insensitive",
-  "guard",
   "reason",
 ] as const;
+
+/**
+ * Keys still accepted at runtime but not advertised in the tool schema (ROADMAP_TOOL_SCHEMA.md,
+ * phase 1): `old_text_fuzzy` was never read by any handler, so it stays in EDIT_ITEM_KEYS and an
+ * older client's leftover field is not reported as unknown. `guard` was removed in phase 5 and is
+ * no longer accepted: edit_batch rejects it as an unknown field before anything runs, and edit_file
+ * answers `[unsupported]` with the expected_sha256 replacement.
+ */
+export const EDIT_ITEM_LEGACY_KEYS = ["old_text_fuzzy"] as const;
+
+/**
+ * Fuzzy-match options. Advertised in the edit_file / edit_batch schema only when VENIRA_EDIT_FUZZY=1
+ * (ROADMAP_TOOL_SCHEMA.md, phase 3). They stay in EDIT_ITEM_KEYS either way, so edit_batch never reports
+ * them as unknown fields; with fuzzy off the handler rejects them with a message that names the variable.
+ */
+export const EDIT_ITEM_FUZZY_KEYS = ["fuzzy_distance", "ignore_indentation", "case_insensitive"] as const;
+
+/**
+ * Names of fuzzy options a caller actually asked for: `fuzzy_distance` when present, the two flags when
+ * truthy (true, 1 or "1"; batch items are loose objects, so a flag can still be a raw number). An explicit
+ * `0`/`false` asks for nothing, so it is not reported.
+ */
+export function fuzzyEditArgsUsed(args: Record<string, unknown>): string[] {
+  const used: string[] = [];
+  if (args.fuzzy_distance !== undefined && args.fuzzy_distance !== null) used.push("fuzzy_distance");
+  for (const key of ["ignore_indentation", "case_insensitive"] as const) {
+    const value = args[key];
+    if (value === true || value === 1 || value === "1") used.push(key);
+  }
+  return used;
+}
 
 /** Fields accepted by one entry of edit_file's `edits[]`. */
 export const EDIT_OP_KEYS = ["old_text", "new_text", "replace_all"] as const;

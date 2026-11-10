@@ -241,7 +241,7 @@ export const ENV_REGISTRY: readonly EnvVarSpec[] = [
     default: "524288",
     reason: NOT_DOC,
   }),
-  toolFlag("VENIRA_EDIT_FUZZY", "Allow fuzzy matching as a fallback in project_edit_file.", true, { default: "0" }),
+  toolFlag("VENIRA_EDIT_FUZZY", "Allow fuzzy matching as a fallback in project_edit_file. Also decides whether fuzzy_distance, ignore_indentation and case_insensitive are advertised in the edit tool schemas (tools/list changes with this flag).", true, { default: "0" }),
   toolFlag("VENIRA_USE_RIPGREP", "Use ripgrep for literal content search when available.", true, { default: "1" }),
 
   // --- shell ---------------------------------------------------------------

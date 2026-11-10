@@ -70,7 +70,7 @@ export function createCachedExecutor({
       }
 
       if (operation === "safe_edit") {
-        throw new Error("[invalid_request] safe_edit tool removed. Use project_edit_file with guard=sha256 instead.");
+        throw new Error("[invalid_request] safe_edit tool removed. Use project_edit_file with expected_sha256 instead.");
       }
 
       const bypassAll = !CACHE_ALL_ENABLED && ["read_file", "get_file_info", "list_files", "search"].includes(operation);

@@ -1,4 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { editFuzzyEnabled } from "../lib/env.js";
 import { renderDescription } from "./project-schema.js";
 
 /**
@@ -40,7 +41,7 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
   project_search: {
     about: "Search by kind: file_name, directory_name, literal_content (regex=1 for regex) or definition (symbol declaration lines).",
     use: "you must locate code, strings or symbols before reading. hybrid=1 tags each hit with source and confidence.",
-    avoid: "you know the path (project_read_file) or want files ranked by several keywords (project_selective_search).",
+    avoid: "you know the path (project_read_file), want one file's structure (project_outline_symbol), a symbol's usages (project_symbol_references) or files ranked by several keywords (project_selective_search).",
     out: "hits[] {relative_path, line_number, snippet}, complete, total_match_lines, files_matched. No match is ok with empty hits.",
   },
   project_recent_files: {
@@ -64,10 +65,10 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
     out: "action (created|overwritten|appended), bytes_written, sha256_after. mode=create on an existing path gives conflict.",
   },
   project_edit_file: {
-    about: "Replace exact text: old_text to new_text, or edits[] for several replacements in one file (edits[] wins). Fuzzy matching of old_text needs VENIRA_EDIT_FUZZY=1 on the host.",
-    use: "you make a targeted change. old_text must match exactly once; replace_all=1 replaces every match. guard=sha256 requires expected_sha256 and makes it atomic and verified.",
+    about: "Replace exact text: old_text to new_text, or edits[] for several replacements in one file (edits[] wins).",
+    use: "you make a targeted change. old_text must match exactly once; replace_all=1 replaces every match. pass expected_sha256 to refuse stale content and get a verified re-read.",
     avoid: "you rewrite the whole file (project_write_file) or change several files at once (project_edit_batch).",
-    out: "replacements, sha256_before, sha256_after, verified (guard mode). Failures: old_text_not_found, old_text_ambiguous (returns each match with line context).",
+    out: "replacements, sha256_before, sha256_after, verified (when expected_sha256 is given). Failures: old_text_not_found, old_text_ambiguous (returns each match with line context).",
   },
   project_edit_batch: {
     about: "Apply edits across one or more files all-or-nothing. Each item takes edit_file arguments (relative_path, old_text, new_text, ...). The first failure rolls back every touched file from an automatic snapshot and skips the rest.",
@@ -82,18 +83,18 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
     out: "entries_deleted, bytes_deleted. Missing path gives not_found.",
   },
   project_create: {
-    about: "Create a directory, or a file (kind=directory|file; a file takes content, mode and create_dirs like project_write_file).",
-    use: "you need a directory. For files use project_write_file (the one path for file content).",
-    avoid: "you edit existing content (project_edit_file).",
-    out: "directory_created or file_written.",
+    about: "Create a directory; missing parents are created unless create_dirs=0.",
+    use: "you need an empty directory. For a file use project_write_file, which also creates parent folders.",
+    avoid: "you write file content (project_write_file) or edit existing content (project_edit_file).",
+    out: "directory_created {relative_path, created, parents_created}.",
   },
 
   // ---- shell & JS ---------------------------------------------------------
   project_shell_run: {
-    about: "Run a shell command in the workspace (shell: powershell|cmd|bash, relative_cwd, timeout_ms). Default is background: it returns run_id at once and you poll project_shell_status. background=0 blocks until exit and returns stdout and stderr.",
+    about: "Run a shell command in the workspace (shell: powershell|cmd|bash, relative_cwd, timeout_ms). Default is background: returns run_id, poll project_shell_status. background=0 blocks until exit and returns stdout/stderr.",
     use: "you build, test, run git or install packages. Use background=0 for short commands whose output you need now.",
-    avoid: "you read or edit files (use the file tools) or run a tiny JS calculation (project_execute_js).",
-    out: "run_id, kill_key, running, exit_code, timed_out, stdout/stderr (background=0) or stdout_tail/stderr_tail (still running). ok=true only means the command ran: a failed one adds a hint, so read exit_code (PowerShell reports 1 for any failing native command). approval_required means ask the user to approve, then retry once with approval_id. Pass secrets with secret_env=[NAME], never in the command.",
+    avoid: "you read or edit files (file tools) or run a tiny JS calculation (project_execute_js).",
+    out: "run_id, kill_key, running, exit_code, timed_out, stdout/stderr (background=0) or stdout_tail/stderr_tail. ok=true only means it ran: read command_status/exit_code. approval_required: ask the user to approve, then retry once with approval_id.",
   },
   project_shell_status: {
     about: "Return the state and output tail of a shell run. wait_seconds (0-30) waits up to that long for it to finish.",
@@ -150,7 +151,7 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
   project_outline_symbol: {
     about: "List a source file's top-level symbols (functions, classes, types, interfaces) with line numbers.",
     use: "you want a file's structure before reading or refactoring it.",
-    avoid: "you need usages (project_symbol_references) or the text itself (project_read_file).",
+    avoid: "you need usages (project_symbol_references), a text search (project_search) or the text itself (project_read_file).",
     out: "total_symbols, symbols[] {name, kind, line, signature}.",
   },
   project_diff_files: {
@@ -168,7 +169,7 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
   project_selective_search: {
     about: "Rank files by how well they match several patterns (must, weight, fuzzy score) within files_hint or a shallow listing.",
     use: "you must find the right module among candidates using several keywords.",
-    avoid: "you search for one literal (project_search).",
+    avoid: "you search for one literal (project_search) or do not know where to start (project_plan_read_batch).",
     out: "hits[] {relative_path, line_number, text, score, matched}, total_files, total_hits.",
   },
   project_dependency_graph: {
@@ -188,7 +189,7 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
   project_plan_read_batch: {
     about: "Turn a task description into ranked candidate files and a ready-to-run project_read_batch call (keyword search plus recent files; deterministic, returns no file contents).",
     use: "you start in an unfamiliar area: run steps[0] instead of guessing files.",
-    avoid: "you already know the files (project_read_batch).",
+    avoid: "you know the files (project_read_batch) or only need one string or name (project_search).",
     out: "keywords[], candidates[] {relative_path, reason, hits}, steps[] {tool, arguments, why}.",
   },
   project_explain_error: {
@@ -198,10 +199,10 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
     out: "matched, summary, diagnoses[] {title, likely_cause, suggested_fix[], next_actions[]}.",
   },
   project_snapshot: {
-    about: "Checkpoint and roll back workspace files. action: create (label, paths) | list | restore (id) | delete (id) | mirror (copy to VENIRA_SNAPSHOT_MIRROR_DIR). Content-addressed, deduplicated, SHA-256 verified.",
-    use: "before multi-file refactors, or before overwriting or deleting files that git does not hold. Scope paths to what you will touch, keep the returned id and check file_count and skipped. Roll back with restore dry_run=1 (path and size preview only), then restore the same id with verify=1; keep delete_extra=0 unless files created after the checkpoint must go.",
-    avoid: "tiny single-file edits, generated output, or states git already holds.",
-    out: "create: id, file_count, total_bytes, truncated, skipped[]. restore: restored[], deleted_count, skipped[]. Unknown id gives invalid_request.",
+    about: "Checkpoint and roll back workspace files. action: create (label, paths) | list | restore (id) | delete (id) | mirror (copy to VENIRA_SNAPSHOT_MIRROR_DIR).",
+    use: "before multi-file refactors or overwriting/deleting files git does not hold. Keep paths narrow and check file_count and skipped. Roll back with restore dry_run=1, then restore with verify=1.",
+    avoid: "tiny single-file edits or states git already holds.",
+    out: "create: id, file_count, total_bytes, truncated, skipped[]. restore: restored[], deleted_count, skipped[].",
   },
   project_detect_harnesses: {
     about: "Find MCP client configs on this machine (OpenCode, Claude Desktop, Cursor, Codex, Kimi, DeepSeek, Antigravity).",
@@ -304,6 +305,18 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
 type RegisterConfig = { description?: string; _meta?: { venira?: Record<string, unknown> } & Record<string, unknown> } & Record<string, unknown>;
 
 /**
+ * Appended to the `project_edit_file` description only when VENIRA_EDIT_FUZZY=1, the same condition that
+ * puts the fuzzy options into its schema (ROADMAP_TOOL_SCHEMA.md, phase 3). With fuzzy off the model is not
+ * told about a feature it cannot use.
+ */
+const EDIT_FUZZY_ABOUT = " With no exact match it falls back to fuzzy matching (fuzzy_distance, ignore_indentation, case_insensitive).";
+
+/** The `about` line served for a tool: its TOOL_DOCS entry plus any note that depends on the environment. */
+export function aboutFor(name: string, doc: ToolDoc): string {
+  return name === "project_edit_file" && editFuzzyEnabled() ? doc.about + EDIT_FUZZY_ABOUT : doc.about;
+}
+
+/**
  * Replace each registered tool's description with its TOOL_DOCS entry. Patches `registerTool` in
  * place (same approach as applyDisabledTools), so call it before the register* functions run.
  */
@@ -314,7 +327,7 @@ export function applyToolDocs(server: McpServer): void {
     if (!doc) return original(name, cfg, ...rest);
     const merged: RegisterConfig = {
       ...cfg,
-      description: renderDescription(doc.about, { use_when: doc.use, avoid_when: doc.avoid, output_kind: doc.out }),
+      description: renderDescription(aboutFor(name, doc), { use_when: doc.use, avoid_when: doc.avoid, output_kind: doc.out }),
       _meta: {
         ...(cfg._meta ?? {}),
         venira: { ...(cfg._meta?.venira ?? {}), use_when: doc.use, avoid_when: doc.avoid, output_kind: doc.out },

@@ -1,13 +1,15 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { ToolResult } from "../lib/output.js";
+import { editFuzzyEnabled } from "../lib/env.js";
 import type { Args } from "./project-cache.js";
 import { runEditBatch, runReadBatch, type BatchDeps } from "./project-batch.js";
 import { runHybridSearch, type HybridDeps } from "./project-hybrid.js";
 import { runRecentFiles, type RecentFilesDeps } from "./project-recent.js";
 import {
   config,
-  editBatchItem,
+  editBatchItemFor,
+  editFuzzyShape,
   editOp,
   flag01,
   path_,
@@ -33,6 +35,9 @@ export type FileToolsDeps = {
 
 export function registerFileTools(server: McpServer, deps: FileToolsDeps): void {
   const { runOne, hybridDeps, recentFilesDeps, batchDeps, maxBatchItemBytes } = deps;
+  // VENIRA_EDIT_FUZZY decides whether the fuzzy options are advertised (ROADMAP_TOOL_SCHEMA.md, phase 3).
+  // Read once per registration, like VENIRA_JS_EXEC_MODE for project_execute_js.
+  const fuzzy = editFuzzyEnabled();
   server.registerTool(
     "project_list_files",
     {
@@ -147,7 +152,7 @@ export function registerFileTools(server: McpServer, deps: FileToolsDeps): void 
         include_hidden: flag01.optional().describe("1 = include hidden files (default); 0 = skip dotfiles. Secrets always excluded."),
         context_lines: z.number().int().min(0).max(20).optional().describe("Context lines around each hit (default 0)."),
         count_only: flag01.optional().describe("1 returns only match counts; limit is then ignored. 0 (default) returns hits."),
-        limit: z.number().int().min(1).max(200).optional().describe("Max hits returned (ignored when count_only=1)."),
+        limit: z.number().int().min(1).max(200).optional().describe("Max hits returned (default and max 200; ignored when count_only=1)."),
         hybrid: flag01.optional().describe("1 = tag hits with source/confidence; literal_content only."),
       },
     },
@@ -260,31 +265,39 @@ export function registerFileTools(server: McpServer, deps: FileToolsDeps): void 
     "project_edit_file",
     {
       ...config(
-        "Edit a file by exact text replacement: one old_text/new_text pair, or edits[] for multiple sections (edits[] takes precedence over old_text/new_text). Supports TOCTOU guard mode (guard=sha256, which requires expected_sha256) for an atomic read-edit-verify cycle. Fuzzy matching of old_text needs VENIRA_EDIT_FUZZY=1 on the host.",
+        "Edit a file by exact text replacement: one old_text/new_text pair, or edits[] for multiple sections (edits[] takes precedence over old_text/new_text). when expected_sha256 is given, the file is checked first and re-read after the write to verify it (reported as verified).",
         "Edit file",
         {
-          use_when: "change one or a few text sections whose exact content you know; pair with expected_sha256 to guard against blind overwrites. Use guard=sha256 for atomic read-edit-verify. Before editing 2+ files or 2+ sections, create a scoped project_snapshot and confirm coverage.",
+          use_when: "change one or a few text sections whose exact content you know; pair with expected_sha256 to guard against blind overwrites. With expected_sha256 the result also reports verified (re-read after the write). Before editing 2+ files or 2+ sections, create a scoped project_snapshot and confirm coverage.",
           avoid_when: "the whole file must change (project_write_file), or you have not read the file to know old_text.",
           speed_profile: "fast; clears the read/list/search cache for the affected path.",
-          output_kind: "file_written: replacements, sha256_before/after, verified (with guard=sha256).",
+          output_kind: "file_written: replacements, sha256_before/after, verified (when expected_sha256 is given).",
           batch_safe: false,
         },
         { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
       ),
-      inputSchema: {
+      // Loose on purpose: the fuzzy options are only advertised when VENIRA_EDIT_FUZZY=1, but a client with a
+      // cached tool list may still send them. A plain object would strip them silently; loose lets the handler
+      // answer with an error that names the variable. Same for the removed `guard` flag: it reaches the handler,
+      // which refuses it with `[unsupported]` instead of silently skipping verification.
+      inputSchema: z.looseObject({
         relative_path: path_,
-        old_text: z.string().min(1).optional().describe("Exact text to replace. Must match exactly once unless replace_all=1. With VENIRA_EDIT_FUZZY=1 a near-match is used instead when there is no exact match. Ignored when edits[] is given."),
+        old_text: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            "Exact text to replace. Must match exactly once unless replace_all=1." +
+              (fuzzy ? " With no exact match a near-match is used (fuzzy options below)." : "") +
+              " Ignored when edits[] is given.",
+          ),
         new_text: z.string().optional().describe("Replacement text (paired with old_text; ignored when edits[] is given)."),
         replace_all: flag01.optional().describe("1 replaces every match; 0 (default) requires exactly one match."),
         edits: z.array(editOp).max(64).optional().describe("Multiple section replacements in this file; takes precedence over old_text/new_text. Create a scoped project_snapshot first when applying 2+ edits or when the change is hard to recreate."),
-        expected_sha256: z.string().optional().describe("Hex SHA-256 of the file's current full content. The edit is refused if the file on disk differs. Use sha256_after from your last write/edit of this file; read_file's sha256 only matches when the whole file was returned. With guard=sha256 this value is required."),
-        old_text_fuzzy: z.string().optional().describe("Ignored: fuzzy matching applies to old_text when VENIRA_EDIT_FUZZY=1 is set. Send old_text instead."),
-        fuzzy_distance: z.number().int().min(0).max(10).optional().describe("Max edit distance for fuzzy matching of old_text (default 3). Needs VENIRA_EDIT_FUZZY=1."),
-        ignore_indentation: flag01.optional().describe("Fuzzy matching ignores leading whitespace. Fuzzy path only (needs VENIRA_EDIT_FUZZY=1)."),
-        case_insensitive: flag01.optional().describe("Fuzzy matching ignores case. Fuzzy path only (needs VENIRA_EDIT_FUZZY=1)."),
-        guard: z.enum(["sha256"]).optional().describe("TOCTOU guard: 'sha256' reads fresh content, verifies expected_sha256, applies edits, writes, then re-reads to verify content+sha256 match. Provides atomic read-edit-verify cycle. Requires expected_sha256."),
+        expected_sha256: z.string().optional().describe("Hex SHA-256 of the file's current full content. The edit is refused if the file on disk differs. Use sha256_after from your last write/edit of this file; read_file's sha256 only matches when the whole file was returned. When given, the result is re-read after the write and reports verified."),
+        ...editFuzzyShape(fuzzy),
         reason: reason_,
-      },
+      }),
     },
     (args) => runOne("edit_file", args),
   );
@@ -304,7 +317,7 @@ export function registerFileTools(server: McpServer, deps: FileToolsDeps): void 
         { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
       ),
       inputSchema: {
-        edits: z.array(editBatchItem).min(1).max(64).describe("edit_file argument objects (typed like project_edit_file). Unknown fields are rejected with a did-you-mean hint and nothing is applied. Snapshot first when later checks may need a full rollback; automatic rollback covers in-batch failures only."),
+        edits: z.array(editBatchItemFor(fuzzy)).min(1).max(64).describe("edit_file argument objects (typed like project_edit_file). Unknown fields are rejected with a did-you-mean hint and nothing is applied. Snapshot first when later checks may need a full rollback; automatic rollback covers in-batch failures only."),
         max_response_bytes_per_item: z.number().int().min(256).max(1048576).optional().describe("Max serialized bytes per edit item (default 1 MiB)."),
       },
     },

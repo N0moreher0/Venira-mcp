@@ -26,7 +26,7 @@ export function registerShellTools(server: McpServer, deps: ShellToolsDeps): voi
       ...config(
         `Run a shell command (cwd defaults to ${WORKSPACE}). ` +
           "Asynchronous by default: returns run_id immediately, so poll project_shell_status for the output. " +
-          "Pass background=0 (or false) for a foreground run: the call blocks until the command exits and returns the final stdout/stderr. " +
+          "Pass background=0 for a foreground run: the call blocks until the command exits and returns the final stdout/stderr. " +
           "For commands that overwrite/delete existing workspace source files, create and verify a scoped project_snapshot first; prefer project file tools for targeted edits. " +
           "Commands pass a policy gate: risky ones return an approval_required error with a pending approval_id; " +
           "catastrophic ones are denied outright. Named overrides require operator allowlisting and a per-call reason.",
@@ -49,8 +49,8 @@ export function registerShellTools(server: McpServer, deps: ShellToolsDeps): voi
         { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
       ),
       inputSchema: {
-        shell: z.enum(["powershell", "pwsh", "cmd", "bash"]).optional().describe("Shell to run the command in. Default: VENIRA_DEFAULT_SHELL if set, otherwise the host default. pwsh = PowerShell 7+, powershell = 5.1; a missing binary fails with [shell_unavailable]."),
-        command: z.string().describe("Command line to run. Use the file tools for file changes; project_snapshot first if it overwrites or deletes files git does not hold."),
+        shell: z.enum(["powershell", "pwsh", "cmd", "bash"]).optional().describe("Default: VENIRA_DEFAULT_SHELL, else the host default. pwsh = PowerShell 7+, powershell = 5.1."),
+        command: z.string().describe("Command line to run."),
         relative_cwd: z.string().optional().describe("Working directory inside the workspace (default: workspace root)."),
         background: backgroundFlag.optional(),
         secret_env: z
@@ -66,27 +66,27 @@ export function registerShellTools(server: McpServer, deps: ShellToolsDeps): voi
           .int()
           .min(0)
           .optional()
-          .describe("Kill the whole process tree after this many milliseconds. Unset or 0 uses the default 10-minute timeout; capped by VENIRA_SHELL_MAX_TIMEOUT_MS."),
+          .describe("Kill the process tree after this many ms (0/unset = 10 min; capped by VENIRA_SHELL_MAX_TIMEOUT_MS)."),
         // Removed from the schema in item 16 (approval_token: "Removed", approval_scope:
         // "Ignored"). Handlers still tolerate both when an older client sends them.
         approval_id: z
           .string()
           .optional()
-          .describe("Approval ID from the approval_required envelope, granted by a human running `data.approval.approve_command` or using client elicitation. Retry once after they confirm."),
+          .describe("Id from approval_required, granted by a human (`data.approval.approve_command` or client elicitation). Retry once."),
         approval_wait_ms: z
           .number()
           .int()
           .min(0)
           .max(APPROVAL_WAIT_MAX_MS)
           .optional()
-          .describe("If the command needs approval, wait up to this many ms (max 45000) for the human to grant it and run in the same call. On timeout you get the normal approval_required response."),
+          .describe("If approval is needed, wait up to this many ms (max 45000) for the human, then run in the same call."),
         dry_run: z
           .number()
           .int()
           .min(0)
           .max(1)
           .optional()
-          .describe("1 = evaluate policy only: returns tier, rule and whether approval would be needed. Nothing runs and no approval is created. (default 0)"),
+          .describe("1 = evaluate policy only; nothing runs, no approval is created (default 0)."),
         override: z
           .enum(["ALLOW_GIT_PUSH", "ALLOW_ENV_READ"])
           .optional()

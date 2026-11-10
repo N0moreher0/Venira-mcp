@@ -184,8 +184,11 @@ export function registerWorkflowTools(server: McpServer, deps: WorkflowToolsDeps
         },
         { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
       ),
-      inputSchema: {
-        action: z.enum(["create", "list", "restore", "delete", "mirror"]).default("create").describe("create (default) captures paths; list shows checkpoints; restore rolls back an id; delete removes an id; mirror copies the store to VENIRA_SNAPSHOT_MIRROR_DIR (needs that env var)."),
+      // Loose on purpose: `scope` is the removed alias for `paths` (ROADMAP_TOOL_SCHEMA.md, phase 5).
+      // A plain object would strip it, and a cached client that sent only `scope` would silently capture
+      // the whole workspace. Loose lets the handler refuse it with `[unsupported]` instead.
+      inputSchema: z.looseObject({
+        action: z.enum(["create", "list", "restore", "delete", "mirror"]).default("create").describe("create (default) captures paths; list; restore rolls back an id; delete removes an id; mirror copies the store to VENIRA_SNAPSHOT_MIRROR_DIR."),
         id: z.string().optional().describe("Checkpoint id (required for restore/delete; returned by create/list)."),
         label: z
           .string()
@@ -196,24 +199,23 @@ export function registerWorkflowTools(server: McpServer, deps: WorkflowToolsDeps
           .array(z.string())
           .max(64)
           .optional()
-          .describe("Workspace-relative paths to capture (default: ['.'] the whole workspace — scope narrowly). For restore: a subset of the checkpoint's files to restore."),
-        scope: z.array(z.string()).max(64).optional().describe("Deprecated alias for paths (kept one release so old clients fail closed instead of capturing the whole workspace). Use paths."),
+          .describe("Workspace-relative paths to capture (default ['.'] = whole workspace; scope narrowly). For restore: subset to restore."),
         exclude: z.array(z.string()).max(64).optional().describe("Extra directory/file names to skip."),
         respect_default_excludes: flag01
           .optional()
           .describe("1 skips standard generated/cache directories (default); 0 disables those exclusions."),
         max_files: z.number().int().min(1).max(20000).optional().describe("Max files captured (default 20000, max 20000)."),
-        max_total_bytes: z.number().int().min(1).max(512 * 1024 * 1024).optional().describe("Max total bytes captured (default 536,870,912 = 512 MiB, max 512 MiB)."),
-        dry_run: flag01.optional().describe("restore only: 1 previews path/size changes without writing (same-size content changes are not detected); inspect current user edits before applying."),
+        max_total_bytes: z.number().int().min(1).max(512 * 1024 * 1024).optional().describe("Max total bytes captured (default and max 512 MiB)."),
+        dry_run: flag01.optional().describe("restore only: 1 previews path/size changes without writing."),
         verify: flag01
           .optional()
-          .describe("restore: 1 verifies each blob before writing (default); 0 disables verification. mirror: 1 re-hashes every blob already at the mirror and re-copies bad ones (default 0 trusts existing files)."),
+          .describe("restore: 1 verifies each blob before writing (default). mirror: 1 re-hashes blobs already at the mirror and re-copies bad ones (default 0)."),
         delete_extra: flag01
           .optional()
-          .describe("restore only: 1 also deletes files inside captured dirs not in the checkpoint (capped at 500); default/0 keeps them. Use 1 only when deletion is explicitly intended."),
+          .describe("restore only: 1 also deletes files in captured dirs that are not in the checkpoint (max 500). Default 0; use only when intended."),
         limit: z.number().int().min(1).max(100).optional().describe("list only: max checkpoints to return (default 20)."),
         reason: reason_,
-      },
+      }),
     },
     (args) => runSnapshot(args as Args),
   );

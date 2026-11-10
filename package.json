@@ -1,7 +1,7 @@
 {
   "name": "venira-mcp",
   "mcpName": "io.github.N0moreher0/venira-mcp",
-  "version": "1.20.1",
+  "version": "1.21.0",
   "description": "venira-mcp — a standalone Model Context Protocol (MCP) server that gives coding agents (OpenCode, Claude Desktop, any MCP client) workspace-scoped tools in default/expert modes: file read/write/edit/delete, batch reads, line-range reads, content search, recent files, code intelligence, dependency graph + change impact, async shell run/poll/cancel, git-free checkpoints/rollback, pull requests + GitLab/GitHub/Bitbucket CI integrations (including bounded CI waiting), encrypted secrets with rotation metadata, deterministic error diagnosis + read planning, and a SQLite WAL audit trail where mutations can record a reason. Pure Node, no external binary. Structured JSON envelopes with hints and cached validated reads. npm i venira-mcp, then point your MCP client at `venira` or `venira-mcp`.",
   "keywords": [
     "mcp",
@@ -81,7 +81,7 @@
     "bench:mcp": "tsx scripts/bench-mcp.ts",
     "bench:hybrid-symbols": "tsx scripts/bench-hybrid-symbols.ts",
     "bench:tools": "npm run build && tsx scripts/bench-tools.ts",
-    "verify": "npm run check:docs && npm run test:shell-unavailable && npm run test:provider-secret-guard && npm run test:github-device-flow && npm run test:approval-lifecycle && npm run test:shell-elicitation && npm run test:protected-snapshot-paths && npm run test:config-posture && npm run test:js-executor && npm run test:cache-layer && npm run test:env-registry && npm run test:coverage-report && npm run coverage:shell && npm run test:git-url-fuzz && npm run test:snapshot-lifecycle && npm run test:snapshot-mirror && npm run test:workspace-switch && npm run test:tool-envelopes && npm run test:tool-schema && npm run test:audit-verify && tsx scripts/verify.ts",
+    "verify": "npm run check:docs && npm run test:shell-unavailable && npm run test:provider-secret-guard && npm run test:github-device-flow && npm run test:approval-lifecycle && npm run test:shell-elicitation && npm run test:protected-snapshot-paths && npm run test:config-posture && npm run test:js-executor && npm run test:cache-layer && npm run test:env-registry && npm run test:coverage-report && npm run coverage:shell && npm run test:git-url-fuzz && npm run test:snapshot-lifecycle && npm run test:snapshot-mirror && npm run test:workspace-switch && npm run test:tool-envelopes && npm run test:tool-schema && npm run test:edit-verify && npm run test:edit-fuzzy-gate && npm run test:schema-budget && npm run test:audit-verify && tsx scripts/verify.ts",
     "doctor": "tsx scripts/doctor.ts",
     "test:github-device-flow": "tsx scripts/test-github-device-flow.ts",
     "test:provider-secret-guard": "tsx scripts/test-provider-secret-guard.ts",
@@ -114,7 +114,10 @@
     "test:snapshot-mirror": "tsx scripts/test-snapshot-mirror.ts",
     "test:workspace-switch": "tsx scripts/test-workspace-switch.ts",
     "test:tool-envelopes": "tsx scripts/test-tool-envelopes.ts",
-    "test:tool-schema": "tsx scripts/test-tool-schema.ts"
+    "test:tool-schema": "tsx scripts/test-tool-schema.ts",
+    "test:schema-budget": "tsx scripts/test-schema-budget.ts",
+    "test:edit-verify": "tsx scripts/test-edit-verify.ts",
+    "test:edit-fuzzy-gate": "tsx scripts/test-edit-fuzzy-gate.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",

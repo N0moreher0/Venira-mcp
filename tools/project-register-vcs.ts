@@ -118,7 +118,7 @@ export function registerVcsTools(server: McpServer, deps: VcsDeps): void {
         pr: z.union([z.number().int().positive(), z.string().max(300)]).describe("PR number or PR URL."),
         method: z.enum(["merge", "squash", "rebase"]).optional().describe("Merge strategy (default: merge)."),
         commit_title: z.string().max(256).optional().describe("Title for the merge commit (squash/merge)."),
-        commit_message: z.string().max(65_536).optional().describe("Body for the merge commit."),
+        commit_message: z.string().max(65_536).optional().describe("Merge commit body (title goes in commit_title)."),
         delete_branch: flag01.optional().describe("1 deletes the head branch after a successful merge (same-repo only); 0 keeps it."),
         repo: repoArg,
         provider: providerArg,

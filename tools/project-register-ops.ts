@@ -33,26 +33,28 @@ export function registerOpsTools(server: McpServer, deps: OpsToolsDeps): void {
     "project_create",
     {
       ...config(
-        "Create a directory OR a file in ONE call. For an existing file, mode=overwrite replaces its contents: create and verify a scoped project_snapshot first.",
-        "Create file or directory",
+        "Create a directory (missing parent directories are created unless create_dirs=0).",
+        "Create directory",
         {
-          use_when: "create a directory or new file; if replacing an existing file, first create a scoped project_snapshot, confirm it captured the target, and keep its id.",
-          avoid_when: "editing an existing file (project_edit_file/project_write_file); never use mode=overwrite unless a pre-write project_snapshot covers the existing contents.",
-          speed_profile: "fast; triggers cache invalidation on write / new directory.",
-          output_kind: "directory_created or file_written (data kind depends on the op).",
+          use_when: "you need an empty directory; project_write_file only creates parent folders for a file.",
+          avoid_when: "you need a file (project_write_file) or a change to existing content (project_edit_file).",
+          speed_profile: "fast; triggers cache invalidation for the new directory.",
+          output_kind: "directory_created: relative_path, created, parents_created.",
           batch_safe: false,
         },
         { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       ),
-      inputSchema: {
+      // Loose on purpose: `kind=file`, `content`, `mode` and `expected_sha256` are the removed file-writing
+      // arguments (ROADMAP_TOOL_SCHEMA.md, phase 5). A plain object would strip them, so a cached client that
+      // sent `kind=file` would silently get an empty directory; loose lets the handler refuse it with
+      // `[unsupported]` and point at project_write_file.
+      inputSchema: z.looseObject({
         relative_path: path_,
-        kind: z.enum(["file", "directory"]).describe("directory creates a folder. file is a shortcut for project_write_file — prefer project_write_file for files so there is one path for file content."),
-        content: z.string().optional().describe("Required when kind=file (same field as project_write_file content)."),
-        mode: z.enum(["create", "overwrite", "append"]).optional().describe("kind=file only. Default overwrite: replaces existing contents; create and verify a scoped project_snapshot first. create fails if the path exists; append adds to the end."),
-        create_dirs: flag01.optional().describe("kind=file only. 1 creates missing parent directories (default 0)."),
-        expected_sha256: z.string().optional().describe("Hex SHA-256 of the file's current full content. The write is refused if the file on disk differs. Use sha256_after from your last write/edit of this file."),
+        create_dirs: flag01
+          .optional()
+          .describe("1 creates missing parent directories (default 1); 0 fails when a parent is missing."),
         reason: reason_,
-      },
+      }),
     },
     (args) => runCreate(args as Args),
   );
@@ -94,7 +96,7 @@ export function registerOpsTools(server: McpServer, deps: OpsToolsDeps): void {
         { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
       ),
       inputSchema: {
-        type: z.enum(["all", "shell", "read", "info", "list", "search", "recent", "negative", "graph"]).default("all").describe("Which cache to clear."),
+        type: z.enum(["all", "shell", "read", "info", "list", "search", "recent", "negative", "graph"]).default("all").describe("Cache to clear (default all). negative = cached not_found paths; graph = import graph."),
       },
     },
     (args) => runOne("cache_clear", args as Args),

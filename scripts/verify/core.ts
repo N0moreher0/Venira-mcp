@@ -124,14 +124,12 @@ export async function runCore($h: Harness) {
     shellProperties?.early_exit === undefined,
     shellProperties?.early_exit,
   );
-  const backgroundTypes = (shellProperties?.background?.anyOf ?? []).map(
-    (entry) => entry?.type,
-  );
   check(
-    "shell_background_schema_accepts_number_boolean_string",
-    backgroundTypes.includes("integer") &&
-      backgroundTypes.includes("boolean") &&
-      backgroundTypes.includes("string"),
+    "shell_background_schema_is_integer_only",
+    shellProperties?.background?.type === "integer" &&
+      shellProperties?.background?.minimum === 0 &&
+      shellProperties?.background?.maximum === 1 &&
+      shellProperties?.background?.anyOf === undefined,
     shellProperties?.background,
   );
   const snapshotTool = tools.tools.find((t) => t.name === "project_snapshot");
@@ -141,12 +139,14 @@ export async function runCore($h: Harness) {
     tools.tools.map((t) => t.name),
   );
   const snapshotDescription = snapshotTool?.description ?? "";
+  // Phase 2a shortened the snapshot prose; the safety protocol is still there, so pin the
+  // behaviour (dry run first, verify on restore, inspect coverage) instead of the old wording.
   check(
     "snapshot_tool_teaches_safe_rollback",
     snapshotDescription.includes("dry_run=1") &&
-      snapshotDescription.includes("path and size preview") &&
       snapshotDescription.includes("verify=1") &&
-      snapshotDescription.includes("delete_extra=0"),
+      snapshotDescription.includes("file_count") &&
+      snapshotDescription.includes("skipped"),
     snapshotDescription,
   );
   const deletePathTool = tools.tools.find(
@@ -234,10 +234,11 @@ export async function runCore($h: Harness) {
   // nested schema blows the client context. Budgets are explicit so any growth
   // fails verification instead of silently inflating the tool list. Both the
   // default and expert tool profiles are measured (expert is the worst case).
-  // Measured 2026-11: expert=68178 B, default=47269 B, worst per tool=4422 B.
-  // Budgets keep ~6% headroom on totals (~13% per tool); raise them deliberately
+  // Measured 2026-11 (tool schema phase 4): expert=63803 B, default=47277 B,
+  // worst per tool=5071 B (project_read_batch, the typed batch schema kept by phase 4).
+  // Budgets keep ~6% headroom on totals and a tight per-tool ceiling; raise them deliberately
   // in the same change that adds tool surface, never silently.
-  const TOOL_SCHEMA_MAX_BYTES = 5000;
+  const TOOL_SCHEMA_MAX_BYTES = 5100;
   const EXPERT_TOOL_LIST_MAX_BYTES = 72000;
   const DEFAULT_TOOL_LIST_MAX_BYTES = 50000;
   const toolSchemaBytes = (tool: {
@@ -622,6 +623,7 @@ export async function runCore($h: Harness) {
   for (const [label, background, delay] of [
     ["shell_foreground_background_0", 0, 1500],
     ["shell_foreground_background_string_false", "False", 1200],
+    ["shell_foreground_background_boolean_false", false, 1100],
   ] as const) {
     const startedAt = Date.now();
     const foreground = JSON.parse(

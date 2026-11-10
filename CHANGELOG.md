@@ -2,10 +2,53 @@
 
 Local release notes for venira-mcp. Not published (not listed in `package.json` `files`) and not pushed to git.
 
-## Unreleased
+## 1.21.0 — 2026-11-10
+
+### Breaking
+- Tool schema Phase 5 removed the last three deprecated arguments (`ROADMAP_TOOL_SCHEMA.md`). None is silently ignored: a client that caches `tools/list` still gets its old arguments to the handler (the tools are registered as loose objects), and the handler refuses them with `[unsupported]` plus a `Hint:` naming the replacement.
+
+  | Removed | Use instead | What the old call does now |
+  |---|---|---|
+  | `project_snapshot.scope` | `paths` (same list of workspace-relative paths; `paths` defaults to `["."]`) | refused; no checkpoint is created (before, it narrowed the capture) |
+  | `project_edit_file.guard`, `project_edit_batch.edits[].guard` | `expected_sha256` (verification is implied by it) | `edit_file`: refused, file untouched; `edit_batch`: rejected as an unknown item key before any edit runs |
+  | `project_create.kind="file"`, `content`, `mode`, `expected_sha256` | `project_write_file` (`mode` is `create|overwrite|append`) | refused; nothing is created (before, it wrote the file) |
+
+  `project_create` creates directories only, so a call that used to write a file must move to `project_write_file`. `old_text_fuzzy` stays accepted: no handler ever read it, so it is harmless.
 
 ### Added
 - `npm run check:docs` now also fails when `package.json`, `package-lock.json`, `server.json` and `lib/version.ts` carry different versions (the 1.20.0 mistake), and it runs as the first step of `npm run verify`, so CI and the Release workflow enforce it before anything is published.
+- `npm run test:schema-budget` (in `verify`): measures what each tool adds to `tools/list` and fails when the expert or default total, or any single tool, grows past the ceilings in `scripts/schema-budget.json`. `-- --update` ratchets the ceilings down; `-- --table` only prints. Plan: `ROADMAP_TOOL_SCHEMA.md`.
+- `npm run test:edit-verify` (in `verify`): pins the edit verification behavior below.
+- `npm run test:edit-fuzzy-gate` (in `verify`): pins how `project_edit_file` / `edit_batch` items answer fuzzy options when `VENIRA_EDIT_FUZZY` is off or on (8 checks).
+
+### Changed
+- `project_edit_file` and `project_edit_batch` no longer advertise `guard` or `old_text_fuzzy` (about 0.5 KB less in `tools/list`). Verification is now implied by `expected_sha256`: when it is given, the file is checked first and re-read after the write, and the result reports `verified` and `verified_sha256`. `guard` was then removed entirely in Phase 5 (see Breaking); `old_text_fuzzy` stays accepted at runtime and was never read by any handler. `project_edit_file` is registered as a loose object (see the Phase 3 entry below), so both keys reach the handler there, as they do in `edit_batch` items.
+- `project_snapshot` accepted `scope` as an alias for `paths` while the removal was announced; Phase 5 removed it (see Breaking).
+- Hint texts that said `guard=sha256` (`safe_edit` removal, out-of-memory diagnosis, tool docs) now say `expected_sha256`.
+- Tool schema Phase 2 (first part), `tools/list` 70247 -> 69580 B (expert) and 52983 -> 52316 B (default):
+  - One shared `path_` description (`PATH_DESC`): workspace-relative, `.` is the root, absolute or `..` outside the workspace is rejected (unless `VENIRA_UNRESTRICTED=1`).
+  - `flag01` no longer carries the generic "1=on, 0=off."; every flag says what `1` does (`edit_batch` items `replace_all` was the last bare one).
+  - `project_snapshot` and `project_shell_run`: shorter model-facing docs (`TOOL_DOCS`) and shorter parameter descriptions; detail that the result already carries (`command_status`, `shell_unavailable` fix text) is not repeated.
+  - Phase 2 second part, +368 B on purpose (clearer wording, expert 69580 -> 69948 B, default 52316 -> 52663 B): `search.limit` says default/max 200; `change_impact.depth` is hops from the seeds; `dependency_graph.max_edges` says excess sets `truncated`; `cache_clear.type` explains `negative` and `graph`; `pr_merge.commit_message` points to `commit_title`; the "Avoid when" lines of `search`, `outline_symbol`, `selective_search` and `plan_read_batch` now name the sibling tool to use instead.
+- `test:schema-budget` now measures what `tools/list` serves (it applies `TOOL_DOCS` to the fake server like `registerProjectTools` does). Before, it measured the inline fallback descriptions, so `TOOL_DOCS` edits were invisible. Ceilings were re-based with `--update --allow-increase`; per-tool numbers moved both ways because of the measuring change.
+- Tool schema Phase 3, `tools/list` 69948 -> 68929 B (expert) and 52663 -> 51644 B (default), -1019 B each: `fuzzy_distance`, `ignore_indentation` and `case_insensitive` are only advertised in `project_edit_file` and in every `project_edit_batch` item when `VENIRA_EDIT_FUZZY=1`, like `project_execute_js` and `VENIRA_JS_EXEC_MODE`. With the variable off (the default) they are gone from the schema, and the model-facing text drops the sentence about fuzzy matching (`TOOL_DOCS` appends it only when the variable is on).
+  - A call that still sends one while fuzzy is off (a client with a cached tool list, an old script) is refused with `[unsupported] ... Set VENIRA_EDIT_FUZZY=1 on the host ...`, naming every offending option, and the file is not touched. Before, the options were silently ignored and the edit failed as `old_text_not_found`. An explicit `0`/`false` asks for nothing and is not refused. In `edit_batch` the refusal fails that item, so the batch rolls back like any other item error.
+  - To make that reachable, `project_edit_file` is now registered as a loose object (unknown keys pass through, like `edit_batch` items). Before, the MCP SDK stripped keys the schema did not list, so the handler never saw a fuzzy option. Side effect: a legacy `guard` key also reaches the handler there, which is what let Phase 5 refuse it with a clear error instead of having the SDK drop it silently.
+  - The schema now depends on the environment: a client that caches `tools/list` sees the fuzzy options appear or disappear only after the server restarts with a different `VENIRA_EDIT_FUZZY` and the client refetches the list. Documented in the README env table and in the env registry.
+  - Internals: `editBatchItem` became `editBatchItemFor(fuzzy)`, `editFuzzyShape(enabled)` is shared by both tools, `EDIT_ITEM_FUZZY_KEYS` and `fuzzyEditArgsUsed()` live in `lib/arg-hints.ts`, `editFuzzyEnabled()` in `lib/env.ts` (read at call time). Ceilings in `scripts/schema-budget.json` ratcheted down.
+- Tool schema Phase 4, `tools/list` 68929 -> 68154 B (expert) and 51644 -> 50869 B (default), -775 B each: `project_create` and `project_shell_run.background` now match the documented convention.
+  - `project_create` stops advertising `kind`, `content`, `mode` and `expected_sha256`; `relative_path`, `create_dirs` and `reason` remain. Registering it as a loose object is what kept those arguments reachable for Phase 5, which turned the transitional `kind=file` alias into the refusal described in Breaking.
+  - `project_shell_run.background` is advertised as the integer 0|1 like every other flag, instead of a `number | boolean | string` union. `.meta()` overrides only the JSON Schema, so the handler still normalises `true`/`false`, `"1"`/`"0"` and `"true"`/`"False"` from a cached client. `npm run verify` pins both the integer schema and the legacy inputs.
+  - `TOOL_DOCS`, the README tool table, the `server.ts` decision tree and the snapshot-discipline line no longer describe `project_create` as a file writer.
+  - Ceilings in `scripts/schema-budget.json` ratcheted down; `test:tool-schema` +2 checks (15), `test:tool-envelopes` +1 check (create defaults to a directory).
+- Tool schema Phase 5, `tools/list` 68154 -> 67975 B (expert) and 50869 -> 50690 B (default), -179 B each: the deprecated arguments are gone from the schema and their handlers (Breaking above).
+  - `project_snapshot` lost `scope`; both it and `project_create` keep `z.looseObject`, so a cached client's removed key reaches the handler and gets `[unsupported]` + a `Hint:` naming `paths` / `project_write_file` rather than being stripped (which would have captured the whole workspace, or created an empty directory).
+  - `guard` left `EDIT_ITEM_KEYS` / `EDIT_ITEM_LEGACY_KEYS`: `project_edit_batch` now rejects it as an unknown item key before anything runs, and `project_edit_file` answers `[unsupported]`. Internally the boolean is `verifyMode`, derived from `expected_sha256` only.
+  - The transitional `deprecated` field is gone from `project_snapshot` and `project_create` results, and `withCreateFileDeprecation` plus three now-unreachable hint mappings in `lib/output.ts` were deleted.
+  - Pinned checks rewritten: `test:tool-schema` asserts `scope`/`guard` are absent from the schema but still reach the handlers, and `test:edit-verify` / `test:snapshot-lifecycle` / `test:tool-envelopes` / `verify` assert the refusals (and that the file, the checkpoint count and the backend call are untouched).
+
+### Fixed
+- `npm run verify` had been red since Phase 2, on two pins that no longer matched the repo: `snapshot_tool_teaches_safe_rollback` required the old snapshot wording ("path and size preview", "delete_extra=0") that the Phase 2a trim removed, so it now checks the behaviour the description does teach (`dry_run=1`, `verify=1`, `file_count`, `skipped`); and the per-tool schema ceiling (5000 B) was below `project_read_batch` (5071 B, kept typed on purpose), so it is 5100 B and the "Measured" comment carries the current numbers (expert 63803 B, default 47277 B).
 
 ## 1.20.1 — 2026-11-10
 

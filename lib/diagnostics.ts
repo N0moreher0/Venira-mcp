@@ -234,7 +234,7 @@ const RULES: Rule[] = [
     pattern: /ENOMEM|JavaScript heap out of memory|heap limit Allocation failed|MemoryError/i,
     cause: "The process needed more memory than the runtime allows (large file, big test matrix, unbounded loop).",
     fix: [
-      "Process in chunks (project_read_file with ranges, batch reads) instead of loading everything at once. For safe edits, use project_edit_file with guard=sha256 and expected_sha256 to get atomic read-edit-verify.",
+      "Process in chunks (project_read_file with ranges, batch reads) instead of loading everything at once. For safe edits, use project_edit_file with expected_sha256 to refuse stale content and verify the write.",
       "For Node builds/tests, raise the heap via the command env, e.g. NODE_OPTIONS=--max-old-space-size=4096.",
       "Keep checkpoint/restore scope narrow (paths[]) to avoid hashing huge trees.",
     ],

@@ -8,7 +8,8 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { resolveInWorkspace, errorWithData, type RustResponse } from "./corehost-common.js";
 import { isProtectedPath, PLATFORM, WORKSPACE } from "./workspace.js";
-import { envFlag } from "./env.js";
+import { editFuzzyEnabled } from "./env.js";
+import { fuzzyEditArgsUsed } from "./arg-hints.js";
 import { editMatchLocations, levenshtein, normalizeForFuzzy } from "./file-ops-helpers.js";
 import { sanitizeReason } from "./snapshots.js";
 import { recordRecentFile, recordRecentFileMeta, removeFromRecentIndex } from "./recent-index.js";
@@ -132,13 +133,33 @@ export async function opEditFile(
   const replaceAll = args.replace_all === true;
   
   // P2: Fuzzy edit support
-  const fuzzyEnabled = envFlag("VENIRA_EDIT_FUZZY", false);
+  const fuzzyEnabled = editFuzzyEnabled();
   const fuzzyDistance = Number(args.fuzzy_distance ?? 3);
   const ignoreIndentation = args.ignore_indentation === true;
   const caseInsensitive = args.case_insensitive === true;
-  
-  // TOCTOU guard: "sha256" = read fresh, verify expected_sha256, apply edits, write, re-read and verify
-  const guard = args.guard === "sha256";
+  // The fuzzy options are only advertised in the schema when VENIRA_EDIT_FUZZY=1 (ROADMAP_TOOL_SCHEMA.md,
+  // phase 3). A client with a cached tool list may still send them: say what to change instead of
+  // silently running an exact-match edit.
+  if (!fuzzyEnabled) {
+    const asked = fuzzyEditArgsUsed(args);
+    if (asked.length > 0) {
+      throw new Error(
+        `[unsupported] ${asked.join(", ")} need fuzzy matching, which is off. Set VENIRA_EDIT_FUZZY=1 on the host to enable it, or drop these arguments and send the exact old_text.`,
+      );
+    }
+  }
+
+  // Phase 5: the legacy `guard` flag is gone. A cached client that still sends it must not silently
+  // skip verification, so say what replaced it instead of ignoring it.
+  if (args.guard !== undefined) {
+    throw new Error(
+      "[unsupported] guard was removed. Hint: send expected_sha256 instead (sha256_after from your last write/edit, or read_file's sha256 when the whole file was returned).",
+    );
+  }
+
+  // Verify mode (read fresh, check expected_sha256, apply edits, write, re-read and verify) is derived
+  // from expected_sha256 only (ROADMAP_TOOL_SCHEMA.md, phases 1 and 5).
+  const verifyMode = typeof args.expected_sha256 === "string" && args.expected_sha256.length > 0;
 
   const editList = edits ?? (oldText !== undefined ? [{ old_text: oldText, new_text: newText ?? "", replace_all: replaceAll }] : []);
   if (editList.length === 0) {
@@ -260,7 +281,7 @@ export async function opEditFile(
     throw new Error(`[io_error] ${error instanceof Error ? error.message : String(error)}`);
   }
 
-  // Compute sha256 after write (before guard uses it)
+  // Compute sha256 after write (before verification uses it)
   let sha256After = "";
   try {
     sha256After = crypto.createHash("sha256").update(Buffer.from(content, "utf8")).digest("hex");
@@ -268,10 +289,10 @@ export async function opEditFile(
     /* best-effort */
   }
 
-  // TOCTOU guard: re-read and verify content matches what we wrote
+  // Verify: re-read and check the content matches what we wrote
   let verified = false;
   let verifiedSha = "";
-  if (guard) {
+  if (verifyMode) {
     try {
       const verifyContent = await fs.readFile(absPath, "utf8");
       const verifySha = crypto.createHash("sha256").update(Buffer.from(verifyContent, "utf8")).digest("hex");
@@ -300,8 +321,8 @@ export async function opEditFile(
         replacements,
         sha256_before: sha256Before || undefined,
         sha256_after: sha256After || undefined,
-        verified: guard ? verified : undefined,
-        verified_sha256: guard && verifiedSha ? verifiedSha : undefined,
+        verified: verifyMode ? verified : undefined,
+        verified_sha256: verifyMode && verifiedSha ? verifiedSha : undefined,
         fuzzy_used: usedFuzzy || undefined,
         reason: sanitizeReason(args.reason),
       },

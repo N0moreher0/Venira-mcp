@@ -30,10 +30,14 @@ export async function opSnapshotCreate(
   args: Record<string, unknown>,
   root: string,
 ): Promise<RustResponse> {
-  // `scope` was used by early clients; preserve it as an alias so an intended
-  // narrow capture can never silently fall back to the whole workspace.
-  const suppliedPaths = args.paths ?? args.scope;
-  const rawPaths = Array.isArray(suppliedPaths) ? (suppliedPaths as unknown[]) : ["."];
+  // Phase 5: the `scope` alias is gone (ROADMAP_TOOL_SCHEMA.md). Fail closed: a cached client that still
+  // sends only `scope` must not silently capture the whole workspace, so it gets an error that names `paths`.
+  if (args.scope !== undefined) {
+    throw new Error(
+      '[unsupported] snapshot.scope was removed. Hint: send paths instead, e.g. paths: ["lib"] (paths defaults to ["."], the whole workspace).',
+    );
+  }
+  const rawPaths = Array.isArray(args.paths) ? (args.paths as unknown[]) : ["."];
   const requested = rawPaths.length > 0 ? rawPaths.map((p) => String(p)) : ["."];
   if (requested.length > 64) {
     throw new Error("[invalid_request] paths[] is limited to 64 entries.");
