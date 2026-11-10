@@ -44,18 +44,23 @@ const SUITES = [
 
 const updateFloors = process.argv.includes("--update-floors");
 
+// `--test-coverage-include/-lines/-branches/-functions` arrived in Node 22.8; Node 20 rejects them ("bad option").
+// Older Node still runs the suites and they must pass; only the coverage floors are skipped (CI gates them on 22/24).
+const [nodeMajor = 0, nodeMinor = 0] = process.versions.node.split(".").map(Number);
+const COVERAGE_GATE = nodeMajor > 22 || (nodeMajor === 22 && nodeMinor >= 8);
+
 function runSuites(): Promise<{ code: number; output: string }> {
   const args = [
     "--import",
     "tsx",
     "--test",
     "--test-reporter=spec",
-    "--experimental-test-coverage",
+    ...(COVERAGE_GATE ? ["--experimental-test-coverage"] : []),
     "--enable-source-maps",
-    `--test-coverage-lines=${AGGREGATE.lines}`,
-    `--test-coverage-branches=${AGGREGATE.branches}`,
-    `--test-coverage-functions=${AGGREGATE.functions}`,
-    "--test-coverage-include=lib/shell-*.ts",
+    ...(COVERAGE_GATE ? [`--test-coverage-lines=${AGGREGATE.lines}`] : []),
+    ...(COVERAGE_GATE ? [`--test-coverage-branches=${AGGREGATE.branches}`] : []),
+    ...(COVERAGE_GATE ? [`--test-coverage-functions=${AGGREGATE.functions}`] : []),
+    ...(COVERAGE_GATE ? ["--test-coverage-include=lib/shell-*.ts"] : []),
     ...SUITES,
   ];
   return new Promise((resolve, reject) => {
@@ -82,6 +87,17 @@ if (report) console.log(report);
 if (code !== 0) {
   console.error("\n--- last 60 lines of the suite output ---");
   console.error(output.split(/\r?\n/).slice(-60).join("\n"));
+}
+
+if (!COVERAGE_GATE) {
+  if (updateFloors) {
+    console.error(`coverage:shell: --update-floors needs Node >= 22.8 (this is ${process.versions.node}).`);
+    process.exit(1);
+  }
+  console.log(
+    `coverage:shell: coverage floors skipped on Node ${process.versions.node} (they need >= 22.8); the shell suites ${code === 0 ? "passed" : "FAILED"}.`,
+  );
+  process.exit(code);
 }
 
 const measured = parseCoverageReport(output);
