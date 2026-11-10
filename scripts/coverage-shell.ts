@@ -28,7 +28,8 @@ import type { FloorsFile } from "./coverage-report.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const FLOORS_FILE = path.join(repoRoot, "scripts", "coverage-floors.json");
-const MARGIN = 4;
+// 6, not 4: Node 22 reports a few modules 4-5 points lower than Node 24 (comment-only header lines), and CI runs both.
+const MARGIN = 6;
 const AGGREGATE = { lines: 92, branches: 92, functions: 95 };
 const SUITES = [
   "scripts/test-shell-policy-adversarial.ts",
