@@ -5,7 +5,13 @@ Local release notes for venira-mcp. Not published (not listed in `package.json` 
 ## 1.20.1 — 2026-11-10
 
 ### Fixed
-- 1.20.0 shipped with `lib/version.ts` still at `1.19.0`, so the server reported the wrong version at runtime and the `doctor` preflight (and therefore CI and the Release workflow) failed with "server version mismatch: 1.19.0 (expected 1.20.0)". 1.20.1 is the same code as 1.20.0 with the version constant corrected; use 1.20.1 instead of 1.20.0.
+- 1.20.0 shipped with `lib/version.ts` still at `1.19.0`, so the server reported the wrong version at runtime and the `doctor` preflight (and therefore CI and the Release workflow) failed with "server version mismatch: 1.19.0 (expected 1.20.0)". npm cannot overwrite a published version, so the correction ships as 1.20.1; use 1.20.1 instead of 1.20.0.
+- Read/info cache (`tools/project-cache.ts`), three review findings:
+  - The shared byte budget now evicts from the cache that holds the bytes. It used to compare entry counts, so a few large `get_file_info` entries could survive while many small read entries were dropped.
+  - The list/search/recent/references TTL caches now have a byte cap per cache (`VENIRA_TTL_CACHE_BYTES`, default 8 MB) on top of the 64-entry cap, which alone allowed ~64 MB per cache.
+  - Stat-only validation could serve stale content when a file was rewritten with the same size inside one filesystem timestamp tick. Entries whose mtime is within `VENIRA_CACHE_RACY_MS` (default 30, `0` disables) of caching are now re-read on the next lookup, and a file is stat'ed before and after the read so a file changed mid-read is not cached. Writes made through Venira already invalidated their path; this covers edits by other programs.
+- New `npm run test:cache-layer` (7 checks, in `verify`).
+- `scripts/test-shell-session-cache.ts`: the Windows-path case now names the `powershell` dialect. It passed on Windows only, because the default dialect follows the host OS, and failed on Linux and macOS CI.
 - `scripts/policy-corpus-extra.ts`: the five obfuscated `.env` cases (`.e{nv}`, `('.e'+'nv')`) now expect `ask.command_substitution`, the rule that fires first since the command-substitution hardening. The tier is unchanged (`ask`), so no policy behavior changed.
 
 ## 1.20.0 — 2026-11-10

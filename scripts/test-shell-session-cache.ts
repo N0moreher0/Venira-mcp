@@ -190,8 +190,10 @@ check("tokenize_honors_quotes", () => {
 });
 
 check("read_only_classification_basics", () => {
-  const yes = ["ls -la", "pwd", "cat README.md", "rg foo src", "head -n 5 a.txt", "tail -n 5 a.txt", "Get-Content a.txt", "C:\\tools\\rg.exe foo", "/usr/bin/ls", "node --version", "npm -v", "python3 version", "wc -l a.txt"];
+  const yes = ["ls -la", "pwd", "cat README.md", "rg foo src", "head -n 5 a.txt", "tail -n 5 a.txt", "Get-Content a.txt", "/usr/bin/ls", "node --version", "npm -v", "python3 version", "wc -l a.txt"];
   for (const command of yes) assert.equal(cache.isReadOnlyCommand(command), true, command);
+  // A Windows path only parses as a program path in a Windows dialect; the default dialect follows the host OS, so name it.
+  assert.equal(cache.isReadOnlyCommand("C:\\tools\\rg.exe foo", "powershell"), true, "windows path, powershell");
   const no = ["", "   ", "rm a", "touch a", "node script.js", "npm install", "python3 x.py", "node -e 1", "make"];
   for (const command of no) assert.equal(cache.isReadOnlyCommand(command), false, JSON.stringify(command));
 });

@@ -303,6 +303,14 @@ export const ENV_REGISTRY: readonly EnvVarSpec[] = [
     reason: NOT_DOC,
   }),
   cacheInt("VENIRA_SEARCH_CACHE_MS", "Search cache lifetime.", false, { default: "3000", reason: NOT_DOC }),
+  cacheInt("VENIRA_TTL_CACHE_BYTES", "Size cap of each list/search/recent/references cache.", false, {
+    default: "8388608",
+    reason: NOT_DOC,
+  }),
+  cacheInt("VENIRA_CACHE_RACY_MS", "Files modified this recently are re-read instead of served from the read cache (0 disables).", false, {
+    default: "30",
+    reason: NOT_DOC,
+  }),
   cacheInt("VENIRA_READ_CACHE_BYTES", "Total size cap of the file-read cache.", false, {
     default: "67108864",
     reason: NOT_DOC,

@@ -34,6 +34,12 @@ const LIST_CACHE_MS = envInt("VENIRA_LIST_CACHE_MS", 1500);
 const SEARCH_CACHE_MS = envInt("VENIRA_SEARCH_CACHE_MS", 3000);
 const RECENT_CACHE_MS = envInt("VENIRA_RECENT_CACHE_MS", 2000);
 const NEGATIVE_CACHE_TTL_MS = envInt("VENIRA_NEGATIVE_CACHE_MS", 500);
+// list/search/recent/references: each map is also capped by bytes (the 64-entry cap alone allows ~64 MB per map).
+const TTL_CACHE_BYTES = envInt("VENIRA_TTL_CACHE_BYTES", 8 * 1024 * 1024);
+const TTL_CACHE_ENTRIES = 64;
+// File timestamps tick coarsely (up to ~16 ms on Windows, a few ms on Linux). A file whose mtime is this close to
+// "now" can be rewritten in the same tick with the same size, which stat() cannot see. Such entries are not trusted.
+const RACY_WINDOW_MS = envInt("VENIRA_CACHE_RACY_MS", 30);
 export const MAX_BATCH_RESPONSE_BYTES = 2 * 1024 * 1024;
 
 type CachedRead = {
@@ -42,6 +48,8 @@ type CachedRead = {
   result: RustResponse["result"];
   hint?: string;
   mtimeMs: number;
+  /** mtime was within RACY_WINDOW_MS of caching: stat cannot prove freshness, so the next lookup re-reads. */
+  racy: boolean;
   size: number;
   bytes: number;
 };
@@ -100,7 +108,10 @@ export function createCacheLayer(deps: CacheDeps) {
 
   function enforceLimits(): void {
     while (readBytes + infoBytes > MAX_CACHE_BYTES || readCache.size + infoCache.size > MAX_CACHE_ENTRIES) {
-      const useRead = readCache.size >= infoCache.size;
+      // Evict from the cache holding more of whatever is over its limit: bytes first, entry count otherwise.
+      const overBytes = readBytes + infoBytes > MAX_CACHE_BYTES;
+      let useRead = overBytes ? readBytes >= infoBytes : readCache.size >= infoCache.size;
+      if ((useRead ? readCache : infoCache).size === 0) useRead = !useRead;
       const map = useRead ? readCache : infoCache;
       const key = map.keys().next().value;
       if (key === undefined) break;
@@ -126,6 +137,10 @@ export function createCacheLayer(deps: CacheDeps) {
     } catch {
       return null;
     }
+  }
+
+  function isRacy(mtimeMs: number): boolean {
+    return RACY_WINDOW_MS > 0 && Date.now() - mtimeMs < RACY_WINDOW_MS;
   }
 
   function cacheKey(absolutePath: string, args: Args): string {
@@ -165,7 +180,13 @@ export function createCacheLayer(deps: CacheDeps) {
     const entry = readCache.get(key);
     if (entry) {
       const signature = await statSignature(absolutePath);
-      if (signature && signature.isFile && signature.mtimeMs === entry.mtimeMs && signature.size === entry.size) {
+      if (
+        signature &&
+        signature.isFile &&
+        !entry.racy &&
+        signature.mtimeMs === entry.mtimeMs &&
+        signature.size === entry.size
+      ) {
         touch(readCache, key, entry);
         cacheStats.read.hits += 1;
         return { response: fromReadEntry(entry), cached: true };
@@ -175,6 +196,8 @@ export function createCacheLayer(deps: CacheDeps) {
     }
 
     cacheStats.read.misses += 1;
+    // Stat before AND after the read: a file rewritten while it was being read must not be cached under the new mtime.
+    const before = await statSignature(absolutePath);
     let response: RustResponse;
     try {
       response = await execute("read_file", args);
@@ -202,7 +225,14 @@ export function createCacheLayer(deps: CacheDeps) {
     const signature = await statSignature(absolutePath);
     const readData = response.result && typeof response.result === 'object' ? (response.result.data as Record<string, unknown> | null) : null;
     const readText = typeof readData?.text === 'string' ? (readData.text as string) : null;
-    if (signature && signature.isFile && readText !== null) {
+    if (
+      signature &&
+      signature.isFile &&
+      readText !== null &&
+      before &&
+      before.mtimeMs === signature.mtimeMs &&
+      before.size === signature.size
+    ) {
       // Surface content integrity + freshness metadata for Agents (TOCTOU guard). Hash computed once on first read, reused from cache.
       const sha256 = createHash('sha256').update(readText, 'utf8').digest('hex');
       if (readData) {
@@ -219,6 +249,7 @@ export function createCacheLayer(deps: CacheDeps) {
           hint: response.hint,
           mtimeMs: signature.mtimeMs,
           size: signature.size,
+          racy: isRacy(signature.mtimeMs),
           bytes,
         };
         readCache.set(key, cached);
@@ -235,7 +266,7 @@ export function createCacheLayer(deps: CacheDeps) {
     const entry = infoCache.get(key);
     if (entry) {
       const signature = await statSignature(absolutePath);
-      if (signature && signature.mtimeMs === entry.mtimeMs && signature.size === entry.size) {
+      if (signature && !entry.racy && signature.mtimeMs === entry.mtimeMs && signature.size === entry.size) {
         touch(infoCache, key, entry);
         cacheStats.info.hits += 1;
         return { response: fromReadEntry(entry), cached: true };
@@ -244,10 +275,17 @@ export function createCacheLayer(deps: CacheDeps) {
       infoBytes -= entry.bytes;
     }
 
+    const before = await statSignature(absolutePath);
     const response = await execute("get_file_info", args);
     cacheStats.info.misses += 1;
     const signature = await statSignature(absolutePath);
-    if (signature && response.result) {
+    if (
+      signature &&
+      response.result &&
+      before &&
+      before.mtimeMs === signature.mtimeMs &&
+      before.size === signature.size
+    ) {
       const bytes = stringify(response).length;
       if (bytes <= MAX_BATCH_RESPONSE_BYTES) {
         const cached: CachedRead = {
@@ -257,6 +295,7 @@ export function createCacheLayer(deps: CacheDeps) {
           hint: response.hint,
           mtimeMs: signature.mtimeMs,
           size: signature.size,
+          racy: isRacy(signature.mtimeMs),
           bytes,
         };
         infoCache.set(key, cached);
@@ -294,9 +333,12 @@ export function createCacheLayer(deps: CacheDeps) {
     const bytes = stringify(response).length;
     if (bytes > 1024 * 1024) return;
     map.set(key, { at: Date.now(), response, bytes });
-    while (map.size > 64) {
+    let total = 0;
+    for (const e of map.values()) total += e.bytes;
+    while (map.size > TTL_CACHE_ENTRIES || total > TTL_CACHE_BYTES) {
       const oldest = map.keys().next().value;
       if (oldest === undefined) break;
+      total -= map.get(oldest)?.bytes ?? 0;
       map.delete(oldest);
     }
   }
