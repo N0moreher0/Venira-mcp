@@ -30,7 +30,7 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
     about: "Read a text file, whole or by line range (start_line/end_line, 1-based; ranges[] for several disjoint ranges of one file).",
     use: "you need one file's content. When truncated, call again with start_line=next_start_line.",
     avoid: "you need 2+ files (project_read_batch) or only size/mtime (project_get_file_info).",
-    out: "text, first_line, last_line, total_bytes, truncated, next_start_line (when truncated). sha256 is the whole-file hash (sha256_scope: file), safe to send as expected_sha256; text_sha256 covers the returned text only. Missing path gives not_found.",
+    out: "text, first_line, last_line, total_bytes, truncated, next_start_line (when truncated). sha256 is the whole-file hash (sha256_scope: file), safe to send as expected_sha256; text_sha256 covers the returned text only. In compact mode the text arrives as preview (preview_truncated marks a cut). Missing path gives not_found.",
   },
   project_get_file_info: {
     about: "Return kind, size and modification time of a path.",
@@ -144,7 +144,7 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
     about: "Read recent audit-log rows, newest first. Filter by session_id, operation, outcome, since_unix; verify=1 checks the hash chain.",
     use: "you review what was done and why (the reason field), in this or an earlier session.",
     avoid: "you want live metrics (project_health).",
-    out: "rows[], count, truncated, chain_ok (verify=1).",
+    out: "rows[] {session_id, operation, outcome, reason_code, reason, args_hash, command, request_id, started_at, completed_at, elapsed_ms}, count, truncated, chain_ok (verify=1). args_hash identifies the call, command is the redacted command line.",
   },
 
   // ---- code intelligence --------------------------------------------------

@@ -131,6 +131,9 @@ function failingJobId(data: Record<string, any>): number | string | undefined {
   return failingJobs(data)[0]?.id;
 }
 
+/** How many failing jobs the response lists. The list and the summary use the same cap. */
+const FAILING_JOBS_SHOWN = 5;
+
 /** One concise line an agent can act on without reading the full status payload. */
 function buildSummary(input: {
   overall: string;
@@ -147,11 +150,12 @@ function buildSummary(input: {
   if (!input.terminal) return `${label}${branch} is ${input.overall} after ${secs}s.`;
   if (input.overall === "success") return `${label}${branch} passed${input.jobsTotal ? ` (${input.jobsTotal} jobs)` : ""}.`;
   if (input.overall === "failure") {
-    const names = input.failed
-      .slice(0, 3)
-      .map((job) => job.name ?? String(job.id))
-      .join(", ");
-    const more = input.failed.length > 3 ? ` +${input.failed.length - 3} more` : "";
+    // The same cap as `failing_jobs`, so the names and the list always agree
+    // (roadmap item 15, P1: the summary said "3 + 6 more" while the list
+    // showed 5 of 9).
+    const shown = input.failed.slice(0, FAILING_JOBS_SHOWN);
+    const names = shown.map((job) => job.name ?? String(job.id)).join(", ");
+    const more = input.failed.length > shown.length ? ` +${input.failed.length - shown.length} more` : "";
     const where = names ? ` Failing: ${names}${more}.` : "";
     return `${label}${branch} failed.${where}${input.hasTail ? " Log tail attached." : ""}`;
   }
@@ -294,7 +298,13 @@ export async function opCiWait(args: Record<string, unknown>): Promise<Resp> {
   const resultData: Record<string, unknown> = {
     summary,
     next_step: nextStep,
-    ...(failed.length > 0 ? { failing_jobs: failed.slice(0, 5), failing_jobs_total: failed.length } : {}),
+    ...(failed.length > 0
+      ? {
+          failing_jobs: failed.slice(0, FAILING_JOBS_SHOWN),
+          failing_jobs_total: failed.length,
+          failing_jobs_shown: Math.min(failed.length, FAILING_JOBS_SHOWN),
+        }
+      : {}),
     repo,
     ...(provider ? { provider } : {}),
     ...(source ? { source } : {}),
@@ -309,9 +319,22 @@ export async function opCiWait(args: Record<string, unknown>): Promise<Resp> {
     polls,
     selector,
     run,
-    ...(Array.isArray(data.jobs) ? { jobs_total: data.jobs_total ?? data.jobs.length } : {}),
+    ...(jobsTotal !== undefined ? { jobs_total: jobsTotal } : {}),
     ...(Array.isArray(data.check_runs) ? { check_runs_total: data.check_runs_total ?? data.check_runs.length } : {}),
-    ci_status: data,
+    // The lean status view. The full job list is available from
+    // project_ci_status; embedding it here duplicated the whole list and
+    // doubled the payload (roadmap item 15, P1).
+    ci_status: {
+      overall,
+      ...(repo ? { repo } : {}),
+      ...(provider ? { provider } : {}),
+      ...(source ? { source } : {}),
+      ...(data.run?.id !== undefined ? { run_id: data.run.id } : {}),
+      ...(jobsTotal !== undefined ? { jobs_total: jobsTotal } : {}),
+      ...(Array.isArray(data.check_runs)
+        ? { check_runs_total: data.check_runs_total ?? data.check_runs.length }
+        : {}),
+    },
     ...(tail ? { failure_tail: tail } : {}),
     ...(tailError ? { failure_tail_error: tailError } : {}),
     ...(tailNote ? { failure_tail_note: tailNote } : {}),

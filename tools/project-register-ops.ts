@@ -69,12 +69,23 @@ export function registerOpsTools(server: McpServer, deps: OpsToolsDeps): void {
           use_when: "debugging slowness/errors, checking the backend/DB/audit before reporting, or inspecting this session's cache/metrics.",
           avoid_when: "you just need to read/write files normally.",
           speed_profile: "fast (~a few ms + 1 audit DB query); set include_audit=0 to skip the DB query.",
-          output_kind: "health: notice, server, corehost, capability, queue, caches, shells, metrics, audit.",
+          output_kind:
+            "health: notice, server, corehost, capability, queue, caches, shells, metrics, audit. Pass sections to get only the parts you need.",
           batch_safe: false,
         },
         { readOnlyHint: true, openWorldHint: false },
       ),
-      inputSchema: { include_audit: flag01.optional().describe("1 includes the audit-log summary in the result (default 1); 0 skips the audit DB query.") },
+      inputSchema: {
+        include_audit: flag01.optional().describe("1 includes the audit-log summary in the result (default 1); 0 skips the audit DB query."),
+        sections: z
+          .array(z.string())
+          .max(24)
+          .optional()
+          .describe(
+            "Section names to return (server, corehost, capability, queue, caches, shells, snapshots, secrets, network, metrics, cache, trace, shell, environment, audit). " +
+              "Omit for everything; use it when the full payload does not fit the response.",
+          ),
+      },
     },
     (args) => runHealth(args as Args, healthDeps),
 

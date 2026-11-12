@@ -640,6 +640,30 @@ export async function runProviderDialects($h: Harness): Promise<void> {
       !String(bbWait.data?.failure_tail?.text ?? "").includes("green-log"),
     bbWait.data?.failure_tail,
   );
+  // Roadmap item 15 (P1): the summary, the list and the counters must agree.
+  const bbFailing = (bbWait.data?.failing_jobs ?? []) as Array<{ id?: unknown }>;
+  const bbFailingTotal = Number(bbWait.data?.failing_jobs_total ?? 0);
+  check(
+    "ci_wait_failing_job_counts_agree",
+    bbFailing.length > 0 &&
+      bbFailing.length === Math.min(bbFailingTotal, 5) &&
+      bbWait.data?.failing_jobs_shown === bbFailing.length &&
+      // The summary names the same jobs the list shows (same cap, same count).
+      !new RegExp(`\\+\\s*${bbFailingTotal - bbFailing.length}\\s+more`).test(String(bbWait.data?.summary ?? "")),
+    {
+      failing: bbFailing.length,
+      total: bbFailingTotal,
+      shown: bbWait.data?.failing_jobs_shown,
+      summary: bbWait.data?.summary,
+    },
+  );
+  check(
+    "ci_wait_does_not_duplicate_the_job_list",
+    bbWait.data?.ci_status !== undefined &&
+      (bbWait.data?.ci_status as { jobs?: unknown })?.jobs === undefined &&
+      (bbWait.data?.ci_status as { check_runs?: unknown })?.check_runs === undefined,
+    bbWait.data?.ci_status,
+  );
 
   // E.3: GitHub bounded pagination + oversized logs (small caps so the fixtures stay tiny).
   console.log("[verify] checking E.3 github pagination + oversized logs...");

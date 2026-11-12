@@ -28,6 +28,7 @@ import {
   defaultShellForPlatform as hostDefaultShell,
   resolveShellBinary,
   shellRuntimeHint,
+  stripAnsi,
   type ShellKind,
 } from "./shell-invocation.js";
 import { shellRuns, pruneShellRuns, TAIL_LIMIT, MAX_OUTPUT_BYTES, trimTail, appendCapped, buildShellEnv, normalizeSecretEnv, killTree, SHELL_EXIT_EARLY, SHELL_MAX_TIMEOUT_MS, SHELL_TIMEOUT_POLICY, type ShellRun } from "./corehost-shell-state.js";
@@ -308,10 +309,6 @@ export async function opShellRun(
               mode: decision.mode,
               ...(waitMs > 0 ? { waited_ms: waitMs } : {}),
               approval: buildApprovalPayload("shell", pending, shellSubject, redactSecrets(command), retryArguments),
-              retry_with: {
-                tool: "project_shell_run",
-                arguments: { ...retryArguments, approval_id: pendingId },
-              },
               note: `A human must run: ${pending.approve_command} (then retry once with approval_id). Do not loop or retry before they confirm.`,
             },
           },
@@ -437,7 +434,8 @@ export async function opShellRun(
   let outcomeRecorded = false;
   let shellMissing = false;
   let outputDecoded = false;
-  /** Decode a UTF-16 stream (the WSL launcher) and strip stray NUL bytes. */
+  /** Decode a UTF-16 stream (the WSL launcher), drop the ANSI colours and
+   *  strip stray NUL bytes. */
   const decodeRunOutput = () => {
     const out = decodeShellOutput(run.stdout_full);
     const err = decodeShellOutput(run.stderr_full);
@@ -449,6 +447,10 @@ export async function opShellRun(
       run.stderr_full = err.text;
       outputDecoded = true;
     }
+    const stdoutClean = stripAnsi(run.stdout_full);
+    const stderrClean = stripAnsi(run.stderr_full);
+    if (stdoutClean !== run.stdout_full) run.stdout_full = stdoutClean;
+    if (stderrClean !== run.stderr_full) run.stderr_full = stderrClean;
   };
   const noteOutcome = () => {
     if (outcomeRecorded) return;

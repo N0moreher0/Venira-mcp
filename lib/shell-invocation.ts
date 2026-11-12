@@ -151,6 +151,18 @@ export function resolveShellBinary(shell: string): { path: string | null; kind: 
 }
 
 /**
+ * Remove the ANSI escape sequences a shell writes around its error messages.
+ *
+ * PowerShell colours its errors (`\u001b[31;1mGet-Content: ...\u001b[0m`); the
+ * agent reads that as noise around the real message.
+ */
+export function stripAnsi(text: string): string {
+  if (!text.includes("\u001b")) return text;
+  // CSI sequences (colour, cursor moves) and OSC sequences (window titles).
+  return text.replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, "").replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, "");
+}
+
+/**
  * Decode a shell stream that came back as UTF-16LE (the WSL launcher's error
  * messages) and strip the NUL bytes of a partially decoded stream.
  *

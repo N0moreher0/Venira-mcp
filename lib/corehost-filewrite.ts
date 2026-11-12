@@ -51,9 +51,29 @@ export async function opWriteFile(
   const content = args.content as string;
   const mode = (args.mode as string | undefined) ?? "overwrite";
   const createDirs = args.create_dirs === true;
+  const parentDir = path.dirname(absPath);
 
   if (createDirs) {
-    await fs.mkdir(path.dirname(absPath), { recursive: true });
+    await fs.mkdir(parentDir, { recursive: true });
+  } else if (mode !== "append") {
+    // Roadmap item 15 (P1): writing into a missing parent directory used to
+    // surface as io_error ("file may be locked, retry once") and leaked the
+    // temporary file name. It is an argument problem, not a transient one.
+    try {
+      const parent = await fs.stat(parentDir);
+      if (!parent.isDirectory()) {
+        throw new Error(
+          `[invalid_request] The parent path is not a directory: ${path.relative(root, parentDir) || "."}. ` +
+            "Hint: pass a file path whose parent is a directory, or create the directory with project_create.",
+        );
+      }
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith("[invalid_request]")) throw error;
+      throw new Error(
+        `[invalid_request] The parent directory does not exist: ${path.relative(root, parentDir) || "."}. ` +
+          "Hint: pass create_dirs=1, or create the directory with project_create.",
+      );
+    }
   }
 
   const action = mode === "create" ? "created" : mode === "append" ? "appended" : "overwritten";
@@ -90,7 +110,10 @@ export async function opWriteFile(
       await fs.rename(tmp, absPath);
     } catch (error) {
       try { await fs.unlink(tmp); } catch { /* ignore */ }
-      throw new Error(`[io_error] ${error instanceof Error ? error.message : String(error)}`);
+      // The temporary name stays out of the message (roadmap item 15, P1).
+      throw new Error(
+        `[io_error] Cannot write ${args.relative_path}: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
     // P2: Update recent-files index
     recordRecentFile(absPath, root);

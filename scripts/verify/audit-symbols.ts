@@ -247,6 +247,25 @@ export async function runAuditSymbols(
     ),
     auditRead.data?.rows,
   );
+  // Roadmap item 15 (P1): the rows also say *which* call they belong to -
+  // the argument hash and the (redacted) command.
+  const auditShellRead = asEnvelope(
+    await call("project_read_audit", {
+      session_id: SESSION_ID,
+      operation: "shell_run",
+      limit: 20,
+    }),
+  );
+  check(
+    "audit_tool_exposes_args_hash_and_command",
+    (auditShellRead.data?.rows ?? []).some(
+      (r: { args_hash?: string }) => typeof r.args_hash === "string" && r.args_hash.length > 0,
+    ) &&
+      (auditShellRead.data?.rows ?? []).some(
+        (r: { command?: string }) => typeof r.command === "string" && r.command.length > 0,
+      ),
+    (auditShellRead.data?.rows ?? []).slice(0, 3),
+  );
 
   // 16-bis. Audit hash chain: keyed, actually recomputed, and tamper-evident.
   const auditVerify = asEnvelope(

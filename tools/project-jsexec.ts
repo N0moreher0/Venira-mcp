@@ -117,15 +117,9 @@ export async function runExecuteJs(args: Args): Promise<ToolResult> {
               },
             ),
             expires_at: expiresAt,
-            retry_with: {
-              tool: "project_execute_js",
-              arguments: {
-                code,
-                ...(cliArgs ? { argv: cliArgs } : {}),
-                ...(typeof args.timeout_ms === "number" ? { timeout_ms: args.timeout_ms } : {}),
-                approval_id: pendingId,
-              },
-            },
+            // The retry call lives in `approval.retry_with` (the same shape
+            // every gated tool uses); a second copy here only made it
+            // ambiguous which one was canonical (roadmap item 15, P1).
             note: `A human must run: ${pending.approve_command} (then retry with approval_id).`,
           },
           hint: `Ask the user to run \`${pending.approve_command}\` in an interactive terminal, then retry project_execute_js with approval_id="${pendingId}".`,

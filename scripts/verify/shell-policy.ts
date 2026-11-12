@@ -508,17 +508,24 @@ export async function runShellPolicy(
     process.platform === "win32"
       ? "'" + resolvedQuoteTestDir.replace(/'/g, "''") + "'"
       : "'" + resolvedQuoteTestDir.replace(/'/g, "'\\''") + "'";
-  const expectedApprovalCommand =
-    (process.platform === "win32" ? "npx.cmd" : "npx") +
+  const expectedApprovalCommand = (process.platform === "win32" ? "npx.cmd" : "npx") +
     " --yes venira-mcp --data-dir " +
     expectedQuotedDir +
     " --approve " +
     quoteTestId;
   check(
     "approval_command_is_single_copy_paste_with_data_dir",
-    quoteTestCommand === expectedApprovalCommand &&
+    // Roadmap item 15 (P1): the command must be one copy-paste line that
+    // names the data dir and the id - and it must run the *installed* build,
+    // not the latest package pulled from the registry.
+    quoteTestCommand.includes(expectedQuotedDir) &&
+      quoteTestCommand.includes(quoteTestId) &&
+      quoteTestCommand.includes("--approve") &&
+      !quoteTestCommand.includes("\n") &&
+      !/venira-mcp@latest/.test(quoteTestCommand) &&
+      !/npx(\.cmd)?\s+--yes\s+venira-mcp\s/.test(quoteTestCommand) &&
       shellApprovalCommand === shellApproval.approve_command,
-    quoteTestCommand,
+    { quoteTestCommand, expectedApprovalCommand },
   );
   check(
     "approval_payload_shell_shape",

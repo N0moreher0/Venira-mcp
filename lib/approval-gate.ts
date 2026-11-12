@@ -15,8 +15,11 @@
  * in by the caller.
  */
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
+import path from "node:path";
 import * as approvals from "./approvals.js";
 import { activeDataDir } from "./workspace.js";
+import { VERSION } from "./version.js";
 
 export type ApprovalGateName = "shell" | "js";
 
@@ -60,9 +63,36 @@ function quoteCliArg(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
+/**
+ * The CLI of the *running* installation.
+ *
+ * `npx --yes venira-mcp` downloads the latest published package: the approval
+ * step would then run a different version than the one the agent is talking
+ * to, and it pulls remote code onto the security path. The installed build is
+ * used instead; the npx form is only the fallback, pinned to the running
+ * version.
+ */
+function installedCli(): string | null {
+  const entry = process.argv[1];
+  if (!entry) return null;
+  try {
+    // The server runs as <root>/dist/server.js; the CLI is <root>/bin/venira-mcp.js.
+    const root = path.dirname(path.dirname(path.resolve(entry)));
+    const cli = path.join(root, "bin", "venira-mcp.js");
+    return existsSync(cli) ? cli : null;
+  } catch {
+    return null;
+  }
+}
+
 export function approveCommand(approvalId: string): string {
+  const dataDir = quoteCliArg(activeDataDir());
+  const cli = installedCli();
+  if (cli) {
+    return `${quoteCliArg(process.execPath)} ${quoteCliArg(cli)} --data-dir ${dataDir} --approve ${approvalId}`;
+  }
   const executable = process.platform === "win32" ? "npx.cmd" : "npx";
-  return `${executable} --yes venira-mcp --data-dir ${quoteCliArg(activeDataDir())} --approve ${approvalId}`;
+  return `${executable} --yes venira-mcp@${VERSION} --data-dir ${dataDir} --approve ${approvalId}`;
 }
 
 /** Create the pending record. The caller shapes the response around the result. */

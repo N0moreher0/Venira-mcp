@@ -250,7 +250,9 @@ All tools return the standard envelope (`ok`, `kind`, `data`, `hint`, `elapsed_m
 | `project_health` | Diagnostics: capability, queue, cache hit-rates, p50/p95, security limits notice, and `server.workspace_switching` (`enabled`, `allowed_roots`) |
 | `project_read_audit` | Read recent audit log rows |
 
-**Whole-file hashes.** `project_read_file` returns `sha256` = the hash of the **whole file** (`sha256_scope: "file"`), even when the call returned only a slice, and `text_sha256` = the hash of the text that was returned. `sha256` is therefore safe to send back as `expected_sha256`; `text_sha256` is not. The hash covers the raw bytes, so a file with a BOM round-trips. When a write or edit refuses a stale hash (`stale_content`), the file is left untouched and the response asks for a fresh read: re-read the file, rebuild the patch against the current content and send the new hash - never replay the same edit unchanged.
+**Whole-file hashes.** `project_read_file` returns `sha256` = the hash of the **whole file** (`sha256_scope: "file"`), even when the call returned only a slice, and `text_sha256` = the hash of the text that was returned. `sha256` is therefore safe to send back as `expected_sha256`; `text_sha256` is not. The hash covers the raw bytes, so a file with a BOM round-trips. When a write or edit refuses a stale hash (`stale_content`), the file is left untouched and the response asks for a fresh read: re-read the file, rebuild the patch against the current content and send the new hash - never replay the same edit unchanged. In `compact` mode the text arrives as `preview` (`preview_truncated` marks a cut); the hash fields are always there.
+
+**Recovery that fits the tool.** A failure names the call that can recover from it: a missing secret points at `project_secret action=list`, a missing device flow at `project_github_connect action=start`, a missing checkpoint at `project_snapshot action=list`, a missing file at the file tree. A read batch that lost one item is marked `partial: true` and reports `failed_count` and `succeeded_count`, so the successful reads stay visible. `project_health` in compact mode keeps whole sections and names the ones it dropped, and `sections` asks for exactly the parts you need.
 
 **Write (mutating, pass `reason`)**
 
@@ -410,7 +412,7 @@ Full reference: the source reads 90+ distinct `VENIRA_*` names; this table lists
 Granting a shell or JS approval:
 
 1. The call fails with `[approval_required]` and returns `data.approval_id` (valid for 5 minutes) together with the command or code, the rule and the reason. Shell and JS share one payload, `data.approval`: `{ approval_id, gate, rule, reason, subject_preview, expires_at, approve_command, retry_with: { tool, arguments } }`.
-2. A person copies `data.approval.approve_command` exactly into an interactive PowerShell terminal (the returned command includes the server data directory and works in Windows PowerShell and PowerShell 7), reviews the request and answers `y`. The CLI refuses without a TTY. `--yes` skips the prompt. `--session` extends the grant to the same command group until it expires, but only for rules in `VENIRA_SESSION_GRANT_RULES` (built-in: `cd_outside_workspace`).
+2. A person copies `data.approval.approve_command` exactly into an interactive PowerShell terminal (the returned command includes the server data directory and works in Windows PowerShell and PowerShell 7), reviews the request and answers `y`. The CLI refuses without a TTY. `--yes` skips the prompt. `--session` extends the grant to the same command group until it expires, but only for rules in `VENIRA_SESSION_GRANT_RULES` (built-in: `cd_outside_workspace`). The command runs the **installed** build (`node <install>/bin/venira-mcp.js ...`), so the human approves the same version the agent is talking to; it never downloads a package from the registry.
 3. The agent retries the same call with `approval_id`. The grant is HMAC-signed, tied to the session, bound to the exact command / shell / cwd / `secret_env` / rule (or code / argv for JS), and single-use. Concurrent retries of the same id cannot both run: consumption is an atomic file claim, so exactly one wins.
 
 **TTL behavior:** the pending request (`approval_id`) is valid for a fixed 5 minutes and cannot be revived by retrying. A `--session` grant lasts 10 minutes by default (`VENIRA_SHELL_APPROVAL_TTL_MS`) and lives only in this server process; restarting the server clears it.
@@ -511,7 +513,7 @@ Venira MCP rules:
 npm run build       # tsc → dist/  (verify launches dist/server.js, so rebuild before verifying)
 npm run smoke       # in-process sanity check
 npm run doctor      # 15 preflight checks
-npm run verify      # 528 behavioural + security checks
+npm run verify      # 531 behavioural + security checks
 npm run coverage:shell  # V8 coverage for lib/shell-*.ts (report only, no thresholds)
 npm run bench:mcp   # end-to-end numbers
 ```

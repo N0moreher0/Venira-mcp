@@ -45,6 +45,8 @@ export type Envelope = {
   truncated?: boolean;
   cached?: boolean;
   trimmed?: boolean;
+  /** Some items of a batch succeeded while others failed (roadmap item 15, P1). */
+  partial?: boolean;
   command_status?: "running" | "succeeded" | "failed" | "cancelled" | "unknown";
   elapsed_ms?: number;
 };
@@ -239,6 +241,24 @@ export function summarize(kind: string, data: unknown): unknown {
 
 export function previewData(kind: string, data: unknown): unknown {
   if (!isObject(data)) return data;
+  if (kind === "health") {
+    // Roadmap item 15 (P1): the health payload does not fit in a compact
+    // response, and slicing it into `preview_text` cut the JSON mid-word and
+    // made every section unreachable. Drop whole sections instead and say
+    // which ones were dropped, so the agent can ask for them by name.
+    const keep = ["notice", "server", "capability", "queue", "shell", "environment"];
+    const dropped: string[] = [];
+    const out: Loose = {};
+    for (const [key, value] of Object.entries(data)) {
+      if (keep.includes(key)) out[key] = value;
+      else dropped.push(key);
+    }
+    out.sections_dropped = dropped;
+    // Every section the tool can produce, so the agent can ask for the ones
+    // that did not fit.
+    out.sections_available = Object.keys(data);
+    return out;
+  }
   if (kind === "file_read") {
     const text = typeof data.text === "string" ? data.text : "";
     const { text: prefix, truncated: cut } = truncateUtf8(text, FILE_PREVIEW_BYTES);
@@ -534,8 +554,94 @@ const DEFAULT_NEXT_ACTIONS: Record<string, unknown[]> = {
   secret_missing: [{ tool: "project_secret", arguments: { action: "list" }, why: "see stored names" }],
 };
 
+/**
+ * Tool-specific recovery (roadmap item 15, P1).
+ *
+ * One generic `not_found` hint pointed every tool at project_list_files: a
+ * missing secret name or a pending GitHub device flow has nothing to do with
+ * the filesystem, so the agent wasted a round trip on a directory listing.
+ * Each entry names the call that can actually recover.
+ */
+const TOOL_RECOVERY: Record<string, Record<string, { hint?: string; next_actions?: unknown[] }>> = {
+  secret: {
+    not_found: {
+      hint: "No such secret. List the stored names with project_secret action=list, or store it with action=set.",
+      next_actions: [{ tool: "project_secret", arguments: { action: "list" }, why: "see the stored names" }],
+    },
+  },
+  github_connect: {
+    not_found: {
+      hint: "No such pending device flow. Start one with project_github_connect action=start, then poll it with its pending_id.",
+      next_actions: [{ tool: "project_github_connect", arguments: { action: "start" }, why: "start the device flow" }],
+    },
+  },
+  snapshot: {
+    not_found: {
+      hint: "No such checkpoint. List the checkpoints with project_snapshot action=list and pick another id.",
+      next_actions: [{ tool: "project_snapshot", arguments: { action: "list" }, why: "pick another checkpoint" }],
+    },
+  },
+  shell_status: {
+    not_found: {
+      hint: "Unknown run id. Run ids live only in the session that started them; start a new run with project_shell_run.",
+    },
+  },
+  shell_cancel: {
+    not_found: {
+      hint: "Unknown run id. Run ids live only in the session that started them.",
+    },
+  },
+  read_audit: {
+    not_found: {
+      hint: "The audit database was not found at that path. Check project_health for the audit store location.",
+    },
+  },
+  ci_status: {
+    not_found: {
+      hint: "No run, job or check-run matched the selector. List the recent runs with project_ci_status without a selector, or use project_ci_logs with a run_id from it.",
+    },
+  },
+  ci_logs: {
+    not_found: {
+      hint: "No log archive for that run or job. Take run_id/job_id from project_ci_status.",
+    },
+  },
+  read_file: {
+    not_found: {
+      hint: "No such file. Check the path with project_list_files or project_search; do not retry the same path.",
+    },
+  },
+  write_file: {
+    not_found: {
+      hint: "No such file. Check the path with project_list_files, or pass create_dirs=1 to create the parent directory.",
+    },
+  },
+  edit_file: {
+    not_found: {
+      hint: "No such file. Check the path with project_list_files, or create it with project_write_file.",
+    },
+  },
+  delete_path: {
+    not_found: {
+      hint: "No such path. Check it with project_list_files before deleting.",
+    },
+  },
+  get_file_info: {
+    not_found: {
+      hint: "No such path. Check it with project_list_files.",
+    },
+  },
+  list_files: {
+    not_found: {
+      hint: "No such directory. Check the path with project_list_files on its parent.",
+    },
+  },
+};
+
 /** A not_found about a shell run id is not a path problem: listing files would not help. */
-function defaultNextActions(failure: Failure): unknown[] | undefined {
+function defaultNextActions(failure: Failure, operation?: string): unknown[] | undefined {
+  const recovery = operation ? TOOL_RECOVERY[operation]?.[failure.code] : undefined;
+  if (recovery?.next_actions) return recovery.next_actions;
   if (failure.code === "not_found" && /^(Unknown run_id|Checkpoint )/i.test(failure.message)) return undefined;
   if (failure.code === "old_text_not_found" || failure.code === "old_text_ambiguous") {
     const file = /^old_text (?:not found|matches \d+ locations) in (.+?)\.(?: |$)/.exec(failure.message)?.[1];
@@ -544,6 +650,12 @@ function defaultNextActions(failure: Failure): unknown[] | undefined {
       : undefined;
   }
   return DEFAULT_NEXT_ACTIONS[failure.code];
+}
+
+/** The tool-specific hint, when the tool knows a better way out than the generic one. */
+function toolSpecificHint(failure: Failure, operation?: string): string | undefined {
+  if (!operation) return undefined;
+  return TOOL_RECOVERY[operation]?.[failure.code]?.hint;
 }
 
 const INVALID_REQUEST_HINTS: Array<[RegExp, string]> = [
@@ -642,7 +754,10 @@ export function errorEnvelope(
   options: EnvelopeOptions = {},
 ): Envelope & { error: { code: string; message: string; retryable: boolean } } {
   const failure = parseToolError(error);
-  const hint = options.hint ?? failure.hint;
+  // The tool knows better than the generic hint whether *its* failure can be
+  // recovered from (roadmap item 15, P1).
+  const recovery = TOOL_RECOVERY[operation]?.[failure.code];
+  const hint = options.hint ?? recovery?.hint ?? failure.hint;
   const messageBytes = Buffer.byteLength(failure.message, "utf8");
   const messagePreview =
     OUTPUT_MODE === "compact" && messageBytes > SUMMARY_THRESHOLD_BYTES
@@ -656,7 +771,8 @@ export function errorEnvelope(
       : undefined;
   const compacted = messagePreview?.truncated === true || compactFailureData !== undefined;
   const compactHint = compacted ? trimHint(hint) : hint;
-  const nextActions = options.next_actions ?? failure.next_actions ?? defaultNextActions(failure);
+  const nextActions =
+    options.next_actions ?? recovery?.next_actions ?? failure.next_actions ?? defaultNextActions(failure, operation);
   const summary = {
     ...(messagePreview?.truncated ? { error_message_bytes: messageBytes } : {}),
     ...(compactFailureData ? { error_data: genericSummary(failureData, failureDataBytes) } : {}),
@@ -701,7 +817,12 @@ export function batchEnvelope(
     data: {
       responses,
       count: responses.length,
-      ...(failedResponses.length > 0 ? { failed_count: failedResponses.length } : {}),
+      ...(failedResponses.length > 0
+        ? {
+            failed_count: failedResponses.length,
+            succeeded_count: responses.length - failedResponses.length,
+          }
+        : {}),
       ...extra,
     },
     elapsed_ms: round(elapsedMs),
@@ -711,6 +832,10 @@ export function batchEnvelope(
     return {
       ok: false,
       status: options.failure ? "failed" : "partial",
+      // Some items succeeded. A client that maps `ok:false` to isError must
+      // still be able to see that the successful reads are in data.responses
+      // (roadmap item 15, P1).
+      ...(options.failure ? {} : { partial: true }),
       ...base,
       error: { code, message, retryable: false },
       ...(hint ? { hint } : {}),

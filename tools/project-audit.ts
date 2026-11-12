@@ -32,8 +32,13 @@ export async function runReadAudit(args: Args, dbPath: string): Promise<ToolResu
       (db.prepare("PRAGMA table_info(project_tool_audit)").all() as Array<{ name: string }>).map((c) => c.name),
     );
     const reasonColumn = columns.has("reason") ? ", reason" : "";
+    // The hash of the arguments and the (redacted) command are what say
+    // *which* call a row belongs to; the roadmap called the missing "why" out
+    // (the reason was logged, the path and the command hash were not).
+    const argsHashColumn = columns.has("args_hash") ? ", args_hash" : "";
+    const commandColumn = columns.has("command") ? ", command" : "";
     const sql =
-      `SELECT session_id, operation, outcome, reason_code, request_id, started_at, completed_at, elapsed_ms${reasonColumn} ` +
+      `SELECT session_id, operation, outcome, reason_code, request_id, started_at, completed_at, elapsed_ms${reasonColumn}${argsHashColumn}${commandColumn} ` +
       `FROM project_tool_audit ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ` +
       `ORDER BY started_at DESC LIMIT ?`;
     const rows = db.prepare(sql).all(...values, limit + 1) as unknown[];
@@ -93,6 +98,8 @@ export async function runReadAudit(args: Args, dbPath: string): Promise<ToolResu
           outcome: row.outcome,
           ...(row.reason_code ? { reason_code: row.reason_code } : {}),
           ...(typeof row.reason === "string" && row.reason ? { reason: row.reason } : {}),
+          ...(typeof row.args_hash === "string" && row.args_hash ? { args_hash: row.args_hash } : {}),
+          ...(typeof row.command === "string" && row.command ? { command: row.command } : {}),
           request_id: row.request_id,
           started_at: typeof row.started_at === "number" ? Math.floor(row.started_at / 1000) : row.started_at,
           ...(row.completed_at != null ? { completed_at: Math.floor((row.completed_at as number) / 1000) } : {}),

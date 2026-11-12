@@ -114,6 +114,12 @@ export async function runHealth(args: Args, deps: HealthDeps): Promise<ToolResul
   const hostInfo = deps.hostSnapshot();
   const dataDir = dataDirFor(hostInfo.exe);
   const includeAudit = args.include_audit !== false;
+  // Roadmap item 15 (P1): the full health payload does not fit in a compact
+  // response. `sections` lets the agent ask for the parts it needs instead of
+  // getting a slice of JSON it cannot read.
+  const wanted = Array.isArray(args.sections)
+    ? args.sections.filter((name): name is string => typeof name === "string" && name.length > 0)
+    : null;
   try {
     const dbPath = path.join(dataDir, "venira.db");
     const data = {
@@ -173,9 +179,24 @@ export async function runHealth(args: Args, deps: HealthDeps): Promise<ToolResul
       environment: { issues: checkEnvironment() },
       audit: includeAudit ? await auditHealth(dbPath) : { skipped: true },
     };
+    const payload = wanted
+      ? (() => {
+          const picked: Record<string, unknown> = {};
+          const unknown: string[] = [];
+          for (const name of wanted) {
+            if (name in data) picked[name] = (data as Record<string, unknown>)[name];
+            else unknown.push(name);
+          }
+          return {
+            ...picked,
+            sections_requested: wanted,
+            ...(unknown.length > 0 ? { sections_unknown: unknown } : {}),
+          };
+        })()
+      : data;
     const elapsedMs = performance.now() - started;
     recordMetric("health", elapsedMs, true);
-    return toolResult(buildEnvelope("health", { status: "completed", result: { kind: "health", data } }, {
+    return toolResult(buildEnvelope("health", { status: "completed", result: { kind: "health", data: payload } }, {
       requestId,
       elapsedMs,
     }));
