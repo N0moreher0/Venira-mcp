@@ -4,6 +4,7 @@
  */
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 import { resolveInWorkspace, errorWithData, type RustResponse } from "./corehost-common.js";
 import { isProtectedPath } from "./workspace.js";
 
@@ -44,14 +45,20 @@ export async function opReadFile(
   const rangesArg = args.ranges as Array<{ start_line: number; end_line?: number; max_bytes?: number }> | undefined;
   const maxBytesGlobal = (args.max_bytes as number | undefined) ?? 1_048_576;
 
-  let content: string;
+  let bytes: Buffer;
   try {
-    content = await fs.readFile(canonicalPath, "utf8");
+    bytes = await fs.readFile(canonicalPath);
   } catch (error) {
     throw new Error(
       `[io_error] Cannot read ${canonicalPath}: ${error instanceof Error ? error.message : String(error)}. Hint: file may be locked.`,
     );
   }
+  const content = bytes.toString("utf8");
+  // Roadmap item 17: `sha256` is the hash of the WHOLE file (raw bytes), so it
+  // can be handed to project_edit_file / project_write_file as expected_sha256
+  // even when this call returned only a slice. `text_sha256` hashes the text
+  // that was actually returned.
+  const fileSha256 = crypto.createHash("sha256").update(bytes).digest("hex");
 
   const allLines = content.split("\n");
   const lastLineOfAll = allLines.length;
@@ -65,7 +72,7 @@ export async function opReadFile(
     },
   ];
 
-  const results: Array<{ start_line: number; end_line: number; text: string; truncated: boolean; next_start_line?: number }> = [];
+  const results: Array<{ start_line: number; end_line: number; text: string; text_sha256: string; truncated: boolean; next_start_line?: number }> = [];
 
   for (const range of effectiveRanges) {
     const startLine = range.start_line ?? 1;
@@ -103,6 +110,7 @@ export async function opReadFile(
       start_line: firstLine,
       end_line: lastLine,
       text,
+      text_sha256: crypto.createHash("sha256").update(text, "utf8").digest("hex"),
       truncated,
       ...(truncated && lastLine < lastLineOfAll ? { next_start_line: lastLine + 1 } : {}),
     });
@@ -118,6 +126,9 @@ export async function opReadFile(
     data = {
       relative_path: rel,
       kind: "file",
+      sha256: fileSha256,
+      sha256_scope: "file",
+      text_sha256: first.text_sha256,
       text: first.text,
       first_line: first.start_line,
       last_line: first.end_line,
@@ -130,6 +141,8 @@ export async function opReadFile(
     data = {
       relative_path: rel,
       kind: "file",
+      sha256: fileSha256,
+      sha256_scope: "file",
       ranges: results,
       total_bytes: stat.size,
       total_lines: lastLineOfAll,

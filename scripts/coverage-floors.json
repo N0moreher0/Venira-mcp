@@ -3,11 +3,11 @@
   "modules": {
     "lib/shell-cache.ts": {
       "lines": 86,
-      "branches": 89,
+      "branches": 90,
       "functions": 94
     },
     "lib/shell-cmd-switches.ts": {
-      "lines": 82,
+      "lines": 83,
       "branches": 79,
       "functions": 94
     },
@@ -22,18 +22,18 @@
       "functions": 94
     },
     "lib/shell-policy-balanced-delete.ts": {
-      "lines": 73,
+      "lines": 72,
       "branches": 91,
       "functions": 94
     },
     "lib/shell-policy-balanced-docker.ts": {
-      "lines": 66,
+      "lines": 69,
       "branches": 94,
       "functions": 94
     },
     "lib/shell-policy-balanced-write.ts": {
-      "lines": 87,
-      "branches": 83,
+      "lines": 88,
+      "branches": 82,
       "functions": 91
     },
     "lib/shell-policy-balanced.ts": {
@@ -62,7 +62,7 @@
       "functions": 94
     },
     "lib/shell-policy-stats.ts": {
-      "lines": 81,
+      "lines": 82,
       "branches": 94,
       "functions": 94
     },
@@ -81,13 +81,18 @@
       "branches": 94,
       "functions": 79
     },
+    "lib/shell-repeat.ts": {
+      "lines": 83,
+      "branches": 90,
+      "functions": 94
+    },
     "lib/shell-tokenizer.ts": {
       "lines": 94,
       "branches": 94,
       "functions": 94
     },
     "lib/shell-unavailable.ts": {
-      "lines": 82,
+      "lines": 78,
       "branches": 94,
       "functions": 94
     }

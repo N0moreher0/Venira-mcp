@@ -233,10 +233,14 @@ export function createCacheLayer(deps: CacheDeps) {
       before.mtimeMs === signature.mtimeMs &&
       before.size === signature.size
     ) {
-      // Surface content integrity + freshness metadata for Agents (TOCTOU guard). Hash computed once on first read, reused from cache.
-      const sha256 = createHash('sha256').update(readText, 'utf8').digest('hex');
+      // Freshness metadata for agents (TOCTOU guard). The whole-file hash comes
+      // from the backend (`sha256`, scope "file"); the cache must not replace it
+      // with a hash of the returned slice - that hash is not the file and
+      // feeding it back as expected_sha256 causes a stale_content loop
+      // (roadmap item 17). `text_sha256` covers the text that was returned.
+      const textSha256 = createHash('sha256').update(readText, 'utf8').digest('hex');
       if (readData) {
-        readData.sha256 = sha256;
+        readData.text_sha256 ??= textSha256;
         readData.mtime_ms = signature.mtimeMs;
         readData.size_bytes = signature.size;
       }

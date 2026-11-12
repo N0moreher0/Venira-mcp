@@ -41,6 +41,7 @@ const SUITES = [
   "scripts/test-shell-policy-file.ts",
   "scripts/test-shell-tokenizer-edges.ts",
   "scripts/test-shell-unavailable.ts",
+  "scripts/test-shell-repeat.ts",
 ];
 
 const updateFloors = process.argv.includes("--update-floors");

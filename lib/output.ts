@@ -145,6 +145,7 @@ export function summarize(kind: string, data: unknown): unknown {
       text_bytes: Buffer.byteLength(text, "utf8"),
       total_bytes: data.total_bytes,
       truncated: data.truncated === true,
+      ...(typeof data.sha256 === "string" ? { sha256: data.sha256 } : {}),
       ...(data.next_start_line !== undefined ? { next_start_line: data.next_start_line } : {}),
     };
   }
@@ -267,6 +268,12 @@ export function previewData(kind: string, data: unknown): unknown {
       last_line: lastLine,
       total_bytes: data.total_bytes,
       truncated: data.truncated === true || cut,
+      // The whole-file hash must survive the compact preview: it is what the
+      // agent hands to project_edit_file as expected_sha256 (roadmap item 17).
+      ...(typeof data.sha256 === "string" ? { sha256: data.sha256, sha256_scope: "file" } : {}),
+      ...(typeof data.text_sha256 === "string" ? { text_sha256: data.text_sha256 } : {}),
+      ...(typeof data.mtime_ms === "number" ? { mtime_ms: data.mtime_ms } : {}),
+      ...(typeof data.size_bytes === "number" ? { size_bytes: data.size_bytes } : {}),
       ...(nextStart !== undefined ? { next_start_line: nextStart } : {}),
       preview,
       preview_truncated: cut,
@@ -472,6 +479,10 @@ const DEFAULT_HINTS: Record<string, string> = {
     "Policy refuses this command in every mode. Do not retry or rephrase; ask the user to run it manually if needed.",
   old_text_not_found: "Re-read the file with project_read_file, copy the exact text, retry.",
   old_text_ambiguous: "Add surrounding lines to old_text to make it unique, or set replace_all=1.",
+  stale_content:
+    "The file changed since you read it. Read it again with project_read_file, rebuild the patch against the current content and send the new sha256 as expected_sha256. Never replay the same edit unchanged.",
+  repeated_failure:
+    "This exact invocation already failed in this session. Read data.previous.stderr_tail, fix the cause, then change the command or its inputs. Pass retry_failed=1 only for a deliberate rerun of the identical command.",
   batch_failed: "Check data.atomic for rollback state, fix the failed item, resubmit the rest.",
   batch_partial_failure: "Fix or drop the failed items in data.responses, retry only those.",
   config_invalid: "Fix the named VENIRA_* setting or config value and restart; do not retry unchanged.",

@@ -69,6 +69,70 @@ export async function runDiagnosticsReadPlan($h: Harness): Promise<void> {
     explainUnknown.ok === true && explainUnknown.data?.matched === false,
     explainUnknown.data,
   );
+  // Roadmap item 17: the codes that make an agent loop must be diagnosable.
+  const explainRepeat = asEnvelope(
+    await call("project_explain_error", {
+      error_text:
+        "[repeated_failure] This exact invocation already failed in this session (exit code 1, 1 time(s)). The command was not run again.",
+    }),
+  );
+  check(
+    "explain_error_venira_repeated_failure",
+    explainRepeat.ok === true &&
+      explainRepeat.data?.matched === true &&
+      explainRepeat.data?.diagnoses?.[0]?.rule_id === "venira.repeated_failure" &&
+      (explainRepeat.data?.diagnoses?.[0]?.retry_hint ?? "").includes("identical"),
+    explainRepeat.data,
+  );
+  const explainStale = asEnvelope(
+    await call("project_explain_error", {
+      error_text:
+        "[stale_content] The file changed since you read it (current sha256 aabbccddeeff..., expected 1122334455...).",
+    }),
+  );
+  check(
+    "explain_error_venira_stale_content",
+    explainStale.ok === true &&
+      explainStale.data?.matched === true &&
+      explainStale.data?.diagnoses?.[0]?.rule_id === "venira.stale_content",
+    explainStale.data,
+  );
+  const explainDenied = asEnvelope(
+    await call("project_explain_error", {
+      error_text: "[command_denied] Blocked by deny.filesystem_root_delete: refuses to delete a filesystem root.",
+    }),
+  );
+  check(
+    "explain_error_venira_command_denied",
+    explainDenied.ok === true &&
+      explainDenied.data?.matched === true &&
+      explainDenied.data?.diagnoses?.[0]?.rule_id === "venira.command_denied",
+    explainDenied.data,
+  );
+  const explainShellMissing = asEnvelope(
+    await call("project_explain_error", {
+      error_text: '[shell_unavailable] Shell "pwsh" (pwsh) was not found, so the command did not run.',
+    }),
+  );
+  check(
+    "explain_error_venira_shell_unavailable",
+    explainShellMissing.ok === true &&
+      explainShellMissing.data?.matched === true &&
+      explainShellMissing.data?.diagnoses?.[0]?.rule_id === "venira.shell_unavailable",
+    explainShellMissing.data,
+  );
+  const explainOldText = asEnvelope(
+    await call("project_explain_error", {
+      error_text: "[old_text_not_found] old_text not found in src/app.ts.",
+    }),
+  );
+  check(
+    "explain_error_venira_old_text_not_found",
+    explainOldText.ok === true &&
+      explainOldText.data?.matched === true &&
+      explainOldText.data?.diagnoses?.[0]?.rule_id === "venira.old_text_not_found",
+    explainOldText.data,
+  );
   const githubEmptyPending = asEnvelope(
     await call("project_github_connect", { action: "poll", pending_id: "" }),
   );

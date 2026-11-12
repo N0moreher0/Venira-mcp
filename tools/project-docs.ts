@@ -30,7 +30,7 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
     about: "Read a text file, whole or by line range (start_line/end_line, 1-based; ranges[] for several disjoint ranges of one file).",
     use: "you need one file's content. When truncated, call again with start_line=next_start_line.",
     avoid: "you need 2+ files (project_read_batch) or only size/mtime (project_get_file_info).",
-    out: "text, first_line, last_line, total_bytes, truncated, next_start_line (when truncated). Missing path gives not_found.",
+    out: "text, first_line, last_line, total_bytes, truncated, next_start_line (when truncated). sha256 is the whole-file hash (sha256_scope: file), safe to send as expected_sha256; text_sha256 covers the returned text only. Missing path gives not_found.",
   },
   project_get_file_info: {
     about: "Return kind, size and modification time of a path.",
@@ -66,9 +66,9 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
   },
   project_edit_file: {
     about: "Replace exact text: old_text to new_text, or edits[] for several replacements in one file (edits[] wins).",
-    use: "you make a targeted change. old_text must match exactly once; replace_all=1 replaces every match. pass expected_sha256 to refuse stale content and get a verified re-read.",
+    use: "you make a targeted change. old_text must match exactly once; replace_all=1 replaces every match. pass expected_sha256 (project_read_file's whole-file sha256, or sha256_after from your last write) to refuse stale content and get a verified re-read.",
     avoid: "you rewrite the whole file (project_write_file) or change several files at once (project_edit_batch).",
-    out: "replacements, sha256_before, sha256_after, verified (when expected_sha256 is given). Failures: old_text_not_found, old_text_ambiguous (returns each match with line context).",
+    out: "replacements, sha256_before, sha256_after, verified (when expected_sha256 is given). Failures: old_text_not_found, old_text_ambiguous (returns each match with line context). stale_content: the file changed - read it again, rebuild the patch, send the new sha256.",
   },
   project_edit_batch: {
     about: "Apply edits across one or more files all-or-nothing. Each item takes edit_file arguments (relative_path, old_text, new_text, ...). The first failure rolls back every touched file from an automatic snapshot and skips the rest.",
@@ -94,7 +94,7 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
     about: "Run a shell command in the workspace (shell: powershell|cmd|bash, relative_cwd, timeout_ms). Default is background: returns run_id, poll project_shell_status. background=0 blocks until exit and returns stdout/stderr.",
     use: "you build, test, run git or install packages. Use background=0 for short commands whose output you need now.",
     avoid: "you read or edit files (file tools) or run a tiny JS calculation (project_execute_js).",
-    out: "run_id, kill_key, running, exit_code, timed_out, stdout/stderr (background=0) or stdout_tail/stderr_tail. ok=true only means it ran: read command_status/exit_code. approval_required: ask the user to approve, then retry once with approval_id.",
+    out: "run_id, kill_key, running, exit_code, timed_out, stdout/stderr (background=0) or stdout_tail/stderr_tail. ok=true only means it ran: read command_status/exit_code. approval_required: ask the user to approve, then retry once with approval_id. repeated_failure: the identical invocation already failed; read data.previous.stderr_tail, then change the command or pass retry_failed=1.",
   },
   project_shell_status: {
     about: "Return the state and output tail of a shell run. wait_seconds (0-30) waits up to that long for it to finish.",

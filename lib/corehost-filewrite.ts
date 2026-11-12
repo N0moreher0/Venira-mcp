@@ -37,8 +37,13 @@ export async function opWriteFile(
     if (current !== String(expectedSha).toLowerCase()) {
       throw errorWithData(
         "stale_content",
-        `sha256 hiện tại (${current.slice(0, 12)}…) khác expected_sha256. Hint: đọc lại file rồi thử lại.`,
-        { sha256: current || null, expected_sha256: String(expectedSha).toLowerCase() },
+        `The file changed since you read it (current sha256 ${current.slice(0, 12)}..., expected ${String(expectedSha).toLowerCase().slice(0, 12)}...).`,
+        {
+          sha256: current || null,
+          expected_sha256: String(expectedSha).toLowerCase(),
+          fresh_read_required: true,
+          next_action: "project_read_file",
+        },
       );
     }
   }
@@ -168,12 +173,13 @@ export async function opEditFile(
     );
   }
 
-  let content: string;
+  let fileBytes: Buffer;
   try {
-    content = await fs.readFile(absPath, "utf8");
+    fileBytes = await fs.readFile(absPath);
   } catch {
     throw new Error(`[not_found] File does not exist: ${args.relative_path}. Hint: create it with project_write_file first.`);
   }
+  let content: string = fileBytes.toString("utf8");
 
   // R2: detect BOM + EOL style of the file.
   const hadBom = content.startsWith("\ufeff");
@@ -186,9 +192,12 @@ export async function opEditFile(
   // helper to normalize incoming text line endings to the file's EOL
   const normalizeEol = (s: string) => s.replace(/\r\n|\r|\n/g, eol);
 
+  // Roadmap item 17: the guard hash is the hash of the file's raw bytes, so it
+  // matches project_read_file's `sha256` (whole file) and project_write_file's
+  // check. The BOM is part of the file and therefore part of the hash.
   let sha256Before = "";
   try {
-    sha256Before = crypto.createHash("sha256").update(Buffer.from(content, "utf8")).digest("hex");
+    sha256Before = crypto.createHash("sha256").update(fileBytes).digest("hex");
   } catch {
     /* best-effort */
   }
@@ -199,11 +208,13 @@ export async function opEditFile(
     if (sha256Before !== String(expectedSha2).toLowerCase()) {
       throw errorWithData(
         "stale_content",
-        `sha256 hiện tại (${sha256Before.slice(0, 12)}…) khác expected_sha256. Hint: đọc lại file rồi thử lại.`,
+        `The file changed since you read it (current sha256 ${sha256Before.slice(0, 12)}..., expected ${String(expectedSha2).toLowerCase().slice(0, 12)}...).`,
         {
           sha256: sha256Before || null,
           expected_sha256: String(expectedSha2).toLowerCase(),
-          mtime_ms: (await fs.stat(absPath)).mtimeMs,
+          fresh_read_required: true,
+          next_action: "project_read_file",
+          ...(await fs.stat(absPath).then((s) => ({ mtime_ms: s.mtimeMs })).catch(() => ({}))),
         },
       );
     }
@@ -281,10 +292,11 @@ export async function opEditFile(
     throw new Error(`[io_error] ${error instanceof Error ? error.message : String(error)}`);
   }
 
-  // Compute sha256 after write (before verification uses it)
+  // Compute sha256 after write (before verification uses it). The hash covers
+  // the bytes that were written, so it can be fed back as expected_sha256.
   let sha256After = "";
   try {
-    sha256After = crypto.createHash("sha256").update(Buffer.from(content, "utf8")).digest("hex");
+    sha256After = crypto.createHash("sha256").update(Buffer.from(finalContent, "utf8")).digest("hex");
   } catch {
     /* best-effort */
   }
@@ -294,8 +306,8 @@ export async function opEditFile(
   let verifiedSha = "";
   if (verifyMode) {
     try {
-      const verifyContent = await fs.readFile(absPath, "utf8");
-      const verifySha = crypto.createHash("sha256").update(Buffer.from(verifyContent, "utf8")).digest("hex");
+      const verifyBytes = await fs.readFile(absPath);
+      const verifySha = crypto.createHash("sha256").update(verifyBytes).digest("hex");
       verified = verifySha === sha256After;
       verifiedSha = verifySha;
     } catch {

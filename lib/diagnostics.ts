@@ -170,6 +170,70 @@ const RULES: Rule[] = [
     ],
   },
   {
+    id: "venira.repeated_failure",
+    title: "The identical shell invocation already failed",
+    confidence: "high",
+    pattern: /\[repeated_failure\]/i,
+    cause:
+      "This exact command, shell, cwd and inputs already failed in this session, so Venira did not run it again. " +
+      "The previous exit code and stderr tail are in the error payload (data.previous).",
+    fix: [
+      "Read data.previous.stderr_tail: it is the failure you would have reproduced.",
+      "Fix the cause, then change the command or its inputs - a different command, shell, cwd or input is a different invocation and runs normally.",
+      "Pass retry_failed=1 only when you deliberately want the identical command to run again after reading the previous error.",
+    ],
+    retry: "Do not rerun the identical command unchanged.",
+  },
+  {
+    id: "venira.stale_content",
+    title: "The file changed after you read it",
+    confidence: "high",
+    pattern: /\[stale_content\]/i,
+    cause:
+      "The expected_sha256 guard refused the write because the file changed since the read. The file was left untouched.",
+    fix: [
+      "Read the file again with project_read_file; its sha256 is the whole-file hash and is safe to send back as expected_sha256.",
+      "Rebuild the patch against the current content - never replay the same edit unchanged.",
+      "Drop expected_sha256 only when you deliberately want to edit whatever is on disk right now.",
+    ],
+    retry: "Re-read the file first, then retry the rebuilt patch with the new hash.",
+  },
+  {
+    id: "venira.command_denied",
+    title: "Shell policy refuses this command",
+    confidence: "high",
+    pattern: /\[command_denied\]/i,
+    cause: "The command matched a hard-deny rule of the shell policy and was not run in any mode.",
+    fix: [
+      "Do not retry and do not rephrase it to slip past the policy.",
+      "If the command is genuinely needed, ask the user to run it manually.",
+    ],
+  },
+  {
+    id: "venira.shell_unavailable",
+    title: "The shell binary is not installed",
+    confidence: "high",
+    pattern: /\[shell_unavailable\]/i,
+    cause: "The requested shell (powershell, pwsh, cmd, bash) could not be started, so the command never ran.",
+    fix: [
+      "Install the shell the response names (the error carries the install hint) and restart the MCP client so it is on the server's PATH.",
+      "Or pick another shell: project_shell_run accepts shell=powershell|pwsh|cmd|bash.",
+    ],
+    retry: "Do not retry unchanged: the binary is still missing.",
+  },
+  {
+    id: "venira.old_text_not_found",
+    title: "old_text was not found in the file",
+    confidence: "high",
+    pattern: /\[old_text_not_found\]|old_text not found/i,
+    cause: "The text to replace is not in the file any more - it moved, it changed, or the read was stale.",
+    fix: [
+      "Re-read the file and copy the exact text (watch the line endings and the indentation).",
+      "Extend old_text with surrounding context so it matches one place only.",
+    ],
+    retry: "Re-read the file; do not replay the same old_text.",
+  },
+  {
     id: "fs.enoent",
     title: "File or directory does not exist (ENOENT)",
     confidence: "high",

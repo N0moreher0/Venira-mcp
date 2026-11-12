@@ -250,6 +250,8 @@ All tools return the standard envelope (`ok`, `kind`, `data`, `hint`, `elapsed_m
 | `project_health` | Diagnostics: capability, queue, cache hit-rates, p50/p95, security limits notice, and `server.workspace_switching` (`enabled`, `allowed_roots`) |
 | `project_read_audit` | Read recent audit log rows |
 
+**Whole-file hashes.** `project_read_file` returns `sha256` = the hash of the **whole file** (`sha256_scope: "file"`), even when the call returned only a slice, and `text_sha256` = the hash of the text that was returned. `sha256` is therefore safe to send back as `expected_sha256`; `text_sha256` is not. The hash covers the raw bytes, so a file with a BOM round-trips. When a write or edit refuses a stale hash (`stale_content`), the file is left untouched and the response asks for a fresh read: re-read the file, rebuild the patch against the current content and send the new hash - never replay the same edit unchanged.
+
 **Write (mutating, pass `reason`)**
 
 | Tool | Purpose |
@@ -283,6 +285,8 @@ All tools return the standard envelope (`ok`, `kind`, `data`, `hint`, `elapsed_m
 | `project_shell_status` | Poll a running command (not queued, not audit-logged) |
 | `project_shell_cancel` | Kill a running command by `run_id` |
 | `project_shell_cancel_session` | Kill all shell runs in this session |
+
+**Repeated-failure guard.** A shell invocation is fingerprinted (normalized command, shell, resolved cwd and the non-secret inputs; `secret_env` contributes its names only) and the fingerprint is remembered per session when the run fails or times out. The identical invocation is then **not** run again: the call fails with `repeated_failure` and carries `data.previous` (exit code, timed-out flag, bounded stderr tail, failure count). Nothing is stored but the hash - never the command text, never a secret value - so a repeat with secrets is reported as "same command and inputs", never as an exact match of the secret values. Change the command, the shell, the cwd or the inputs and it runs normally; a deliberate rerun of the identical command is `retry_failed: 1`. A successful run clears the memory.
 
 **Choosing a shell on Windows.** `powershell` starts `powershell.exe` (5.1), which has no `&&` / `||` pipeline-chain operators; `pwsh` starts PowerShell 7+ (`winget install --id Microsoft.PowerShell`), which has them. `pwsh` must be on the `PATH` of the server process, so restart the MCP client after installing it. Policy treats both as the same PowerShell dialect: every segment of an `&&` / `||` chain is classified on its own, so a denied command after `&&` is still denied (`policy_adv_dialect_pwsh_chain_operators`). `pwsh` starts slower than `cmd`; set `VENIRA_DEFAULT_SHELL=pwsh` only if you want it for every call. A shell binary that is not installed fails with `[shell_unavailable]` and an install hint instead of returning exit code -1. In PowerShell an unquoted `(...)`, `@(...)` or `{...}` counts as a substitution the policy cannot inspect, so a command that carries one always asks for approval in policy-enabled modes, including `permissive`: PowerShell evaluates the group before the command runs, so `git status (Remove-Item -Recurse -Force $HOME)` would otherwise delete while looking like read-only git (`policy_adv_dialect_powershell_grouping_expressions`).
 
@@ -482,7 +486,7 @@ Failure:
 
 In `compact` mode, shortened payloads set `trimmed: true` and `truncated: true`; `summary` describes omitted content. For an otherwise unsupported large payload, `data.preview_text` contains a bounded JSON-text preview and `summary` reports the original size and shape. Large error messages or attached error data are also explicitly marked as trimmed. Use `full` when the complete payload is required.
 
-Common codes: `not_found`, `invalid_request`, `old_text_not_found`, `old_text_ambiguous`, `stale_content`, `path_escape`, `resource_limit`, `sensitive_result`, `unsupported`, `internal`.
+Common codes: `not_found`, `invalid_request`, `old_text_not_found`, `old_text_ambiguous`, `stale_content`, `repeated_failure`, `command_denied`, `shell_unavailable`, `path_escape`, `resource_limit`, `sensitive_result`, `unsupported`, `internal`.
 
 ## 9. Agent instructions (paste into `AGENTS.md` / `CLAUDE.md`)
 
@@ -505,7 +509,7 @@ Venira MCP rules:
 npm run build       # tsc → dist/  (verify launches dist/server.js, so rebuild before verifying)
 npm run smoke       # in-process sanity check
 npm run doctor      # 15 preflight checks
-npm run verify      # 518 behavioural + security checks
+npm run verify      # 528 behavioural + security checks
 npm run coverage:shell  # V8 coverage for lib/shell-*.ts (report only, no thresholds)
 npm run bench:mcp   # end-to-end numbers
 ```

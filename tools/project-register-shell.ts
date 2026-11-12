@@ -29,7 +29,8 @@ export function registerShellTools(server: McpServer, deps: ShellToolsDeps): voi
           "Pass background=0 for a foreground run: the call blocks until the command exits and returns the final stdout/stderr. " +
           "For commands that overwrite/delete existing workspace source files, create and verify a scoped project_snapshot first; prefer project file tools for targeted edits. " +
           "Commands pass a policy gate: risky ones return an approval_required error with a pending approval_id; " +
-          "catastrophic ones are denied outright. Named overrides require operator allowlisting and a per-call reason.",
+          "catastrophic ones are denied outright. Named overrides require operator allowlisting and a per-call reason. " +
+          "An invocation that already failed in this session is not run again: it returns repeated_failure with the previous exit code and stderr tail; change the command or pass retry_failed=1 to rerun it deliberately.",
         "Shell run",
         {
           use_when:
@@ -87,6 +88,16 @@ export function registerShellTools(server: McpServer, deps: ShellToolsDeps): voi
           .max(1)
           .optional()
           .describe("1 = evaluate policy only; nothing runs, no approval is created (default 0)."),
+        retry_failed: z
+          .number()
+          .int()
+          .min(0)
+          .max(1)
+          .optional()
+          .describe(
+            "1 = run again although the identical invocation already failed here (you read the previous error and deliberately retry). " +
+              "Default 0: a repeat is refused with repeated_failure and the previous stderr tail.",
+          ),
         override: z
           .enum(["ALLOW_GIT_PUSH", "ALLOW_ENV_READ"])
           .optional()

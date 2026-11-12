@@ -14,7 +14,13 @@ import { PLATFORM } from "./workspace.js";
 import { checkpointBeforeRestore, type RestoreCheckpoint } from "./restore-checkpoint.js";
 import { assertSecretUsable, getSecretValueSync, markSecretUsed, redactSecretValues } from "./secrets.js";
 import { parseBackgroundFlag } from "./env.js";
-import { resolveInWorkspace, type RustResponse } from "./corehost-common.js";
+import { errorWithData, resolveInWorkspace, type RustResponse } from "./corehost-common.js";
+import {
+  clearShellFailure,
+  findShellRepeat,
+  fingerprintShellInvocation,
+  recordShellFailure,
+} from "./shell-repeat.js";
 import { isSpawnNotFound, shellUnavailableMessage } from "./shell-unavailable.js";
 import { shellRuns, pruneShellRuns, TAIL_LIMIT, MAX_OUTPUT_BYTES, trimTail, appendCapped, buildShellEnv, normalizeSecretEnv, killTree, SHELL_EXIT_EARLY, SHELL_MAX_TIMEOUT_MS, SHELL_TIMEOUT_POLICY, type ShellRun } from "./corehost-shell-state.js";
 
@@ -75,6 +81,19 @@ export async function opShellRun(
   const runId = crypto.randomUUID().slice(0, 12);
   const killKey = crypto.randomBytes(16).toString("hex");
   const secretNames = normalizeSecretEnv(args.secret_env);
+  const timeoutMs = clampTimeout(args.timeout_ms);
+  const foreground = !parseBackgroundFlag(args.background);
+  // Roadmap item 17: the fingerprint of this invocation. It carries the
+  // normalized command, the shell, the resolved cwd and the non-secret
+  // inputs - never a secret value.
+  const fingerprint = fingerprintShellInvocation({
+    command,
+    shell,
+    cwd,
+    secretNames,
+    timeoutMs,
+    background: !foreground,
+  });
   let override: ShellOverride | undefined;
   if (args.override !== undefined) {
     if (!isShellOverride(args.override)) {
@@ -198,6 +217,48 @@ export async function opShellRun(
     );
   }
 
+  // -------------------------------------------------------------------------
+  // 1b. Repeated-failure guard (roadmap item 17).
+  //
+  // The identical invocation already failed in this session. Running it again
+  // would only reproduce the same error, so the caller gets the previous
+  // evidence instead. A deliberate rerun is possible with retry_failed=1, and
+  // any change to the command, the shell, the cwd or the inputs makes it a
+  // different invocation that runs normally.
+  // -------------------------------------------------------------------------
+  const intentionalRetry =
+    args.retry_failed === true || args.retry_failed === 1 || args.retry_failed === "1";
+  if (!intentionalRetry) {
+    const repeat = findShellRepeat(sessionId, fingerprint);
+    if (repeat) {
+      throw errorWithData(
+        "repeated_failure",
+        `This exact invocation already failed in this session ` +
+          `(exit code ${repeat.exit_code ?? "none"}${repeat.timed_out ? ", timed out" : ""}, ` +
+          `${repeat.failures} time(s)). The command was not run again.`,
+        {
+          repeat_detected: true,
+          ran: false,
+          match: repeat.secret_env.length > 0 ? "command_and_inputs" : "exact",
+          previous: {
+            exit_code: repeat.exit_code,
+            timed_out: repeat.timed_out,
+            stderr_tail: repeat.stderr_tail,
+            failed_at: repeat.failed_at,
+            failures: repeat.failures,
+          },
+          ...(repeat.secret_env.length > 0 ? { secret_env: repeat.secret_env } : {}),
+          ...(repeat.secret_env.length > 0
+            ? { note: "Secret values are not compared: the fingerprint covers the secret names only." }
+            : {}),
+          next_step:
+            "Read previous.stderr_tail, fix the cause, then change the command or its inputs. " +
+            "Pass retry_failed=1 only when you deliberately want the identical command to run again.",
+        },
+      );
+    }
+  }
+
   for (const name of secretNames) assertSecretUsable(name);
 
   if (decision.tier === "ask") {
@@ -306,8 +367,6 @@ export async function opShellRun(
         `Hint: create a narrower project_snapshot of the files yourself, or ask the user to approve the command.`,
     );
   }
-  const timeoutMs = clampTimeout(args.timeout_ms);
-  const foreground = !parseBackgroundFlag(args.background);
   const { file, args: spawnArgs } = shellCommandFor(shell, command);
 
   // Secrets are decrypted only now (post-approval) and handed to the child
@@ -383,6 +442,34 @@ export async function opShellRun(
   shellRuns.set(runId, run);
   pruneShellRuns();
 
+  // Roadmap item 17: remember a failure so the identical invocation is not
+  // repeated silently. A success clears the memory again. The outcome is
+  // recorded once, whichever of 'close' / 'error' fires last.
+  //
+  // A missing shell binary is not remembered: the command never ran, the
+  // error already carries the install hint, and remembering it would hide
+  // that hint behind a `repeated_failure` on the next call.
+  let outcomeRecorded = false;
+  let shellMissing = false;
+  const noteOutcome = () => {
+    if (outcomeRecorded) return;
+    outcomeRecorded = true;
+    if (shellMissing) {
+      clearShellFailure(sessionId, fingerprint);
+      return;
+    }
+    if (run.exit_code !== 0 || run.timed_out) {
+      recordShellFailure(sessionId, fingerprint, {
+        exit_code: run.exit_code,
+        timed_out: run.timed_out,
+        stderr_tail: redactSecretValues(run.stderr_tail),
+        secretNames,
+      });
+    } else {
+      clearShellFailure(sessionId, fingerprint);
+    }
+  };
+
   child.stdout?.on("data", (chunk: Buffer) => {
     const text = chunk.toString("utf8");
     const out = appendCapped(run.stdout_full, text, MAX_OUTPUT_BYTES);
@@ -437,6 +524,7 @@ export async function opShellRun(
     // tails forever — and could even poison the shell cache with empty output.
     run.stdout_tail = trimTail(run.stdout_full);
     run.stderr_tail = trimTail(run.stderr_full);
+    noteOutcome();
     if (run.exit_code === 0 && run.stdout_full.length < 10000) {
       setShellCache(
         command,
@@ -451,6 +539,7 @@ export async function opShellRun(
   });
   child.on("error", (error) => {
     spawnError = error;
+    shellMissing = isSpawnNotFound(error);
     // Foreground results return stderr_full, so the failure must be there too, not only in the tail.
     run.stderr_full = appendCapped(run.stderr_full, `[spawn error] ${error.message}\n`, MAX_OUTPUT_BYTES).text;
     run.running = false;
@@ -463,6 +552,7 @@ export async function opShellRun(
       clearTimeout(run.timer);
       run.timer = null;
     }
+    noteOutcome();
   });
 
   if (timeoutMs > 0) {
@@ -527,6 +617,7 @@ export async function opShellRun(
   if (foreground) {
     run.stdout_tail = trimTail(run.stdout_full);
     run.stderr_tail = trimTail(run.stderr_full);
+    noteOutcome();
     if (run.exit_code === 0 && run.stdout_full.length < 10000) {
       setShellCache(
         command,

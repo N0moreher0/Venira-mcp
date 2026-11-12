@@ -1,11 +1,11 @@
 {
   "expert": {
     "tool_count": 44,
-    "total_bytes": 67975
+    "total_bytes": 68688
   },
   "default": {
     "tool_count": 33,
-    "total_bytes": 50690
+    "total_bytes": 51403
   },
   "tools": {
     "project_cache_clear": 708,
@@ -21,7 +21,7 @@
     "project_detect_harnesses": 484,
     "project_diff_files": 985,
     "project_edit_batch": 2550,
-    "project_edit_file": 2485,
+    "project_edit_file": 2652,
     "project_execute_js": 1904,
     "project_explain_error": 1149,
     "project_get_file_info": 576,
@@ -39,14 +39,14 @@
     "project_pr_reopen": 1006,
     "project_read_audit": 1201,
     "project_read_batch": 5098,
-    "project_read_file": 1972,
+    "project_read_file": 2100,
     "project_recent_files": 1067,
     "project_search": 2537,
     "project_secret": 2189,
     "project_selective_search": 1636,
     "project_shell_cancel": 701,
     "project_shell_cancel_session": 453,
-    "project_shell_run": 2777,
+    "project_shell_run": 3195,
     "project_shell_status": 824,
     "project_snapshot": 2825,
     "project_symbol_references": 1357,

@@ -975,6 +975,48 @@ export async function runShellPolicy(
       timedStatus?.data?.running === false,
     timedStatus?.data,
   );
+
+  // Roadmap item 17: the repeated-failure guard (tool level) and the whole-file
+  // hash that makes the stale-content guard usable.
+  const missingRead =
+    shellFor === "powershell" ? "Get-Content missing.txt" : "cat missing.txt";
+  const failingOnce = asEnvelope(
+    await call("project_shell_run", {
+      command: missingRead,
+      shell: shellFor,
+      background: 0,
+    }),
+  );
+  const failingTwice = asEnvelope(
+    await call("project_shell_run", {
+      command: missingRead,
+      shell: shellFor,
+      background: 0,
+    }),
+  );
+  check(
+    "policy_repeated_failure_is_refused_with_the_previous_evidence",
+    failingOnce?.ok === true &&
+      failingTwice?.ok === false &&
+      failingTwice?.error?.code === "repeated_failure" &&
+      failingTwice?.data?.ran === false &&
+      typeof failingTwice?.data?.previous?.exit_code === "number",
+    {
+      first: failingOnce?.error?.code ?? failingOnce?.command_status,
+      second: failingTwice?.error,
+      previous: failingTwice?.data?.previous,
+    },
+  );
+  const readHash = asEnvelope(
+    await call("project_read_file", { relative_path: "package.json" }),
+  );
+  check(
+    "read_file_reports_the_whole_file_hash",
+    typeof readHash?.data?.sha256 === "string" &&
+      readHash?.data?.sha256_scope === "file" &&
+      typeof readHash?.data?.text_sha256 === "string",
+    { keys: Object.keys(readHash?.data ?? {}) },
+  );
   return {
     shellFor,
     asEnvelope,
