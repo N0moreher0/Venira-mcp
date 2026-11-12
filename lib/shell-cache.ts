@@ -229,6 +229,14 @@ const READ_ONLY_PROGRAMS = new Set([
   "rg", "ripgrep", "fd", "fdfind", "ls", "dir", "pwd", "cd", "cat", "head", "tail", "type",
   "get-content", "gc", "echo", "write-output", "whoami", "hostname", "date", "time", "ver",
   "uname", "where", "which", "stat", "wc", "findstr", "grep", "find", "tree",
+  // PowerShell read-only cmdlets (lowercased by the parser); the -Wait flag is
+  // excluded above so a live tailing Get-Content still runs.
+  "get-date", "get-childitem", "get-item", "get-location", "get-itemproperty",
+  "get-process", "get-service", "get-alias", "get-command", "get-help",
+  "get-variable", "get-culture", "get-service", "get-uptime",
+  "write-host", "write-verbose", "write-debug", "write-warning", "write-error",
+  "out-string", "format-list", "format-table", "select-object", "sort-object",
+  "measure-command", "test-path", "test-connection", "resolve-path",
 ]);
 
 const READ_ONLY_VERSION = new Set(["node", "npm", "npx", "yarn", "pnpm", "cargo", "rustc", "go", "python", "python3", "py"]);
