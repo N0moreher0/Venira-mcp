@@ -94,7 +94,7 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
     about: "Run a shell command in the workspace (shell: powershell|cmd|bash, relative_cwd, timeout_ms). Default is background: returns run_id, poll project_shell_status. background=0 blocks until exit and returns stdout/stderr.",
     use: "you build, test, run git or install packages. Use background=0 for short commands whose output you need now.",
     avoid: "you read or edit files (file tools) or run a tiny JS calculation (project_execute_js).",
-    out: "run_id, kill_key, running, exit_code, timed_out, stdout/stderr (background=0) or stdout_tail/stderr_tail. ok=true only means it ran: read command_status/exit_code. approval_required: ask the user to approve, then retry once with approval_id. repeated_failure: the identical invocation already failed; read data.previous.stderr_tail, then change the command or pass retry_failed=1.",
+    out: "run_id, kill_key, running, exit_code, timed_out, stdout/stderr (background=0) or stdout_tail/stderr_tail. ok=true only means it ran: read command_status/exit_code. shell_path/shell_kind name the binary that ran it (on Windows bash may be the WSL launcher). approval_required: ask the user to approve, then retry once with approval_id. repeated_failure: the identical invocation already failed; read data.previous.stderr_tail, then change the command or pass retry_failed=1.",
   },
   project_shell_status: {
     about: "Return the state and output tail of a shell run. wait_seconds (0-30) waits up to that long for it to finish.",

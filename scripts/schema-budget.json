@@ -1,11 +1,11 @@
 {
   "expert": {
     "tool_count": 44,
-    "total_bytes": 68688
+    "total_bytes": 68781
   },
   "default": {
     "tool_count": 33,
-    "total_bytes": 51403
+    "total_bytes": 51496
   },
   "tools": {
     "project_cache_clear": 708,
@@ -46,7 +46,7 @@
     "project_selective_search": 1636,
     "project_shell_cancel": 701,
     "project_shell_cancel_session": 453,
-    "project_shell_run": 3195,
+    "project_shell_run": 3288,
     "project_shell_status": 824,
     "project_snapshot": 2825,
     "project_symbol_references": 1357,

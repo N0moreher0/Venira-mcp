@@ -13,7 +13,12 @@
     },
     "lib/shell-dialect.ts": {
       "lines": 70,
-      "branches": 87,
+      "branches": 88,
+      "functions": 94
+    },
+    "lib/shell-invocation.ts": {
+      "lines": 79,
+      "branches": 69,
       "functions": 94
     },
     "lib/shell-parser.ts": {
@@ -62,7 +67,7 @@
       "functions": 94
     },
     "lib/shell-policy-stats.ts": {
-      "lines": 82,
+      "lines": 81,
       "branches": 94,
       "functions": 94
     },
@@ -82,7 +87,7 @@
       "functions": 79
     },
     "lib/shell-repeat.ts": {
-      "lines": 83,
+      "lines": 84,
       "branches": 90,
       "functions": 94
     },

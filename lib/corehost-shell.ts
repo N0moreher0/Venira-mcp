@@ -22,42 +22,18 @@ import {
   recordShellFailure,
 } from "./shell-repeat.js";
 import { isSpawnNotFound, shellUnavailableMessage } from "./shell-unavailable.js";
+import {
+  buildShellInvocation,
+  decodeShellOutput,
+  defaultShellForPlatform as hostDefaultShell,
+  resolveShellBinary,
+  shellRuntimeHint,
+  type ShellKind,
+} from "./shell-invocation.js";
 import { shellRuns, pruneShellRuns, TAIL_LIMIT, MAX_OUTPUT_BYTES, trimTail, appendCapped, buildShellEnv, normalizeSecretEnv, killTree, SHELL_EXIT_EARLY, SHELL_MAX_TIMEOUT_MS, SHELL_TIMEOUT_POLICY, type ShellRun } from "./corehost-shell-state.js";
 
 function defaultShellForPlatform(): string {
-  // OPTIMIZATION: cmd.exe starts ~99% faster than PowerShell on Windows
-  // (8ms vs 2300ms). Most agent commands work in both shells.
-  // Users can override with VENIRA_DEFAULT_SHELL=powershell (5.1) or pwsh (7+) if needed.
-  if (PLATFORM === "win32") return "cmd";
-  // macOS: respect $SHELL (zsh/bash); Linux: fall back to bash/zsh.
-  if (process.env.SHELL && process.env.SHELL !== "") {
-    const base = process.env.SHELL.split("/").pop();
-    if (base) return base;
-  }
-  return "bash";
-}
-
-function shellCommandFor(shell: string, command: string): { file: string; args: string[] } {
-  switch (shell) {
-    case "powershell":
-      return { file: "powershell.exe", args: ["-NoProfile", "-NonInteractive", "-Command", command] };
-    case "pwsh":
-      // PowerShell 7+ (cross-platform): supports `&&` / `||` pipeline chains, unlike Windows PowerShell 5.1.
-      return { file: "pwsh", args: ["-NoProfile", "-NonInteractive", "-Command", command] };
-    case "cmd":
-      return { file: "cmd.exe", args: ["/c", command] };
-    case "bash":
-      return { file: "bash", args: ["-c", command] };
-    case "sh":
-      return { file: "sh", args: ["-c", command] };
-    case "zsh":
-      return { file: "zsh", args: ["-c", command] };
-    case "fish":
-      return { file: "fish", args: ["-c", command] };
-    default:
-      const fallback = defaultShellForPlatform();
-      return shellCommandFor(fallback, command);
-  }
+  return hostDefaultShell();
 }
 
 function clampTimeout(value: unknown): number {
@@ -367,7 +343,13 @@ export async function opShellRun(
         `Hint: create a narrower project_snapshot of the files yourself, or ask the user to approve the command.`,
     );
   }
-  const { file, args: spawnArgs } = shellCommandFor(shell, command);
+  // Roadmap item 15: the invocation carries the OS-specific fix-ups (cmd
+  // verbatim arguments, the PowerShell exit-code wrapper). The policy, the
+  // audit row and the approval binding still describe the user's command.
+  const invocation = buildShellInvocation(shell, command);
+  const { file, args: spawnArgs } = invocation;
+  const binary = resolveShellBinary(shell);
+  const shellKind: ShellKind = binary.kind;
 
   // Secrets are decrypted only now (post-approval) and handed to the child
   // through the environment: the command string stays free of values.
@@ -398,6 +380,9 @@ export async function opShellRun(
       env: buildShellEnv(secretEnvValues),
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
+      // cmd.exe does not understand Node's argument escaping: the command has
+      // to reach the OS exactly as the user wrote it (roadmap item 15).
+      ...(invocation.verbatim ? { windowsVerbatimArguments: true } : {}),
       // POSIX: own process group so a timeout/cancel can kill grandchildren.
       detached: PLATFORM !== "win32",
     });
@@ -451,6 +436,20 @@ export async function opShellRun(
   // that hint behind a `repeated_failure` on the next call.
   let outcomeRecorded = false;
   let shellMissing = false;
+  let outputDecoded = false;
+  /** Decode a UTF-16 stream (the WSL launcher) and strip stray NUL bytes. */
+  const decodeRunOutput = () => {
+    const out = decodeShellOutput(run.stdout_full);
+    const err = decodeShellOutput(run.stderr_full);
+    if (out.decoded) {
+      run.stdout_full = out.text;
+      outputDecoded = true;
+    }
+    if (err.decoded) {
+      run.stderr_full = err.text;
+      outputDecoded = true;
+    }
+  };
   const noteOutcome = () => {
     if (outcomeRecorded) return;
     outcomeRecorded = true;
@@ -522,6 +521,7 @@ export async function opShellRun(
     // On Windows 'exit' can fire before the last 'data' events, so trimming at
     // 'exit' (or right after spawn on the async path) used to freeze empty
     // tails forever — and could even poison the shell cache with empty output.
+    decodeRunOutput();
     run.stdout_tail = trimTail(run.stdout_full);
     run.stderr_tail = trimTail(run.stderr_full);
     noteOutcome();
@@ -611,10 +611,19 @@ export async function opShellRun(
     throw new Error(shellUnavailableMessage(shell, file, PLATFORM));
   }
 
+  // The WSL launcher without an installed distribution answers with its own
+  // message instead of the command's output (roadmap item 15).
+  const shellHint = shellRuntimeHint(
+    shell,
+    shellKind,
+    `${run.stdout_full}\n${run.stderr_full}`,
+  );
+
   // Foreground: output is final now (we awaited 'close'), so trim tails and
   // cache here. The async path does the same in the 'close' handler instead —
   // trimming here would freeze empty tails before the child produced output.
   if (foreground) {
+    decodeRunOutput();
     run.stdout_tail = trimTail(run.stdout_full);
     run.stderr_tail = trimTail(run.stderr_full);
     noteOutcome();
@@ -660,6 +669,10 @@ export async function opShellRun(
             }
           : {}),
         ...(secretNames.length > 0 ? { secret_env: secretNames } : {}),
+        ...(binary.path ? { shell_path: binary.path } : {}),
+        shell_kind: shellKind,
+        ...(outputDecoded ? { output_decoded: true } : {}),
+        ...(shellHint ? { shell_hint: shellHint } : {}),
         ...(checkpoint
           ? {
               checkpoint: {
