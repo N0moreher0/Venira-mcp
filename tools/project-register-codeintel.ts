@@ -138,7 +138,7 @@ export function registerCodeIntelTools(server: McpServer, deps: CodeIntelDeps): 
           speed_profile:
             "medium; bounded walk (<=5000 files / 64 MB), parser-lite line scan, 5 s index cache invalidated on writes. No network.",
           output_kind:
-            "dependency_graph: nodes[] {id, type, language, loc}, edges[] {from, to, type (import|extends|implements|references), confidence, line, via}, external[] {id, used_by}, unresolved[], stats, truncated; format=dot|mermaid returns data.graph.",
+            "dependency_graph: nodes[] {id, type, language, loc}, edges[] {from, to, type (import|extends|implements|references), confidence, line, via}, external[] {id, used_by} (top 50), unresolved[] (top 10), stats {externals, unresolved_imports}, limited, truncated; format=dot|mermaid returns data.graph.",
           batch_safe: true,
         },
         { readOnlyHint: true, idempotentHint: true, openWorldHint: false },

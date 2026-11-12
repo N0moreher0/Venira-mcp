@@ -82,6 +82,49 @@ export async function runConsistency(
   );
 
   // -------------------------------------------------------------------------
+  // 1b. dependency_graph: the side lists are capped and counted
+  // -------------------------------------------------------------------------
+  await fs.mkdir(path.join(dir, "many-externals"), { recursive: true });
+  await Promise.all(
+    Array.from({ length: 60 }, (_, i) =>
+      fs.writeFile(
+        path.join(dir, "many-externals", `pkg-${i}.ts`),
+        `import "venira-verify-pkg-${i}";\nexport const v${i} = ${i};\n`,
+      ),
+    ),
+  );
+  const manyGraph = asEnvelope(
+    await call("project_dependency_graph", {
+      kind: "files",
+      relative_path: `${dir}/many-externals`,
+      depth: 3,
+      include_external: 1,
+      max_nodes: 200,
+      max_edges: 500,
+    }),
+  );
+  const graphExternals = (manyGraph.data?.external ?? []) as unknown[];
+  const graphUnresolved = (manyGraph.data?.unresolved ?? []) as unknown[];
+  check(
+    "dependency_graph_caps_its_side_lists_and_counts_them",
+    manyGraph.ok === true &&
+      graphExternals.length === 50 &&
+      Number(manyGraph.data?.stats?.externals ?? 0) >= 60 &&
+      graphUnresolved.length <= 10 &&
+      Number(manyGraph.data?.stats?.unresolved_imports ?? 0) >=
+        graphUnresolved.length &&
+      manyGraph.data?.limited === true &&
+      manyGraph.limited === true,
+    {
+      externals: graphExternals.length,
+      stats_externals: manyGraph.data?.stats?.externals,
+      unresolved: graphUnresolved.length,
+      stats_unresolved: manyGraph.data?.stats?.unresolved_imports,
+      limited: manyGraph.data?.limited,
+    },
+  );
+
+  // -------------------------------------------------------------------------
   // 2. symbol_references: the scan cap and the returned cap are different
   // -------------------------------------------------------------------------
   await fs.writeFile(

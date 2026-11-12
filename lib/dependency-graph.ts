@@ -56,6 +56,12 @@ type BuiltEdges = {
 
 const CONFIDENCE_RANK: Record<EdgeConfidence, number> = { exact: 0, likely: 1, possible: 2 };
 
+// Roadmap item 15 (P2): the side lists of the graph are capped and counted.
+// The list shows the most useful few; `stats` holds the full count, so a cut
+// is visible instead of silent.
+const MAX_EXTERNAL_LIST = 50;
+const MAX_UNRESOLVED_LIST = 10;
+
 function worseConfidence(a: EdgeConfidence, b: EdgeConfidence): EdgeConfidence {
   return CONFIDENCE_RANK[a] >= CONFIDENCE_RANK[b] ? a : b;
 }
@@ -447,12 +453,19 @@ export async function buildDependencyGraph(
     };
   });
 
-  const external = includeExternal
+  // Roadmap item 15 (P2): the two side lists were the token-heavy part of
+  // the payload and neither said when it had cut something. Both are now
+  // short, sorted by usefulness, and counted: the list shows the top few,
+  // `stats` says how many there really are, and `limited` marks the cut.
+  const externalAll = includeExternal
     ? [...built.externals.values()]
         .map((entry) => ({ id: entry.id, used_by: entry.usedBy.size }))
         .sort((a, b) => b.used_by - a.used_by || a.id.localeCompare(b.id))
-        .slice(0, 200)
     : [];
+  const external = externalAll.slice(0, MAX_EXTERNAL_LIST);
+  const unresolvedAll = built.unresolved;
+  const unresolved = unresolvedAll.slice(0, MAX_UNRESOLVED_LIST);
+  const limited = external.length < externalAll.length || unresolved.length < unresolvedAll.length;
 
   const data = {
     root: index.startRel || ".",
@@ -461,14 +474,18 @@ export async function buildDependencyGraph(
     nodes,
     edges,
     external,
-    unresolved: built.unresolved.slice(0, 50),
+    unresolved,
     stats: {
       files_scanned: index.filesScanned,
       files_skipped: index.filesSkipped,
       edges: edges.length,
+      // The full counts: the lists above are the top few, not everything.
+      externals: externalAll.length,
+      unresolved_imports: unresolvedAll.length,
       duration_ms: Date.now() - started,
       cache,
     },
+    ...(limited ? { limited: true } : {}),
     truncated,
     next_cursor: null,
   };
@@ -477,6 +494,9 @@ export async function buildDependencyGraph(
     truncated,
     ...(truncated
       ? { hint: "Graph truncated at max_nodes/max_edges/files. Hint: narrow with relative_path, lower depth, or raise max_nodes/max_edges." }
+      : {}),
+    ...(limited && !truncated
+      ? { hint: `The external[] and unresolved[] lists are capped (${MAX_EXTERNAL_LIST} / ${MAX_UNRESOLVED_LIST}); stats.externals and stats.unresolved_imports hold the full counts.` }
       : {}),
   };
 }

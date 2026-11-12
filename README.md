@@ -287,6 +287,8 @@ All tools return the standard envelope (`ok`, `kind`, `data`, `hint`, `elapsed_m
 
 **`change_impact` says what it could not resolve.** `unresolved[]` holds the **seeds** that did not resolve (the symbol is not declared, or the name is ambiguous in N files) with a `next_step`; the graph-wide unresolved imports are only counted (`stats.unresolved_imports`), because they say nothing about the seeds and cost tokens on every call.
 
+**The graph's side lists are short and counted.** `project_dependency_graph` returns the 50 most used `external[]` entries and the 10 first `unresolved[]` ones; `stats.externals` and `stats.unresolved_imports` hold the full counts, and `limited: true` says that a list was cut.
+
 **Shell (async, policy-gated)**
 
 | Tool | Purpose |

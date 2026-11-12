@@ -176,7 +176,7 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
     about: "Build the import and reference graph for TypeScript/JavaScript, Python, Rust, Go, Java and Kotlin. format: json, dot or mermaid.",
     use: "you want module structure or what a subtree depends on. Narrow with relative_path, depth, languages.",
     avoid: "you need usages of one symbol (project_symbol_references) or the impact of an edit (project_change_impact).",
-    out: "nodes[], edges[] {from, to, type, confidence}, external[], unresolved[], stats, truncated. dot and mermaid return data.graph.",
+    out: "nodes[], edges[] {from, to, type, confidence}, external[] (top 50), unresolved[] (top 10), stats {externals, unresolved_imports}, limited, truncated. dot and mermaid return data.graph.",
   },
   project_change_impact: {
     about: "List the files and symbols affected by changing given files or symbols (direction: dependents, dependencies or both). At least one of files/symbols; a symbol seed takes {name, relative_path} (file is an alias).",
