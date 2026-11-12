@@ -264,13 +264,13 @@ All tools return the standard envelope (`ok`, `kind`, `data`, `hint`, `elapsed_m
 |---|---|
 | `project_write_file` | Create/overwrite/append; `expected_sha256` guards blind overwrites |
 | `project_edit_file` | Replace `old_text`→`new_text`; `edits[]` (up to 64); fuzzy edit opt-in |
-| `project_edit_batch` | Multiple edits; stops at first failure and attempts checkpoint rollback. Check `data.atomic` and `data.rollback_succeeded`; snapshot failure/incompleteness or a partial restore means changes may remain. |
+| `project_edit_batch` | Multiple edits; stops at first failure and attempts checkpoint rollback. Check `data.atomic` and `data.rollback_succeeded`; snapshot failure/incompleteness or a partial restore means changes may remain. A batch that rolled back cleanly removes its own checkpoint (`data.checkpoint_deleted: true`), so a failed attempt does not eat a `VENIRA_SNAPSHOT_KEEP` slot; a **failed** rollback keeps the checkpoint - it is the recovery path. |
 | `project_create` | Create a directory (missing parents are created; use `project_write_file` for file content) |
 | `project_delete_path` | Delete file/dir; **not undoable** |
 
 **Checkpoints (git-free rollback)**
 
-`project_snapshot` — `create`/`list`/`restore`/`delete`. Content-addressed, deduplicated, atomic per-file restore.
+`project_snapshot` — `create`/`list`/`restore`/`delete`. Content-addressed, deduplicated, atomic per-file restore. The id carries the **local** timestamp (`snap-20261113-001500-3f9ac2`); the exact instant is `created_at_ms` (epoch milliseconds).
 
 **Code intelligence**
 
@@ -282,6 +282,10 @@ All tools return the standard envelope (`ok`, `kind`, `data`, `hint`, `elapsed_m
 | `project_selective_search` | Multi-query search with AND/NOT + fuzzy scoring |
 | `project_dependency_graph` | TS/JS/Python/Rust/Go/Java/Kotlin import/symbol graph (JSON/DOT/Mermaid) |
 | `project_change_impact` | "What breaks if I edit this?" — bounded reverse/forward closure |
+
+**Two caps, two names.** `project_symbol_references` has `max_references` (how many references come back - the token bill, default 100) and `limit` (how many workspace hits are scanned - the work, default: `max_references`). The result says which one bit: `count` (found), `returned`, `omitted`, `scan_limit` and `limited`.
+
+**`change_impact` says what it could not resolve.** `unresolved[]` holds the **seeds** that did not resolve (the symbol is not declared, or the name is ambiguous in N files) with a `next_step`; the graph-wide unresolved imports are only counted (`stats.unresolved_imports`), because they say nothing about the seeds and cost tokens on every call.
 
 **Shell (async, policy-gated)**
 
@@ -490,7 +494,11 @@ Failure:
 { "ok": false, "status": "failed", "error": { "code": "not_found", "message": "…", "retryable": false }, "hint": "Check with project_list_files first", "next_actions": [{ "tool": "project_list_files", "arguments": { "relative_path": "." } }] }
 ```
 
-`ok` describes the tool operation. For `project_shell_run`, a command that ran and exited non-zero still has `ok: true`; `command_status: "failed"` and `hint` report the command outcome. A running or cancelled command reports `command_status: "running"` or `"cancelled"`. A read batch with failed items reports top-level `ok: false`, `status: "partial"`, and `error.code: "batch_partial_failure"`; inspect `data.responses` for each result.
+`ok` describes the tool operation. For `project_shell_run`, a command that ran and exited non-zero still has `ok: true`, but the envelope `status` names the command: `completed`, `failed`, `running`, `cancelled` (or `unknown` when the shell never reported an exit code). `command_status` repeats the same outcome in the shell vocabulary (`succeeded` / `failed` / `running` / `cancelled`) and `hint` says what to do next. A read batch with failed items reports top-level `ok: false`, `status: "partial"`, and `error.code: "batch_partial_failure"`; inspect `data.responses` for each result.
+
+**Timestamps and ordering.** Every timestamp a tool reports is epoch **milliseconds** and says so in its field name (`started_at_ms`, `completed_at_ms`, `created_at_ms`, `timestamp_ms`); the only exception is the `since_unix` filter of `project_read_audit`, which takes seconds. Every "recent list" reads **newest first**: the audit rows, the checkpoints and the trace buffer.
+
+**Counts vs. caps.** A tool that caps a list says so: `count` is what was found, `returned` is what came back, `omitted` is what the cap cut, and `limited: true` marks the cut (`project_symbol_references`, `project_search`, `project_list_files`).
 
 In `compact` mode, shortened payloads set `trimmed: true` and `truncated: true`; `summary` describes omitted content. For an otherwise unsupported large payload, `data.preview_text` contains a bounded JSON-text preview and `summary` reports the original size and shape. Large error messages or attached error data are also explicitly marked as trimmed. Use `full` when the complete payload is required.
 

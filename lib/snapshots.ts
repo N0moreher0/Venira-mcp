@@ -164,7 +164,9 @@ export async function opSnapshotCreate(
       data: {
         id: manifest.id,
         label: manifest.label,
-        created_at: manifest.created_at,
+        // Roadmap item 15 (P2): every timestamp the tools report is epoch
+        // milliseconds and says so in its name.
+        created_at_ms: manifest.created_at,
         file_count: manifest.file_count,
         total_bytes: manifest.total_bytes,
         new_blob_bytes: manifest.new_blob_bytes,
@@ -188,7 +190,7 @@ export async function opSnapshotList(args: Record<string, unknown>): Promise<Rus
   const rows = manifests.slice(0, limit).map((m) => ({
     id: m.id,
     label: m.label,
-    created_at: m.created_at,
+    created_at_ms: m.created_at,
     file_count: m.file_count,
     total_bytes: m.total_bytes,
     roots: m.roots.map((r) => r.path),

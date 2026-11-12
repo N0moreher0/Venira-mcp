@@ -33,8 +33,17 @@ export function createCodeIntelRunners(deps: CodeIntelRunnerDeps) {
     }
     const scope = args.scope === "file" ? "file" : "workspace";
     let references: Array<{ relative_path: string; line_number: number; context: string }> = [];
+    let found = 0;
     let searchCacheHit = false;
     let sourceTruncated = false;
+    // Roadmap item 15 (P2): `limit` and `max_references` overlapped and the
+    // schema did not say which was which. The two roles are now explicit:
+    //   max_references - how many references come back (the token bill)
+    //   limit         - how many workspace hits are scanned (the work)
+    // The scan is never the bottleneck by default: it follows max_references.
+    const max = Number(args.max_references ?? 100);
+    const requestedScan = Number(args.limit ?? max);
+    const scanLimit = Math.max(1, Math.min(200, requestedScan));
     if (scope === "file") {
       const rel = String(args.relative_path ?? "");
       // Roadmap item 15 (P2): scope=file needs a file. Without one it used to
@@ -66,24 +75,29 @@ export function createCodeIntelRunners(deps: CodeIntelRunnerDeps) {
       const lines = content.split("\n");
       const escaped = symbolName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       const re = new RegExp(`\\b${escaped}\\b`);
+      const relName = path.relative(WORKSPACE, toHostPath(rel)).replace(/\\/g, "/");
       for (let i = 0; i < lines.length; i++) {
         if (re.test(lines[i])) {
-          references.push({
-            // Roadmap item 15 (P2): a workspace-relative path, like every
-            // other tool reports.
-            relative_path: path.relative(WORKSPACE, toHostPath(rel)).replace(/\\/g, "/"),
-            line_number: i + 1,
-            context: lines[i].trim().slice(0, 160),
-          });
+          found += 1;
+          // Only the returned slice is kept in memory: the count stays exact,
+          // the payload stays bounded by max_references.
+          if (references.length < max) {
+            references.push({
+              // Roadmap item 15 (P2): a workspace-relative path, like every
+              // other tool reports.
+              relative_path: relName,
+              line_number: i + 1,
+              context: lines[i].trim().slice(0, 160),
+            });
+          }
         }
       }
     } else {
-      const limit = Number(args.limit ?? 50);
       const innerArgs = {
         query: symbolName,
         kind: "literal_content",
         whole_word: true,
-        limit,
+        limit: scanLimit,
         relative_path: args.relative_path,
       };
       const refKey = stableKey(innerArgs);
@@ -94,20 +108,33 @@ export function createCodeIntelRunners(deps: CodeIntelRunnerDeps) {
       sourceTruncated = searchData?.complete === false;
       if (!cachedSearch && searchData?.complete !== false) referenceCache.store(refKey, searchRes);
       const hits = (searchRes.result?.data as { hits?: unknown[] } | undefined)?.hits ?? [];
+      found = hits.length;
       references = (hits as Array<{ relative_path?: unknown; line_number?: unknown; snippet?: unknown; text?: unknown; line?: unknown; context?: unknown }>).map((hit) => ({
         relative_path: String(hit.relative_path ?? ""),
         line_number: Number(hit.line_number ?? 0),
         context: String(hit.snippet ?? hit.text ?? hit.line ?? hit.context ?? "").slice(0, 160),
       }));
     }
-    const max = Number(args.max_references ?? 100);
+    const returned = references.slice(0, max);
+    // `count` is the number of matches, `returned` what came back: the agent
+    // sees at once that a cap cut the list instead of guessing.
+    const limited = found > returned.length || sourceTruncated;
     const response: RustResponse = {
       status: "completed",
       result: {
         kind: "symbol_references",
-        data: { symbol_name: symbolName, scope, count: references.length, references: references.slice(0, max) },
+        data: {
+          symbol_name: symbolName,
+          scope,
+          count: found,
+          returned: returned.length,
+          ...(found > returned.length ? { omitted: found - returned.length } : {}),
+          ...(scope === "workspace" ? { scan_limit: scanLimit } : {}),
+          ...(limited ? { limited: true } : {}),
+          references: returned,
+        },
       },
-      truncated: sourceTruncated || references.length > max,
+      truncated: limited,
     };
     const elapsedMs = performance.now() - started;
     recordMetric("symbol_references", elapsedMs, true);

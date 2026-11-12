@@ -128,6 +128,16 @@ export async function runCheckpointsErrors(
       rustSkipped.some((entry) => String(entry?.path ?? "").includes("target")),
     rustSkipped,
   );
+  // Roadmap item 15 (P2): this checkpoint was never deleted, so every verify
+  // run left one behind and ate a VENIRA_SNAPSHOT_KEEP slot.
+  const rustSnapshotId = String(snapCreateRust.data?.id ?? "");
+  if (rustSnapshotId) {
+    await call("project_snapshot", {
+      action: "delete",
+      id: rustSnapshotId,
+      reason: "VERIFY_REASON_CLEANUP_RUST_SNAPSHOT",
+    });
+  }
   const snapId = String(snapCreate.data?.id ?? "");
   await call("project_write_file", {
     relative_path: `${dir}/snap-target.txt`,

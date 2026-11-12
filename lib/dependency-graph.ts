@@ -487,6 +487,27 @@ export async function buildDependencyGraph(
 
 type SymbolSeed = { name: string; file?: string };
 
+/**
+ * Why a seed did not resolve (roadmap item 15, P2).
+ *
+ * Only the seeds the caller asked about end up here: a missing symbol, a
+ * symbol that is not declared in the pinned file, an ambiguous name. The
+ * graph-wide unresolved imports are counted, not listed - they say nothing
+ * about the seeds and cost tokens on every call.
+ */
+type SeedUnresolved = {
+  /** The symbol the caller asked about (empty for a file seed). */
+  symbol: string;
+  /** Why it did not resolve, in one sentence. */
+  reason: string;
+  /** How to fix it, in one sentence. */
+  next_step: string;
+  /** The declaring files, when the name is ambiguous (capped). */
+  files?: string[];
+  /** How many files declare the name (when ambiguous). */
+  files_count?: number;
+};
+
 function parseSymbolSeeds(value: unknown): SymbolSeed[] {
   if (!Array.isArray(value)) return [];
   const seeds: SymbolSeed[] = [];
@@ -551,7 +572,11 @@ export async function buildChangeImpact(
   const format = formatRaw as "json" | "mermaid";
 
   const { index, cache } = await buildIndex(rootAbs, "", 20, null, true);
-  const unresolved: Unresolved[] = [];
+  // Roadmap item 15 (P2): `unresolved[]` mixed two different things - why the
+  // caller's own seed did not resolve (actionable, rare) and graph-wide
+  // unresolved import specifiers (noise, unrelated to the seeds). The list
+  // now holds the seed problems only; the graph noise is a count.
+  const seedUnresolved: SeedUnresolved[] = [];
   const seedFiles = new Set<string>();
   const seedSymbols = new Set<string>();
 
@@ -599,21 +624,30 @@ export async function buildChangeImpact(
       const rel = relFromRoot(rootAbs, abs);
       declared = declared.filter((entry) => entry.file === rel);
       if (declared.length === 0) {
-        unresolved.push({ from: rel, symbol: seed.name, reason: "symbol is not declared in this file" });
+        seedUnresolved.push({
+          symbol: seed.name,
+          reason: "the symbol is not declared in the file you pinned",
+          next_step: "drop the file, or pin the file that declares it (check it with project_outline_symbol)",
+        });
         continue;
       }
     }
     if (declared.length === 0) {
-      unresolved.push({ from: "", symbol: seed.name, reason: "symbol is not declared in the workspace (it may be external)" });
+      seedUnresolved.push({
+        symbol: seed.name,
+        reason: "the symbol is not declared anywhere in the workspace (it may be external)",
+        next_step: "check the spelling with project_search, or pass files=[] with the file that uses it",
+      });
       continue;
     }
     const files = [...new Set(declared.map((entry) => entry.file))].sort();
     if (files.length > 1) {
-      unresolved.push({
-        from: "",
+      seedUnresolved.push({
         symbol: seed.name,
-        reason: `ambiguous: declared in ${files.length} files; pass {name, file} to disambiguate`,
-        files,
+        reason: `ambiguous: declared in ${files.length} files`,
+        next_step: "pass {name, file} to pin it (the affected list is a lower bound until you do)",
+        files: files.slice(0, 10),
+        files_count: files.length,
       });
       if (!seed.file) files.forEach((file) => possibleSeedFiles.add(file));
     }
@@ -622,7 +656,9 @@ export async function buildChangeImpact(
   }
 
   const built = buildEdges(index, true);
-  unresolved.push(...built.unresolved.slice(0, 50));
+  // The graph-wide unresolved imports are noise for this call: they say
+  // nothing about the seeds. Count them, do not list them.
+  const unresolvedImports = built.unresolved.length;
 
   if (seedFiles.size === 0) {
     return {
@@ -631,8 +667,9 @@ export async function buildChangeImpact(
         seed: { files: [], symbols: [...seedSymbols].sort() },
         direction,
         affected: [],
-        unresolved,
+        unresolved: seedUnresolved,
         summary: { affected_files: 0, affected_symbols: 0, max_distance: 0, tests_affected: 0 },
+        stats: { unresolved_imports: unresolvedImports },
         truncated: false,
       },
       truncated: false,
@@ -759,12 +796,20 @@ export async function buildChangeImpact(
           uniqueNodes,
         ),
         summary,
-        unresolved,
+        unresolved: seedUnresolved,
         truncated,
       },
       truncated,
       hint: truncated ? "Impact list truncated at max_nodes. Hint: narrow the seeds or raise max_nodes." : undefined,
     };
+  }
+
+  const impactHints: string[] = [];
+  if (truncated) {
+    impactHints.push("Impact list truncated at max_nodes. Hint: narrow the seeds, lower depth, or raise max_nodes.");
+  }
+  if (seedUnresolved.length > 0) {
+    impactHints.push(`Seed did not resolve: ${seedUnresolved[0].symbol} - ${seedUnresolved[0].next_step}`);
   }
 
   return {
@@ -773,15 +818,14 @@ export async function buildChangeImpact(
       seed,
       direction,
       affected,
-      unresolved,
+      unresolved: seedUnresolved,
       summary,
+      stats: { unresolved_imports: unresolvedImports },
       truncated,
       cache,
       duration_ms: Date.now() - started,
     },
     truncated,
-    ...(truncated
-      ? { hint: "Impact list truncated at max_nodes. Hint: narrow the seeds, lower depth, or raise max_nodes." }
-      : {}),
+    ...(impactHints.length > 0 ? { hint: impactHints.join(" ") } : {}),
   };
 }

@@ -18,6 +18,7 @@ import { runGithubCi } from "./verify/github-ci.js";
 import { runDiagnosticsReadPlan } from "./verify/diagnostics-read-plan.js";
 import { runProvidersConfig } from "./verify/providers-config.js";
 import { runAuditSymbols } from "./verify/audit-symbols.js";
+import { runConsistency } from "./verify/consistency.js";
 
 // Sections run in the original order; later sections receive the state earlier ones produced.
 const {
@@ -63,6 +64,11 @@ await runAuditSymbols(harness, {
   ...shellEnvAudit,
   ...checkpointsErrors,
   ...secrets,
+});
+await runConsistency(harness, {
+  ...core,
+  ...shellPolicy,
+  ...shellEnvAudit,
 });
 
 console.log("[verify] done");

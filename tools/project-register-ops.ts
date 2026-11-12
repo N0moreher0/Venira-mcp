@@ -164,7 +164,7 @@ export function registerOpsTools(server: McpServer, deps: OpsToolsDeps): void {
           use_when: "VENIRA_TRACE=1 and you want to see what ran recently without reading the log file.",
           avoid_when: "tracing is disabled (returns an empty buffer) or you need the full on-disk log (read VENIRA_TRACE_FILE instead).",
           speed_profile: "instant; in-memory buffer only, no I/O.",
-          output_kind: "trace_status: enabled, file, buffered, recent[] (newest last).",
+          output_kind: "trace_status: enabled, file, buffered, recent[] (newest first, timestamp_ms = epoch ms).",
           batch_safe: true,
         },
         { readOnlyHint: true, openWorldHint: false },

@@ -412,18 +412,35 @@ export function buildEnvelope(
     kind,
     elapsed_ms: round(options.elapsedMs ?? 0),
   };
+  // Roadmap item 15 (P2): `status: "completed"` next to
+  // `command_status: "running"` read as a contradiction. `status` now names
+  // what happened to the COMMAND (the call itself always succeeded, so
+  // `ok` stays true): "running", "failed", "cancelled" or "completed".
+  if (kind === "shell_run" && isObject(data)) {
+    const status = commandStatus(data);
+    envelope.command_status = status;
+    envelope.status =
+      status === "running"
+        ? "running"
+        : status === "cancelled"
+          ? "cancelled"
+          : status === "failed"
+            ? "failed"
+            : status === "unknown"
+              ? "unknown"
+              : "completed";
+  }
   if (truncated) envelope.truncated = true;
   if (limited) envelope.limited = true;
   if (incomplete) envelope.incomplete = true;
   if (options.cached) envelope.cached = true;
   if (hint) envelope.hint = hint;
-  if (kind === "shell_run" && isObject(data)) envelope.command_status = commandStatus(data);
   // Roadmap item 15 (P2): a failed snippet came back as ok:true with
   // data.ok:false - two truths to read. The envelope now carries the same
-  // command_status the shell tools use.
+  // command_status the shell tools use, and `status` names the outcome.
   if (kind === "js_execute" && isObject(data)) {
-    envelope.command_status =
-      data.ok === true ? "succeeded" : data.timed_out === true ? "failed" : "failed";
+    envelope.command_status = data.ok === true ? "succeeded" : "failed";
+    envelope.status = data.ok === true ? "completed" : "failed";
   }
 
   const originalBytes = serializedBytes(data ?? null);
@@ -517,7 +534,7 @@ const DEFAULT_HINTS: Record<string, string> = {
   command_denied:
     "Policy refuses this command in every mode. Do not retry or rephrase; ask the user to run it manually if needed.",
   old_text_not_found:
-    "The text to replace is not in the file. Copy nearest_match.text into old_text (it is the file content without line numbers); it also reports the indentation and the line endings. The file was not changed.",
+    "The text to replace is not in the file. data.mismatch says the line, the first differing character and how many characters are off; data.context.text is three lines around the wrong spot (no line numbers) - copy it into old_text. The file was not changed.",
   old_text_ambiguous:
     "old_text matches more than one place. Extend it with surrounding context, or set replace_all=1. The file was not changed.",
   stale_content:

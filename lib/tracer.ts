@@ -17,7 +17,8 @@ const TRACE_FILE_MAX_BYTES = 10 * 1024 * 1024;
 const MAX_TRACE_BUFFER = 100;
 
 export type TraceEntry = {
-  timestamp: number;
+  /** Epoch milliseconds - the same unit every other tool reports (roadmap item 15, P2). */
+  timestamp_ms: number;
   operation: string;
   duration_ms: number;
   ok: boolean;
@@ -54,14 +55,14 @@ function writeTraceFile(line: string): void {
 }
 
 /** Record one tool call. No-op unless VENIRA_TRACE is enabled. */
-export function addTrace(entry: Omit<TraceEntry, "timestamp">): void {
+export function addTrace(entry: Omit<TraceEntry, "timestamp_ms">): void {
   if (!TRACE_ENABLED) return;
-  const record: TraceEntry = { timestamp: Date.now(), ...entry };
+  const record: TraceEntry = { timestamp_ms: Date.now(), ...entry };
   entries.push(record);
   while (entries.length > MAX_TRACE_BUFFER) entries.shift();
   writeTraceFile(
     JSON.stringify({
-      ts: new Date(record.timestamp).toISOString(),
+      ts: new Date(record.timestamp_ms).toISOString(),
       op: record.operation,
       ms: Math.round(record.duration_ms),
       ok: record.ok,
@@ -70,10 +71,16 @@ export function addTrace(entry: Omit<TraceEntry, "timestamp">): void {
   );
 }
 
-/** Most recent traces, newest last (for project_trace_status). */
+/**
+ * Most recent traces, newest first (for project_trace_status).
+ *
+ * The audit log and the checkpoint list are newest-first; the trace buffer
+ * used to be newest-last, so an agent had to reverse it in its head. Now
+ * every "recent list" in venira reads the same way.
+ */
 export function recentTraces(limit = 20): TraceEntry[] {
   const n = Math.max(1, Math.min(MAX_TRACE_BUFFER, limit));
-  return entries.slice(-n);
+  return entries.slice(-n).reverse();
 }
 
 export function traceSnapshot() {

@@ -162,6 +162,15 @@ const healthDeps: HealthDeps = {
       ? {
           state: capabilityState(value),
           project_id: value.projectId,
+          // Roadmap item 15 (P2): "chat-terminal" is the FALLBACK id - no
+          // project is open. Without this marker it reads like a real project
+          // name that something went wrong with.
+          ...(value.projectId === "chat-terminal"
+            ? {
+                project_id_kind: "fallback",
+                project_id_note: "no project is open; this is the default session scope",
+              }
+            : { project_id_kind: "project" }),
           opened_ago_ms: Date.now() - value.openedAt,
         }
       : { state: opening ? "opening" : "closed" };

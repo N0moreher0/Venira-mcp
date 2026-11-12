@@ -208,9 +208,14 @@ const ID_RE = /^snap-[0-9]{8}-[0-9]{6}-[a-z0-9]{4,12}$/;
 export function newId(): string {
   const now = new Date();
   const pad = (n: number) => String(n).padStart(2, "0");
+  // Roadmap item 15 (P2): the stamp used to be UTC while every other date
+  // the agent sees (file mtimes, the checkpoint list, its own notes) is
+  // local - so a checkpoint created at 00:10 local was labelled with the
+  // previous day. The stamp is now LOCAL time; the exact instant is always
+  // available as `created_at_ms` (epoch milliseconds).
   const stamp =
-    `${now.getUTCFullYear()}${pad(now.getUTCMonth() + 1)}${pad(now.getUTCDate())}-` +
-    `${pad(now.getUTCHours())}${pad(now.getUTCMinutes())}${pad(now.getUTCSeconds())}`;
+    `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-` +
+    `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
   return `snap-${stamp}-${crypto.randomBytes(3).toString("hex")}`;
 }
 

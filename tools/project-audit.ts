@@ -101,8 +101,11 @@ export async function runReadAudit(args: Args, dbPath: string): Promise<ToolResu
           ...(typeof row.args_hash === "string" && row.args_hash ? { args_hash: row.args_hash } : {}),
           ...(typeof row.command === "string" && row.command ? { command: row.command } : {}),
           request_id: row.request_id,
-          started_at: typeof row.started_at === "number" ? Math.floor(row.started_at / 1000) : row.started_at,
-          ...(row.completed_at != null ? { completed_at: Math.floor((row.completed_at as number) / 1000) } : {}),
+          // Roadmap item 15 (P2): every timestamp the tools report is epoch
+          // MILLISECONDS and says so in its name (snapshots and traces already
+          // did; the audit rows were the odd one out in seconds).
+          started_at_ms: typeof row.started_at === "number" ? row.started_at : Number(row.started_at ?? 0),
+          ...(row.completed_at != null ? { completed_at_ms: Number(row.completed_at) } : {}),
           ...(row.elapsed_ms != null ? { elapsed_ms: row.elapsed_ms } : {}),
         };
       }),

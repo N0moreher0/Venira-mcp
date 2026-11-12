@@ -94,7 +94,7 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
     about: "Run a shell command in the workspace (shell: powershell|cmd|bash, relative_cwd, timeout_ms). Default is background: returns run_id, poll project_shell_status. background=0 blocks until exit and returns stdout/stderr.",
     use: "you build, test, run git or install packages. Use background=0 for short commands whose output you need now.",
     avoid: "you read or edit files (file tools) or run a tiny JS calculation (project_execute_js).",
-    out: "run_id, kill_key, running, exit_code, timed_out, stdout/stderr (background=0) or stdout_tail/stderr_tail. ok=true only means it ran: read command_status/exit_code. shell_path/shell_kind name the binary that ran it (on Windows bash may be the WSL launcher). approval_required: ask the user to approve, then retry once with approval_id. repeated_failure: the identical invocation already failed; read data.previous.stderr_tail, then change the command or pass retry_failed=1.",
+    out: "run_id, kill_key, running, exit_code, timed_out, stdout/stderr (background=0) or stdout_tail/stderr_tail. ok=true only means the call ran; status names the command (completed|failed|running|cancelled) and command_status repeats it. shell_path/shell_kind name the binary that ran it (on Windows bash may be the WSL launcher). approval_required: ask the user to approve, then retry once with approval_id. repeated_failure: the identical invocation already failed; read data.previous.stderr_tail, then change the command or pass retry_failed=1.",
   },
   project_shell_status: {
     about: "Return the state and output tail of a shell run. wait_seconds (0-30) waits up to that long for it to finish.",
@@ -126,7 +126,7 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
     about: "Server diagnostics: version, workspace, security posture and warnings, caches, queue, running shells, latency, snapshot store, audit status.",
     use: "you debug slowness or errors, or want the security warnings before risky work. include_audit=0 skips the audit query.",
     avoid: "normal file work.",
-    out: "server, corehost, queue, caches, shells, posture {level, findings}, snapshots, metrics.",
+    out: "server, corehost, capability {state, project_id, project_id_kind}, queue, caches, shells, posture, snapshots, metrics.",
   },
   project_cache_clear: {
     about: "Clear in-process caches (all, read, info, list, search, recent, negative, graph, shell).",
@@ -138,13 +138,13 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
     about: "Show recent traced tool calls and the trace configuration (needs VENIRA_TRACE=1).",
     use: "you want to see what ran recently without opening the log file.",
     avoid: "tracing is off (the buffer is empty).",
-    out: "enabled, file, buffered, recent[] (newest last).",
+    out: "enabled, file, buffered, recent[] (newest first, timestamp_ms is epoch milliseconds).",
   },
   project_read_audit: {
-    about: "Read recent audit-log rows, newest first. Filter by session_id, operation, outcome, since_unix; verify=1 checks the hash chain.",
+    about: "Read recent audit-log rows, newest first. Filter by session_id, operation, outcome, since_unix (seconds); verify=1 checks the hash chain. Timestamps in the rows are epoch milliseconds.",
     use: "you review what was done and why (the reason field), in this or an earlier session.",
     avoid: "you want live metrics (project_health).",
-    out: "rows[] {session_id, operation, outcome, reason_code, reason, args_hash, command, request_id, started_at, completed_at, elapsed_ms}, count, truncated, chain_ok (verify=1). args_hash identifies the call, command is the redacted command line.",
+    out: "rows[] {session_id, operation, outcome, reason_code, reason, args_hash, command, request_id, started_at_ms, completed_at_ms, elapsed_ms}, count, truncated, chain_ok (verify=1). Timestamps are epoch milliseconds (since_unix filters in seconds). args_hash identifies the call, command is the redacted command line.",
   },
 
   // ---- code intelligence --------------------------------------------------
@@ -161,10 +161,10 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
     out: "lines_added, lines_removed, unified_diff, truncated.",
   },
   project_symbol_references: {
-    about: "Find occurrences of a symbol name. scope=file needs relative_path (one file); scope=workspace (default) searches all files. limit caps the workspace scan, max_references caps the returned list.",
+    about: "Find occurrences of a symbol name. scope=file needs relative_path (one file); scope=workspace (default) searches all files. max_references caps what comes back; limit caps the workspace scan (default: max_references).",
     use: "you check where a symbol is used before renaming or changing it.",
     avoid: "you only need its declaration (project_outline_symbol) or arbitrary text (project_search).",
-    out: "count, references[] {relative_path, line_number, context}.",
+    out: "count (matches found), returned (how many came back), omitted (cut by the cap), scan_limit (workspace only), references[] {relative_path, line_number, context}.",
   },
   project_selective_search: {
     about: "Rank files by how well they match several patterns (must, weight, fuzzy score) within files_hint or a shallow listing.",
@@ -182,7 +182,7 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
     about: "List the files and symbols affected by changing given files or symbols (direction: dependents, dependencies or both). At least one of files/symbols; a symbol seed takes {name, relative_path} (file is an alias).",
     use: "you are about to rename or change something and need which files to read and which tests to run.",
     avoid: "you want the whole graph (project_dependency_graph).",
-    out: "affected[] {id, distance, path, confidence}, summary {affected_files, affected_symbols, tests_affected}, unresolved[].",
+    out: "affected[] {id, distance, path, confidence}, summary {affected_files, affected_symbols, tests_affected}, unresolved[] (the seeds that did not resolve: symbol, reason, next_step), stats.unresolved_imports.",
   },
 
   // ---- workflow -----------------------------------------------------------

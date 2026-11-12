@@ -351,6 +351,20 @@ export async function runEditBatch(args: Args, deps: BatchDeps): Promise<ToolRes
   }
   const elapsedMs = performance.now() - started;
   recordMetric("edit_batch", elapsedMs, !failed);
+  // Roadmap item 15 (P2): a failed batch that rolled back cleanly left its
+  // internal checkpoint behind, eating one VENIRA_SNAPSHOT_KEEP slot per
+  // failed attempt. Nothing was changed, so the checkpoint has served its
+  // purpose: drop it. A FAILED rollback keeps it - it is the recovery path.
+  let checkpointDeleted = false;
+  let checkpointDeleteError: string | undefined;
+  if (failed && rollbackSucceeded && snapshotId) {
+    try {
+      await deps.execute("snapshot_delete", { action: "delete", id: snapshotId, reason: "edit_batch rollback done" });
+      checkpointDeleted = true;
+    } catch (error) {
+      checkpointDeleteError = error instanceof Error ? error.message : String(error);
+    }
+  }
   const batchExtra = {
     total_bytes_returned: totalBytes,
     atomic: snapshotComplete,
@@ -362,7 +376,11 @@ export async function runEditBatch(args: Args, deps: BatchDeps): Promise<ToolRes
     rollback_succeeded: rollbackSucceeded,
     ...(snapshotError ? { snapshot_error: snapshotError } : {}),
     ...(rollbackError ? { rollback_error: rollbackError } : {}),
-    ...(snapshotId ? { snapshot_id: snapshotId } : {}),
+    // The id is only useful while the checkpoint exists; after the cleanup it
+    // would point at nothing.
+    ...(snapshotId && !checkpointDeleted ? { snapshot_id: snapshotId } : {}),
+    ...(checkpointDeleted ? { checkpoint_deleted: true } : {}),
+    ...(checkpointDeleteError ? { checkpoint_delete_error: checkpointDeleteError } : {}),
   };
   const base = { code: "batch_failed" };
   const failure = !failed
