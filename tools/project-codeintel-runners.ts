@@ -1,7 +1,9 @@
+import path from "node:path";
 import { recordMetric } from "../lib/metrics.js";
 import { buildEnvelope, errorEnvelope, newRequestId, toolResult } from "../lib/output.js";
 import type { RustResponse, ToolResult } from "../lib/output.js";
 import { selectiveSearch, type SelectiveQuery } from "../lib/symbol-diff.js";
+import { WORKSPACE } from "../lib/workspace.js";
 import type { Args } from "./project-cache.js";
 
 type ReferenceCache = {
@@ -35,6 +37,22 @@ export function createCodeIntelRunners(deps: CodeIntelRunnerDeps) {
     let sourceTruncated = false;
     if (scope === "file") {
       const rel = String(args.relative_path ?? "");
+      // Roadmap item 15 (P2): scope=file needs a file. Without one it used to
+      // answer `not_found "No such file: ."`, which looks like a missing file
+      // instead of a missing argument.
+      if (!rel.trim() || rel === ".") {
+        return toolResult(
+          errorEnvelope(
+            "symbol_references",
+            new Error(
+              "[invalid_request] scope=file needs relative_path. " +
+                "Hint: pass the file to search, or use scope=workspace (the default).",
+            ),
+            { requestId, elapsedMs: performance.now() - started },
+          ),
+          true,
+        );
+      }
       if (isProtectedPath(toHostPath(rel))) {
         return toolResult(
           errorEnvelope("symbol_references", new Error(`[sensitive_result] Path is protected by policy: ${rel}.`), { requestId, elapsedMs: performance.now() - started }),
@@ -50,7 +68,13 @@ export function createCodeIntelRunners(deps: CodeIntelRunnerDeps) {
       const re = new RegExp(`\\b${escaped}\\b`);
       for (let i = 0; i < lines.length; i++) {
         if (re.test(lines[i])) {
-          references.push({ relative_path: toHostPath(rel), line_number: i + 1, context: lines[i].trim().slice(0, 160) });
+          references.push({
+            // Roadmap item 15 (P2): a workspace-relative path, like every
+            // other tool reports.
+            relative_path: path.relative(WORKSPACE, toHostPath(rel)).replace(/\\/g, "/"),
+            line_number: i + 1,
+            context: lines[i].trim().slice(0, 160),
+          });
         }
       }
     } else {

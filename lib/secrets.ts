@@ -140,7 +140,7 @@ export type SecretMeta = {
   /** Number of successful uses since the current value was written. */
   use_count: number;
   /** When the current value was written (a re-set counts as a rotation). */
-  rotated_at: number;
+  rotated_at: number | null;
 };
 
 type StoredEntry = {
@@ -365,10 +365,14 @@ export function listSecrets(): SecretMeta[] {
         updated_at: typeof entry.updated_at === "number" ? entry.updated_at : 0,
         expires_at: expiresAt,
         expired: expiresAt !== null && expiresAt <= now,
-        days_left: expiresAt === null ? null : Math.floor((expiresAt - now) / DAY_MS),
+        // Roadmap item 15 (P2): a secret that expires in one day reported
+        // `days_left: 0`. The count rounds up, so "1 day" reads as 1.
+        days_left: expiresAt === null ? null : Math.max(0, Math.ceil((expiresAt - now) / DAY_MS)),
         last_used_at: typeof entry.last_used_at === "number" ? entry.last_used_at : null,
         use_count: typeof entry.use_count === "number" ? entry.use_count : 0,
-        rotated_at: typeof entry.rotated_at === "number" ? entry.rotated_at : typeof entry.updated_at === "number" ? entry.updated_at : 0,
+        // Only a real rotation carries a timestamp; a fresh secret has none
+        // (it used to report `updated_at`, which reads like a rotation).
+        rotated_at: typeof entry.rotated_at === "number" ? entry.rotated_at : null,
       };
     })
     .sort((a, b) => a.name.localeCompare(b.name));
@@ -554,7 +558,9 @@ export async function setSecret(
       expires_at: expiresAt,
       last_used_at: null,
       use_count: 0,
-      rotated_at: now,
+      // Roadmap item 15 (P2): a fresh secret is not a rotation, so it gets no
+      // rotated_at (it used to report the creation time as one).
+      ...(created ? {} : { rotated_at: now }),
     };
     await writeStoreUnlocked(store);
     return {
@@ -565,10 +571,11 @@ export async function setSecret(
       updated_at: now,
       expires_at: expiresAt,
       expired: expiresAt !== null && expiresAt <= now,
-      days_left: expiresAt === null ? null : Math.floor((expiresAt - now) / DAY_MS),
+      days_left: expiresAt === null ? null : Math.max(0, Math.ceil((expiresAt - now) / DAY_MS)),
       last_used_at: null,
       use_count: 0,
-      rotated_at: now,
+      // A fresh secret is not a rotation (roadmap item 15, P2).
+      rotated_at: created ? null : now,
       created,
       rotated: !created,
     };
@@ -604,7 +611,14 @@ export async function deleteSecret(name: string): Promise<{ name: string; delete
   const cleanName = assertSecretName(name);
   return withStoreLock(async (fresh) => {
     const store = fresh();
-    if (!store.secrets[cleanName]) return { name: cleanName, deleted: false };
+    if (!store.secrets[cleanName]) {
+      // Roadmap item 15 (P2): `get` answers not_found for a name that is not
+      // stored; `delete` used to answer "deleted: false". Both now say the
+      // same thing.
+      throw new Error(
+        `[not_found] Secret "${cleanName}" is not stored. Hint: run project_secret action=list to see available names.`,
+      );
+    }
     delete store.secrets[cleanName];
     await writeStoreUnlocked(store);
     return { name: cleanName, deleted: true };

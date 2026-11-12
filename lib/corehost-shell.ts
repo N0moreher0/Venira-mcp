@@ -6,7 +6,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
 import crypto from "node:crypto";
-import { commandKey, enabledShellOverrides, evaluateShellCommand, grantSessionApproval, hasSessionApproval, parseShellCommand, recordApproval, recordDecision, redactSecrets, shellOverrideMatches, isShellOverride, type Decision, type ShellOverride } from "./shell-policy.js";
+import { commandKey, enabledShellOverrides, evaluateShellCommand, grantSessionApproval, hasSessionApproval, loadShellPolicy, parseShellCommand, recordApproval, recordDecision, redactSecrets, shellOverrideMatches, isShellOverride, type Decision, type ShellOverride } from "./shell-policy.js";
 import { getShellCache, setShellCache } from "./shell-cache.js";
 import * as approvals from "./approvals.js";
 import { awaitApprovalGrant, buildApprovalPayload, parseApprovalWaitMs, redeemApproval, requestApproval } from "./approval-gate.js";
@@ -129,6 +129,19 @@ export async function opShellRun(
 
   if (dryRun) {
     const sessionCovered = decision.tier === "ask" && hasSessionApproval(sessionId, decision, approvalKey);
+    // Roadmap item 15 (P2): with the policy switched off, `tier: allow` says
+    // nothing about the command. The balanced verdict is reported next to it,
+    // so the agent can see what the real policy would decide.
+    const policyMode = loadShellPolicy().mode;
+    let bypassed: { tier: string; rule: string; reason: string } | undefined;
+    if (policyMode === "off") {
+      try {
+        const strict = evaluateShellCommand(command, cwd, { mode: "balanced", shell });
+        bypassed = { tier: strict.tier, rule: strict.rule, reason: strict.reason };
+      } catch {
+        bypassed = undefined;
+      }
+    }
     return {
       status: "completed",
       result: {
@@ -145,7 +158,18 @@ export async function opShellRun(
           would_run: decision.tier === "allow" || sessionCovered,
           requires_approval: decision.tier === "ask" && !sessionCovered,
           denied: decision.tier === "deny",
-          note: "Nothing was executed and no approval was requested.",
+          ...(bypassed
+            ? {
+                policy_mode: policyMode,
+                bypassed_verdict: bypassed,
+                note:
+                  `The shell policy is off (mode=${policyMode}), so tier=allow means "no check ran". ` +
+                  "bypassed_verdict is what the balanced policy would decide. Nothing was executed and no approval was created.",
+              }
+            : {}),
+          ...(bypassed
+            ? {}
+            : { note: "Nothing was executed and no approval was requested." }),
         },
       },
     };
@@ -716,7 +740,9 @@ export async function opShellStatus(
   return {
     status: "completed",
     result: {
-      kind: "shell_run",
+      // Roadmap item 15 (P2): the kind named the tool that produced it, so
+      // `shell_status` no longer claims to be a `shell_run`.
+      kind: "shell_status",
       data: {
         run_id: runId,
         shell_id: runId,
@@ -730,7 +756,8 @@ export async function opShellStatus(
         dropped_bytes: run.dropped_bytes,
         timed_out: run.timed_out,
         timeout_ms: run.timeout_ms,
-        elapsed_ms: Date.now() - run.started_at,
+        // The envelope's elapsed_ms is the call; this one is the run.
+        run_elapsed_ms: Date.now() - run.started_at,
         policy: {
           decision: run.decision.tier,
           rule: run.decision.rule,
@@ -763,7 +790,8 @@ export function opShellCancel(args: Record<string, unknown>): RustResponse {
   return {
     status: "completed",
     result: {
-      kind: "cancellation",
+      // Roadmap item 15 (P2): the kind named the tool that produced it.
+      kind: "shell_cancel",
       data: {
         accepted: true,
         cleanup_complete: !run.running,

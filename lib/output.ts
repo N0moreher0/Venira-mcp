@@ -43,6 +43,10 @@ export type Envelope = {
   hint?: string;
   next_actions?: unknown[];
   truncated?: boolean;
+  /** A limit cut the result (a list, a search). */
+  limited?: boolean;
+  /** The content was not fully returned (a file read, a range). */
+  incomplete?: boolean;
   cached?: boolean;
   trimmed?: boolean;
   /** Some items of a batch succeeded while others failed (roadmap item 15, P1). */
@@ -387,12 +391,18 @@ export function buildEnvelope(
 ): Envelope {
   const data = response?.result?.data;
   const kind = response?.result?.kind ?? operation;
-  const dd = (data ?? {}) as { complete?: unknown; truncated?: unknown; hits?: unknown };
+  const dd = (data ?? {}) as { complete?: unknown; truncated?: unknown; hits?: unknown; limited?: unknown; incomplete?: unknown };
   const dataTruncated =
     dd.complete === false ||
     dd.truncated === true ||
     (Array.isArray(dd.hits) && dd.truncated === true);
   const truncated = response?.truncated === true || dataTruncated;
+  // Roadmap item 15 (P2): `truncated` meant three different things. The
+  // producers now say which one happened: `limited` (a limit cut the
+  // result), `incomplete` (the content was not fully returned) and
+  // `trimmed` (compact mode cut the payload).
+  const limited = dd.limited === true;
+  const incomplete = dd.incomplete === true;
   const hint = options.hint ?? inferHint(kind, data);
 
   const envelope: Envelope = {
@@ -403,6 +413,8 @@ export function buildEnvelope(
     elapsed_ms: round(options.elapsedMs ?? 0),
   };
   if (truncated) envelope.truncated = true;
+  if (limited) envelope.limited = true;
+  if (incomplete) envelope.incomplete = true;
   if (options.cached) envelope.cached = true;
   if (hint) envelope.hint = hint;
   if (kind === "shell_run" && isObject(data)) envelope.command_status = commandStatus(data);
@@ -497,8 +509,10 @@ const DEFAULT_HINTS: Record<string, string> = {
     "approval_id is single-use, bound to the exact command/shell/cwd/secret_env, and expires. Call again without it for a fresh approval_required; a human must grant the new id.",
   command_denied:
     "Policy refuses this command in every mode. Do not retry or rephrase; ask the user to run it manually if needed.",
-  old_text_not_found: "Re-read the file with project_read_file, copy the exact text, retry.",
-  old_text_ambiguous: "Add surrounding lines to old_text to make it unique, or set replace_all=1.",
+  old_text_not_found:
+    "The text to replace is not in the file. Copy nearest_match.text into old_text (it is the file content without line numbers); it also reports the indentation and the line endings. The file was not changed.",
+  old_text_ambiguous:
+    "old_text matches more than one place. Extend it with surrounding context, or set replace_all=1. The file was not changed.",
   stale_content:
     "The file changed since you read it. Read it again with project_read_file, rebuild the patch against the current content and send the new sha256 as expected_sha256. Never replay the same edit unchanged.",
   repeated_failure:

@@ -10,7 +10,7 @@ import { resolveInWorkspace, errorWithData, type RustResponse } from "./corehost
 import { isProtectedPath, PLATFORM, WORKSPACE } from "./workspace.js";
 import { editFuzzyEnabled } from "./env.js";
 import { fuzzyEditArgsUsed } from "./arg-hints.js";
-import { editMatchLocations, levenshtein, normalizeForFuzzy } from "./file-ops-helpers.js";
+import { buildEditSnippet, detectIndentation, detectLineEndings, editMatchLocations, levenshtein, normalizeForFuzzy } from "./file-ops-helpers.js";
 import { sanitizeReason } from "./snapshots.js";
 import { recordRecentFile, recordRecentFileMeta, removeFromRecentIndex } from "./recent-index.js";
 
@@ -245,12 +245,18 @@ export async function opEditFile(
 
   let replacements = 0;
   let usedFuzzy = false;
-  for (const edit of editList) {
+  // Roadmap item 15 (P2): with several edits[] the error did not say which
+  // edit failed, nor that the file was left untouched.
+  for (const [editIndex, edit] of editList.entries()) {
     const old_text = normalizeEol(edit.old_text as string);
     const new_text = normalizeEol((edit.new_text ?? "") as string);
     const replace_all = edit.replace_all;
     if (typeof old_text !== "string" || old_text.length === 0) {
-      throw new Error(`[invalid_request] old_text must be a non-empty string (field: ${args.relative_path}).`);
+      throw errorWithData(
+        "invalid_request",
+        `old_text must be a non-empty string (field: ${args.relative_path}).`,
+        { edit_index: editIndex, suggestion: "pass the exact text to replace" },
+      );
     }
     if (old_text === new_text) continue;
     if (!(replace_all || replaceAll)) {
@@ -262,13 +268,20 @@ export async function opEditFile(
           {
             occurrences,
             matches: editMatchLocations(content, old_text),
+            edit_index: editIndex,
+            edit_count: editList.length,
+            file_unchanged: true,
+            // Roadmap item 15 (P2): the whitespace facts the agent cannot
+            // see in plain text.
+            indentation: detectIndentation(content),
+            line_endings: detectLineEndings(content),
             suggestion: "extend old_text with surrounding context or set replace_all=true",
           },
         );
       }
     }
     let idx = content.indexOf(old_text);
-    
+
     // P2: Fuzzy match fallback
     if (idx === -1 && fuzzyEnabled) {
       const fuzzyResult = findFuzzyMatch(content, old_text, fuzzyDistance, ignoreIndentation, caseInsensitive);
@@ -278,12 +291,28 @@ export async function opEditFile(
         console.error(`[corehost] fuzzy match found at offset ${idx} (distance ${fuzzyDistance})`);
       }
     }
-    
+
     if (idx === -1) {
+      // Roadmap item 15 (P2): the failure now carries the region the agent
+      // most likely meant, copy-pasteable (no line numbers), with the
+      // detected indentation and line endings - and a buffer around it, so
+      // the retry works without another read.
+      const snippet = buildEditSnippet(content, String(args.relative_path), old_text);
       throw errorWithData(
         "old_text_not_found",
-        `old_text not found in ${args.relative_path}. Hint: re-read the file and copy the exact text.${fuzzyEnabled ? ` (fuzzy distance ${fuzzyDistance})` : ""}`,
-        { occurrences: 0, suggestion: "re-read file and copy exact old_text" },
+        `old_text not found in ${args.relative_path} (edit ${editIndex + 1} of ${editList.length}). ` +
+          `The nearest region is in the error data (nearest_match.text - copy it as is, it has no line numbers). ` +
+          `Hint: copy the snippet into old_text, or read the file again with project_read_file.`,
+        {
+          occurrences: 0,
+          edit_index: editIndex,
+          edit_count: editList.length,
+          file_unchanged: true,
+          nearest_match: snippet,
+          suggestion:
+            "copy nearest_match.text into old_text (it is the file content without line numbers); " +
+            `the file indents with ${snippet.indentation} and uses ${snippet.line_endings} line endings`,
+        },
       );
     }
     if (replace_all || replaceAll) {

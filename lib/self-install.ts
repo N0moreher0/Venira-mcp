@@ -33,9 +33,12 @@ type InstallTarget = HarnessName | "vscode";
 type InstallResult = {
   harness: InstallTarget;
   config_path: string;
-  status: "installed" | "already_present" | "config_missing" | "error";
+  status: "installed" | "already_present" | "config_missing" | "error" | "would_merge" | "would_create";
   needs_restart: boolean;
   error?: string;
+  /** A dry run writes nothing: it reports what would happen. */
+  dry_run?: boolean;
+  note?: string;
 };
 
 type DetectResult = {
@@ -460,16 +463,21 @@ export async function installSelf(opts: {
     };
   }
 
-  // For a dry run: report what would happen without writing
+  // For a dry run: report what would happen without writing.
+  // Roadmap item 15 (P2): the note used to sit in `error` and the result
+  // claimed `needs_restart: true` although nothing was written. A dry run
+  // writes nothing, so it needs no restart and reports its own status.
   if (opts.dryRun) {
     const present = veniraPresentInFile(file, det.format ?? "json",
       opts.harness === "opencode" ? "mcp" : "mcpServers");
+    const exists = existsSync(file);
     return {
       harness: opts.harness,
       config_path: file,
-      status: present ? "already_present" : existsSync(file) ? "installed" : "config_missing",
-      needs_restart: true,
-      error: `DRY RUN: ${present ? "Venira already present" : existsSync(file) ? "would merge" : "would create"} in ${file}; no changes written.`,
+      status: present ? "already_present" : exists ? "would_merge" : "would_create",
+      needs_restart: false,
+      dry_run: true,
+      note: `DRY RUN: ${present ? "Venira is already present" : exists ? "would merge" : "would create"} in ${file}; no changes written.`,
     };
   }
 
@@ -503,12 +511,14 @@ export async function installVscodeConfig(opts: {
   const file = path.join(workspace, ".vscode", "mcp.json");
   if (opts.dryRun) {
     const present = veniraPresentInFile(file, "json", "servers");
+    const exists = existsSync(file);
     return {
       harness: "vscode",
       config_path: file,
-      status: present ? "already_present" : existsSync(file) ? "installed" : "config_missing",
-      needs_restart: true,
-      error: `DRY RUN: ${present ? "Venira already present" : existsSync(file) ? "would merge" : "would create"} in ${file}; no changes written.`,
+      status: present ? "already_present" : exists ? "would_merge" : "would_create",
+      needs_restart: false,
+      dry_run: true,
+      note: `DRY RUN: ${present ? "Venira is already present" : exists ? "would merge" : "would create"} in ${file}; no changes written.`,
     };
   }
   return installJsonLike(file, "servers", {

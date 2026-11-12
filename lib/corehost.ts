@@ -25,7 +25,7 @@ import { WORKSPACE, dynamicWorkspaceEnabled, switchWorkspaceRoot, allowedWorkspa
 import { opSnapshotCreate, opSnapshotDelete, opSnapshotList, opSnapshotRestore, sanitizeReason } from "./snapshots.js";
 import { opSnapshotMirror } from "./snapshot-mirror.js";
 import { opCiControl, opCiLogs, opCiStatus, opCiTrigger, opPrClose, opPrComment, opPrCreate, opPrList, opPrMerge, opPrReopen } from "./git-provider.js";
-import { assertSecretName, deleteSecret, getSecretValueSync, listSecrets, MAX_EXPIRY_DAYS, redactSecretValues, setSecret } from "./secrets.js";
+import { assertSecretName, deleteSecret, getSecretValueSync, listSecrets, MAX_EXPIRY_DAYS, redactSecretValues, secretsDir, setSecret } from "./secrets.js";
 import { GithubDeviceFlow } from "./github-device-flow.js";
 import { envFlag } from "./env.js";
 import { buildChangeImpact, buildDependencyGraph } from "./dependency-graph.js";
@@ -154,7 +154,10 @@ async function opSecret(args: Record<string, unknown>): Promise<RustResponse> {
           action: "list",
           count: secrets.length,
           secrets,
-          store: process.env.VENIRA_DATA_DIR?.trim() ? "VENIRA_DATA_DIR" : "default_data_dir",
+          // Roadmap item 15 (P2): the store was reported as the *name* of
+          // the environment variable; report the path and where it comes from.
+          store: secretsDir(),
+          store_location: process.env.VENIRA_DATA_DIR?.trim() ? "VENIRA_DATA_DIR" : "default_data_dir",
         },
       },
       ...(secrets.length === 0

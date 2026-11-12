@@ -55,7 +55,7 @@ export function registerWorkflowTools(server: McpServer, deps: WorkflowToolsDeps
           use_when: "a user asks to 'install venira into <client>' — add the MCP server block to that client's config file.",
           avoid_when: "the config path is unknown (run project_detect_harnesses first), or the user wants a dry-run (set dry_run=1).",
           speed_profile: "fast; one atomic write per config. Always backs up the original to <file>.venira-bak.",
-          output_kind: "install_self: {harness, config_path, status (installed|already_present|config_missing|error), needs_restart, error?}.",
+          output_kind: "install_self: {harness, config_path, status (installed|already_present|config_missing|error|would_merge|would_create), needs_restart, dry_run, note}.",
           batch_safe: false,
         },
         { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },

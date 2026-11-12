@@ -345,7 +345,9 @@ export async function runSecrets(
     "secret_expiry_stored",
     expiredSet.ok === true &&
       expiredSet.data?.expired === true &&
-      expiredSet.data?.days_left < 0,
+      // Roadmap item 15 (P2): the day count never goes negative - an expired
+      // secret reads "0 days left".
+      expiredSet.data?.days_left === 0,
     expiredSet.data,
   );
   const expiredInjection = asEnvelope(

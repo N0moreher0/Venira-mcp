@@ -76,9 +76,9 @@ function printInstallResult(
   if (dryRun) {
     const state = result.status === "already_present"
       ? "already present"
-      : result.status === "installed"
+      : result.status === "would_merge"
         ? "would merge"
-        : result.status === "config_missing"
+        : result.status === "would_create"
           ? "would create"
           : "error";
     console.log(`[dry] ${client.padEnd(15)} ${state.padEnd(15)} ${result.config_path || "(no path)"}`);

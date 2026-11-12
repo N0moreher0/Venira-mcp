@@ -68,7 +68,7 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
     about: "Replace exact text: old_text to new_text, or edits[] for several replacements in one file (edits[] wins).",
     use: "you make a targeted change. old_text must match exactly once; replace_all=1 replaces every match. pass expected_sha256 (project_read_file's whole-file sha256, or sha256_after from your last write) to refuse stale content and get a verified re-read.",
     avoid: "you rewrite the whole file (project_write_file) or change several files at once (project_edit_batch).",
-    out: "replacements, sha256_before, sha256_after, verified (when expected_sha256 is given). Failures: old_text_not_found, old_text_ambiguous (returns each match with line context). stale_content: the file changed - read it again, rebuild the patch, send the new sha256.",
+    out: "replacements, sha256_before, sha256_after, verified (when expected_sha256 is given). Failures: old_text_not_found (data.nearest_match carries the region to copy - no line numbers - plus the indentation and the line endings; the file is unchanged), old_text_ambiguous (returns each match with line context).",
   },
   project_edit_batch: {
     about: "Apply edits across one or more files all-or-nothing. Each item takes edit_file arguments (relative_path, old_text, new_text, ...). The first failure rolls back every touched file from an automatic snapshot and skips the rest.",
@@ -214,7 +214,7 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
     about: "Add the Venira MCP server entry to a client's config. Atomic write with a backup at <file>.venira-bak. dry_run=1 previews.",
     use: "the user asks to install Venira into a client.",
     avoid: "the config path is unknown (project_detect_harnesses first).",
-    out: "harness, config_path, status (installed|already_present|config_missing|error), needs_restart.",
+    out: "harness, config_path, status (installed|already_present|config_missing|error|would_merge|would_create), needs_restart, dry_run, note.",
   },
 
   // ---- git provider: PRs --------------------------------------------------

@@ -369,7 +369,16 @@ export const gitlabDialect: GitDialect = {
     const prs = (Array.isArray(json) ? json : []).map(summarizeMr);
     return ok(
       "pr_list",
-      { repo: `${ctx.repo.owner}/${ctx.repo.name}`, provider: ctx.provider, state, total: prs.length, prs },
+      {
+        repo: `${ctx.repo.owner}/${ctx.repo.name}`,
+        provider: ctx.provider,
+        state,
+        total: prs.length,
+        // Roadmap item 15 (P2): `total` counts this page, not the repo.
+        total_scope: "page",
+        returned_count: prs.length,
+        prs,
+      },
       { hint: prs.length === 0 ? "No merge requests matched. Hint: state=all lists closed and merged MRs too." : undefined },
     );
   },

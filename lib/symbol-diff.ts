@@ -137,6 +137,8 @@ export type DiffResult = {
   lines_removed: number;
   unified_diff: string;
   truncated: boolean;
+  /** Roadmap item 15 (P2): the two files are byte-identical. */
+  identical: boolean;
 };
 
 /**
@@ -148,7 +150,7 @@ export type DiffResult = {
  */
 export function diffUnified(a: string, b: string, contextLines = 3, maxLines = 500): DiffResult {
   if (a === b) {
-    return { lines_added: 0, lines_removed: 0, unified_diff: "", truncated: false };
+    return { lines_added: 0, lines_removed: 0, unified_diff: "", truncated: false, identical: true };
   }
   const A = a.split("\n");
   const B = b.split("\n");
@@ -229,7 +231,7 @@ export function diffUnified(a: string, b: string, contextLines = 3, maxLines = 5
   flushChunk();
   if (truncated) out.push("\\ No newline at end of file");
 
-  return { lines_added: added, lines_removed: removed, unified_diff: out.join("\n"), truncated };
+  return { lines_added: added, lines_removed: removed, unified_diff: out.join("\n"), truncated, identical: false };
 }
 
 // ---------------------------------------------------------------------------

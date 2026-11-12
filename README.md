@@ -254,6 +254,8 @@ All tools return the standard envelope (`ok`, `kind`, `data`, `hint`, `elapsed_m
 
 **Recovery that fits the tool.** A failure names the call that can recover from it: a missing secret points at `project_secret action=list`, a missing device flow at `project_github_connect action=start`, a missing checkpoint at `project_snapshot action=list`, a missing file at the file tree. A read batch that lost one item is marked `partial: true` and reports `failed_count` and `succeeded_count`, so the successful reads stay visible. `project_health` in compact mode keeps whole sections and names the ones it dropped, and `sections` asks for exactly the parts you need.
 
+**A failed edit hands back something you can use.** When `old_text` is not in the file, the error carries `nearest_match`: `text` is the region of the file as it really is (**no line numbers** - copying "130: if (dryRun) {" back never matches), `numbered` is the same region with the line numbers for orientation, `header` names the range, and `indentation` / `line_endings` say whether the file uses tabs or spaces and CRLF or LF. The region covers ten lines before and after the nearest match, so the retry works without another read. The file is never changed by a refused edit.
+
 **Write (mutating, pass `reason`)**
 
 | Tool | Purpose |

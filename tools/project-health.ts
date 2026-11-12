@@ -57,6 +57,11 @@ function approvalsHealth(shellElicit: boolean): {
       security_profile: securityProfile,
       security_profile_explicit: securityProfileIsExplicit(),
       shell_mode: policy.mode,
+      // Roadmap item 15 (P2): `security_profile: balanced` next to
+      // `shell_mode: off` reads like a contradiction. Say what is actually
+      // enforced: the mode decides, and "off" means no checks run at all.
+      shell_checks: policy.mode === "off" ? "disabled" : "enforced",
+      shell_mode_decides: true,
       policy_source: policy.source,
       js_exec_mode: JS_EXEC_MODE,
       js_exec_enabled: ALLOW_JS_EXEC,
@@ -131,8 +136,15 @@ export async function runHealth(args: Args, deps: HealthDeps): Promise<ToolResul
         session_id: SESSION_ID,
         uptime_ms: Date.now() - deps.startedAt,
         workspace: WORKSPACE,
-        // Runtime switching is off by default; when on, these are the only roots a switch may reach.
-        workspace_switching: { enabled: dynamicWorkspaceEnabled(), allowed_roots: allowedWorkspaceRoots() },
+        // Roadmap item 15 (P2): `allowed_roots` listed "/" (the unrestricted
+        // mode) next to `enabled: false`, which reads as "you may switch
+        // anywhere". While switching is off, only the current workspace is in
+        // play; unrestricted is reported on its own.
+        workspace_switching: {
+          enabled: dynamicWorkspaceEnabled(),
+          allowed_roots: dynamicWorkspaceEnabled() ? allowedWorkspaceRoots() : [WORKSPACE],
+          unrestricted: UNRESTRICTED,
+        },
         unrestricted: UNRESTRICTED,
         permission_mode: deps.permissionMode,
         output_mode: OUTPUT_MODE,
@@ -143,6 +155,9 @@ export async function runHealth(args: Args, deps: HealthDeps): Promise<ToolResul
         ...hostInfo,
         exe: hostInfo.exe,
         data_dir: dataDir,
+        // Roadmap item 15 (P2): the data dir holds the audit DB and the
+        // secrets; the checkpoint store lives elsewhere (see snapshots.store).
+        data_dir_kind: "audit_and_secrets",
         audit_fast: envFlag("VENIRA_AUDIT_FAST", true),
       },
       capability: deps.capability(),

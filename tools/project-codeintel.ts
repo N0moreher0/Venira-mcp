@@ -1,9 +1,10 @@
 import { promises as fs } from "node:fs";
+import path from "node:path";
 import { recordMetric } from "../lib/metrics.js";
 import { buildEnvelope, errorEnvelope, newRequestId, toolResult } from "../lib/output.js";
 import type { RustResponse, ToolResult } from "../lib/output.js";
 import { buildOutline, diffUnified, extractSymbols } from "../lib/symbol-diff.js";
-import { isProtectedPath, toHostPath } from "../lib/workspace.js";
+import { isProtectedPath, toHostPath, WORKSPACE } from "../lib/workspace.js";
 
 // Code-intelligence tool handlers (outline_symbol, file_symbols, diff_files) and the
 // shared protected-path-aware text reader. Extracted verbatim from tools/project.ts
@@ -57,16 +58,35 @@ export async function runOutlineSymbol(args: Args): Promise<ToolResult> {
     result: {
       kind: "outline_symbol",
       data: {
-        relative_path: toHostPath(rel),
+        // Roadmap item 15 (P2): a workspace-relative path, like every other
+        // tool reports - an absolute path here broke the "relative_path"
+        // contract the agent relies on.
+        relative_path: path.relative(WORKSPACE, toHostPath(rel)).replace(/\\/g, "/"),
         total_symbols: outline.total_symbols,
         symbols: symbols.slice(0, Number(args.max_symbols ?? 200)),
       },
     },
     truncated: false,
+    // Roadmap item 15 (P2): no symbols used to look like "this file has
+    // none" - it may just not be source code.
+    ...(symbols.length === 0
+      ? {
+          hint:
+            "No symbols found. The extractor understands C-like source (functions, classes, types, interfaces). " +
+            "If the file is not source code, use project_search instead.",
+        }
+      : {}),
   };
   const elapsedMs = performance.now() - started;
   recordMetric("outline_symbol", elapsedMs, true);
-  return toolResult(buildEnvelope("outline_symbol", response, { requestId, elapsedMs, cached: false }));
+  return toolResult(
+    buildEnvelope("outline_symbol", response, {
+      requestId,
+      elapsedMs,
+      cached: false,
+      ...(response.hint ? { hint: response.hint } : {}),
+    }),
+  );
 }
 
 export async function runFileSymbols(args: Args): Promise<ToolResult> {
@@ -132,10 +152,13 @@ export async function runDiffFiles(args: Args): Promise<ToolResult> {
     result: {
       kind: "diff_files",
       data: {
-        relative_path_a: toHostPath(relA),
-        relative_path_b: toHostPath(relB),
+        // Roadmap item 15 (P2): workspace-relative paths, like every other tool.
+        relative_path_a: path.relative(WORKSPACE, toHostPath(relA)).replace(/\\/g, "/"),
+        relative_path_b: path.relative(WORKSPACE, toHostPath(relB)).replace(/\\/g, "/"),
         lines_added: diff.lines_added,
         lines_removed: diff.lines_removed,
+        // The two files are byte-identical (the diff is empty).
+        identical: diff.identical,
         unified_diff: diff.unified_diff,
         truncated: diff.truncated,
       },

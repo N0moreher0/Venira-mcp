@@ -60,8 +60,13 @@ export async function opReadFile(
   // that was actually returned.
   const fileSha256 = crypto.createHash("sha256").update(bytes).digest("hex");
 
+  // The raw split keeps the trailing newline in the returned text (the agent
+  // copies the text back into an edit). The *count* ignores the empty string
+  // after a trailing newline: "a\nb\nc\nd\n" has four lines, not five
+  // (roadmap item 15, P2).
   const allLines = content.split("\n");
-  const lastLineOfAll = allLines.length;
+  const lastLineOfAll =
+    allLines.length > 0 && allLines[allLines.length - 1] === "" ? allLines.length - 1 : allLines.length;
 
   // If ranges provided, use them; else fall back to single range
   const effectiveRanges = rangesArg ?? [
@@ -78,6 +83,28 @@ export async function opReadFile(
     const startLine = range.start_line ?? 1;
     const endLine = range.end_line ?? Infinity;
     const maxBytes = range.max_bytes ?? maxBytesGlobal;
+
+    // Roadmap item 15 (P2): a range that cannot exist is an argument
+    // mistake. It used to answer "ok, text: ''" with last_line < first_line.
+    if (!Number.isInteger(startLine) || startLine < 1) {
+      throw new Error(
+        `[invalid_request] start_line must be an integer >= 1 (got ${String(range.start_line)}). ` +
+          "Hint: lines are 1-based; ask for the first line with start_line=1.",
+      );
+    }
+    if (Number.isFinite(endLine) && endLine < startLine) {
+      throw new Error(
+        `[invalid_request] end_line (${endLine}) is before start_line (${startLine}). ` +
+          "Hint: swap them, or drop end_line to read to the end of the file.",
+      );
+    }
+    // An empty file still answers a read of its first line (with no text).
+    if (startLine > Math.max(1, lastLineOfAll)) {
+      throw new Error(
+        `[invalid_request] start_line ${startLine} is past the end of the file (${lastLineOfAll} line(s)). ` +
+          "Hint: read the file without start_line, or ask for a line inside it.",
+      );
+    }
 
     const startIdx = Math.max(0, startLine - 1);
     const endIdx = Math.min(allLines.length, endLine);
@@ -104,7 +131,9 @@ export async function opReadFile(
 
     const text = lines.join("\n");
     const firstLine = startLine;
-    const lastLine = startIdx + lines.length;
+    // The empty string after a trailing newline is not a line of its own.
+    const lastLine =
+      startIdx + lines.length - (lines.length > 0 && lines[lines.length - 1] === "" ? 1 : 0);
 
     results.push({
       start_line: firstLine,
@@ -135,6 +164,9 @@ export async function opReadFile(
       total_bytes: stat.size,
       total_lines: lastLineOfAll,
       truncated: first.truncated,
+      // Roadmap item 15 (P2): `incomplete` says "the content was not fully
+      // returned", `truncated` is kept for compatibility.
+      incomplete: first.truncated,
       ...(first.next_start_line !== undefined ? { next_start_line: first.next_start_line } : {}),
     };
   } else {
@@ -146,6 +178,8 @@ export async function opReadFile(
       ranges: results,
       total_bytes: stat.size,
       total_lines: lastLineOfAll,
+      truncated: results.some((r) => r.truncated),
+      incomplete: results.some((r) => r.truncated),
     };
   }
 
@@ -201,6 +235,23 @@ export async function opListFiles(
   const targetPath = resolveInWorkspace(args.relative_path as string, root);
   if (isProtectedPath(targetPath)) {
     throw new Error(`[sensitive_result] Path is protected by policy: ${args.relative_path}. Hint: do not list protected files.`);
+  }
+  // Roadmap item 15 (P2): listing a path that does not exist (or a file)
+  // used to answer "ok, entries: []" - indistinguishable from an empty
+  // folder. Now it says what is wrong.
+  try {
+    const stat = await fs.stat(targetPath);
+    if (!stat.isDirectory()) {
+      throw new Error(
+        `[invalid_request] Not a directory: ${args.relative_path}. ` +
+          "Hint: use project_read_file to read a file, or project_list_files on its parent.",
+      );
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("[")) throw error;
+    throw new Error(
+      `[not_found] Path does not exist: ${args.relative_path}. Hint: check it with project_list_files.`,
+    );
   }
   const limit = Math.min(200, (args.limit as number | undefined) ?? 200);
   const depth = Math.min(3, Math.max(1, (args.depth as number | undefined) ?? 1));
@@ -284,6 +335,9 @@ export async function opListFiles(
         relative_path: path.relative(root, targetPath).replace(/\\/g, "/"),
         entries,
         truncated,
+        // Roadmap item 15 (P2): `limited` says "the limit cut the list",
+        // `truncated` is kept for compatibility.
+        limited: truncated,
         hint: truncated
           ? "Result truncated: raise limit (max 200) or narrow relative_path/depth."
           : undefined,

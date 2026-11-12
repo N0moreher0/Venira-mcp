@@ -154,6 +154,24 @@ export async function opSearch(
   const query = args.query;
   const kind = (args.kind as string) ?? "literal_content";
   const searchRoot = resolveInWorkspace(args.relative_path as string, root);
+  // Roadmap item 15 (P2): a search in a path that does not exist is a
+  // mistake, not an empty result. `dependency_graph`, `snapshot create` and
+  // `change_impact` already answer not_found; search answers the same way.
+  try {
+    const stat = await fs.stat(searchRoot);
+    if (!stat.isDirectory() && !stat.isFile()) {
+      throw new Error(
+        "[invalid_request] The search path is neither a file nor a directory. " +
+          "Hint: pass an existing file or folder.",
+      );
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("[")) throw error;
+    throw new Error(
+      `[not_found] Path does not exist: ${String(args.relative_path ?? ".")}. ` +
+        "Hint: check it with project_list_files.",
+    );
+  }
   // Hidden files are searched by default (parity with the JS walker; agents
   // legitimately search `.github/`, `.vscode/`). Pass include_hidden=0 to skip
   // dotfiles (rg-style). Protected secrets are always excluded either way.
@@ -219,6 +237,33 @@ export async function opSearch(
   const diagnostics: string[] = [];
   let complete = true;
   let totalMatchLines = 0;
+  /** How many matches the scan collected at most (the rg fast path has a cap). */
+  let scanCap: number | undefined;
+  /**
+   * One hint for the two ways a search can disappoint the caller.
+   * Roadmap item 15 (P2): the cut case used to say "see diagnostics" while
+   * `diagnostics` was empty, and `total_match_lines` looked like the real
+   * number of matches although it stops at the scan cap.
+   */
+  const searchHint = (): string | undefined => {
+    if (hits.length === 0) {
+      return "No matches. Broaden the search: drop glob/relative_path, set regex=0, or use kind=file_name.";
+    }
+    if (!complete) {
+      return (
+        `The search was cut after ${totalMatchLines} collected match(es)` +
+        (scanCap ? ` (the scan cap is ${scanCap})` : "") +
+        ", so this is not the full picture. Narrow it with glob/relative_path, or raise limit (max 200)."
+      );
+    }
+    return undefined;
+  };
+  /** The fields that say what the numbers mean. */
+  const searchMeta = () => ({
+    limit,
+    ...(scanCap ? { match_scan_cap: scanCap } : {}),
+    files_matched_scope: "returned_hits" as const,
+  });
 
   async function collectFiles(dir: string): Promise<string[]> {
     const files: string[] = [];
@@ -321,6 +366,7 @@ export async function opSearch(
             // Safety cap only: never cut at `limit` before ranking, because
             // rg's multithreaded output order is not stable.
             const COLLECT_CAP = Math.max(limit * 10, 1000);
+            scanCap = COLLECT_CAP;
             for (const raw of lines) {
               let rec: any = null;
               try { rec = JSON.parse(raw); } catch { continue; }
@@ -391,7 +437,11 @@ export async function opSearch(
                   diagnostics,
                   total_match_lines: totalMatchLines,
                   files_matched: new Set(hits.map((h) => h.relative_path)).size,
-                  hint: hits.length === 0 ? "No matches. Broaden the search: drop glob/relative_path, set regex=0, or use kind=file_name." : undefined,
+                  ...searchMeta(),
+                  // Roadmap item 15 (P2): `limited` says "a limit cut the
+                  // result", `truncated` is kept for compatibility.
+                  limited: !complete,
+                  hint: searchHint(),
                 },
               },
             };
@@ -499,10 +549,9 @@ export async function opSearch(
         diagnostics,
         total_match_lines: totalMatchLines,
         files_matched: filesMatched,
-        hint:
-          hits.length === 0
-            ? "No matches. Broaden the search: drop glob/relative_path, set regex=0, or use kind=file_name."
-            : undefined,
+        ...searchMeta(),
+        limited: !complete,
+        hint: searchHint(),
       },
     },
   };

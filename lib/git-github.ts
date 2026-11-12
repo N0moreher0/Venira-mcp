@@ -104,7 +104,12 @@ function summarizePull(pr: any): Record<string, unknown> {
     author: pr?.user?.login ?? null,
     created_at: pr?.created_at ?? null,
     updated_at: pr?.updated_at ?? null,
-    merged: pr?.merged ?? null,
+    // Roadmap item 15 (P2): the list endpoint does not say whether a PR was
+    // merged, so `merged` was null for closed PRs. `merged_at` is the field
+    // that is available; `merged` is true/false/unknown (null = the provider
+    // did not say).
+    merged: typeof pr?.merged === "boolean" ? pr.merged : pr?.merged_at ? true : null,
+    merged_at: pr?.merged_at ?? null,
     url: pr?.html_url ?? null,
   };
 }
@@ -331,7 +336,18 @@ export const githubDialect: GitDialect = {
     const prs = (Array.isArray(json) ? json : []).map(summarizePull);
     return ok(
       "pr_list",
-      { repo: `${ctx.repo.owner}/${ctx.repo.name}`, provider: ctx.provider, state, total: prs.length, prs },
+      {
+        repo: `${ctx.repo.owner}/${ctx.repo.name}`,
+        provider: ctx.provider,
+        state,
+        total: prs.length,
+        // Roadmap item 15 (P2): `total` is the number of PRs in this page,
+        // not the number in the repo (that is what ci_status.total_count
+        // means). Say which one it is.
+        total_scope: "page",
+        returned_count: prs.length,
+        prs,
+      },
       { hint: prs.length === 0 ? "No PRs matched. Hint: state=all also lists closed/merged PRs." : undefined },
     );
   },
@@ -499,12 +515,15 @@ export const githubDialect: GitDialect = {
   },
 
   async ciTrigger(ctx, args) {
-    requireToken(ctx);
+    // Roadmap item 15 (P2): the missing argument was reported after the
+    // missing credential, so a caller without a workflow learned about the
+    // token first. Arguments are cheap and local - check them first.
     const workflow = requireText(
       args,
       "workflow",
       'pass the workflow file name or id, e.g. workflow="ci.yml" (see .github/workflows/).',
     );
+    requireToken(ctx);
     const ref = text(args, "ref") || currentBranch() || (await repoDefaultBranch(ctx));
 
     let inputs: Record<string, string> = {};
