@@ -673,7 +673,9 @@ export async function buildChangeImpact(
         truncated: false,
       },
       truncated: false,
-      hint: "No seed file resolved. Hint: pass files=[...] or a symbol declared in the workspace.",
+      hint: seedUnresolved.length > 0
+        ? `No seed file resolved: ${seedUnresolved[0].symbol} - ${seedUnresolved[0].reason}. ${seedUnresolved[0].next_step}`
+        : "No seed file resolved. Hint: pass files=[...] or a symbol declared in the workspace.",
     };
   }
 
