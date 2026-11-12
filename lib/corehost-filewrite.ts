@@ -496,7 +496,9 @@ export async function opDeletePath(
   try {
     stat = await fs.stat(absPath);
   } catch {
-    throw new Error(`[not_found] Path does not exist: ${args.relative_path}.`);
+    throw new Error(
+      `[not_found] Path does not exist: ${args.relative_path}. Hint: check with project_list_files.`,
+    );
   }
 
   if (stat.isDirectory() && !recursive) {

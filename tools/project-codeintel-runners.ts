@@ -146,7 +146,7 @@ export function createCodeIntelRunners(deps: CodeIntelRunnerDeps) {
     const requestId = newRequestId();
     const queries = args.queries as SelectiveQuery[] | undefined;
     if (!Array.isArray(queries) || queries.length === 0) {
-      return toolResult(errorEnvelope("selective_search", new Error("[invalid_request] queries[] is required."), { requestId, elapsedMs: 0 }), true);
+      return toolResult(errorEnvelope("search", new Error("[invalid_request] queries[] is required."), { requestId, elapsedMs: 0 }), true);
     }
     const files = new Map<string, string>();
     const hint = Array.isArray(args.files_hint) ? (args.files_hint as string[]) : [];
@@ -170,7 +170,7 @@ export function createCodeIntelRunners(deps: CodeIntelRunnerDeps) {
       }
       if (usable === 0 && blocked > 0) {
         return toolResult(
-          errorEnvelope("selective_search", new Error("[sensitive_result] Every files_hint path is protected by policy."), { requestId, elapsedMs: performance.now() - started }),
+          errorEnvelope("search", new Error("[sensitive_result] Every files_hint path is protected by policy."), { requestId, elapsedMs: performance.now() - started }),
           true,
         );
       }
@@ -196,14 +196,14 @@ export function createCodeIntelRunners(deps: CodeIntelRunnerDeps) {
     const response: RustResponse = {
       status: "completed",
       result: {
-        kind: "selective_search",
-        data: { hits, total_files: result.total_files, total_hits: result.total_hits, truncated: result.truncated },
+        kind: "search",
+        data: { hits, total_files: result.total_files, total_hits: result.total_hits, truncated: result.truncated, limited: result.truncated, complete: !result.truncated, mode: "selective" },
       },
       truncated: result.truncated,
     };
     const elapsedMs = performance.now() - started;
-    recordMetric("selective_search", elapsedMs, true);
-    return toolResult(buildEnvelope("selective_search", response, { requestId, elapsedMs, cached: false }));
+    recordMetric("search", elapsedMs, true);
+    return toolResult(buildEnvelope("search", response, { requestId, elapsedMs, cached: false }));
   }
 
   return { runSymbolReferences, runSelectiveSearch };

@@ -234,6 +234,7 @@ export function registerProjectTools(server: McpServer): void {
     recentFilesDeps,
     batchDeps,
     maxBatchItemBytes: MAX_BATCH_ITEM_BYTES,
+    runSearchSelective: runSelectiveSearch,
   });
 
   registerShellTools(server, { runOne, shellDeps });
@@ -244,7 +245,7 @@ export function registerProjectTools(server: McpServer): void {
   // P2/P3: code intelligence + workflow
   // -------------------------------------------------------------------------
 
-  registerCodeIntelTools(server, { runOne, runSymbolReferences, runSelectiveSearch });
+  registerCodeIntelTools(server, { runOne, runSymbolReferences });
 
   registerWorkflowTools(server, {
     ...workflowRunners,

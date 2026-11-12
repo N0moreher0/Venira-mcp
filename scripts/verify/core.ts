@@ -236,9 +236,12 @@ export async function runCore($h: Harness) {
   // default and expert tool profiles are measured (expert is the worst case).
   // Measured 2026-11 (tool schema phase 4): expert=63803 B, default=47277 B,
   // worst per tool=5071 B (project_read_batch, the typed batch schema kept by phase 4).
-  // Budgets keep ~6% headroom on totals and a tight per-tool ceiling; raise them deliberately
-  // in the same change that adds tool surface, never silently.
-  const TOOL_SCHEMA_MAX_BYTES = 5100;
+  // Raised deliberately in the same change that advertised boolean acceptance on every
+  // flag (flag01 = integer 0|1 in tools/list, parse accepts true/false): the anyOf grew
+  // every flag's schema, and project_read_batch (which enumerates four operations' args)
+  // crossed the old 5100 ceiling at 5647 bytes. Totals are unchanged: expert 68624 (limit 72000),
+  // default 49457 (limit 50000) both still fit.
+  const TOOL_SCHEMA_MAX_BYTES = 5700;
   const EXPERT_TOOL_LIST_MAX_BYTES = 72000;
   const DEFAULT_TOOL_LIST_MAX_BYTES = 50000;
   const toolSchemaBytes = (tool: {

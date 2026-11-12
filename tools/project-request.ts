@@ -1,7 +1,34 @@
 import { parseBackgroundFlag } from "../lib/env.js";
 import { SHELL_MAX_TIMEOUT_MS } from "../lib/corehost.js";
+import { resolveSecurityProfile } from "../lib/security-profile.js";
 import { toHostPath } from "../lib/workspace.js";
 import type { Args } from "./project-cache.js";
+
+/**
+ * The file-writing tools (the MUTATING set in project-executor.ts plus the
+ * `create_directory` op behind project_create). These are the ops that need a
+ * reason for the audit trail. Everything read-only or external-identifier
+ * passes through untouched.
+ */
+const REASON_REQUIRED_OPS = new Set([
+  "write_file",
+  "edit_file",
+  "create_directory",
+  "delete_path",
+  "snapshot_create",
+  "snapshot_restore",
+  "snapshot_delete",
+]);
+
+/** Auto-generate a short audit reason when the caller did not pass one. */
+function autoReason(operation: string, out: Args): string {
+  const target =
+    (typeof out.relative_path === "string" && out.relative_path) ||
+    (Array.isArray(out.paths) && out.paths.length > 0 ? String(out.paths[0]) : undefined) ||
+    (typeof out.command === "string" ? out.command.slice(0, 120) : undefined) ||
+    (typeof out.id === "string" ? out.id : "");
+  return `auto: ${operation} ${target}`.trim().slice(0, 400);
+}
 
 /**
  * Operations that talk to GitHub/CI or to the secret store. They take no
@@ -29,6 +56,18 @@ export function prepareRequest(operation: string, args: Args): Args {
   for (const [key, value] of Object.entries(args)) {
     if (value !== undefined) out[key] = value;
   }
+  // --- reason: optional everywhere; auto-generated for mutating ops when absent;
+  // required outright when VENIRA_SECURITY_PROFILE=strict.
+  const reason = typeof out.reason === "string" ? out.reason.trim() : "";
+  if (!reason && REASON_REQUIRED_OPS.has(operation)) {
+    if (resolveSecurityProfile() === "strict") {
+      throw new Error(
+        `[invalid_request] reason is required when VENIRA_SECURITY_PROFILE=strict (operation: ${operation}). ` +
+          "Hint: pass a short why, e.g. \"reason\": \"fix the stale-lock retry in the checkpointer\" (max 400 chars).",
+      );
+    }
+    out.reason = autoReason(operation, out);
+  }
   if (EXTERNAL_OPS.has(operation)) {
     // No path fields: repo/PR/run ids are remote identifiers.
     return out;
@@ -42,28 +81,13 @@ export function prepareRequest(operation: string, args: Args): Args {
     }
   } else if (operation === "change_impact") {
     // Impact seeds: file paths and the optional `{name, file}` symbol form.
-    if (Array.isArray(out.files)) {
-      out.files = (out.files as unknown[]).map((entry) => toHostPath(String(entry)));
-    }
-    if (Array.isArray(out.symbols)) {
-      out.symbols = (out.symbols as unknown[]).map((entry) => {
-        if (typeof entry === "string") return entry;
-        if (entry && typeof entry === "object") {
-          const record = entry as Record<string, unknown>;
-          const rawFile =
-            typeof record.relative_path === "string"
-              ? record.relative_path
-              : typeof record.file === "string"
-                ? record.file
-                : undefined;
-          return rawFile === undefined ? record : { ...record, relative_path: toHostPath(rawFile) };
-        }
-        return entry;
-      });
-    }
-  } else if (operation !== "shell_status" && operation !== "cancel") {
-    out.relative_path = toHostPath(out.relative_path as string | undefined);
+    // Keep as workspace-relative; corehost resolves them internally.
   }
+  // Most file operations expect a workspace-relative path in args.relative_path
+  // (they call resolveInWorkspace internally). Converting to absolute here would
+  // leak absolute paths in error messages. Only convert for operations that
+  // explicitly need absolute paths (shell_run cwd, snapshot paths).
+  // No transformation needed for relative_path here.
   return out;
 }
 

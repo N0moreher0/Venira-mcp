@@ -6,18 +6,17 @@ import { runDiffFiles, runOutlineSymbol } from "./project-codeintel.js";
 import { config, flag01, path_ } from "./project-schema.js";
 
 // Code-intelligence tool registrations: project_outline_symbol, project_diff_files,
-// project_symbol_references, project_selective_search, project_dependency_graph, project_change_impact.
+// project_symbol_references, project_dependency_graph, project_change_impact.
 // Extracted from registerProjectTools in tools/project.ts (roadmap item 6, step 5m). Schemas, descriptions
 // and registration order are unchanged; handlers that need project.ts state arrive through CodeIntelDeps.
 
 export type CodeIntelDeps = {
   runOne: (operation: string, args: Args) => Promise<ToolResult>;
   runSymbolReferences: (args: Args) => Promise<ToolResult>;
-  runSelectiveSearch: (args: Args) => Promise<ToolResult>;
 };
 
 export function registerCodeIntelTools(server: McpServer, deps: CodeIntelDeps): void {
-  const { runOne, runSymbolReferences, runSelectiveSearch } = deps;
+  const { runOne, runSymbolReferences } = deps;
   server.registerTool(
     "project_outline_symbol",
     {
@@ -93,35 +92,6 @@ export function registerCodeIntelTools(server: McpServer, deps: CodeIntelDeps): 
       },
     },
     (args) => runSymbolReferences(args as Args),
-  );
-
-  server.registerTool(
-    "project_selective_search",
-    {
-      ...config(
-        "Smart multi-query search: combine several patterns with AND/OR/NOT + fuzzy scoring. Bounded to a file set you pass in.",
-        "Selective search",
-        {
-          use_when: "you need to rank many files by how well they match several keywords at once (e.g. locating the right module among candidates).",
-          avoid_when: "you need a single exact literal (project_search) or to inspect one file's content (project_read_file).",
-          speed_profile: "medium; reads a bounded set of files (files_hint or a shallow listing) and scores each line.",
-          output_kind: "selective_search: hits[] {relative_path, line_number, text, score, matched}, total_files, total_hits, truncated.",
-          batch_safe: true,
-        },
-        { readOnlyHint: true, openWorldHint: false },
-      ),
-      inputSchema: {
-        queries: z.array(z.object({
-          pattern: z.string().describe("Case-insensitive substring matched against each line."),
-          must: flag01.optional().describe("1 excludes files that do not contain this pattern (default 0)."),
-          weight: z.number().int().optional().describe("Score multiplier for hits on this pattern (default 1; higher wins)."),
-        })).min(1).describe("One or more patterns. Files are scored by how many patterns they match (must patterns are required)."),
-        files_hint: z.array(z.string()).optional().describe("Workspace paths to search instead of a shallow listing (first 20 are used)."),
-        relative_path: path_.optional().describe("Directory to list when files_hint is omitted (default: workspace root, depth 2, first 40 files)."),
-        limit: z.number().int().min(1).max(500).optional().describe("Max hits returned (default 100, max 500)."),
-      },
-    },
-    (args) => runSelectiveSearch(args as Args),
   );
 
   server.registerTool(

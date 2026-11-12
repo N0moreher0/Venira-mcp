@@ -589,17 +589,17 @@ export async function runCheckpointsErrors(
       !JSON.stringify(symbolLeak).includes(sensitiveMarker),
     symbolLeak,
   );
-  const selectiveLeak = asEnvelope(
-    await call("project_selective_search", {
+  const multiQueryLeak = asEnvelope(
+    await call("project_search", {
       queries: [{ pattern: "TOKEN" }],
       files_hint: [`${dir}/.env.local`],
     }),
   );
   check(
-    "sensitive_selective_search_excluded",
-    selectiveLeak.error?.code === "sensitive_result" &&
-      !JSON.stringify(selectiveLeak).includes(sensitiveMarker),
-    selectiveLeak,
+    "sensitive_multi_query_search_excluded",
+    multiQueryLeak.error?.code === "sensitive_result" &&
+      !JSON.stringify(multiQueryLeak).includes(sensitiveMarker),
+    multiQueryLeak,
   );
   await fs.writeFile(`${dir}/.env::$DATA`, `TOKEN=${sensitiveMarker}\n`);
   const adsLeak = asEnvelope(

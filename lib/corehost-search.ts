@@ -9,6 +9,23 @@ import { resolveInWorkspace, type RustResponse } from "./corehost-common.js";
 import { isProtectedPath } from "./workspace.js";
 import { envFlag } from "./env.js";
 
+/** Max files the JS fallback walker collects before it stops and reports
+ *  complete=false. Bounds searches rooted at huge trees (e.g. absolute paths
+ *  outside the workspace when VENIRA_UNRESTRICTED=1). */
+function maxScanFiles(): number {
+  const raw = Number(process.env.VENIRA_SEARCH_MAX_FILES ?? "");
+  return Number.isFinite(raw) && raw > 0 ? Math.min(5_000_000, Math.floor(raw)) : 50_000;
+}
+
+/** Reports `relative_path` relative to the workspace when the file is inside it;
+ *  falls back to the absolute path otherwise (unrestricted out-of-workspace search). */
+function relToRoot(absPath: string, root: string): string {
+  const rel = path.relative(root, absPath);
+  if (rel === "") return ".";
+  if (rel.startsWith("..") || path.isAbsolute(rel)) return absPath;
+  return rel.replace(/\\/g, "/");
+}
+
 
 let ripgrepAvailableCache: boolean | null = null;
 async function ripgrepInstalled(): Promise<boolean> {
@@ -237,6 +254,7 @@ export async function opSearch(
   const diagnostics: string[] = [];
   let complete = true;
   let totalMatchLines = 0;
+  let countedFilesMatched = 0;
   /** How many matches the scan collected at most (the rg fast path has a cap). */
   let scanCap: number | undefined;
   /**
@@ -246,6 +264,9 @@ export async function opSearch(
    * number of matches although it stops at the scan cap.
    */
   const searchHint = (): string | undefined => {
+    if (!complete && hits.length === 0) {
+      return `The search was cut before any hit was found (file cap ${scanCap ?? maxScanFiles()}). Narrow relative_path/glob, or raise VENIRA_SEARCH_MAX_FILES.`;
+    }
     if (hits.length === 0) {
       return "No matches. Broaden the search: drop glob/relative_path, set regex=0, or use kind=file_name.";
     }
@@ -265,9 +286,12 @@ export async function opSearch(
     files_matched_scope: "returned_hits" as const,
   });
 
-  async function collectFiles(dir: string): Promise<string[]> {
+  async function collectFiles(dir: string): Promise<{ files: string[]; scanTruncated: boolean }> {
     const files: string[] = [];
+    let scanTruncated = false;
+    const cap = maxScanFiles();
     async function walk(d: string): Promise<void> {
+      if (files.length >= cap) { scanTruncated = true; return; }
       let entries;
       try {
         entries = await fs.readdir(d, { withFileTypes: true });
@@ -275,6 +299,7 @@ export async function opSearch(
         return;
       }
       for (const entry of entries) {
+        if (scanTruncated) return;
         if (entry.isSymbolicLink()) continue;
         // Hidden files/dot-directories are skipped unless include_hidden=1.
         // IGNORED (node_modules/target/…) and isProtectedPath always apply.
@@ -286,17 +311,19 @@ export async function opSearch(
         } else if (entry.isFile()) {
           if (isProtectedPath(abs)) continue;
           files.push(abs);
+          if (files.length >= cap) { scanTruncated = true; return; }
         }
       }
     }
     await walk(dir);
-    return files;
+    return { files, scanTruncated };
   }
 
   const needle = caseSensitive ? query : query.toLowerCase();
 
   if (kind === "file_name" || kind === "directory_name") {
-    const files = await collectFiles(searchRoot);
+    const { files, scanTruncated } = await collectFiles(searchRoot);
+    if (scanTruncated) { complete = false; scanCap = maxScanFiles(); }
     for (const abs of files) {
       if (hits.length >= limit) { complete = false; break; }
       const basename = path.basename(abs);
@@ -304,7 +331,7 @@ export async function opSearch(
       if (!match) continue;
       if (kind === "file_name" && (await fs.stat(abs)).isDirectory()) continue;
       if (kind === "directory_name" && !(await fs.stat(abs)).isDirectory()) continue;
-      const rel = path.relative(root, abs).replace(/\\/g, "/");
+      const rel = relToRoot(abs, root);
       hits.push({ relative_path: rel });
       totalMatchLines += 1;
     }
@@ -374,7 +401,7 @@ export async function opSearch(
               const pth = String(rec.data?.path?.text ?? "");
               const abs = path.isAbsolute(pth) ? pth : path.resolve(root, pth);
               if (isProtectedPath(abs)) continue;
-              const rel = path.relative(root, abs).replace(/\\/g, "/");
+              const rel = relToRoot(abs, root);
               // Mirror collectFiles() exactly: hidden segments and built-in
               // IGNORED dirs are dropped even if rg's glob handling lets one
               // through (keeps both backends returning the same hit set).
@@ -452,7 +479,8 @@ export async function opSearch(
       }
     }
 
-    const files = await collectFiles(searchRoot);
+    const { files, scanTruncated } = await collectFiles(searchRoot);
+    if (scanTruncated) { complete = false; scanCap = maxScanFiles(); }
     const useRegex = args.regex === true;
     let wordRe: RegExp | null = null;
     if (wholeWord) {
@@ -474,7 +502,7 @@ export async function opSearch(
     for (let ci = 0; ci < files.length; ci += READ_CHUNK) {
       const chunk = files.slice(ci, ci + READ_CHUNK);
       const results = await Promise.all(chunk.map(async (abs): Promise<FileEntry | null> => {
-        const rel = path.relative(root, abs).replace(/\\/g, "/");
+        const rel = relToRoot(abs, root);
         if (includeRe && !includeRe.test(rel)) return null;
         if (excludeRe && excludeRe.test(rel)) return null;
         if (BINARY_EXT.has(path.extname(rel).toLowerCase())) return null;
@@ -489,66 +517,115 @@ export async function opSearch(
     }
 
     const needleConst = needle;
-    for (const entry of entries) {
-      if (!entry) continue;
-      if (hits.length >= limit) { complete = false; break; }
-      const { rel, content } = entry;
+    // When countOnly is true, we don't collect hits at all - just count matches.
+    // The limit is ignored for counting (per schema: "limit is then ignored").
+    if (!countOnly) {
+      for (const entry of entries) {
+        if (!entry) continue;
+        if (hits.length >= limit) { complete = false; break; }
+        const { rel, content } = entry;
 
-      const lines = content.split(/\r?\n/);
-      const matchIndices: number[] = [];
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i];
-        const lineLower = caseSensitive ? line : line.toLowerCase();
-        const match = useRegex
-          ? (contentRe as RegExp).test(line)
-          : kind === "definition"
-            ? /^\s*(?:export\s+)?(?:function|class|const|let|var|type|interface|struct|fn|impl|trait|enum)\s+/.test(line) &&
-              (wordRe ? wordRe.test(lineLower) : lineLower.includes(needleConst))
-            : wordRe
-              ? wordRe.test(lineLower)
-              : lineLower.includes(needleConst);
-        if (match) matchIndices.push(i);
-      }
-      if (matchIndices.length === 0) continue;
-      totalMatchLines += matchIndices.length;
+        const lines = content.split(/\r?\n/);
+        const matchIndices: number[] = [];
+        for (let i = 0; i < lines.length; i++) {
+          const line = lines[i];
+          const lineLower = caseSensitive ? line : line.toLowerCase();
+          const match = useRegex
+            ? (contentRe as RegExp).test(line)
+            : kind === "definition"
+              ? /^\s*(?:export\s+)?(?:function|class|const|let|var|type|interface|struct|fn|impl|trait|enum)\s+/.test(line) &&
+                (wordRe ? wordRe.test(lineLower) : lineLower.includes(needleConst))
+              : wordRe
+                ? wordRe.test(lineLower)
+                : lineLower.includes(needleConst);
+          if (match) matchIndices.push(i);
+        }
+        if (matchIndices.length === 0) continue;
+        totalMatchLines += matchIndices.length;
 
-      for (const idx of matchIndices) {
-        // Same collection cap as the rg path: collect, rank, then trim so the
-        // two backends agree on which hits survive `limit`.
-        if (hits.length >= Math.max(limit * 10, 1000)) {
-          complete = false;
-          break;
+        for (const idx of matchIndices) {
+          // Same collection cap as the rg path: collect, rank, then trim so the
+          // two backends agree on which hits survive `limit`.
+          if (hits.length >= Math.max(limit * 10, 1000)) {
+            complete = false;
+            break;
+          }
+          const snippet = lines[idx].trim().slice(0, 200);
+          const hit: Hit = { relative_path: rel, line_number: idx + 1 };
+          hit.snippet = snippet;
+          if (contextLines > 0) {
+            const start = Math.max(0, idx - contextLines);
+            const end = Math.min(lines.length, idx + contextLines + 1);
+            hit.context = lines.slice(start, end);
+          }
+          hits.push(hit);
         }
-        const snippet = lines[idx].trim().slice(0, 200);
-        const hit: Hit = { relative_path: rel, line_number: idx + 1 };
-        if (!countOnly) hit.snippet = snippet;
-        if (contextLines > 0 && !countOnly) {
-          const start = Math.max(0, idx - contextLines);
-          const end = Math.min(lines.length, idx + contextLines + 1);
-          hit.context = lines.slice(start, end);
-        }
-        hits.push(hit);
       }
-    }
-    rankHits(hits, needleConst);
-    if (hits.length > limit) {
-      hits.length = limit;
-      complete = false;
+      rankHits(hits, needleConst);
+      if (hits.length > limit) {
+        hits.length = limit;
+        complete = false;
+      }
+    } else {
+      // countOnly = true: count all matches without limit, don't collect hits
+      for (const entry of entries) {
+        if (!entry) continue;
+        const { content } = entry;
+        const lines = content.split(/\r?\n/);
+        for (let i = 0; i < lines.length; i++) {
+          const line = lines[i];
+          const lineLower = caseSensitive ? line : line.toLowerCase();
+          const match = useRegex
+            ? (contentRe as RegExp).test(line)
+            : kind === "definition"
+              ? /^\s*(?:export\s+)?(?:function|class|const|let|var|type|interface|struct|fn|impl|trait|enum)\s+/.test(line) &&
+                (wordRe ? wordRe.test(lineLower) : lineLower.includes(needleConst))
+              : wordRe
+                ? wordRe.test(lineLower)
+                : lineLower.includes(needleConst);
+          if (match) totalMatchLines += 1;
+        }
+      }
+      // Count files that have at least one match
+      const filesWithMatches = new Set<string>();
+      for (const entry of entries) {
+        if (!entry) continue;
+        const { rel, content } = entry;
+        const lines = content.split(/\r?\n/);
+        for (let i = 0; i < lines.length; i++) {
+          const line = lines[i];
+          const lineLower = caseSensitive ? line : line.toLowerCase();
+          const match = useRegex
+            ? (contentRe as RegExp).test(line)
+            : kind === "definition"
+              ? /^\s*(?:export\s+)?(?:function|class|const|let|var|type|interface|struct|fn|impl|trait|enum)\s+/.test(line) &&
+                (wordRe ? wordRe.test(lineLower) : lineLower.includes(needleConst))
+              : wordRe
+                ? wordRe.test(lineLower)
+                : lineLower.includes(needleConst);
+          if (match) {
+            filesWithMatches.add(rel);
+            break;
+          }
+        }
+      }
+      countedFilesMatched = filesWithMatches.size;
+      complete = true;
     }
   }
 
-  const filesMatched = new Set(hits.map((h) => h.relative_path)).size;
+  const finalFilesMatched = countOnly ? countedFilesMatched : new Set(hits.map((h) => h.relative_path)).size;
 
   return {
     status: "completed",
     result: {
       kind: "search",
       data: {
-        hits,
+        ...(!countOnly ? { hits } : {}),
         complete,
         diagnostics,
         total_match_lines: totalMatchLines,
-        files_matched: filesMatched,
+        files_matched: finalFilesMatched,
         ...searchMeta(),
         limited: !complete,
         hint: searchHint(),

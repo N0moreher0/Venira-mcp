@@ -74,6 +74,7 @@ const fileToolDeps = {
   recentFilesDeps: { lookup: dummy, store: dummy, recentEdits: new Set() } as never,
   batchDeps: { execute: dummy, maxBatchResponseBytes: 1 } as never,
   maxBatchItemBytes: 1,
+  runSearchSelective: dummy,
 };
 files.registerFileTools(fakeServer, fileToolDeps);
 shell.registerShellTools(fakeServer, {
@@ -100,7 +101,6 @@ ops.registerOpsTools(fakeServer, {
 codeintel.registerCodeIntelTools(fakeServer, {
   runOne: dummy,
   runSymbolReferences: dummy,
-  runSelectiveSearch: dummy,
 });
 workflow.registerWorkflowTools(fakeServer, {
   runDetectHarnesses: dummy,

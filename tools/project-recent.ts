@@ -4,7 +4,7 @@ import { queryRecentFiles } from "../lib/corehost.js";
 import { recordMetric } from "../lib/metrics.js";
 import { buildEnvelope, errorEnvelope, newRequestId, toolResult } from "../lib/output.js";
 import type { RustResponse, ToolResult } from "../lib/output.js";
-import { toHostPath, WORKSPACE } from "../lib/workspace.js";
+import { toHostPath, WORKSPACE, isProtectedPath } from "../lib/workspace.js";
 
 // project_recent_files: SQLite index first, bounded filesystem scan as fallback.
 // Extracted from tools/project.ts (P1 #6, step 5c); behavior is unchanged.
@@ -68,6 +68,11 @@ async function scanRecent(args: Args): Promise<{
     for (const entry of entries) {
       if (entry.isSymbolicLink()) continue;
       const abs = path.join(dir.abs, entry.name);
+      // Roadmap item 15 (P2): the file tools refuse the data dir, the
+      // checkpoint store and the credential files - the recent list must not
+      // advertise them (it listed data/venira.db and data/audit.key when the
+      // data dir sits inside the workspace).
+      if (isProtectedPath(abs)) continue;
       if (entry.isDirectory()) {
         if (entry.name === ".git") continue;
         if (!includeIgnored && IGNORED_DIRS.has(entry.name)) continue;
@@ -141,20 +146,36 @@ export async function runRecentFiles(args: Args, deps: RecentFilesDeps): Promise
 
     // P2: Try the SQLite index first (no bounded scan needed when the index is populated).
     const maxFiles = Math.max(1, Math.min(100, Number(args.limit ?? 20)));
-    const indexHits = queryRecentFiles(maxFiles, args.include_ignored === true, root);
+    // The index is keyed by the WORKSPACE root, not by the requested directory:
+    // filtering it by a subdirectory used to miss every indexed row and
+    // silently fall back to the scan. Query the workspace and filter here.
+    const rootRel = path.relative(WORKSPACE, root).replace(/\\/g, "/");
+    const indexAll = queryRecentFiles(maxFiles * 3, false, WORKSPACE);
+    const indexHits = indexAll
+      .filter((hit) => !hit.outside_workspace)
+      .filter((hit) => !rootRel || hit.relative_path === rootRel || hit.relative_path.startsWith(`${rootRel}/`))
+      .filter(
+        (hit) =>
+          args.include_ignored === true ||
+          !IGNORED_DIRS.has((hit.relative_path.split("/")[0] ?? "").toLowerCase()),
+      )
+      .slice(0, maxFiles);
     if (indexHits.length > 0) {
       const data = {
-        relative_path: root,
+        relative_path: rootRel,
         source: "index" as const,
         entries: indexHits.map((hit) => ({
           relative_path: hit.relative_path,
           size_bytes: hit.size,
           modified_unix_seconds: Math.floor((hit.mtime_ms || hit.updated_at) / 1000),
           modified_ago_seconds: Math.max(0, Math.floor((Date.now() - (hit.mtime_ms || hit.updated_at)) / 1000)),
+          // Roadmap item 15 (P2): a path outside the workspace was listed like
+          // every other one. The file tools cannot read it back, so say so.
+          ...(hit.outside_workspace ? { outside_workspace: true } : {}),
         })),
         scanned_files: indexHits.length,
         scanned_dirs: 0,
-        truncated: false,
+        truncated: indexAll.length > indexHits.length,
       };
       const response: RustResponse = { status: "completed", result: { kind: "recent_files", data } };
       deps.store(key, response);
@@ -167,7 +188,7 @@ export async function runRecentFiles(args: Args, deps: RecentFilesDeps): Promise
     const scan = await scanRecent(args);
     const editedRecently = [...new Set([...deps.recentEdits].filter((abs) => abs.startsWith(root)))].slice(0, 20);
     const data = {
-      relative_path: root,
+      relative_path: rootRel,
       source: "fallback_scan" as const,
       entries: scan.entries.map((entry) => ({
         relative_path: entry.rel,

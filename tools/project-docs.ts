@@ -39,10 +39,10 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
     out: "kind, size_bytes, modified_unix_seconds. Missing path gives not_found.",
   },
   project_search: {
-    about: "Search by kind: file_name, directory_name, literal_content (regex=1 for regex) or definition (symbol declaration lines).",
-    use: "you must locate code, strings or symbols before reading. hybrid=1 tags each hit with source and confidence.",
-    avoid: "you know the path (project_read_file), want one file's structure (project_outline_symbol), a symbol's usages (project_symbol_references) or files ranked by several keywords (project_selective_search).",
-    out: "hits[] {relative_path, line_number, snippet}, complete, total_match_lines, files_matched. No match is ok with empty hits.",
+    about: "Search by kind: file_name, directory_name, literal_content (regex=1 for regex) or definition (symbol declaration lines). Set `queries` to rank files by AND/OR/NOT patterns (must/weight) instead — hits then carry score/matched.",
+    use: "you must locate code, strings or symbols before reading. hybrid=1 tags each hit with source and confidence. `queries` ranks files by several keywords at once.",
+    avoid: "you know the path (project_read_file), want one file's structure (project_outline_symbol) or a symbol's usages (project_symbol_references).",
+    out: "hits[] {relative_path, line_number, snippet}, complete, total_match_lines, files_matched. With queries: hits also carry score/matched, plus total_files/total_hits. No match is ok with empty hits.",
   },
   project_recent_files: {
     about: "List recently modified files, newest first, plus session_edits (files you wrote in this session).",
@@ -165,12 +165,6 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
     use: "you check where a symbol is used before renaming or changing it.",
     avoid: "you only need its declaration (project_outline_symbol) or arbitrary text (project_search).",
     out: "count (matches found), returned (how many came back), omitted (cut by the cap), scan_limit (workspace only), references[] {relative_path, line_number, context}.",
-  },
-  project_selective_search: {
-    about: "Rank files by how well they match several patterns (must, weight, fuzzy score) within files_hint or a shallow listing.",
-    use: "you must find the right module among candidates using several keywords.",
-    avoid: "you search for one literal (project_search) or do not know where to start (project_plan_read_batch).",
-    out: "hits[] {relative_path, line_number, text, score, matched}, total_files, total_hits.",
   },
   project_dependency_graph: {
     about: "Build the import and reference graph for TypeScript/JavaScript, Python, Rust, Go, Java and Kotlin. format: json, dot or mermaid.",

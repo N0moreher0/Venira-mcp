@@ -31,10 +31,12 @@ export type FileToolsDeps = {
   recentFilesDeps: RecentFilesDeps;
   batchDeps: BatchDeps;
   maxBatchItemBytes: number;
+  /** Multi-query AND/NOT/weighted search behind project_search's `queries` param. */
+  runSearchSelective: (args: Args) => Promise<ToolResult>;
 };
 
 export function registerFileTools(server: McpServer, deps: FileToolsDeps): void {
-  const { runOne, hybridDeps, recentFilesDeps, batchDeps, maxBatchItemBytes } = deps;
+  const { runOne, hybridDeps, recentFilesDeps, batchDeps, maxBatchItemBytes, runSearchSelective } = deps;
   // VENIRA_EDIT_FUZZY decides whether the fuzzy options are advertised (ROADMAP_TOOL_SCHEMA.md, phase 3).
   // Read once per registration, like VENIRA_JS_EXEC_MODE for project_execute_js.
   const fuzzy = editFuzzyEnabled();
@@ -80,14 +82,14 @@ export function registerFileTools(server: McpServer, deps: FileToolsDeps): void 
       ),
       inputSchema: {
         relative_path: path_,
-        start_line: z.number().int().min(1).optional().describe("First line (1-based). Together with end_line it selects one line range. When truncated, read again with start_line=next_start_line."),
+        start_line: z.number().int().optional().describe("First line (1-based). Together with end_line it selects one line range. When truncated, read again with start_line=next_start_line."),
         end_line: z.number().int().min(1).optional().describe("Last line (1-based, inclusive)."),
         line_numbers: flag01.optional().describe("1 prefixes each line with its line number (default 0)."),
         max_bytes: z.number().int().min(1).max(1048576).optional().describe("Max text bytes returned (default 1,048,576 = 1 MiB, max 1 MiB)."),
         ranges: z
           .array(
             z.object({
-              start_line: z.number().int().min(1).describe("First line (1-based)."),
+              start_line: z.number().int().describe("First line (1-based)."),
               end_line: z.number().int().min(1).optional().describe("Last line (1-based, inclusive)."),
               max_bytes: z.number().int().min(1).optional().describe("Max text bytes for this range (default: the top-level max_bytes)."),
             })
@@ -128,21 +130,38 @@ export function registerFileTools(server: McpServer, deps: FileToolsDeps): void 
     "project_search",
     {
       ...config(
-        "Search by file name, directory name, content (literal or regex=1), or symbol declaration lines (definition).",
+        "Search by file name, directory name, content (literal or regex=1), or symbol declaration lines (definition). Set `queries` to rank files by AND/OR/NOT patterns instead.",
         "Search workspace",
         {
-          use_when: "you need to find code/strings/symbols before reading; use kind=literal_content or definition.",
+          use_when: "you need to find code/strings/symbols before reading; use kind=literal_content or definition. `queries` scores files by several patterns (must/weight) when one pattern is not enough.",
           avoid_when: "you already know the exact path to read.",
           speed_profile: "medium (file scan); TTL cache 3s for the same query.",
           output_kind:
-            "search: hits (source+confidence when hybrid:1), complete, diagnostics, hint.",
+            "search: hits (source+confidence when hybrid:1; score/matched with queries=1), complete, diagnostics, hint.",
           batch_safe: true,
         },
         { readOnlyHint: true, openWorldHint: false },
       ),
       inputSchema: {
-        query: z.string().describe("What to find (meaning depends on kind)."),
-        kind: z.enum(["file_name", "directory_name", "literal_content", "definition"]).describe("name substring | content (substring, or regex when regex=1) | declaration lines."),
+        query: z.string().optional().describe("What to find (meaning depends on kind). Required unless `queries`/`files_hint` is set, in which case `kind` is ignored and files are ranked by AND/OR/NOT patterns."),
+        queries: z
+          .array(
+            z.object({
+              pattern: z.string().min(1).describe("Case-insensitive substring matched against each line."),
+              must: flag01.optional().describe("1 excludes files that do not contain this pattern (default 0)."),
+              weight: z.number().int().optional().describe("Score multiplier for hits on this pattern (default 1; higher wins)."),
+            }),
+          )
+          .min(1)
+          .max(8)
+          .optional()
+          .describe("Multi-query AND/NOT ranked search: files are scored by how many patterns they match (must patterns are required). When set, `kind` and `query` are ignored and hits arrive with `score`/`matched`. Combine with `files_hint` to scan specific files."),
+        files_hint: z
+          .array(z.string().max(300))
+          .max(20)
+          .optional()
+          .describe("Workspace paths to search when `queries` is set (first 20 are used). Omit to scan a shallow listing of `relative_path` instead."),
+        kind: z.enum(["file_name", "directory_name", "literal_content", "definition"]).optional().describe("name substring | content (substring, or regex when regex=1) | declaration lines. Required unless `queries`/`files_hint` is set."),
         relative_path: path_.optional(),
         glob: z.string().optional().describe("rg glob filter ('*.ts' = any depth, 'tools/*.ts' = that dir)."),
         exclude_glob: z.string().optional().describe("rg glob exclusion (same dialect as glob)."),
@@ -156,10 +175,14 @@ export function registerFileTools(server: McpServer, deps: FileToolsDeps): void 
         hybrid: flag01.optional().describe("1 = tag hits with source/confidence; literal_content only."),
       },
     },
-    (args) =>
-      args.hybrid === true && args.kind === "literal_content"
+    (args) => {
+      if (Array.isArray((args as Args).queries) && ((args as Args).queries as unknown[]).length > 0) {
+        return runSearchSelective(args as Args);
+      }
+      return args.hybrid === true && args.kind === "literal_content"
         ? runHybridSearch(args as Args, hybridDeps)
-        : runOne("search", args),
+        : runOne("search", args);
+    },
   );
 
   server.registerTool(

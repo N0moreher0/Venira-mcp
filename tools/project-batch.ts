@@ -80,6 +80,7 @@ function normalizeBatchArgs(operation: string, args: Args): Args {
   for (const key of BATCH_FLAG_KEYS) {
     const value = out[key];
     if (typeof value === "number") out[key] = value === 1;
+    else if (typeof value === "boolean") out[key] = value;
     else if (value === "1" || value === "true") out[key] = true;
     else if (value === "0" || value === "false") out[key] = false;
   }

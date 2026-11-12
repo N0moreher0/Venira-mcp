@@ -444,9 +444,14 @@ export function buildEnvelope(
   }
 
   const originalBytes = serializedBytes(data ?? null);
-  if (OUTPUT_MODE === "compact" && originalBytes > SUMMARY_THRESHOLD_BYTES) {
+  const forcePreviewKinds = new Set(["file_list", "search", "symbol_references", "recent_files", "audit_read"]);
+  const shouldPreview = OUTPUT_MODE === "compact" && (originalBytes > SUMMARY_THRESHOLD_BYTES || forcePreviewKinds.has(kind));
+  if (shouldPreview) {
     const candidate = previewData(kind, data);
-    const previewed = serializedBytes(candidate) < originalBytes ? candidate : genericPreview(data, originalBytes);
+    // For forcePreviewKinds, always use the structured preview even if not smaller.
+    // For large payloads above threshold, fall back to generic preview only if candidate is not smaller.
+    const useGeneric = !forcePreviewKinds.has(kind) && serializedBytes(candidate) >= originalBytes;
+    const previewed = useGeneric ? genericPreview(data, originalBytes) : candidate;
     envelope.data = previewed;
     const summary = summarize(kind, data) ?? genericSummary(data, originalBytes);
     envelope.summary = serializedBytes(summary) > PREVIEW_BYTES ? genericSummary(summary) : summary;

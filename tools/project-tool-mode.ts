@@ -20,6 +20,7 @@ export type ToolMode = "default" | "expert";
 export const TOOL_MODE_EXCLUDES: Record<ToolMode, string[]> = {
   expert: [],
   default: [
+    // Shipping surface (PR/CI).
     "project_ci_status",
     "project_ci_trigger",
     "project_ci_logs",
@@ -31,6 +32,12 @@ export const TOOL_MODE_EXCLUDES: Record<ToolMode, string[]> = {
     "project_pr_list",
     "project_pr_close",
     "project_pr_reopen",
+    // Diagnostics planning kit: project_explain_error and project_plan_read_batch.
+    // The envelope already carries hint + next_actions, which is enough for the
+    // common case; these two are for agents that want the explicit call. They
+    // cost schema tokens in every prompt, so they are expert-only.
+    "project_explain_error",
+    "project_plan_read_batch",
   ],
 };
 
@@ -67,7 +74,6 @@ export function applyDisabledTools(server: McpServer): void {
       "project_outline_symbol",
       "project_diff_files",
       "project_symbol_references",
-      "project_selective_search",
       "project_recent_files",
       "project_dependency_graph",
       "project_change_impact",

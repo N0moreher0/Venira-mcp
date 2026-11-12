@@ -212,6 +212,63 @@ export async function runConsistency(
   );
 
   // -------------------------------------------------------------------------
+  // 2c. The read cache must not confuse two shapes of the same file
+  // -------------------------------------------------------------------------
+  await fs.writeFile(path.join(dir, "shapes.txt"), "one\ntwo\nthree\n");
+  const plain = asEnvelope(await call("project_read_file", { relative_path: `${dir}/shapes.txt` }));
+  const ranged = asEnvelope(
+    await call("project_read_file", {
+      relative_path: `${dir}/shapes.txt`,
+      ranges: [{ start_line: 1, end_line: 2 }],
+    }),
+  );
+  check(
+    "a ranged read does not return the cached plain read",
+    plain.data?.text === "one\ntwo\nthree\n" &&
+      Array.isArray(ranged.data?.ranges) &&
+      ranged.data.ranges.length === 1 &&
+      ranged.data.ranges[0].text === "one\ntwo",
+    { plain_text: plain.data?.text, ranged_keys: Object.keys(ranged.data ?? {}) },
+  );
+  const numbered = asEnvelope(
+    await call("project_read_file", { relative_path: `${dir}/shapes.txt`, line_numbers: 1 }),
+  );
+  const numberedAgain = asEnvelope(
+    await call("project_read_file", { relative_path: `${dir}/shapes.txt`, line_numbers: 1 }),
+  );
+  check(
+    "a numbered read numbers once (the cache must not re-number)",
+    /^\s*1\| one/m.test(String(numbered.data?.text ?? "")) &&
+      /^\s*1\| one/m.test(String(numberedAgain.data?.text ?? "")) &&
+      !/1\| +\d+\|/.test(String(numberedAgain.data?.text ?? "")),
+    { first: numbered.data?.text, second: numberedAgain.data?.text },
+  );
+
+  // -------------------------------------------------------------------------
+  // 2d. recent_files: a workspace-relative root, and the index serves a subtree
+  // -------------------------------------------------------------------------
+  const recentRoot = asEnvelope(await call("project_recent_files", { relative_path: ".", limit: 5 }));
+  check(
+    "recent_files reports a workspace-relative root",
+    recentRoot.ok === true && recentRoot.data?.relative_path === "",
+    { relative_path: recentRoot.data?.relative_path },
+  );
+  const recentSub = asEnvelope(
+    await call("project_recent_files", { relative_path: dir, limit: 10 }),
+  );
+  const subEntries = (recentSub.data?.entries ?? []) as Array<{
+    relative_path?: string;
+  }>;
+  check(
+    "recent_files serves a subtree query from the index",
+    recentSub.ok === true &&
+      recentSub.data?.relative_path === dir &&
+      subEntries.length > 0 &&
+      subEntries.every((entry) => String(entry.relative_path ?? "").startsWith(`${dir}/`)),
+    { relative_path: recentSub.data?.relative_path, entries: subEntries.slice(0, 4) },
+  );
+
+  // -------------------------------------------------------------------------
   // 3. Timestamps: epoch milliseconds, everywhere, newest first
   // -------------------------------------------------------------------------
   const auditRows = asEnvelope(await call("project_read_audit", { limit: 5 }));

@@ -438,7 +438,7 @@ await check("a snapshot dry run reports that it verified nothing", async () => {
   assert.equal(data.verify, false, "a dry run verifies nothing");
 });
 
-await check("selective_search reports workspace-relative paths", async () => {
+await check("multi_query_search reports workspace-relative paths", async () => {
   const runners = (await import("../tools/project-codeintel-runners.js")) as typeof import("../tools/project-codeintel-runners.js");
   const deps = {
     execute: async () => ({ response: {} as never, cached: false }),
@@ -451,7 +451,7 @@ await check("selective_search reports workspace-relative paths", async () => {
   };
   const run = runners.createCodeIntelRunners(deps as never);
   const result = await run.runSelectiveSearch({
-    queries: [{ pattern: "retry", must: ["retry"], weight: 1 }],
+    queries: [{ pattern: "retry", must: true, weight: 1 }],
     files_hint: ["multi.txt"],
   });
   const text = JSON.stringify(result);

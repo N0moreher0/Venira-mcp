@@ -183,6 +183,24 @@ export async function opReadFile(
     };
   }
 
+  // Apply line numbering if requested (before caching, so cached response has numbers)
+  if (args.line_numbers === true && isLegacy && typeof data.text === "string" && typeof data.first_line === "number" && data.first_line >= 1) {
+    const lines = data.text.split("\n");
+    const trailingNewline = lines[lines.length - 1] === "";
+    if (trailingNewline) lines.pop();
+    const firstLine = data.first_line;
+    const lastNumber = firstLine + lines.length - 1;
+    const width = Math.max(4, String(lastNumber).length);
+    const numbered = lines
+      .map((line, index) => `${(firstLine + index).toString().padStart(width, " ")}| ${line}`)
+      .join("\n");
+    const numberedText = numbered + (trailingNewline ? "\n" : "");
+    data.text = numberedText;
+    data.line_numbers = true;
+    // text_sha256 must be recomputed for the numbered text
+    data.text_sha256 = crypto.createHash("sha256").update(numberedText, "utf8").digest("hex");
+  }
+
   return {
     status: "completed",
     truncated: results.some((r) => r.truncated),

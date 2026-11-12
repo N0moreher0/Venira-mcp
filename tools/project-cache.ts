@@ -144,7 +144,12 @@ export function createCacheLayer(deps: CacheDeps) {
   }
 
   function cacheKey(absolutePath: string, args: Args): string {
-    return `${absolutePath}\u0000${args.start_line ?? ""}\u0000${args.end_line ?? ""}\u0000${args.max_bytes ?? ""}`;
+    // Roadmap item 15 (P2): the key must cover EVERY argument that changes the
+    // shape of the answer. `ranges` and `line_numbers` do exactly that, and
+    // omitting them made a ranged read return a plain read (and vice versa) -
+    // the same file, the same cache entry, a different answer.
+    const ranges = Array.isArray(args.ranges) ? JSON.stringify(args.ranges) : "";
+    return `${absolutePath}\u0000${args.start_line ?? ""}\u0000${args.end_line ?? ""}\u0000${args.max_bytes ?? ""}\u0000${ranges}\u0000${args.line_numbers ? 1 : 0}`;
   }
 
   function fromReadEntry(entry: CachedRead): RustResponse {

@@ -9,10 +9,15 @@ import { parseBackgroundFlag } from "../lib/env.js";
 export const PATH_DESC = "Workspace-relative ('.' = root); absolute/.. outside it rejected.";
 export const path_ = z.string().describe(PATH_DESC);
 /**
- * Boolean convention (item 16): every boolean flag on every tool is the integer 0|1.
- * No default description: every use must say what 1 does (`.describe("1 = ...")`), never a generic "1=on, 0=off".
+ * Boolean convention (item 16): tool flags are integer 0|1 in the published
+ * JSON Schema (`.meta()` keeps tools/list integer), but the parser also
+ * accepts `true`/`false` — LLMs are trained on booleans and would otherwise
+ * send `true` and get a validation error back.
  */
-export const flag01 = z.number().int().min(0).max(1).transform((value) => value === 1);
+export const flag01 = z
+  .union([z.boolean(), z.number().int().min(0).max(1)])
+  .transform((value) => value === true || value === 1)
+  .meta({ type: "integer", minimum: 0, maximum: 1 });
 /**
  * `project_shell_run.background` is advertised as the integer 0|1 like every other flag (ROADMAP_TOOL_SCHEMA.md,
  * phase 4), but the value is still normalised from the older shapes a cached client may send: `true`/`false`,

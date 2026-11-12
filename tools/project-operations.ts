@@ -16,24 +16,10 @@ export function createOperationRunners({ executeCached }: OperationRunnerDeps) {
     const started = performance.now();
     const requestId = newRequestId();
     try {
-      const { response, cached } = await executeCached(operation, args);
+      // Pass line_numbers to backend so it's applied before caching
+      const backendArgs = options?.line_numbers ? { ...args, line_numbers: true } : args;
+      const { response, cached } = await executeCached(operation, backendArgs);
       const result = response;
-      if (options?.line_numbers && result?.result?.kind === "file_read") {
-        const data = result.result.data as { text?: string; first_line?: number; line_numbers?: boolean } | undefined;
-        if (data && typeof data.text === "string" && typeof data.first_line === "number" && data.first_line >= 1 && data.text) {
-          const lines = data.text.split("\n");
-          const trailingNewline = lines[lines.length - 1] === "";
-          if (trailingNewline) lines.pop();
-          const firstLine = data.first_line;
-          const lastNumber = firstLine + lines.length - 1;
-          const width = Math.max(4, String(lastNumber).length);
-          const numbered = lines
-            .map((line, index) => `${(firstLine + index).toString().padStart(width, " ")}| ${line}`)
-            .join("\n");
-          data.text = numbered + (trailingNewline ? "\n" : "");
-          data.line_numbers = true;
-        }
-      }
       const elapsedMs = performance.now() - started;
       recordMetric(operation, elapsedMs, true);
       return toolResult(

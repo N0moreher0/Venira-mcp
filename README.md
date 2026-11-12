@@ -1,7 +1,7 @@
 # venira-mcp
 
 Fast, workspace-scoped MCP server for coding agents (OpenCode, Claude Desktop, any MCP client).
-Two tool modes — **Default** (32 coding tools + shell, no CI/CD) · **Expert** (43 tools: default + CI/CD). Setting `VENIRA_JS_EXEC_MODE=ask`, `semi-auto` or `auto` adds `project_execute_js` (33 / 44).
+Two tool modes — **Default** (29 coding tools + shell, no CI/CD) · **Expert** (42 tools: default + CI/CD). Setting `VENIRA_JS_EXEC_MODE=ask`, `semi-auto` or `auto` adds `project_execute_js` (30 / 43).
 Pure Node, 1 native dependency (better-sqlite3), no GUI, no external binary.
 
 > **Security scope.** Venira is a guard rail with an audit trail, not a sandbox. It runs with the privileges of the OS user that started it. The workspace lock limits the paths the file tools can touch (unless `VENIRA_UNRESTRICTED=1`), not what a shell command does: commands are classified by rules (allow / ask / deny) and every call is audited, but a malicious prompt can still steer the agent into running a harmful command that the active profile lets through (with `off`, every command runs). Anything running as the same OS user can read the keys in `VENIRA_DATA_DIR`. For untrusted workspaces, or whenever you need a real isolation boundary, run Venira in a container or VM. Details: [`SECURITY.md`](./SECURITY.md).
@@ -54,7 +54,9 @@ The examples use four environment variables: workspace, tool set, output size, a
         "VENIRA_WORKSPACE": "/absolute/path/to/project",
         "VENIRA_TOOL_MODE": "expert",
         "VENIRA_OUTPUT_MODE": "full",
-        "VENIRA_SECURITY_PROFILE": "balanced"
+        "VENIRA_SECURITY_PROFILE": "balanced",
+        // Small model / restricted context? Uncomment to slim tools/list:
+        // "VENIRA_PROFILE": "core"
       }
     }
   }
@@ -228,8 +230,8 @@ Two tool modes set which tools the client sees. Set via `VENIRA_TOOL_MODE` env v
 
 | Mode | Tools | Includes |
 |---|---|---|
-| `default` | **32** (33 with `VENIRA_JS_EXEC_MODE=ask`, `semi-auto` or `auto`) | Read/write/edit/search, code intel, snapshots, shell, `project_delete_path`, optional JS exec — **no** CI/CD |
-| `expert` | **43** (44 with `VENIRA_JS_EXEC_MODE=ask`, `semi-auto` or `auto`) | Everything in default + `project_pr_*`, `project_ci_*` |
+| `default` | **29** (30 with `VENIRA_JS_EXEC_MODE=ask`, `semi-auto` or `auto`) | Read/write/edit/search, code intel, snapshots, shell, `project_delete_path`, optional JS exec — **no** CI/CD; `project_explain_error` and `project_plan_read_batch` are expert-only |
+| `expert` | **42** (43 with `VENIRA_JS_EXEC_MODE=ask`, `semi-auto` or `auto`) | Everything in default + `project_pr_*`, `project_ci_*`, `project_explain_error`, `project_plan_read_batch` |
 
 `project_delete_path` is always available. In `balanced` / `strict` mode, shell `rm -rf /` / `~` and Windows drive-wide deletes are hard-denied, and recursive/force deletes (`Remove-Item -Recurse -Force`, `rd /s /q`, `del /f /q`) need approval. `permissive` mode lets ordinary ask-rule and unclassified commands run without a prompt, but hard-denies require approval and uninspectable command substitutions require approval in every policy-enabled mode.
 
@@ -244,7 +246,7 @@ All tools return the standard envelope (`ok`, `kind`, `data`, `hint`, `elapsed_m
 | `project_list_files` | List files/dirs, depth 1–3, limit ≤ 200 |
 | `project_read_file` | Read a file by line range; optional `ranges[]` (up to 16) |
 | `project_get_file_info` | File/dir metadata (kind, size, mtime) |
-| `project_search` | Search by file/dir name, content, regex, or symbol; `hybrid: 1` tags hits with `source`+`confidence` |
+| `project_search` | Search by file/dir name, content, regex, or symbol; `hybrid: 1` tags hits with `source`+`confidence`; `queries[]` ranks files by AND/OR/NOT patterns |
 | `project_recent_files` | Recently modified files (index-first, scan-fallback) |
 | `project_read_batch` | Up to 8 read-only ops in one call; each item takes the same arguments as its standalone tool (`search` items support `regex`, `case_sensitive`, `hybrid`, ...) |
 | `project_health` | Diagnostics: capability, queue, cache hit-rates, p50/p95, security limits notice, and `server.workspace_switching` (`enabled`, `allowed_roots`) |
@@ -279,7 +281,6 @@ All tools return the standard envelope (`ok`, `kind`, `data`, `hint`, `elapsed_m
 | `project_outline_symbol` | Parse a file's symbols (functions, classes, types) with line numbers |
 | `project_diff_files` | Unified diff between two files |
 | `project_symbol_references` | Find all occurrences of a named symbol |
-| `project_selective_search` | Multi-query search with AND/NOT + fuzzy scoring |
 | `project_dependency_graph` | TS/JS/Python/Rust/Go/Java/Kotlin import/symbol graph (JSON/DOT/Mermaid) |
 | `project_change_impact` | "What breaks if I edit this?" — bounded reverse/forward closure |
 
@@ -348,9 +349,9 @@ Full reference: the source reads 90+ distinct `VENIRA_*` names; this table lists
 | Variable | Default | What it does |
 |---|---|---|
 | `VENIRA_WORKSPACE` | `process.cwd()` | Workspace root; all paths resolve against it |
-| `VENIRA_TOOL_MODE` | `default` | `default` (32 tools) or `expert` (43 tools); +1 with `VENIRA_JS_EXEC_MODE=ask`, `semi-auto` or `auto` |
+| `VENIRA_TOOL_MODE` | `default` | `default` (29 tools) or `expert` (42 tools); +1 with `VENIRA_JS_EXEC_MODE=ask`, `semi-auto` or `auto` |
 | `VENIRA_OUTPUT_MODE` | `full` | `full` or `compact` (summarize/trim payloads > 8 KiB; generic payloads use `preview_text`) |
-| `VENIRA_PROFILE` | `full` | `full` or `core` (disables dependency graph / change impact) |
+| `VENIRA_PROFILE` | `full` | `full` or `core` (disables dependency graph, change impact, outline_symbol, symbol_references and recent_files — smaller tools/list, for small models / restricted context) |
 | `VENIRA_UNRESTRICTED` | `"0"` | `"1"` disables workspace lock (never in production) |
 | `VENIRA_SECURITY_PROFILE` | `balanced` | Selects the shell policy: `strict`, `balanced`, `trusted`, or `off` |
 | `VENIRA_SHELL_MODE` | Profile mapping | Advanced override for shell policy: `strict`, `balanced`, `permissive`, or `off` |
@@ -360,6 +361,7 @@ Full reference: the source reads 90+ distinct `VENIRA_*` names; this table lists
 | `VENIRA_DEFAULT_SHELL` | `cmd` on Windows, `$SHELL` / `bash` elsewhere | Shell used when a call does not name one: `powershell` (5.1), `pwsh` (7+), `cmd`, `bash` |
 | `VENIRA_JS_EXEC_MODE` | `"off"` | `"off"` hides `project_execute_js` · `"ask"` registers it with per-call approval · `"semi-auto"` registers it without approval, contained (network guard, workspace-only fs, scrubbed env) · `"auto"` registers it without approval and without containment |
 | `VENIRA_USE_RIPGREP` | `"1"` | `"1"` uses ripgrep if installed (faster on big repos) |
+| `VENIRA_SEARCH_MAX_FILES` | `"50000"` | Max files collected by the JS fallback walker before it stops and reports `complete: false`. Bounds searches rooted at huge trees (e.g. with `VENIRA_UNRESTRICTED=1` and an absolute path outside the workspace) |
 | `VENIRA_CACHE_ALL` | `"1"` | `"1"` TTL caches on · `"0"` always-fresh (slower) |
 | `VENIRA_EDIT_FUZZY` | `"0"` | `"1"` enables fuzzy-match fallback for `old_text`, and adds `fuzzy_distance`, `ignore_indentation` and `case_insensitive` to the `project_edit_file` / `project_edit_batch` schemas. `tools/list` changes with this flag, so reconnect the client after changing it. With `"0"` those options are not advertised and a call that still sends them is refused with `[unsupported]` |
 | `VENIRA_DATA_DIR` | per-user OS path | Where audit DB + encrypted secrets live |

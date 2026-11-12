@@ -203,6 +203,9 @@ export async function runShellEnvAudit(
     !defaultList.tools.some((t) => t.name === "project_ci_wait") &&
       !defaultList.tools.some((t) => t.name === "project_ci_control") &&
       !defaultList.tools.some((t) => t.name === "project_pr_create") &&
+      // Diagnostics planning kit is expert-only (the envelope already carries hint + next_actions).
+      !defaultList.tools.some((t) => t.name === "project_explain_error") &&
+      !defaultList.tools.some((t) => t.name === "project_plan_read_batch") &&
       defaultList.tools.some((t) => t.name === "project_delete_path") &&
       defaultList.tools.some((t) => t.name === "project_shell_run") &&
       defaultList.tools.some((t) => t.name === "project_execute_js") &&
