@@ -161,7 +161,14 @@ export async function runExecuteJs(args: Args): Promise<ToolResult> {
     };
     const elapsedMs = performance.now() - started;
     recordMetric("execute_js", elapsedMs, r.ok);
-    return toolResult(buildEnvelope("execute_js", response, { requestId, elapsedMs, cached: false }));
+    const envelope = buildEnvelope("execute_js", response, { requestId, elapsedMs, cached: false });
+    // Roadmap item 15 (P2): a failed snippet is a failed command. Say so in
+    // the hint instead of leaving the agent to compare `ok` with `data.ok`.
+    if (!r.ok) {
+      const reason = typeof r.error === "string" ? r.error : `the snippet exited with code ${String(r.exit_code)}`;
+      envelope.hint = `The snippet did not succeed: ${reason}`;
+    }
+    return toolResult(envelope);
   } catch (error) {
     const elapsedMs = performance.now() - started;
     recordMetric("execute_js", elapsedMs, false);

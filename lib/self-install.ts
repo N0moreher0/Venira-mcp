@@ -43,7 +43,11 @@ type InstallResult = {
 
 type DetectResult = {
   harness: HarnessName;
+  /** The config file exists (it does not say that Venira is configured). */
   detected: boolean;
+  config_exists: boolean;
+  /** Venira is already in that config file. */
+  venira_installed: boolean;
   config_path?: string;
   format?: "json" | "jsonc" | "toml" | "unknown";
   note?: string;
@@ -140,6 +144,10 @@ function detectHarnessConfig(harness: HarnessName): DetectResult {
       return {
         harness,
         detected: true,
+        // Roadmap item 15 (P2): `detected` only meant "the config file
+        // exists". Say what was found and whether Venira is in it.
+        config_exists: true,
+        venira_installed: veniraPresentInFile(candidate, format, harness === "opencode" ? "mcp" : "mcpServers"),
         config_path: candidate,
         format,
         note: "Config file exists; will merge/append.",
@@ -150,6 +158,8 @@ function detectHarnessConfig(harness: HarnessName): DetectResult {
   return {
     harness,
     detected: false,
+    config_exists: false,
+    venira_installed: false,
     config_path: candidates[0],
     format: candidates[0]?.endsWith(".toml") ? "toml" : "json",
     note: "Config file not found; will create.",

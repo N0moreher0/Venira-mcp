@@ -46,7 +46,7 @@ export function recordRecentFileMeta(absPath: string, stat: { mtimeMs: number; s
 }
 
 /** P2: Query the recent-files index, optionally limiting the result. */
-export function queryRecentFiles(limit: number, includeDirs: boolean, workspaceRoot: string = WORKSPACE): Array<{ relative_path: string; mtime_ms: number; size: number; kind: string; updated_at: number }> {
+export function queryRecentFiles(limit: number, includeDirs: boolean, workspaceRoot: string = WORKSPACE): Array<{ relative_path: string; mtime_ms: number; size: number; kind: string; updated_at: number; outside_workspace: boolean }> {
   const db = ensureAuditDb();
   if (!db) return [];
   try {
@@ -55,7 +55,18 @@ export function queryRecentFiles(limit: number, includeDirs: boolean, workspaceR
     const rows = db.prepare(
       `SELECT path, mtime_ms, size, kind, updated_at FROM project_file_index WHERE ${wsClause}${kindClause} ORDER BY updated_at DESC LIMIT ?`,
     ).all(workspaceRoot, limit) as Array<{ path: string; mtime_ms: number; size: number; kind: string; updated_at: number }>
-    return rows.map((r) => ({ relative_path: r.path, mtime_ms: r.mtime_ms, size: r.size, kind: r.kind, updated_at: r.updated_at }));
+    return rows.map((r) => ({
+      relative_path: r.path,
+      mtime_ms: r.mtime_ms,
+      size: r.size,
+      kind: r.kind,
+      updated_at: r.updated_at,
+      // Roadmap item 15 (P2): a path that leaves the workspace was listed
+      // like every other one, with no sign that the file tools could not read
+      // it back.
+      outside_workspace:
+        r.path.startsWith("../") || r.path === ".." || path.isAbsolute(r.path),
+    }));
   } catch (error) {
     console.error(`[corehost] recent index query failed: ${error instanceof Error ? error.message : String(error)}`);
     return [];

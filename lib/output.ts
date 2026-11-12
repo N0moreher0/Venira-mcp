@@ -418,6 +418,13 @@ export function buildEnvelope(
   if (options.cached) envelope.cached = true;
   if (hint) envelope.hint = hint;
   if (kind === "shell_run" && isObject(data)) envelope.command_status = commandStatus(data);
+  // Roadmap item 15 (P2): a failed snippet came back as ok:true with
+  // data.ok:false - two truths to read. The envelope now carries the same
+  // command_status the shell tools use.
+  if (kind === "js_execute" && isObject(data)) {
+    envelope.command_status =
+      data.ok === true ? "succeeded" : data.timed_out === true ? "failed" : "failed";
+  }
 
   const originalBytes = serializedBytes(data ?? null);
   if (OUTPUT_MODE === "compact" && originalBytes > SUMMARY_THRESHOLD_BYTES) {

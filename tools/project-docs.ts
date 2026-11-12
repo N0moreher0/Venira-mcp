@@ -68,7 +68,7 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
     about: "Replace exact text: old_text to new_text, or edits[] for several replacements in one file (edits[] wins).",
     use: "you make a targeted change. old_text must match exactly once; replace_all=1 replaces every match. pass expected_sha256 (project_read_file's whole-file sha256, or sha256_after from your last write) to refuse stale content and get a verified re-read.",
     avoid: "you rewrite the whole file (project_write_file) or change several files at once (project_edit_batch).",
-    out: "replacements, sha256_before, sha256_after, verified (when expected_sha256 is given). Failures: old_text_not_found (data.nearest_match carries the region to copy - no line numbers - plus the indentation and the line endings; the file is unchanged), old_text_ambiguous (returns each match with line context).",
+    out: "replacements, sha256_before, sha256_after, verified (when expected_sha256 is given). Failures: old_text_not_found (data.mismatch says the file, the line, the first differing character and how many characters are off; data.context is three lines around the wrong spot, without line numbers - the file is unchanged), old_text_ambiguous (returns each match with line context).",
   },
   project_edit_batch: {
     about: "Apply edits across one or more files all-or-nothing. Each item takes edit_file arguments (relative_path, old_text, new_text, ...). The first failure rolls back every touched file from an automatic snapshot and skips the rest.",

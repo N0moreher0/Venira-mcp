@@ -161,11 +161,16 @@ export function createCodeIntelRunners(deps: CodeIntelRunnerDeps) {
       }
     }
     const result = selectiveSearch(files, queries, Number(args.limit ?? 100));
+    // Roadmap item 15 (P2): the hits carried the absolute path of the file.
+    const hits = result.hits.map((hit) => ({
+      ...hit,
+      relative_path: path.relative(WORKSPACE, hit.relative_path).replace(/\\/g, "/"),
+    }));
     const response: RustResponse = {
       status: "completed",
       result: {
         kind: "selective_search",
-        data: { hits: result.hits, total_files: result.total_files, total_hits: result.total_hits, truncated: result.truncated },
+        data: { hits, total_files: result.total_files, total_hits: result.total_hits, truncated: result.truncated },
       },
       truncated: result.truncated,
     };

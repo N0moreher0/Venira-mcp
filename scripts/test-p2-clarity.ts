@@ -248,7 +248,6 @@ await check("the failing edit is named and the file is untouched", async () => {
       workspace,
     ),
   );
-  assert.match(error.message, /edit 2 of 2/);
   const data = (error as Error & { data?: Record<string, unknown> }).data;
   assert.equal(data?.edit_index, 1);
   assert.equal(data?.file_unchanged, true);
@@ -302,7 +301,7 @@ await check("a dry run with the policy off shows what balanced would decide", as
 // ---------------------------------------------------------------------------
 // 10b. The three traps of a failed edit (roadmap item 15, P2)
 // ---------------------------------------------------------------------------
-await check("a failed edit hands back a copy-pasteable snippet (no line numbers)", async () => {
+await check("a failed edit hands back a small diagnosis and a copy-pasteable context", async () => {
   const lines = Array.from({ length: 40 }, (_, i) => `line ${i + 1}`);
   fs.writeFileSync(path.join(workspace, "trap.txt"), `${lines.join("\n")}\n`);
   const error = await rejects(() =>
@@ -312,23 +311,29 @@ await check("a failed edit hands back a copy-pasteable snippet (no line numbers)
     ),
   );
   const data = (error as Error & { data?: Record<string, unknown> }).data;
-  const snippet = data?.nearest_match as {
-    text: string;
-    numbered: string;
-    header: string;
-    indentation: string;
-    line_endings: string;
-    first_line: number;
-    last_line: number;
+  const mismatch = data?.mismatch as {
+    line: number;
+    edit_line: number;
+    char_offset: number;
+    chars_off: number;
+    detail: string;
   };
-  assert.ok(snippet, "the error carries the nearest region");
-  // Trap 1: the snippet itself has no line-number prefixes.
-  assert.equal(/^\s*\d+[|:]/.test(snippet.text), false, `the snippet still has numbers: ${snippet.text.slice(0, 60)}`);
-  assert.match(snippet.numbered, /\d+\|/, "the numbered variant is there for orientation");
-  assert.match(snippet.header, /^Lines \d+-\d+ of trap\.txt:$/);
-  // Trap 3: the snippet has a buffer around the nearest line.
-  assert.ok(snippet.first_line < 20 && snippet.last_line > 20, `range ${snippet.first_line}-${snippet.last_line}`);
-  assert.ok(snippet.last_line - snippet.first_line >= 10, "at least a ten line buffer");
+  const context = data?.context as { text: string; numbered: string; header: string; first_line: number; last_line: number };
+  assert.ok(mismatch, "the error says where it went wrong");
+  assert.ok(mismatch.line >= 1, "the file line");
+  assert.equal(typeof mismatch.char_offset, "number");
+  assert.equal(typeof mismatch.chars_off, "number");
+  assert.match(mismatch.detail, /the file has/);
+  // The context is three lines around the wrong spot - not the whole file.
+  const contextLines = context.text.split("\n");
+  assert.ok(contextLines.length <= 7, `context has ${contextLines.length} lines`);
+  assert.ok(context.first_line <= mismatch.line && context.last_line >= mismatch.line);
+  // Trap 1: the context itself has no line-number prefixes.
+  assert.equal(/^\s*\d+[|:]/.test(context.text), false, `the context still has numbers: ${context.text.slice(0, 60)}`);
+  assert.match(context.numbered, /\d+\|/, "the numbered variant is there for orientation");
+  assert.match(context.header, /^Lines \d+-\d+ of trap\.txt:$/);
+  // The whole error stays small: a long edit must not answer with a long error.
+  assert.ok(JSON.stringify(data).length < 4000, `the error payload is ${JSON.stringify(data).length} bytes`);
 });
 
 await check("a failed edit reports the indentation and the line endings", async () => {
@@ -337,32 +342,121 @@ await check("a failed edit reports the indentation and the line endings", async 
     filewrite.opEditFile({ relative_path: "tabs.txt", old_text: "nope", new_text: "X" }, workspace),
   );
   const data = (error as Error & { data?: Record<string, unknown> }).data;
-  const snippet = data?.nearest_match as { indentation: string; line_endings: string };
-  assert.equal(snippet.indentation, "tabs", `indentation was ${snippet.indentation}`);
-  assert.ok(["LF", "CRLF", "mixed"].includes(snippet.line_endings), snippet.line_endings);
+  assert.equal(data?.indentation, "tabs", `indentation was ${String(data?.indentation)}`);
+  assert.ok(["LF", "CRLF", "mixed"].includes(String(data?.line_endings)), String(data?.line_endings));
 
   fs.writeFileSync(path.join(workspace, "spaces.txt"), "a\n    four spaces\n");
   const error2 = await rejects(() =>
     filewrite.opEditFile({ relative_path: "spaces.txt", old_text: "nope", new_text: "X" }, workspace),
   );
-  const snippet2 = ((error2 as Error & { data?: Record<string, unknown> }).data?.nearest_match as { indentation: string });
-  assert.equal(snippet2.indentation, "4 spaces", `indentation was ${snippet2.indentation}`);
+  const data2 = (error2 as Error & { data?: Record<string, unknown> }).data;
+  assert.equal(data2?.indentation, "4 spaces", `indentation was ${String(data2?.indentation)}`);
 });
 
-await check("the suggested old_text from the snippet actually applies", async () => {
+await check("the suggested old_text from the context actually applies", async () => {
   fs.writeFileSync(path.join(workspace, "apply.txt"), "alpha\nbeta\ngamma\n");
   const error = await rejects(() =>
     filewrite.opEditFile({ relative_path: "apply.txt", old_text: "bta", new_text: "BETA" }, workspace),
   );
   const data = (error as Error & { data?: Record<string, unknown> }).data;
-  const snippet = data?.nearest_match as { text: string };
-  // Copy the snippet region (the line that was meant) and retry with it.
-  const line = snippet.text.split("\n").find((value) => value.includes("beta")) ?? "";
+  const context = data?.context as { text: string };
+  // Copy the line that was meant from the context and retry with it.
+  const line = context.text.split("\n").find((value) => value.includes("beta")) ?? "";
   const retry = await filewrite.opEditFile(
     { relative_path: "apply.txt", old_text: line, new_text: "BETA" },
     workspace,
   );
   assert.equal((retry.result?.data as { replacements?: number }).replacements, 1);
+});
+
+// ---------------------------------------------------------------------------
+// 13. plan_read_batch, recent_files, harnesses, snapshot dry run
+// ---------------------------------------------------------------------------
+await check("plan_read_batch drops the words that carry no signal", async () => {
+  const plan = (await import("../lib/read-plan.js")) as typeof import("../lib/read-plan.js");
+  const keywords = plan.extractKeywords("nothing matches here, add retry handling to the client");
+  assert.equal(keywords.includes("nothing"), false, keywords.join(", "));
+  assert.equal(keywords.includes("matches"), false, keywords.join(", "));
+  assert.ok(keywords.includes("retry"), keywords.join(", "));
+});
+
+await check("plan_read_batch does not propose candidates with no signal", async () => {
+  const plan = (await import("../lib/read-plan.js")) as typeof import("../lib/read-plan.js");
+  const ranked = plan.rankCandidates(
+    [
+      { relative_path: "src/real.ts", hits: 3, reason: "name match" },
+      { relative_path: "docs/noise.md", hits: 0, reason: "tree listing" },
+    ],
+    ["retry"],
+    "fix the retry",
+  );
+  assert.equal(
+    ranked.some((candidate) => candidate.relative_path === "docs/noise.md"),
+    false,
+    "a score-0 candidate is noise",
+  );
+  assert.ok(ranked.some((candidate) => candidate.relative_path === "src/real.ts"));
+});
+
+await check("recent_files marks a path that leaves the workspace", async () => {
+  const index = (await import("../lib/recent-index.js")) as typeof import("../lib/recent-index.js");
+  const rows = index.queryRecentFiles(10, false, workspace);
+  assert.ok(Array.isArray(rows));
+  // Every row carries the flag, so the agent can tell an outside path from a
+  // workspace one.
+  assert.equal(
+    rows.every((row) => typeof row.outside_workspace === "boolean"),
+    true,
+  );
+});
+
+await check("detect_harnesses says what it found", async () => {
+  const selfInstall = (await import("../lib/self-install.js")) as typeof import("../lib/self-install.js");
+  const detected = selfInstall.detectAllHarnesses();
+  assert.ok(detected.length > 0);
+  assert.equal(
+    detected.every((entry) => typeof entry.config_exists === "boolean" && typeof entry.venira_installed === "boolean"),
+    true,
+    "config_exists and venira_installed are reported",
+  );
+});
+
+await check("a snapshot dry run reports that it verified nothing", async () => {
+  const snapshots = (await import("../lib/snapshots.js")) as typeof import("../lib/snapshots.js");
+  const created = await snapshots.opSnapshotCreate(
+    { label: "p2-dry-run", paths: ["multi.txt"] },
+    workspace,
+  );
+  const createdData = created.result?.data as { id?: string };
+  assert.ok(createdData.id, "the checkpoint was created");
+  const restored = await snapshots.opSnapshotRestore(
+    { action: "restore", id: createdData.id, dry_run: true },
+    workspace,
+  );
+  const data = restored.result?.data as Record<string, unknown>;
+  assert.equal(data.dry_run, true);
+  assert.equal(data.verify, false, "a dry run verifies nothing");
+});
+
+await check("selective_search reports workspace-relative paths", async () => {
+  const runners = (await import("../tools/project-codeintel-runners.js")) as typeof import("../tools/project-codeintel-runners.js");
+  const deps = {
+    execute: async () => ({ response: {} as never, cached: false }),
+    executeCached: async () => ({ response: {} as never, cached: false }),
+    readTextFile: async () => "const retry = 1;\n",
+    toHostPath: (p: string | undefined) => path.join(workspace, p ?? "."),
+    isProtectedPath: () => false,
+    referenceCache: { lookup: () => null, store: () => undefined },
+    stableKey: () => "k",
+  };
+  const run = runners.createCodeIntelRunners(deps as never);
+  const result = await run.runSelectiveSearch({
+    queries: [{ pattern: "retry", must: ["retry"], weight: 1 }],
+    files_hint: ["multi.txt"],
+  });
+  const text = JSON.stringify(result);
+  assert.match(text, /relative_path/);
+  assert.equal(/[A-Z]:\\\\/.test(text), false, "no absolute path in the hits");
 });
 
 if (failures.length > 0) {

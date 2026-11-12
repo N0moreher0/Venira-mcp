@@ -46,6 +46,13 @@ const STOPWORDS = new Set([
   "working", "works", "there", "here", "it", "its", "you", "your", "we", "our", "they", "their",
   "sao", "cho", "cua", "của", "và", "va", "thì", "thi", "một", "mot", "các", "cac", "này", "nay",
   "làm", "lam", "được", "duoc", "khi", "nhé", "nhe", "với", "voi", "trong", "trên", "tren",
+  // Roadmap item 15 (P2): words that look like signal but carry none. A plan
+  // built on "nothing" or "matches" sends the agent nowhere.
+  "nothing", "something", "anything", "everything", "someone", "somewhere", "nothing",
+  "match", "matches", "matched", "matching", "thing", "things", "stuff", "misc",
+  "maybe", "really", "quite", "much", "many", "less", "least", "still", "even",
+  "ever", "never", "always", "often", "sometimes", "already", "again", "once",
+  "twice", "enough", "sure", "thanks", "thank", "hey", "hello", "okay",
 ]);
 
 const MAX_KEYWORDS = 5;
@@ -217,7 +224,12 @@ export function rankCandidates(
       (b.hits ?? 0) - (a.hits ?? 0) ||
       a.relative_path.localeCompare(b.relative_path),
   );
-  return scored.slice(0, limit);
+  // Roadmap item 15 (P2): a candidate with score 0 matched nothing - the
+  // plan proposed files that carry no signal. They are dropped, unless
+  // *every* candidate scored 0 (then the tree map is the better first step).
+  const withSignal = scored.filter((candidate) => (candidate.score ?? 0) > 0);
+  const ranked = withSignal.length > 0 ? withSignal : scored;
+  return ranked.slice(0, limit);
 }
 
 /**

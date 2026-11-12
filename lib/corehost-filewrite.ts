@@ -10,7 +10,7 @@ import { resolveInWorkspace, errorWithData, type RustResponse } from "./corehost
 import { isProtectedPath, PLATFORM, WORKSPACE } from "./workspace.js";
 import { editFuzzyEnabled } from "./env.js";
 import { fuzzyEditArgsUsed } from "./arg-hints.js";
-import { buildEditSnippet, detectIndentation, detectLineEndings, editMatchLocations, levenshtein, normalizeForFuzzy } from "./file-ops-helpers.js";
+import { buildEditContext, detectIndentation, detectLineEndings, editMatchLocations, findEditMismatch, levenshtein, normalizeForFuzzy } from "./file-ops-helpers.js";
 import { sanitizeReason } from "./snapshots.js";
 import { recordRecentFile, recordRecentFileMeta, removeFromRecentIndex } from "./recent-index.js";
 
@@ -293,25 +293,29 @@ export async function opEditFile(
     }
 
     if (idx === -1) {
-      // Roadmap item 15 (P2): the failure now carries the region the agent
-      // most likely meant, copy-pasteable (no line numbers), with the
-      // detected indentation and line endings - and a buffer around it, so
-      // the retry works without another read.
-      const snippet = buildEditSnippet(content, String(args.relative_path), old_text);
+      // Roadmap item 15 (P2): the error must be small. A long edit that does
+      // not apply used to answer with a long error; now it answers with a
+      // diagnosis (file, line, how far off) and three lines of context on
+      // each side of the wrong spot.
+      const mismatch = findEditMismatch(content, old_text);
+      const context = buildEditContext(content, mismatch?.line ?? 1, String(args.relative_path));
       throw errorWithData(
         "old_text_not_found",
-        `old_text not found in ${args.relative_path} (edit ${editIndex + 1} of ${editList.length}). ` +
-          `The nearest region is in the error data (nearest_match.text - copy it as is, it has no line numbers). ` +
-          `Hint: copy the snippet into old_text, or read the file again with project_read_file.`,
+        `old_text not found in ${args.relative_path}` +
+          (mismatch
+            ? `: line ${mismatch.line}, character ${mismatch.char_offset}, ${mismatch.chars_off} character(s) off`
+            : "") +
+          `. Hint: fix the line the context points at and copy it from context.text (no line numbers).`,
         {
           occurrences: 0,
           edit_index: editIndex,
           edit_count: editList.length,
           file_unchanged: true,
-          nearest_match: snippet,
-          suggestion:
-            "copy nearest_match.text into old_text (it is the file content without line numbers); " +
-            `the file indents with ${snippet.indentation} and uses ${snippet.line_endings} line endings`,
+          ...(mismatch ? { mismatch } : {}),
+          context,
+          indentation: detectIndentation(content),
+          line_endings: detectLineEndings(content),
+          suggestion: "copy context.text into old_text (it has no line numbers)",
         },
       );
     }

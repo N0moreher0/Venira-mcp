@@ -416,12 +416,14 @@ export async function opSnapshotRestore(
       data: {
         id,
         dry_run: dryRun,
-        verify,
+        // Roadmap item 15 (P2): a dry run verified nothing (it compares the
+        // size only), so it did not report `verify: true`.
+        ...(dryRun ? { verify: false } : { verify }),
         restored_count: restored.length,
         restored: restored.slice(0, 200),
         unchanged_count: unchanged.length,
         ...(dryRun
-          ? { dry_run_note: "dry_run compares size only; run without dry_run to rewrite files." }
+          ? { dry_run_note: "dry_run compares size only; it verifies nothing and writes nothing - run without dry_run to restore the files." }
           : {}),
         skipped,
         deleted_count: deleted.length,

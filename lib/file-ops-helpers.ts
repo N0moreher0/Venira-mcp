@@ -19,40 +19,35 @@ export function editMatchLocations(
 }
 
 // ---------------------------------------------------------------------------
-// Copy-pasteable guidance for a failed edit (roadmap item 15, P2)
+// A precise diagnosis of a failed edit (roadmap item 15, P2)
 //
-// Three traps this closes:
-//
-//   1. **The line-number trap.** The file content an agent reads comes with
-//      line-number prefixes ("130:   if (dryRun) {"). Copying that back into
-//      old_text never matches - the second attempt fails the same way. The
-//      snippet here carries the numbers only in a header; `text` is the file
-//      content itself.
-//   2. **The invisible whitespace trap.** Plain text does not show whether a
-//      file uses tabs or spaces, so a model that guesses "4 spaces" for a tab
-//      file fails again. The detected indentation and the line endings are
-//      reported explicitly.
-//   3. **The truncated snippet.** A snippet that stops exactly where the
-//      agent's old_text ended leaves it guessing. The snippet carries a
-//      buffer of lines before and after the nearest region.
+// The error must be small: a long edit that does not apply used to answer with
+// a long error, and the agent paid for every token of it. The answer is now a
+// diagnosis - which file, which line, how far off it is - plus three lines of
+// context on each side of the wrong spot.
 // ---------------------------------------------------------------------------
 
-export type EditSnippet = {
-  /** "Lines 130-145 of src/app.ts:" - the range the snippet covers. */
-  header: string;
-  /** The file content of that range, without line numbers: copy this. */
-  text: string;
-  /** The same lines with their numbers, for orientation only. */
-  numbered: string;
-  /** "4 spaces" | "tabs" | "mixed" | "none" */
-  indentation: string;
-  /** "CRLF" | "LF" | "mixed" */
-  line_endings: string;
-  first_line: number;
-  last_line: number;
+export type EditMismatch = {
+  /** The line in the file where the text stops matching (1-based). */
+  line: number;
+  /** The line of the edit that did not match (1-based). */
+  edit_line: number;
+  /** The first character of that line that differs (0-based). */
+  char_offset: number;
+  /** How many characters the line is off (the length difference). */
+  chars_off: number;
+  /** The line the edit expected (truncated). */
+  expected_line: string;
+  /** The line the file has (truncated). */
+  actual_line: string;
+  /** One sentence: what is wrong. */
+  detail: string;
 };
 
-const SNIPPET_BUFFER_LINES = 10;
+/** How many characters of one line the error carries. */
+const CONTEXT_LINE_CHARS = 160;
+/** How many lines before and after the mismatch the error carries. */
+const CONTEXT_RADIUS = 3;
 
 function bigrams(text: string): Set<string> {
   const clean = text.trim();
@@ -72,10 +67,10 @@ function similarity(a: Set<string>, b: Set<string>): number {
 
 /** How the file indents: tabs, a number of spaces, or mixed. */
 export function detectIndentation(content: string): string {
-  const lines = content.split("\n");
+  const fileLines = content.split("\n");
   let tabLines = 0;
   const spaceWidths = new Set<number>();
-  for (const line of lines) {
+  for (const line of fileLines) {
     const match = /^([ \t]+)/.exec(line);
     if (!match) continue;
     const indent = match[1];
@@ -100,36 +95,149 @@ export function detectLineEndings(content: string): string {
   return "LF";
 }
 
-/**
- * The region of the file an agent most likely meant to edit.
- *
- * `needle` is the text it tried to replace. The anchor is the line that
- * resembles it most; the snippet covers that line plus a buffer, so the
- * agent has the whole neighbourhood (and can copy it straight back).
- */
-export function buildEditSnippet(
-  content: string,
-  relativePath: string,
-  needle: string,
-  buffer = SNIPPET_BUFFER_LINES,
-): EditSnippet {
-  const lines = content.split("\n");
-  const needleLine = needle.split("\n")[0] ?? "";
-  const needleGrams = bigrams(needleLine);
+/** The first character where two lines differ, and the length delta. */
+function lineDifference(expected: string, actual: string): { char_offset: number; chars_off: number } {
+  const limit = Math.min(expected.length, actual.length);
+  let offset = 0;
+  while (offset < limit && expected[offset] === actual[offset]) offset += 1;
+  return { char_offset: offset, chars_off: actual.length - expected.length };
+}
 
-  let anchor = 0;
-  let best = -1;
-  for (let i = 0; i < lines.length; i += 1) {
-    const score = similarity(needleGrams, bigrams(lines[i]));
-    if (score > best) {
-      best = score;
-      anchor = i;
+const truncateLine = (value: string): string =>
+  value.length > CONTEXT_LINE_CHARS ? `${value.slice(0, CONTEXT_LINE_CHARS)}...` : value;
+
+/**
+ * Where does the edit stop matching the file?
+ *
+ * The edit's lines are aligned with the file's lines (longest common
+ * subsequence); the first line that has no counterpart is where the edit went
+ * wrong. For a normal edit this is exact; for a pathological one (a huge
+ * needle against a huge file) it falls back to the closest line.
+ */
+export function findEditMismatch(content: string, needle: string): EditMismatch | null {
+  const fileLines = content.split("\n");
+  const needleLines = needle.split("\n");
+  if (needleLines.length === 0) return null;
+
+  const m = needleLines.length;
+  const n = fileLines.length;
+  let aligned: Map<number, number> | null = null;
+  if (m * n <= 2_000_000) {
+    // LCS table (needle x file).
+    const table: number[][] = Array.from({ length: m + 1 }, () => new Array<number>(n + 1).fill(0));
+    for (let i = m - 1; i >= 0; i -= 1) {
+      for (let j = n - 1; j >= 0; j -= 1) {
+        table[i][j] =
+          needleLines[i] === fileLines[j]
+            ? table[i + 1][j + 1] + 1
+            : Math.max(table[i + 1][j], table[i][j + 1]);
+      }
+    }
+    aligned = new Map();
+    let i = 0;
+    let j = 0;
+    while (i < m && j < n) {
+      if (needleLines[i] === fileLines[j]) {
+        aligned.set(i, j);
+        i += 1;
+        j += 1;
+      } else if (table[i + 1][j] >= table[i][j + 1]) {
+        i += 1;
+      } else {
+        j += 1;
+      }
     }
   }
 
-  const first = Math.max(0, anchor - buffer);
-  const last = Math.min(lines.length, anchor + buffer + 1);
-  const slice = lines.slice(first, last);
+  // The first needle line without a counterpart is the mismatch.
+  let fileIndex = -1;
+  let needleIndex = -1;
+  if (aligned) {
+    let lastNeedle = -1;
+    let lastFile = -1;
+    for (let i = 0; i < m; i += 1) {
+      const match = aligned.get(i);
+      if (match === undefined) {
+        needleIndex = i;
+        // Where the file *should* have that line: the previous aligned line
+        // plus the distance between the two needle lines.
+        fileIndex = lastFile >= 0 ? lastFile + (i - lastNeedle) : -1;
+        break;
+      }
+      lastNeedle = i;
+      lastFile = match;
+    }
+    if (needleIndex === -1) return null; // the needle is in the file after all
+    if (fileIndex >= n) fileIndex = -1;
+  } else {
+    // Fallback: the file line that resembles the needle's first line most.
+    const grams = bigrams(needleLines[0] ?? "");
+    let best = -1;
+    let bestScore = -1;
+    for (let j = 0; j < n; j += 1) {
+      const score = similarity(grams, bigrams(fileLines[j] ?? ""));
+      if (score > bestScore) {
+        bestScore = score;
+        best = j;
+      }
+    }
+    needleIndex = 0;
+    fileIndex = best;
+  }
+
+  const expected = needleLines[needleIndex] ?? "";
+  let actual = fileIndex >= 0 ? fileLines[fileIndex] ?? "" : "";
+  if (fileIndex < 0) {
+    // No position to compare with: take the file line that resembles the
+    // expected one most, so the agent still gets "the file has X".
+    const grams = bigrams(expected);
+    let best = -1;
+    let bestScore = -1;
+    for (let j = 0; j < n; j += 1) {
+      const score = similarity(grams, bigrams(fileLines[j] ?? ""));
+      if (score > bestScore) {
+        bestScore = score;
+        best = j;
+      }
+    }
+    if (best >= 0 && bestScore > 0.3) {
+      fileIndex = best;
+      actual = fileLines[best] ?? "";
+    }
+  }
+  const { char_offset, chars_off } = lineDifference(expected, actual);
+  const line = fileIndex >= 0 ? fileIndex + 1 : Math.min(n, Math.max(1, fileIndex + 2));
+  const detail =
+    fileIndex >= 0
+      ? `the file has "${truncateLine(actual)}" where the edit expects "${truncateLine(expected)}"`
+      : `the edit expects a line the file does not have: "${truncateLine(expected)}"`;
+
+  return {
+    line,
+    edit_line: needleIndex + 1,
+    char_offset,
+    chars_off,
+    expected_line: truncateLine(expected),
+    actual_line: truncateLine(actual),
+    detail,
+  };
+}
+
+/**
+ * The lines around the wrong spot: three before, the line itself, three
+ * after. No line numbers in `text` (copy it straight into old_text), the
+ * numbers only in `numbered` for orientation.
+ */
+export function buildEditContext(
+  content: string,
+  line: number,
+  relativePath: string,
+  radius = CONTEXT_RADIUS,
+): { header: string; text: string; numbered: string; first_line: number; last_line: number } {
+  const lines = content.split("\n");
+  const first = Math.max(0, line - 1 - radius);
+  const last = Math.min(lines.length, line + radius);
+  const slice = lines.slice(first, last).map((value) => truncateLine(value));
   const width = String(last).length;
   return {
     header: `Lines ${first + 1}-${last} of ${relativePath}:`,
@@ -137,8 +245,6 @@ export function buildEditSnippet(
     numbered: slice
       .map((value, index) => `${String(first + 1 + index).padStart(width, " ")}| ${value}`)
       .join("\n"),
-    indentation: detectIndentation(content),
-    line_endings: detectLineEndings(content),
     first_line: first + 1,
     last_line: last,
   };

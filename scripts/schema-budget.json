@@ -1,11 +1,11 @@
 {
   "expert": {
     "tool_count": 44,
-    "total_bytes": 69454
+    "total_bytes": 69521
   },
   "default": {
     "tool_count": 33,
-    "total_bytes": 52169
+    "total_bytes": 52236
   },
   "tools": {
     "project_cache_clear": 708,
@@ -21,7 +21,7 @@
     "project_detect_harnesses": 484,
     "project_diff_files": 985,
     "project_edit_batch": 2550,
-    "project_edit_file": 2696,
+    "project_edit_file": 2763,
     "project_execute_js": 1904,
     "project_explain_error": 1149,
     "project_get_file_info": 576,

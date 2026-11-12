@@ -124,6 +124,57 @@ try {
     typeof bogus.error === "string" && bogus.error.includes("[config_invalid]") && bogus.error.includes("semi-auto"),
     bogus,
   );
+
+  // --- roadmap item 15 (P2): a snippet the agent can actually use ---
+  const esmRequire = executeJs(
+    'const fs = require("node:fs"); const names = fs.readdirSync(".").length; await Promise.resolve(); console.log(names >= 0);',
+    { cwd, contained: true },
+  );
+  check(
+    "a snippet with top-level await still has require",
+    esmRequire.ok && esmRequire.stdout_tail.includes("true"),
+    { error: esmRequire.error, stderr: esmRequire.stderr_tail },
+  );
+
+  const topLevelReturn = executeJs("return 42;", { cwd, contained: true });
+  check(
+    "a top-level return explains how to return a value",
+    !topLevelReturn.ok &&
+      /top-level `return` is not allowed/i.test(topLevelReturn.stderr_tail + (topLevelReturn.error ?? "")),
+    { error: topLevelReturn.error, stderr: topLevelReturn.stderr_tail.slice(0, 300) },
+  );
+
+  const timedOut = executeJs("while (true) {}", { cwd, contained: true, timeout: 400 });
+  check(
+    "a timeout is reported as a timeout, not as a spawn error",
+    !timedOut.ok &&
+      timedOut.timed_out &&
+      /did not finish within/.test(timedOut.error ?? "") &&
+      !/ETIMEDOUT/.test(timedOut.error ?? ""),
+    { error: timedOut.error, timed_out: timedOut.timed_out },
+  );
+
+  const netImport = executeJs('import https from "node:https"; console.log(typeof https);', {
+    cwd,
+    contained: true,
+  });
+  check(
+    "a static import of a network module is refused before it runs",
+    !netImport.ok &&
+      /\[unsupported\]/.test(netImport.error ?? "") &&
+      /node:https/.test(netImport.error ?? "") &&
+      netImport.stdout_tail === "",
+    { error: netImport.error },
+  );
+  const netImportOpen = executeJs('import https from "node:https"; console.log(typeof https);', {
+    cwd,
+    contained: false,
+  });
+  check(
+    "uncontained: the same import runs (the operator opted out)",
+    netImportOpen.ok && netImportOpen.stdout_tail.includes("object"),
+    { error: netImportOpen.error, stdout: netImportOpen.stdout_tail },
+  );
 } finally {
   fs.rmSync(outsideDir, { recursive: true, force: true });
 }
