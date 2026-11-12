@@ -33,12 +33,12 @@ for (const tool of ["project_dependency_graph", "project_change_impact", "projec
   }
 }
 // Tool counts: README must state the Default/Expert counts that doctor.ts treats as the contract.
-// Default = Expert minus the 11 PR/CI tools minus project_explain_error and project_plan_read_batch = 42 - 13 = 29.
-// Expert = 43 - 1 (project_selective_search merged into project_search) = 42.
-// +1 tool with VENIRA_JS_EXEC_MODE=ask|semi-auto|auto (project_execute_js). schema-budget records that set (30/43).
+// Default = Expert minus the 11 PR/CI tools minus project_explain_error and project_plan_read_batch = 40 - 13 = 27.
+// Expert = 43 - 1 (project_selective_search merged into project_search) - 2 (setup tools, VENIRA_SETUP_TOOLS=1) = 40.
+// +1 tool with VENIRA_JS_EXEC_MODE=ask|semi-auto|auto (project_execute_js). schema-budget records that set (28/41).
 // Update check-docs.ts, doctor.ts, README and schema-budget.json together.
-const EXPECTED_DEFAULT_TOOLS = 29;
-const EXPECTED_EXPERT_TOOLS = 42;
+const EXPECTED_DEFAULT_TOOLS = 27;
+const EXPECTED_EXPERT_TOOLS = 40;
 for (const phrase of [
   `${EXPECTED_DEFAULT_TOOLS} coding tools`,
   `${EXPECTED_EXPERT_TOOLS} tools`,

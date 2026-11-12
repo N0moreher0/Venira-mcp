@@ -1,7 +1,7 @@
 # venira-mcp
 
 Fast, workspace-scoped MCP server for coding agents (OpenCode, Claude Desktop, any MCP client).
-Two tool modes — **Default** (29 coding tools + shell, no CI/CD) · **Expert** (42 tools: default + CI/CD). Setting `VENIRA_JS_EXEC_MODE=ask`, `semi-auto` or `auto` adds `project_execute_js` (30 / 43).
+Two tool modes — **Default** (27 coding tools + shell, no CI/CD) · **Expert** (40 tools: default + CI/CD). Setting `VENIRA_JS_EXEC_MODE=ask`, `semi-auto` or `auto` adds `project_execute_js` (28 / 41). `VENIRA_SETUP_TOOLS=1` adds the two setup tools `project_detect_harnesses` and `project_install_self` (+2); `npx venira-mcp --install` and `--print-config` do the same from a terminal.
 Pure Node, 1 native dependency (better-sqlite3), no GUI, no external binary.
 
 > **Security scope.** Venira is a guard rail with an audit trail, not a sandbox. It runs with the privileges of the OS user that started it. The workspace lock limits the paths the file tools can touch (unless `VENIRA_UNRESTRICTED=1`), not what a shell command does: commands are classified by rules (allow / ask / deny) and every call is audited, but a malicious prompt can still steer the agent into running a harmful command that the active profile lets through (with `off`, every command runs). Anything running as the same OS user can read the keys in `VENIRA_DATA_DIR`. For untrusted workspaces, or whenever you need a real isolation boundary, run Venira in a container or VM. Details: [`SECURITY.md`](./SECURITY.md).
@@ -349,7 +349,7 @@ Full reference: the source reads 90+ distinct `VENIRA_*` names; this table lists
 | Variable | Default | What it does |
 |---|---|---|
 | `VENIRA_WORKSPACE` | `process.cwd()` | Workspace root; all paths resolve against it |
-| `VENIRA_TOOL_MODE` | `default` | `default` (29 tools) or `expert` (42 tools); +1 with `VENIRA_JS_EXEC_MODE=ask`, `semi-auto` or `auto` |
+| `VENIRA_TOOL_MODE` | `default` | `default` (27 tools) or `expert` (40 tools); +2 with `VENIRA_SETUP_TOOLS=1`, +1 with `VENIRA_JS_EXEC_MODE=ask`, `semi-auto` or `auto` |
 | `VENIRA_OUTPUT_MODE` | `full` | `full` or `compact` (summarize/trim payloads > 8 KiB; generic payloads use `preview_text`) |
 | `VENIRA_PROFILE` | `full` | `full` or `core` (disables dependency graph, change impact, outline_symbol, symbol_references and recent_files — smaller tools/list, for small models / restricted context) |
 | `VENIRA_UNRESTRICTED` | `"0"` | `"1"` disables workspace lock (never in production) |
@@ -386,6 +386,7 @@ Full reference: the source reads 90+ distinct `VENIRA_*` names; this table lists
 | `VENIRA_SHELL_ELICIT` | `"0"` | `"1"` asks the person through an MCP confirmation dialog (client must support elicitation) |
 | `VENIRA_SESSION_GRANT_RULES` | built-in: `cd_outside_workspace` | Extra ask-rule ids (comma-separated) that may be approved with `--approve --session` |
 | `VENIRA_SHELL_APPROVAL_TTL_MS` | `600000` (10 min) | Lifetime of an in-memory `--session` grant; pending approvals always expire after a fixed 5 minutes |
+| `VENIRA_SETUP_TOOLS` | `"0"` | `"1"` advertises `project_detect_harnesses` and `project_install_self` in `tools/list` (changes the tool list after a restart) |
 | `VENIRA_ALLOW_SELF_INSTALL` | `"0"` | `"1"` lets `project_install_self` write other clients' config files |
 | `VENIRA_SHELL_POLICY_FILE` | unset | Path to a JSON shell policy file (allow/ask/deny rules); never read from the workspace automatically |
 | `VENIRA_TOOL_POLICY_JSON` / `VENIRA_TOOL_POLICY_FILE` | unset | Per-tool policy rules, inline JSON or a file (see `lib/tool-policy.ts`) |

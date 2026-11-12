@@ -147,7 +147,7 @@ async function main() {
       await new Promise((r) => setTimeout(r, 500)); // let warm-up finish
 
       const tools = await client.listTools();
-      const expectedTools = 42; // expert mode exposes 42 tools; JS exec remains approval-gated
+      const expectedTools = 40; // expert mode exposes 40 tools (setup tools need VENIRA_SETUP_TOOLS=1); JS exec remains approval-gated
       results.push(await check("tools_count", tools.tools.length === expectedTools, { actual: tools.tools.length, expected: expectedTools }));
 
       const healthRes = await client.callTool({ name: "project_health", arguments: { include_audit: 0 } });

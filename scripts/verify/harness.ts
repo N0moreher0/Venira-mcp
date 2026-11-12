@@ -51,6 +51,7 @@ export function verifyEnv(
     VENIRA_SHELL_EXIT_EARLY: "0",
     VENIRA_SHELL_ENV_PASS_ALL: "0",
     VENIRA_EDIT_FUZZY: "0",
+    VENIRA_SETUP_TOOLS: "1", // verify/secrets.ts still exercises project_install_self; the default-off listing is pinned in test-tool-schema.ts
     VENIRA_SHELL_AUTO_APPROVE_TOKEN: "0",
     VENIRA_SECRET_ALLOW_REVEAL: "0",
     VENIRA_SHELL_ELICIT: "0",

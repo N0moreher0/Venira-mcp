@@ -21,6 +21,16 @@ export function editFuzzyEnabled(): boolean {
   return envFlag("VENIRA_EDIT_FUZZY", false);
 }
 
+/**
+ * `VENIRA_SETUP_TOOLS=1`: advertise the one-time setup tools (`project_detect_harnesses`, `project_install_self`)
+ * in `tools/list`. Off by default (ROADMAP_TOOL_SCHEMA.md, phase 8 patch 2): they are only used when wiring Venira
+ * into a client, and `npx venira-mcp --install` / `--print-config` do the same job from a terminal. Read when the
+ * tools are registered, so it changes `tools/list` after a restart.
+ */
+export function setupToolsEnabled(): boolean {
+  return envFlag("VENIRA_SETUP_TOOLS", false);
+}
+
 export function envChoice<const T extends readonly string[]>(
   name: string,
   defaultValue: T[number],

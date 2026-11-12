@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { ToolResult } from "../lib/output.js";
 import type { Args } from "./project-cache.js";
+import { setupToolsEnabled } from "../lib/env.js";
 import { config, flag01, reason_ } from "./project-schema.js";
 
 // Self-install (detect_harnesses, install_self), diagnostics + read planning (explain_error,
@@ -25,6 +26,8 @@ export function registerWorkflowTools(server: McpServer, deps: WorkflowToolsDeps
   // P2.5: Self-install (detect harnesses + install venira MCP config)
   // -------------------------------------------------------------------------
 
+  // Only advertised with VENIRA_SETUP_TOOLS=1: setup-time tools, and `venira-mcp --install` covers them.
+  if (setupToolsEnabled()) {
   server.registerTool(
     "project_detect_harnesses",
     {
@@ -69,6 +72,7 @@ export function registerWorkflowTools(server: McpServer, deps: WorkflowToolsDeps
     },
     (args) => runInstallSelf(args as Args),
   );
+  }
 
   // -------------------------------------------------------------------------
   // Diagnostics + read planning (deterministic, no model call)

@@ -313,6 +313,43 @@ function registerFilesWithFuzzy(value: "0" | "1"): Registered {
 
 const fuzzyOff = registerFilesWithFuzzy("0");
 const fuzzyOn = registerFilesWithFuzzy("1");
+// ---- Phase 8 patch 2: the setup tools are advertised only when VENIRA_SETUP_TOOLS=1 ----
+const SETUP_TOOLS = ["project_detect_harnesses", "project_install_self"];
+
+/** Register the workflow tools with VENIRA_SETUP_TOOLS = `value` (undefined = unset) and return the names. */
+function workflowToolNames(value: "0" | "1" | undefined): string[] {
+  const saved = process.env.VENIRA_SETUP_TOOLS;
+  if (value === undefined) delete process.env.VENIRA_SETUP_TOOLS;
+  else process.env.VENIRA_SETUP_TOOLS = value;
+  try {
+    const names: string[] = [];
+    const server = { registerTool: (name: string) => void names.push(name) } as never;
+    workflow.registerWorkflowTools(server, {
+      runDetectHarnesses: dummy,
+      runInstallSelf: dummy,
+      runExplainError: dummy,
+      runPlanReadBatch: dummy,
+      runSnapshot: dummy,
+    });
+    return names;
+  } finally {
+    if (saved === undefined) delete process.env.VENIRA_SETUP_TOOLS;
+    else process.env.VENIRA_SETUP_TOOLS = saved;
+  }
+}
+
+check("setup tools: not advertised by default (unset or 0), the other workflow tools stay", () => {
+  for (const value of [undefined, "0"] as const) {
+    const names = workflowToolNames(value);
+    assert.deepEqual(names.filter((n) => SETUP_TOOLS.includes(n)), []);
+    assert.deepEqual(names.sort(), ["project_explain_error", "project_plan_read_batch", "project_snapshot"]);
+  }
+});
+
+check("setup tools: VENIRA_SETUP_TOOLS=1 advertises project_detect_harnesses and project_install_self", () => {
+  assert.deepEqual(workflowToolNames("1").filter((n) => SETUP_TOOLS.includes(n)).sort(), [...SETUP_TOOLS].sort());
+});
+
 const fuzzyIn = (keys: string[]) => keys.filter((k) => FUZZY.includes(k)).sort();
 const editFileKeys = (tools: Registered) => Object.keys(shapeOf(tools.get("project_edit_file")!.inputSchema));
 /** The zod schema of one project_edit_batch item (`edits` is an array of loose objects). */

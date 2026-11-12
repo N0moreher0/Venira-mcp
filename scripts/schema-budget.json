@@ -1,11 +1,11 @@
 {
   "expert": {
-    "tool_count": 43,
-    "total_bytes": 70716
+    "tool_count": 41,
+    "total_bytes": 68971
   },
   "default": {
-    "tool_count": 30,
-    "total_bytes": 50906
+    "tool_count": 28,
+    "total_bytes": 49161
   },
   "tools": {
     "project_cache_clear": 708,
@@ -18,7 +18,6 @@
     "project_create": 1033,
     "project_delete_path": 1004,
     "project_dependency_graph": 2112,
-    "project_detect_harnesses": 462,
     "project_diff_files": 985,
     "project_edit_batch": 2425,
     "project_edit_file": 2625,
@@ -27,7 +26,6 @@
     "project_get_file_info": 576,
     "project_github_connect": 1347,
     "project_health": 1245,
-    "project_install_self": 1283,
     "project_list_files": 1025,
     "project_outline_symbol": 1370,
     "project_plan_read_batch": 1393,
