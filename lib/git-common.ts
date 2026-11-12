@@ -23,6 +23,21 @@ export function requireText(args: Record<string, unknown>, key: string, hint: st
   return value;
 }
 
+/**
+ * Number of CI selectors set among run_id / ref / pr / branch (blank values do
+ * not count). Shared by `project_ci_status` (0..1 allowed) and
+ * `project_ci_wait` (exactly 1) so both tools define "a selector" identically.
+ * `workflow` is not a selector: it only narrows `branch` or the recent-runs list.
+ */
+export function selectorCount(args: Record<string, unknown>): number {
+  let count = 0;
+  if (args.run_id !== undefined && args.run_id !== null && String(args.run_id).trim() !== "") count += 1;
+  if (typeof args.ref === "string" && args.ref.trim() !== "") count += 1;
+  if (args.pr !== undefined && args.pr !== null && String(args.pr).trim() !== "") count += 1;
+  if (typeof args.branch === "string" && args.branch.trim() !== "") count += 1;
+  return count;
+}
+
 export function prNumberFrom(args: Record<string, unknown>, key = "pr"): number {
   const raw = args[key];
   if (typeof raw === "number" && Number.isFinite(raw) && raw >= 1 && Number.isSafeInteger(Math.floor(raw))) return Math.floor(raw);

@@ -534,6 +534,24 @@ export async function runGithubCi(
     ciWaitTwoSelectors.error?.code === "invalid_request",
     ciWaitTwoSelectors,
   );
+  // Phase 8 patch 1: ci_status rejects ambiguous selectors like ci_wait does
+  // (no hidden precedence); 0 or 1 selector still works.
+  for (const [label, selectors] of [
+    ["run_id_ref", { run_id: 99, ref: "main" }],
+    ["ref_pr", { ref: "main", pr: 1 }],
+    ["pr_branch", { pr: 1, branch: "main" }],
+  ] as const) {
+    const ambiguous = asEnvelope(await call("project_ci_status", { ...selectors }));
+    check(
+      `ci_status_rejects_two_selectors_${label}`,
+      ambiguous.error?.code === "invalid_request",
+      ambiguous,
+    );
+  }
+  const ciStatusNone = asEnvelope(await call("project_ci_status", {}));
+  check("ci_status_accepts_no_selector", ciStatusNone.ok === true, ciStatusNone);
+  const ciStatusOne = asEnvelope(await call("project_ci_status", { run_id: 99 }));
+  check("ci_status_accepts_one_selector", ciStatusOne.ok === true, ciStatusOne);
   const waitAudit = asEnvelope(
     await call("project_read_audit", { operation: "ci_wait", limit: 50 }),
   );

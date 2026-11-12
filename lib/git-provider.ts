@@ -15,7 +15,7 @@ import type { GitDialect } from "./git-dialect.js";
 import { githubDialect } from "./git-github.js";
 import { gitlabDialect } from "./git-gitlab.js";
 import { bitbucketDialect } from "./git-bitbucket.js";
-import type { Resp } from "./git-common.js";
+import { selectorCount, type Resp } from "./git-common.js";
 import { refreshGithubAccessTokenIfNeeded } from "./github-device-flow.js";
 import { assertProviderPayloadSafe } from "./provider-secret-guard.js";
 
@@ -83,6 +83,14 @@ export async function opPrReopen(args: Record<string, unknown>): Promise<Resp> {
 }
 
 export async function opCiStatus(args: Record<string, unknown>): Promise<Resp> {
+  // 0 selectors = recent runs; 1 = that run/ref/PR/branch. 2+ used to be resolved
+  // silently by a hidden precedence, so reject it like project_ci_wait does.
+  if (selectorCount(args) > 1) {
+    throw new Error(
+      "[invalid_request] Pass at most one of run_id / ref / pr / branch (they select different CI surfaces). " +
+        "Hint: add workflow= to narrow a branch selector.",
+    );
+  }
   return runProvider(args, "ci_status", (ctx, dialect) => dialect.ciStatus(ctx, args));
 }
 

@@ -723,7 +723,7 @@ const INVALID_REQUEST_HINTS: Array<[RegExp, string]> = [
   [/reason of at most 400/i, "Add reason (one line, max 400 chars)."],
   [/kill_key/i, "Use the kill_key from the project_shell_run response."],
   [/secret_env/i, "secret_env: array of up to 16 names from project_secret action=list."],
-  [/Pass exactly one/i, "Pass only one selector: run_id, ref, pr or branch."],
+  [/Pass exactly one|Pass at most one of run_id/i, "Pass only one selector: run_id, ref, pr or branch."],
   [/Pass either expires_in_days or expires_at|expires_at` must be/i, "Use expires_in_days or expires_at (epoch ms/ISO-8601), not both."],
   [/`until` must be/i, 'Set until to "terminal" or "any_change".'],
   [/pending_id|action must be "start" or "poll"/i, "Call project_github_connect action=start first, then poll with its pending_id."],

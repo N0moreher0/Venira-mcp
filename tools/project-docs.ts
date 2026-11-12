@@ -252,13 +252,13 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
 
   // ---- git provider: CI ---------------------------------------------------
   project_ci_status: {
-    about: "Read CI state: recent runs (filter by branch or workflow), one run with its jobs (run_id), or check-runs for a PR or ref (pr, ref). Selector precedence: ref > pr > run_id > branch/workflow; give none for recent runs. GitHub Actions, GitLab pipelines, Bitbucket Pipelines.",
+    about: "Read CI state: recent runs (filter by branch or workflow), one run with its jobs (run_id), or check-runs for a PR or ref (pr, ref). Pass at most one of run_id/ref/pr/branch (workflow narrows); none = recent runs. GitHub Actions, GitLab pipelines, Bitbucket Pipelines.",
     use: "after a push or trigger, to see whether checks passed.",
     avoid: "you need the failure detail (project_ci_logs) or want to wait (project_ci_wait).",
     out: "overall (success|failure|in_progress|no_runs|no_checks), runs[] {id, name, status, conclusion, branch, sha, url}.",
   },
   project_ci_wait: {
-    about: "Wait for a run, ref, PR or branch to reach a final state, and include the failure log tail. Selector precedence: run_id > ref > pr > branch. One call lasts at most timeout_ms (default 45s, max 110s); terminal=false means still running, so call again with the same selector.",
+    about: "Wait for a run, ref, PR or branch to reach a final state, and include the failure log tail. Pass exactly one of run_id/ref/pr/branch. One call lasts at most timeout_ms (default 45s, max 110s); terminal=false means still running, so call again with the same selector.",
     use: "after project_ci_trigger or a push: the result and the failure tail in one call.",
     avoid: "you want an instant snapshot (project_ci_status) or a full job log (project_ci_logs).",
     out: "overall, terminal, changed, waited_ms, run, failure_tail.",

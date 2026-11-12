@@ -7,7 +7,7 @@
  * No background timer, no standing network traffic.
  */
 import { opCiLogs, opCiStatus } from "./git-provider.js";
-import type { Resp } from "./git-common.js";
+import { selectorCount, type Resp } from "./git-common.js";
 
 const TERMINAL = new Set(["success", "failure", "cancelled", "skipped", "timed_out"]);
 const DEFAULT_TIMEOUT_MS = 45_000;
@@ -57,15 +57,6 @@ function selectorArgs(args: Record<string, unknown>): Record<string, unknown> {
     out[key] = value;
   }
   return out;
-}
-
-function selectorCount(args: Record<string, unknown>): number {
-  let count = 0;
-  if (args.run_id !== undefined && args.run_id !== null && String(args.run_id).trim() !== "") count += 1;
-  if (typeof args.ref === "string" && args.ref.trim() !== "") count += 1;
-  if (args.pr !== undefined && args.pr !== null && String(args.pr).trim() !== "") count += 1;
-  if (typeof args.branch === "string" && args.branch.trim() !== "") count += 1;
-  return count;
 }
 
 async function pollStatus(args: Record<string, unknown>): Promise<{ response: Resp; data: Record<string, any> }> {
