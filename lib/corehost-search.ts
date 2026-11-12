@@ -265,7 +265,7 @@ export async function opSearch(
    */
   const searchHint = (): string | undefined => {
     if (!complete && hits.length === 0) {
-      return `The search was cut before any hit was found (file cap ${scanCap ?? maxScanFiles()}). Narrow relative_path/glob, or raise VENIRA_SEARCH_MAX_FILES.`;
+      return `The search was cut before any hit was found (file cap ${scanCap ?? maxScanFiles()}). Narrow relative_path/glob, or raise VENIRA_SEARCH_MAX_FILES. For an executable on PATH run \`where <name>\` via project_shell_run.`;
     }
     if (hits.length === 0) {
       return "No matches. Broaden the search: drop glob/relative_path, set regex=0, or use kind=file_name.";
