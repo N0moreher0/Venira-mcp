@@ -153,6 +153,10 @@ export async function opEditFile(
   if (isProtectedPath(absPath)) {
     throw new Error(`[sensitive_result] Path is protected by policy: ${args.relative_path}. Hint: do not edit protected files.`);
   }
+  // The workspace-relative path of the file, for the recovery payload: the
+  // agent can paste it into any tool, and it does not depend on parsing the
+  // message (the message carries the diagnosis now).
+  const relFile = path.relative(root, absPath).replace(/\\/g, "/") || String(args.relative_path);
   const edits = args.edits as
     | Array<{ old_text: string; new_text: string; replace_all?: boolean }>
     | undefined;
@@ -271,6 +275,9 @@ export async function opEditFile(
             edit_index: editIndex,
             edit_count: editList.length,
             file_unchanged: true,
+            // The file, so the recovery does not have to parse it out of the
+            // message (the message carries the diagnosis now).
+            file: relFile,
             // Roadmap item 15 (P2): the whitespace facts the agent cannot
             // see in plain text.
             indentation: detectIndentation(content),
@@ -311,6 +318,9 @@ export async function opEditFile(
           edit_index: editIndex,
           edit_count: editList.length,
           file_unchanged: true,
+          // The file, so the recovery does not have to parse it out of the
+          // message (the message carries the diagnosis now).
+          file: relFile,
           ...(mismatch ? { mismatch } : {}),
           context,
           indentation: detectIndentation(content),

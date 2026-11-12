@@ -682,7 +682,14 @@ function defaultNextActions(failure: Failure, operation?: string): unknown[] | u
   if (recovery?.next_actions) return recovery.next_actions;
   if (failure.code === "not_found" && /^(Unknown run_id|Checkpoint )/i.test(failure.message)) return undefined;
   if (failure.code === "old_text_not_found" || failure.code === "old_text_ambiguous") {
-    const file = /^old_text (?:not found|matches \d+ locations) in (.+?)\.(?: |$)/.exec(failure.message)?.[1];
+    // The file comes from the error data. Parsing it out of the message is
+    // brittle: the message now carries the diagnosis ("...: line 13,
+    // character 19, -10 character(s) off."), which the old regex swallowed.
+    const data = failure.data as { file?: unknown } | undefined;
+    const fromData = typeof data?.file === "string" && data.file.trim() ? data.file.trim() : "";
+    const file =
+      fromData ||
+      /^old_text (?:not found|matches \d+ locations) in (.+?)(?:: line \d+|:\s|\.\s|\.$|$)/.exec(failure.message)?.[1];
     return file
       ? [{ tool: "project_read_file", arguments: { relative_path: file }, why: "copy the exact current text, then retry the edit" }]
       : undefined;
@@ -769,10 +776,14 @@ export function parseToolError(error: unknown): Failure & { data?: unknown } {
   if (!hint) hint = DEFAULT_HINTS[code] ?? GENERIC_HINT;
   const message = body || raw;
   const retryable = error instanceof VeniraError ? error.retryable : RETRYABLE.has(code);
+  // The recovery may need the error data (e.g. the file of a failed edit),
+  // so it is read before the next actions are computed.
+  const errorData =
+    error && typeof error === "object" ? (error as { data?: unknown }).data : undefined;
   const nextActions =
     error instanceof VeniraError
       ? error.next_actions
-      : defaultNextActions({ code, message, hint, retryable });
+      : defaultNextActions({ code, message, hint, retryable, data: errorData });
 
   return {
     code,

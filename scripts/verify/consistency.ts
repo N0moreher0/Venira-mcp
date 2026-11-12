@@ -177,6 +177,41 @@ export async function runConsistency(
   );
 
   // -------------------------------------------------------------------------
+  // 2b. A failed edit points at the right file (the message carries the
+  //     diagnosis now, so parsing the path out of it broke).
+  // -------------------------------------------------------------------------
+  await fs.writeFile(path.join(dir, "recovery.txt"), "alpha\n");
+  const recoveryEdit = asEnvelope(
+    await call("project_edit_file", {
+      relative_path: `${dir}/recovery.txt`,
+      old_text: "not in the file",
+      new_text: "X",
+    }),
+  );
+  const recoveryFile = String(
+    (recoveryEdit.data as { file?: unknown } | undefined)?.file ?? "",
+  );
+  const recoveryAction = (recoveryEdit.next_actions ?? []) as Array<{
+    tool?: string;
+    arguments?: { relative_path?: string };
+  }>;
+  check(
+    "a_failed_edit_points_at_the_edited_file",
+    recoveryEdit.error?.code === "old_text_not_found" &&
+      recoveryFile === `${dir}/recovery.txt` &&
+      recoveryAction.some(
+        (action) =>
+          action.tool === "project_read_file" &&
+          action.arguments?.relative_path === `${dir}/recovery.txt`,
+      ),
+    {
+      file: recoveryFile,
+      next_actions: recoveryAction,
+      message: recoveryEdit.error?.message,
+    },
+  );
+
+  // -------------------------------------------------------------------------
   // 3. Timestamps: epoch milliseconds, everywhere, newest first
   // -------------------------------------------------------------------------
   const auditRows = asEnvelope(await call("project_read_audit", { limit: 5 }));
