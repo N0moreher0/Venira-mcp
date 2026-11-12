@@ -42,8 +42,15 @@ export const reason_ = z
   .max(400)
   .optional()
   .describe(
-    "Optional why (max 400 chars), audit-logged. Required only on project_ci_control.",
+    "Optional why (max 400 chars), audit-logged.",
   );
+/**
+ * 1-based line number. Advertised as `minimum: 1` through `.meta()` (which overrides only the JSON Schema, like
+ * `flag01`), but the parser stays permissive on purpose: `lib/corehost-fileread.ts` refuses `start_line < 1`
+ * with an `[invalid_request]` error and a hint, which beats a generic validation error and does not break a
+ * client that sends `0` (ROADMAP_TOOL_SCHEMA.md, phase 7).
+ */
+export const lineNo = z.number().int().meta({ minimum: 1 });
 export const editOp = z.object({
   old_text: z.string().min(1).describe("Exact text to replace."),
   new_text: z.string().describe("Replacement text."),
@@ -131,25 +138,24 @@ export const readBatchSearchArgs = z.looseObject({
 });
 
 /**
- * `use_when` / `avoid_when` / `output_kind` are rendered into the model-facing description.
- * `speed_profile` / `batch_safe` are machine metadata only (`_meta.venira`): the model gains nothing
- * from them, so they are not printed. Final wording lives in tools/project-docs.ts.
+ * Machine metadata a registration passes to `config()` (`_meta.venira`): the model gains nothing from it,
+ * so it is never printed. All model-facing text (description, use/avoid/output lines) lives in
+ * tools/project-docs.ts (`TOOL_DOCS`); `applyToolDocs` adds it to `_meta.venira` and the description.
  */
 export type ToolMeta = {
-  use_when: string;
-  avoid_when: string;
   speed_profile: string;
-  output_kind: string;
   batch_safe: boolean;
 };
 
+type DescribedMeta = { use_when: string; avoid_when: string; output_kind: string };
+
 /** Model-facing description: what it does, when to use it, what to use instead, what comes back. */
-export function renderDescription(base: string, meta: Pick<ToolMeta, "use_when" | "avoid_when" | "output_kind">): string {
+export function renderDescription(base: string, meta: DescribedMeta): string {
   return `${base}\nUse when: ${meta.use_when}\nAvoid when: ${meta.avoid_when}\nOutput: ${meta.output_kind}`;
 }
 
+/** No description here: `applyToolDocs` serves it from `TOOL_DOCS` (a tool without an entry fails `test:tool-schema`). */
 export function config(
-  base: string,
   title: string,
   meta: ToolMeta,
   annotations: {
@@ -161,7 +167,6 @@ export function config(
 ) {
   return {
     title,
-    description: renderDescription(base, meta),
     annotations,
     _meta: { venira: meta },
   };

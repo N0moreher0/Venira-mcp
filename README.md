@@ -535,7 +535,7 @@ npm run bench:mcp   # end-to-end numbers
 ```
 
 **Adding a tool**:
-1. Register in `tools/project.ts` → `registerProjectTools`, use the `config()` helper.
+1. Register in `tools/project.ts` → `registerProjectTools`, use the `config(title, meta, annotations)` helper (`meta` is only `speed_profile` + `batch_safe`), and add the model-facing wording (about / use / avoid / out) to `TOOL_DOCS` in `tools/project-docs.ts`; `test:tool-schema` fails for a tool without an entry.
 2. Read-only: route through `executeCached`; mutations: add to `MUTATING` set.
 3. Envelope: use `buildEnvelope` / `errorEnvelope` from `lib/output.ts`.
 4. Add a check in the matching section module under `scripts/verify/` (`scripts/verify.ts` only orchestrates); update the decision tree in `server.ts` INSTRUCTIONS.

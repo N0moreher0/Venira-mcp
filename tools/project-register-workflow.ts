@@ -29,13 +29,9 @@ export function registerWorkflowTools(server: McpServer, deps: WorkflowToolsDeps
     "project_detect_harnesses",
     {
       ...config(
-        "Detect which MCP-client harnesses (OpenCode/Claude/Cursor/Codex/Kimi/DeepSeek/Antigravity) have a config on this machine.",
         "Detect MCP harnesses",
         {
-          use_when: "before installing venira, to know which client configs exist and can be updated.",
-          avoid_when: "you already know the config path (skip straight to project_install_self).",
           speed_profile: "fast; filesystem checks, no writes.",
-          output_kind: "harness_detect: detected[] (found harnesses), harnesses[] {harness, detected, config_path, format, note}.",
           batch_safe: true,
         },
         { readOnlyHint: true, openWorldHint: false },
@@ -49,13 +45,9 @@ export function registerWorkflowTools(server: McpServer, deps: WorkflowToolsDeps
     "project_install_self",
     {
       ...config(
-        "Add the venira MCP entry to a target client's config (OpenCode/Claude/Cursor/Codex/Kimi/DeepSeek/Antigravity). Atomic + backup.",
         "Self-install venira MCP",
         {
-          use_when: "a user asks to 'install venira into <client>' — add the MCP server block to that client's config file.",
-          avoid_when: "the config path is unknown (run project_detect_harnesses first), or the user wants a dry-run (set dry_run=1).",
           speed_profile: "fast; one atomic write per config. Always backs up the original to <file>.venira-bak.",
-          output_kind: "install_self: {harness, config_path, status (installed|already_present|config_missing|error|would_merge|would_create), needs_restart, dry_run, note}.",
           batch_safe: false,
         },
         { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
@@ -86,16 +78,9 @@ export function registerWorkflowTools(server: McpServer, deps: WorkflowToolsDeps
     "project_explain_error",
     {
       ...config(
-        "Diagnose a failure from its error text / log tail: known signatures (errno, TypeScript, Python, git, npm, GitHub, venira codes) → likely cause + ready-to-send next tool calls. Rule-based, offline, instant.",
         "Explain an error",
         {
-          use_when:
-            "a command, test, build or provider call failed and you want the fastest route to the fix (feed it the stderr tail or the CI log tail).",
-          avoid_when:
-            "you already know the cause and only need the file contents (use project_read_file, which also accepts ranges).",
           speed_profile: "pure local rules, < 1 ms; no network and no model call.",
-          output_kind:
-            "explain_error: matched, summary, error_line, language, diagnoses[] {rule_id, title, likely_cause, suggested_fix[], retry_hint?, next_actions[]}, next_actions[].",
           batch_safe: true,
         },
         { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
@@ -126,16 +111,9 @@ export function registerWorkflowTools(server: McpServer, deps: WorkflowToolsDeps
     "project_plan_read_batch",
     {
       ...config(
-        "Plan a read: extract keywords from the task, run bounded content + file-name searches (+recent files), rank candidate source files by hits, path/name match and prose weight (build output, DB/log artifacts excluded), and return a ready project_read_batch call with a calibrated estimate. Deterministic planner, no model call.",
         "Plan reads from a task",
         {
-          use_when:
-            "starting a task in an unfamiliar area and you do not know which files matter yet (one call instead of guess-read-repeat).",
-          avoid_when:
-            "you already know the exact files (call project_read_batch directly), or the task is a one-line lookup (project_search).",
           speed_profile: "1-3 bounded content searches (~20 ms each) + local ranking; no file contents are returned.",
-          output_kind:
-            "plan_read_batch: task, keywords[], searched, candidates[] {relative_path, reason, hits}, steps[] {tool, arguments, why}, estimated_ms, notes.",
           batch_safe: true,
         },
         { readOnlyHint: true, idempotentHint: false, openWorldHint: false },
@@ -168,18 +146,10 @@ export function registerWorkflowTools(server: McpServer, deps: WorkflowToolsDeps
     "project_snapshot",
     {
       ...config(
-        "Checkpoint/rollback for the workspace: create a labeled, scoped snapshot before multi-file or hard-to-reverse edits; keep its returned id. For rollback, preview with restore dry_run=1 (size-based preview only; it cannot detect same-size content changes), inspect newer user edits, then restore that exact id with verify=1 and delete_extra=0. Content-addressed and deduplicated.",
         "Workspace checkpoint",
         {
-          use_when:
-            "before multi-file, cross-file, refactor/rename or hard-to-reverse edits: create with a descriptive label, scope paths to the affected area, retain the exact returned id, and confirm required files were captured. For rollback, run restore dry_run=1 to preview path/size changes (same-size content differences are not detected); inspect files with newer user edits, then restore the exact id with verify=1 and delete_extra=0. Example: checkpoint → edit 3 files → tests fail → inspect scope → restore.",
-          avoid_when: "a tiny, easily recreated single-file edit, generated build output, or a commit already provides the needed recovery point; do not restore over newer user changes without inspecting them.",
           speed_profile:
             "create walks/hashes the captured files (skips .git/node_modules/dist, symlinks, huge files); repeats only store new blobs. restore is atomic per file, concurrency 4, SHA-256 verified by default; dry_run previews path/size only, not same-size content changes.",
-          output_kind:
-            "snapshot_create: id, label, file_count, total_bytes, new_blob_bytes, skipped[], truncated; " +
-            "snapshot_list: checkpoints[]; snapshot_restore: restored_count/restored[], deleted_count, skipped[]; snapshot_delete: deleted, bytes_freed; " +
-            "snapshot_mirror: status, copied_blobs, copied_indexes, bytes, failed[] (needs VENIRA_SNAPSHOT_MIRROR_DIR); snapshot_create adds mirror{} when configured.",
           batch_safe: false,
         },
         { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },

@@ -3,7 +3,16 @@ import { z } from "zod";
 import type { ToolResult } from "../lib/output.js";
 import { editFuzzyEnabled } from "../lib/env.js";
 import type { Args } from "./project-cache.js";
-import { runEditBatch, runReadBatch, type BatchDeps } from "./project-batch.js";
+import {
+  checkItemBytes,
+  EDIT_ITEM_BYTES_MAX,
+  EDIT_ITEM_BYTES_MIN,
+  READ_ITEM_BYTES_MAX,
+  READ_ITEM_BYTES_MIN,
+  runEditBatch,
+  runReadBatch,
+  type BatchDeps,
+} from "./project-batch.js";
 import { runHybridSearch, type HybridDeps } from "./project-hybrid.js";
 import { runRecentFiles, type RecentFilesDeps } from "./project-recent.js";
 import {
@@ -12,6 +21,7 @@ import {
   editFuzzyShape,
   editOp,
   flag01,
+  lineNo,
   path_,
   readBatchGetFileInfoArgs,
   readBatchListFilesArgs,
@@ -44,13 +54,9 @@ export function registerFileTools(server: McpServer, deps: FileToolsDeps): void 
     "project_list_files",
     {
       ...config(
-        "List files/directories in the workspace. depth 1..3 shows the tree in a single call.",
         "List files",
         {
-          use_when: "you need to see the directory tree, check a path, or list files before reading.",
-          avoid_when: "you only need one file's metadata (project_get_file_info) or one file's contents (project_read_file).",
           speed_profile: "fast; TTL cache 1.5s, auto-wiped on write/edit/delete.",
-          output_kind: "file_list: entries, truncated, hint.",
           batch_safe: true,
         },
         { readOnlyHint: true, openWorldHint: false },
@@ -69,27 +75,23 @@ export function registerFileTools(server: McpServer, deps: FileToolsDeps): void 
     "project_read_file",
     {
       ...config(
-        "Read a text file, optionally by line range (1-based). The result carries next_start_line when truncated.",
         "Read file",
         {
-          use_when: "you need the contents of one file, or one line range of a large file.",
-          avoid_when: "you need to read 2+ files (project_read_batch) or only need metadata (project_get_file_info).",
           speed_profile: "very fast on repeat; cache validated by mtime+size.",
-          output_kind: "file_read: text, first_line, last_line, total_bytes, next_start_line.",
           batch_safe: true,
         },
         { readOnlyHint: true, openWorldHint: false },
       ),
       inputSchema: {
         relative_path: path_,
-        start_line: z.number().int().optional().describe("First line (1-based). Together with end_line it selects one line range. When truncated, read again with start_line=next_start_line."),
+        start_line: lineNo.optional().describe("First line (1-based)."),
         end_line: z.number().int().min(1).optional().describe("Last line (1-based, inclusive)."),
         line_numbers: flag01.optional().describe("1 prefixes each line with its line number (default 0)."),
-        max_bytes: z.number().int().min(1).max(1048576).optional().describe("Max text bytes returned (default 1,048,576 = 1 MiB, max 1 MiB)."),
+        max_bytes: z.number().int().min(1).max(1048576).optional().describe("Max bytes returned (default and max 1 MiB)."),
         ranges: z
           .array(
             z.object({
-              start_line: z.number().int().describe("First line (1-based)."),
+              start_line: lineNo.describe("First line (1-based)."),
               end_line: z.number().int().min(1).optional().describe("Last line (1-based, inclusive)."),
               max_bytes: z.number().int().min(1).optional().describe("Max text bytes for this range (default: the top-level max_bytes)."),
             })
@@ -110,13 +112,9 @@ export function registerFileTools(server: McpServer, deps: FileToolsDeps): void 
     "project_get_file_info",
     {
       ...config(
-        "File/directory metadata (kind, size, modification time).",
         "Get file info",
         {
-          use_when: "you only need size/mtime/kind, or want to check that a path exists.",
-          avoid_when: "you need the file's contents (project_read_file).",
           speed_profile: "very fast; cache validated by mtime+size.",
-          output_kind: "file_info: relative_path, kind, size_bytes, modified_unix_seconds.",
           batch_safe: true,
         },
         { readOnlyHint: true, openWorldHint: false },
@@ -130,32 +128,27 @@ export function registerFileTools(server: McpServer, deps: FileToolsDeps): void 
     "project_search",
     {
       ...config(
-        "Search by file name, directory name, content (literal or regex=1), or symbol declaration lines (definition). Set `queries` to rank files by AND/OR/NOT patterns instead.",
         "Search workspace",
         {
-          use_when: "you need to find code/strings/symbols before reading; use kind=literal_content or definition. `queries` scores files by several patterns (must/weight) when one pattern is not enough.",
-          avoid_when: "you already know the exact path to read.",
           speed_profile: "medium (file scan); TTL cache 3s for the same query.",
-          output_kind:
-            "search: hits (source+confidence when hybrid:1; score/matched with queries=1), complete, diagnostics, hint.",
           batch_safe: true,
         },
         { readOnlyHint: true, openWorldHint: false },
       ),
       inputSchema: {
-        query: z.string().optional().describe("What to find (meaning depends on kind). Required unless `queries`/`files_hint` is set, in which case `kind` is ignored and files are ranked by AND/OR/NOT patterns."),
+        query: z.string().optional().describe("What to find (meaning depends on kind). Required unless `queries`/`files_hint` is set."),
         queries: z
           .array(
             z.object({
               pattern: z.string().min(1).describe("Case-insensitive substring matched against each line."),
-              must: flag01.optional().describe("1 excludes files that do not contain this pattern (default 0)."),
-              weight: z.number().int().optional().describe("Score multiplier for hits on this pattern (default 1; higher wins)."),
+              must: flag01.optional().describe("1 = only lines containing this pattern count as hits (default 0)."),
+              weight: z.number().int().optional().describe("Points added to a line's score when it matches this pattern (default 1)."),
             }),
           )
           .min(1)
           .max(8)
           .optional()
-          .describe("Multi-query AND/NOT ranked search: files are scored by how many patterns they match (must patterns are required). When set, `kind` and `query` are ignored and hits arrive with `score`/`matched`. Combine with `files_hint` to scan specific files."),
+          .describe("Rank matching lines by several patterns: each matching pattern adds its weight to the line's score, and `must` patterns have to match. When set, `kind` and `query` are ignored and hits carry `score`/`matched`. Combine with `files_hint` to scan specific files."),
         files_hint: z
           .array(z.string().max(300))
           .max(20)
@@ -189,13 +182,9 @@ export function registerFileTools(server: McpServer, deps: FileToolsDeps): void 
     "project_recent_files",
     {
       ...config(
-        "List files modified most recently in the workspace, newest first, plus session_edits (files you already wrote this session). Cheap orientation call: use it at the start of a task, when resuming, before editing a file the user may have changed, and after shell/build/git steps to see what really changed (bounded filesystem scan, skips node_modules/target/.git).",
         "Recent files",
         {
-          use_when: "starting or resuming a task, checking what the user or a command just changed (after shell/build/format/git), re-orienting after context loss, or picking the next files to feed into project_read_batch. Prefer it over listing a whole tree.",
-          avoid_when: "you need the full list / by name (project_list_files) or content search (project_search).",
           speed_profile: "medium (filesystem walk); TTL cache 2s, bounded to 4000 files / 300 directories.",
-          output_kind: "recent_files: entries[] sorted by mtime desc, scanned_files, truncated.",
           batch_safe: false,
         },
         { readOnlyHint: true, openWorldHint: false },
@@ -214,18 +203,16 @@ export function registerFileTools(server: McpServer, deps: FileToolsDeps): void 
     "project_read_batch",
     {
       ...config(
-        "Run up to 8 READ-ONLY ops (list_files, read_file, get_file_info, search) in one call; read/info use the cache so repeats are very fast. Each item takes the same arguments as the standalone tool, including numeric 0/1 flags (e.g. search regex, case_sensitive, hybrid).",
         "Batch read",
         {
-          use_when: "you need to read 2+ files/ops in the same step (reading context, scanning several files).",
-          avoid_when: "there is only a single op; or you need a mutating op (use the corresponding tool).",
           speed_profile: "fastest for read-heavy work; sequential + cached, with a response budget.",
-          output_kind: "read_batch: responses[] (each item is an ok/error envelope).",
           batch_safe: true,
         },
         { readOnlyHint: true, openWorldHint: false },
       ),
-      inputSchema: {
+      // Loose on purpose: `max_response_bytes_per_item` is accepted but not advertised (phase 7); a plain object
+      // would strip it, so the handler reads and range-checks it itself.
+      inputSchema: z.looseObject({
         requests: z
           .array(
             z.union([
@@ -250,24 +237,23 @@ export function registerFileTools(server: McpServer, deps: FileToolsDeps): void 
           .min(1)
           .max(8)
           .describe("1-8 read items; one failing item does not stop the rest."),
-        max_response_bytes_per_item: z.number().int().min(1024).max(2 * 1024 * 1024).optional().describe("Max serialized bytes per item (default 1 MiB)."),
-      },
+      }),
     },
-    ({ requests, max_response_bytes_per_item }) =>
-      runReadBatch(requests, max_response_bytes_per_item ?? maxBatchItemBytes, batchDeps),
+    (args) => {
+      const itemBytes = (args as Args).max_response_bytes_per_item;
+      const badBytes = checkItemBytes("read_batch", itemBytes, READ_ITEM_BYTES_MIN, READ_ITEM_BYTES_MAX);
+      if (badBytes) return badBytes;
+      return runReadBatch(args.requests, (itemBytes as number | undefined) ?? maxBatchItemBytes, batchDeps);
+    },
   );
 
   server.registerTool(
     "project_write_file",
     {
       ...config(
-        "Write a file. mode=create errors if it exists; overwrite replaces existing contents; append concatenates. Create and verify a scoped project_snapshot before overwriting existing file contents.",
         "Write file",
         {
-          use_when: "create a new file or append content; before mode=overwrite on an existing file, create a scoped project_snapshot, confirm it captured the target, and keep the returned id.",
-          avoid_when: "only a small section needs to change (project_edit_file), or an existing file would be overwritten without a verified pre-write project_snapshot.",
           speed_profile: "fast; clears the read/list/search cache for the affected path.",
-          output_kind: "file_written: action, bytes_written, sha256_after.",
           batch_safe: false,
         },
         { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
@@ -275,7 +261,7 @@ export function registerFileTools(server: McpServer, deps: FileToolsDeps): void 
       inputSchema: {
         relative_path: path_,
         content: z.string().describe("Full file content to write."),
-        mode: z.enum(["create", "overwrite", "append"]).optional().describe("Default overwrite: replaces existing contents; create and verify a scoped project_snapshot first. create fails if the path exists; append adds to the end."),
+        mode: z.enum(["create", "overwrite", "append"]).optional().describe("Default overwrite. create fails if the path exists; append adds to the end."),
         create_dirs: flag01.optional().describe("1 creates missing parent directories (default 0)."),
         expected_sha256: z.string().optional().describe("Hex SHA-256 of the file's current full content. The write is refused if the file on disk differs. Use sha256_after from your last write/edit of this file; read_file's sha256 only matches when the whole file was returned."),
         reason: reason_,
@@ -288,13 +274,9 @@ export function registerFileTools(server: McpServer, deps: FileToolsDeps): void 
     "project_edit_file",
     {
       ...config(
-        "Edit a file by exact text replacement: one old_text/new_text pair, or edits[] for multiple sections (edits[] takes precedence over old_text/new_text). when expected_sha256 is given, the file is checked first and re-read after the write to verify it (reported as verified).",
         "Edit file",
         {
-          use_when: "change one or a few text sections whose exact content you know; pair with expected_sha256 to guard against blind overwrites. With expected_sha256 the result also reports verified (re-read after the write). Before editing 2+ files or 2+ sections, create a scoped project_snapshot and confirm coverage.",
-          avoid_when: "the whole file must change (project_write_file), or you have not read the file to know old_text.",
           speed_profile: "fast; clears the read/list/search cache for the affected path.",
-          output_kind: "file_written: replacements, sha256_before/after, verified (when expected_sha256 is given).",
           batch_safe: false,
         },
         { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
@@ -316,7 +298,7 @@ export function registerFileTools(server: McpServer, deps: FileToolsDeps): void 
           ),
         new_text: z.string().optional().describe("Replacement text (paired with old_text; ignored when edits[] is given)."),
         replace_all: flag01.optional().describe("1 replaces every match; 0 (default) requires exactly one match."),
-        edits: z.array(editOp).max(64).optional().describe("Multiple section replacements in this file; takes precedence over old_text/new_text. Create a scoped project_snapshot first when applying 2+ edits or when the change is hard to recreate."),
+        edits: z.array(editOp).max(64).optional().describe("Multiple section replacements in this file; takes precedence over old_text/new_text."),
         expected_sha256: z.string().optional().describe("Hex SHA-256 of the file's current full content. The edit is refused if the file on disk differs. Use sha256_after from your last write/edit of this file; read_file's sha256 only matches when the whole file was returned. When given, the result is re-read after the write and reports verified."),
         ...editFuzzyShape(fuzzy),
         reason: reason_,
@@ -328,21 +310,17 @@ export function registerFileTools(server: McpServer, deps: FileToolsDeps): void 
     "project_edit_batch",
     {
       ...config(
-        "Apply multiple edit_file operations atomically in one call; aborts after the first failure and restores the pre-batch snapshot when possible.",
         "Edit batch",
         {
-          use_when: "before editing existing files in a multi-edit batch, create a scoped project_snapshot when it spans multiple files/sections or needs rollback after later checks. Batch rollback covers an in-batch failure only; it does not undo a successful batch after tests fail.",
-          avoid_when: "a single edit (project_edit_file) or a whole-file rewrite (project_write_file).",
           speed_profile: "depends on item count; each runs edit_file and clears caches.",
-          output_kind: "batch: responses[] {ok, response|error}, atomic metadata with executed/skipped indexes and rollback status.",
           batch_safe: false,
         },
         { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
       ),
-      inputSchema: {
-        edits: z.array(editBatchItemFor(fuzzy)).min(1).max(64).describe("edit_file argument objects (typed like project_edit_file). Unknown fields are rejected with a did-you-mean hint and nothing is applied. Snapshot first when later checks may need a full rollback; automatic rollback covers in-batch failures only."),
-        max_response_bytes_per_item: z.number().int().min(256).max(1048576).optional().describe("Max serialized bytes per edit item (default 1 MiB)."),
-      },
+      // Loose for the same reason as project_read_batch: `max_response_bytes_per_item` is not advertised.
+      inputSchema: z.looseObject({
+        edits: z.array(editBatchItemFor(fuzzy)).min(1).max(64).describe("edit_file argument objects (typed like project_edit_file). Unknown fields are rejected with a did-you-mean hint and nothing is applied."),
+      }),
     },
     (args) => runEditBatch(args as Args, batchDeps),
   );
@@ -350,16 +328,13 @@ export function registerFileTools(server: McpServer, deps: FileToolsDeps): void 
   server.registerTool(
     "project_delete_path",
     {
-      ...config("Delete a file or directory (directories require recursive=1). Create and verify a scoped snapshot before using this irreversible tool; do not delete if the checkpoint is incomplete.", "Delete path", {
-        use_when: "only after creating a scoped project_snapshot for the exact target, confirming file_count/truncated/skipped cover the intended files, and keeping its id for recovery.",
-        avoid_when: "the target is ambiguous or a pre-delete snapshot is missing, truncated, or skipped the target. This op is not undoable; capture and verify a checkpoint first.",
+      ...config("Delete path", {
         speed_profile: "fast; clears the read/list/search cache.",
-        output_kind: "path_deleted: entries_deleted, bytes_deleted.",
         batch_safe: false,
       }, { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false }),
       inputSchema: {
-        relative_path: path_.describe("Exact workspace path to delete. Create a scoped project_snapshot first and confirm this target is captured; do not delete if it is skipped or the checkpoint is truncated."),
-        recursive: flag01.optional().describe("For recursive directory deletion, set 1 only after confirming the target and creating a scoped project_snapshot; required for directory deletion."),
+        relative_path: path_.describe("Exact workspace path to delete."),
+        recursive: flag01.optional().describe("1 = delete a directory recursively (required for directories); snapshot it first."),
         reason: reason_,
       },
     },

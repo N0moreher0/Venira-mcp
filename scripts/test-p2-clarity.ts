@@ -106,6 +106,21 @@ await check("end_line before start_line is invalid_request", async () => {
   assert.match(error.message, /^\[invalid_request\]/);
 });
 
+// ROADMAP_TOOL_SCHEMA.md phase 7: the schema advertises `minimum: 1` but stays permissive, so a start_line
+// below 1 reaches this handler and gets a readable error (not a generic validation failure).
+await check("start_line below 1 is invalid_request with a hint, for the single range and for ranges[]", async () => {
+  for (const bad of [0, -5]) {
+    const single = await rejects(() => fileread.opReadFile({ relative_path: "lines.txt", start_line: bad }, workspace));
+    assert.match(single.message, /^\[invalid_request\]/);
+    assert.match(single.message, />= 1/);
+    assert.match(single.message, /start_line=1/);
+    const ranged = await rejects(() =>
+      fileread.opReadFile({ relative_path: "lines.txt", ranges: [{ start_line: bad }] }, workspace),
+    );
+    assert.match(ranged.message, /^\[invalid_request\]/);
+  }
+});
+
 await check("total_lines does not count the phantom line after a trailing newline", async () => {
   const data = (await fileread.opReadFile({ relative_path: "lines.txt" }, workspace)).result?.data as Record<string, unknown>;
   assert.equal(data.total_lines, 3, "three lines, not four");

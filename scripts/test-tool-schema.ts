@@ -382,4 +382,67 @@ check("fuzzy on: every edit-tool parameter still has a description", () => {
   assert.deepEqual(missing, [], `parameters without a description (fuzzy on):\n  ${missing.join("\n  ")}`);
 });
 
+// ---- Phase 7: start_line minimum, hidden max_response_bytes_per_item, config() without dead text ----
+const batchModule = (await load("tools/project-batch.ts")) as typeof import("../tools/project-batch.js");
+const propsOf = (input: unknown): Record<string, any> => JSON.parse(jsonOf(input)).properties ?? {};
+
+check("read_file advertises start_line with minimum 1 (also in ranges[]) but still parses 0", () => {
+  const input = registered.get("project_read_file")!.inputSchema;
+  const props = propsOf(input);
+  assert.equal(props.start_line.minimum, 1, "start_line must advertise minimum 1");
+  assert.equal(props.ranges.items.properties.start_line.minimum, 1, "ranges[].start_line must advertise minimum 1");
+  const parsed = z.object(input as never).safeParse({ relative_path: "a.txt", start_line: 0, ranges: [{ start_line: 0 }] });
+  assert.ok(parsed.success, "start_line=0 must reach the handler, which answers with a hint");
+});
+
+check("max_response_bytes_per_item is not advertised on the batch tools but still reaches the handler", () => {
+  for (const [tool, payload] of [
+    ["project_read_batch", { requests: [{ operation: "list_files", arguments: {} }], max_response_bytes_per_item: 2048 }],
+    ["project_edit_batch", { edits: [{ relative_path: "a.txt", old_text: "x", new_text: "y" }], max_response_bytes_per_item: 512 }],
+  ] as const) {
+    const input = registered.get(tool)!.inputSchema;
+    assert.ok(!("max_response_bytes_per_item" in propsOf(input)), `${tool} still advertises max_response_bytes_per_item`);
+    assert.ok(!jsonOf(input).includes("max_response_bytes_per_item"), `${tool} schema text still names max_response_bytes_per_item`);
+    const parsed = (input as unknown as z.ZodType).safeParse(payload);
+    assert.ok(parsed.success, `${tool}: the hidden key must pass the schema`);
+    assert.equal(
+      (parsed.data as Record<string, unknown>).max_response_bytes_per_item,
+      payload.max_response_bytes_per_item,
+      `${tool}: the SDK stripped max_response_bytes_per_item`,
+    );
+  }
+});
+
+check("the hidden per-item budget is range-checked by the handler (not by zod)", () => {
+  const { checkItemBytes, READ_ITEM_BYTES_MIN, READ_ITEM_BYTES_MAX, EDIT_ITEM_BYTES_MIN, EDIT_ITEM_BYTES_MAX } = batchModule;
+  assert.equal(checkItemBytes("read_batch", undefined, READ_ITEM_BYTES_MIN, READ_ITEM_BYTES_MAX), undefined);
+  assert.equal(checkItemBytes("read_batch", 2048, READ_ITEM_BYTES_MIN, READ_ITEM_BYTES_MAX), undefined);
+  assert.equal(checkItemBytes("edit_batch", EDIT_ITEM_BYTES_MIN, EDIT_ITEM_BYTES_MIN, EDIT_ITEM_BYTES_MAX), undefined);
+  for (const bad of [1, READ_ITEM_BYTES_MAX + 1, 1.5, "2048", Number.NaN, null]) {
+    const result = batchModule.checkItemBytes("read_batch", bad, READ_ITEM_BYTES_MIN, READ_ITEM_BYTES_MAX);
+    assert.ok(result, `${String(bad)} must be rejected`);
+    const text = JSON.stringify(result);
+    assert.match(text, /invalid_request/);
+    assert.match(text, /max_response_bytes_per_item/);
+  }
+});
+
+check("config() carries only machine metadata; the description comes from TOOL_DOCS", () => {
+  const cfg = schema.config("Some tool", { speed_profile: "fast", batch_safe: true }, { readOnlyHint: true });
+  assert.ok(!("description" in cfg), "config() must not invent a description");
+  assert.deepEqual(Object.keys((cfg._meta as { venira: object }).venira).sort(), ["batch_safe", "speed_profile"]);
+  const tools = new Map<string, { description?: string; _meta?: { venira?: Record<string, unknown> } }>();
+  const server = {
+    registerTool: (name: string, c: Record<string, unknown>) => {
+      tools.set(name, c as never);
+    },
+  } as never;
+  docs.applyToolDocs(server);
+  files.registerFileTools(server, fileToolDeps);
+  const read = tools.get("project_read_file")!;
+  assert.match(read.description ?? "", /Use when:/);
+  assert.equal(read._meta?.venira?.use_when, docs.TOOL_DOCS.project_read_file.use);
+  assert.equal(read._meta?.venira?.batch_safe, true, "speed/batch metadata must survive applyToolDocs");
+});
+
 console.log(`[test-tool-schema] ${checks} checks passed.`);

@@ -21,13 +21,9 @@ export function registerCodeIntelTools(server: McpServer, deps: CodeIntelDeps): 
     "project_outline_symbol",
     {
       ...config(
-        "Parse a source file and return its symbol outline (functions, classes, types, interfaces) with line numbers.",
         "Outline symbols",
         {
-          use_when: "you need to see the structure / top-level symbols of a file before reading or refactoring it.",
-          avoid_when: "you need every usage of a symbol (project_symbol_references) or a text-only diff (project_diff_files).",
           speed_profile: "fast; single-file regex scan, no external indexer.",
-          output_kind: "outline_symbol: total_symbols, symbols[] {name, kind, line, signature}.",
           batch_safe: true,
         },
         { readOnlyHint: true, openWorldHint: false },
@@ -47,13 +43,9 @@ export function registerCodeIntelTools(server: McpServer, deps: CodeIntelDeps): 
     "project_diff_files",
     {
       ...config(
-        "Unified (git-style) diff between two workspace files. Reports lines_added/lines_removed and the full hunk text.",
         "Diff files",
         {
-          use_when: "comparing two versions of a file, or reviewing changes before/after an edit.",
-          avoid_when: "the two files are in different languages or one is binary; large binaries are not supported.",
           speed_profile: "medium; LCS-based diff over the two full texts, bounded by max_lines.",
-          output_kind: "diff_files: lines_added, lines_removed, unified_diff, truncated.",
           batch_safe: true,
         },
         { readOnlyHint: true, openWorldHint: false },
@@ -72,13 +64,9 @@ export function registerCodeIntelTools(server: McpServer, deps: CodeIntelDeps): 
     "project_symbol_references",
     {
       ...config(
-        "Find every occurrence of a named symbol. scope=file (fast, single file) or scope=workspace (uses content search).",
         "Symbol references",
         {
-          use_when: "you need to know where a symbol is used before renaming/refactoring it.",
-          avoid_when: "you only need its declaration (project_outline_symbol) or an arbitrary string (project_search).",
           speed_profile: "fast for scope=file; medium for scope=workspace (single search call).",
-          output_kind: "symbol_references: count (found), returned, omitted, scan_limit, references[] {relative_path, line_number, context}.",
           batch_safe: true,
         },
         { readOnlyHint: true, openWorldHint: false },
@@ -98,17 +86,10 @@ export function registerCodeIntelTools(server: McpServer, deps: CodeIntelDeps): 
     "project_dependency_graph",
     {
       ...config(
-        "Build a deterministic file/symbol dependency graph for TypeScript/JavaScript, Python, Rust, Go, Java and Kotlin (module declarations, pub mod, use crate::/super::, extern crate, go.mod module resolution, import (...) blocks, relative imports, require(), dynamic import(), extends/implements, cross-file symbol references). Renders as JSON, DOT or Mermaid.",
         "Dependency graph",
         {
-          use_when:
-            "you need the import graph, a module map to render, or the files/symbols a change can reach before refactoring.",
-          avoid_when:
-            "you only need usages of one symbol in one file (project_symbol_references) or a text search (project_search).",
           speed_profile:
             "medium; bounded walk (<=5000 files / 64 MB), parser-lite line scan, 5 s index cache invalidated on writes. No network.",
-          output_kind:
-            "dependency_graph: nodes[] {id, type, language, loc}, edges[] {from, to, type (import|extends|implements|references), confidence, line, via}, external[] {id, used_by} (top 50), unresolved[] (top 10), stats {externals, unresolved_imports}, limited, truncated; format=dot|mermaid returns data.graph.",
           batch_safe: true,
         },
         { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
@@ -132,17 +113,10 @@ export function registerCodeIntelTools(server: McpServer, deps: CodeIntelDeps): 
     "project_change_impact",
     {
       ...config(
-        "Answer \"if I change these files/symbols, what depends on them?\" with a bounded reverse (or forward) closure: affected files, distance, path, reason and confidence, plus affected symbols and a separate test count.",
         "Change impact",
         {
-          use_when:
-            "before renaming/changing a function or file, to list the dependents you should read/test (direction=dependents), or the dependencies a module relies on.",
-          avoid_when:
-            "you need the whole graph (project_dependency_graph) or exact textual usages in one file (project_symbol_references).",
           speed_profile:
             "medium; reuses the dependency index (5 s cache, invalidated on writes), BFS bounded by depth. No network.",
-          output_kind:
-            "change_impact: seed {files, symbols}, affected[] {id, distance, path, reason, confidence, symbols?}, unresolved[], summary {affected_files, affected_symbols, max_distance, tests_affected}, truncated; format=mermaid returns data.graph.",
           batch_safe: true,
         },
         { readOnlyHint: true, idempotentHint: true, openWorldHint: false },

@@ -33,13 +33,9 @@ export function registerOpsTools(server: McpServer, deps: OpsToolsDeps): void {
     "project_create",
     {
       ...config(
-        "Create a directory (missing parent directories are created unless create_dirs=0).",
         "Create directory",
         {
-          use_when: "you need an empty directory; project_write_file only creates parent folders for a file.",
-          avoid_when: "you need a file (project_write_file) or a change to existing content (project_edit_file).",
           speed_profile: "fast; triggers cache invalidation for the new directory.",
-          output_kind: "directory_created: relative_path, created, parents_created.",
           batch_safe: false,
         },
         { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
@@ -63,14 +59,9 @@ export function registerOpsTools(server: McpServer, deps: OpsToolsDeps): void {
     "project_health",
     {
       ...config(
-        "Server diagnostics: corehost/data dir/audit DB, capability, queue depth, cache hit-rate, running shells, p50/p95 metrics, plus a security-limit notice (guard rail, not sandbox).",
         "Health & metrics",
         {
-          use_when: "debugging slowness/errors, checking the backend/DB/audit before reporting, or inspecting this session's cache/metrics.",
-          avoid_when: "you just need to read/write files normally.",
           speed_profile: "fast (~a few ms + 1 audit DB query); set include_audit=0 to skip the DB query.",
-          output_kind:
-            "health: notice, server, corehost, capability, queue, caches, shells, metrics, audit. Pass sections to get only the parts you need.",
           batch_safe: false,
         },
         { readOnlyHint: true, openWorldHint: false },
@@ -82,7 +73,7 @@ export function registerOpsTools(server: McpServer, deps: OpsToolsDeps): void {
           .max(24)
           .optional()
           .describe(
-            "Section names to return (server, corehost, capability, queue, caches, shells, snapshots, secrets, network, metrics, cache, trace, shell, environment, audit). " +
+            "Report sections to return: notice, server, corehost, capability, queue, caches, shells, approvals, warnings, posture, snapshots, secrets, network, metrics, cache, trace, shell, environment, audit. caches/shells are live state; cache/shell are configuration. " +
               "Omit for everything; use it when the full payload does not fit the response.",
           ),
       },
@@ -95,13 +86,9 @@ export function registerOpsTools(server: McpServer, deps: OpsToolsDeps): void {
     "project_cache_clear",
     {
       ...config(
-        "Clear in-process read/search/list/recent/search/shell/graph caches. Use after a toolchain generates files outside normal write flow, or to force fresh reads.",
         "Clear caches",
         {
-          use_when: "force-fresh reads after external tooling mutated files, or the cache stats show high hit/miss pressure.",
-          avoid_when: "normal flow (cache invalidates on write/edit/delete).",
           speed_profile: "instant; clears LRU/TTL maps only (no backend call).",
-          output_kind: "cache_clear: type, cleared per-cache entry counts.",
           batch_safe: false,
         },
         { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
@@ -118,19 +105,15 @@ export function registerOpsTools(server: McpServer, deps: OpsToolsDeps): void {
       "project_execute_js",
       {
         ...config(
-          "Evaluate JavaScript code. Runs `node` in the workspace, capturing stdout/stderr; supports top-level await and `require`. For hard-to-reverse workspace file changes, create and verify a scoped project_snapshot first; prefer project file tools for targeted edits. In `ask` mode (`VENIRA_JS_EXEC_MODE=ask`) each call needs human approval: call without `approval_id` to receive one, then retry after the user grants it. In `auto` mode no approval is required.",
           "Execute JS",
           {
-            use_when: "you need a small JS computation or prototype. Before hard-to-reverse workspace file I/O, create and verify a scoped project_snapshot; prefer project_write_file/project_edit_file for targeted changes.",
-            avoid_when: "you need a full shell pipeline (project_shell_run) or a persistent process.",
             speed_profile: "synchronous node exec with timeout (default 30s, cap 10min); output capped at 1 MiB.",
-            output_kind: "execute_js: stdout_tail, stderr_tail, exit_code, timed_out, ok. Without approval_id: approval_required + approval_id.",
             batch_safe: false,
           },
           { destructiveHint: true, openWorldHint: false },
         ),
         inputSchema: {
-          code: z.string().min(1).describe("JavaScript to evaluate. If it modifies/deletes existing workspace files in a hard-to-reverse way, create and verify a scoped project_snapshot first."),
+          code: z.string().min(1).describe("JavaScript to evaluate."),
           timeout_ms: z.number().int().min(1).max(600_000).optional().describe("Kill the node process after this many ms (default 30,000, max 600,000)."),
           argv: z.array(z.string()).optional().describe("Extra string arguments exposed to the script as process.argv values; part of what the human approves."),
           approval_id: z
@@ -158,13 +141,9 @@ export function registerOpsTools(server: McpServer, deps: OpsToolsDeps): void {
     "project_trace_status",
     {
       ...config(
-        "Show the most recent traced tool calls from the in-memory buffer (last N) plus the trace configuration.",
         "Trace status",
         {
-          use_when: "VENIRA_TRACE=1 and you want to see what ran recently without reading the log file.",
-          avoid_when: "tracing is disabled (returns an empty buffer) or you need the full on-disk log (read VENIRA_TRACE_FILE instead).",
           speed_profile: "instant; in-memory buffer only, no I/O.",
-          output_kind: "trace_status: enabled, file, buffered, recent[] (newest first, timestamp_ms = epoch ms).",
           batch_safe: true,
         },
         { readOnlyHint: true, openWorldHint: false },
@@ -199,13 +178,9 @@ export function registerOpsTools(server: McpServer, deps: OpsToolsDeps): void {
     "project_read_audit",
     {
       ...config(
-        "Read recent rows from the SQLite audit log (WAL). Filter by session/operation/outcome; bounded by limit.",
         "Read audit log",
         {
-          use_when: "you need to inspect what operations were recorded (audit trail) — e.g. compliance or debugging a prior action.",
-          avoid_when: "you only need the live cache/metric report (project_health include_audit=1) — that one is faster.",
           speed_profile: "fast; one bounded SQLite read (readonly, WAL-safe).",
-          output_kind: "audit_read: rows[] (newest first), count, truncated, db_path.",
           batch_safe: true,
         },
         { readOnlyHint: true, openWorldHint: false },
@@ -226,13 +201,9 @@ export function registerOpsTools(server: McpServer, deps: OpsToolsDeps): void {
     "project_shell_cancel_session",
     {
       ...config(
-        "Cancel ALL shell runs tracked in this session (kills every process tree). Use to cleanly tear down a session.",
         "Shell cancel session",
         {
-          use_when: "a session is ending or a stuck session has many running commands and they must all be stopped.",
-          avoid_when: "only one run needs cancelling (project_shell_cancel by run_id). Destructive: running commands are killed.",
           speed_profile: "fast; iterates the in-process shell run table and kills each tree.",
-          output_kind: "shell_cancel_session: cancelled_run_ids[], count.",
           batch_safe: false,
         },
         { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },

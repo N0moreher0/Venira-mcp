@@ -27,6 +27,32 @@ type Args = Record<string, unknown>;
 
 const serializedSize = (value: unknown): number => Buffer.byteLength(stringify(value), "utf8");
 
+/**
+ * `max_response_bytes_per_item` is accepted by both batch tools but no longer advertised (ROADMAP_TOOL_SCHEMA.md,
+ * phase 7). They are registered as loose objects so the SDK does not strip it, which also means zod no longer
+ * range-checks it, so the range is checked here. Returns an error result for a bad value, undefined when it is
+ * absent or fine.
+ */
+export function checkItemBytes(operation: string, value: unknown, min: number, max: number): ToolResult | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value === "number" && Number.isInteger(value) && value >= min && value <= max) return undefined;
+  return toolResult(
+    errorEnvelope(
+      operation,
+      new VeniraError(
+        "invalid_request",
+        `max_response_bytes_per_item must be an integer between ${min} and ${max} (got ${String(value)}).`,
+      ),
+      { hint: "Omit it to use the default." },
+    ),
+  );
+}
+
+export const EDIT_ITEM_BYTES_MIN = 256;
+export const EDIT_ITEM_BYTES_MAX = 1_048_576;
+export const READ_ITEM_BYTES_MIN = 1024;
+export const READ_ITEM_BYTES_MAX = 2 * 1024 * 1024;
+
 function failureItem(operation: string, failure: Failure): Record<string, unknown> {
   const envelope = errorEnvelope(
     operation,
@@ -201,7 +227,9 @@ export async function runEditBatch(args: Args, deps: BatchDeps): Promise<ToolRes
   const started = performance.now();
   const requestId = newRequestId();
   const items = Array.isArray(args.edits) ? (args.edits as Args[]) : [];
-  const maxItemBytes = Number(args.max_response_bytes_per_item ?? 1_048_576);
+  const badBytes = checkItemBytes("edit_batch", args.max_response_bytes_per_item, EDIT_ITEM_BYTES_MIN, EDIT_ITEM_BYTES_MAX);
+  if (badBytes) return badBytes;
+  const maxItemBytes = Number(args.max_response_bytes_per_item ?? EDIT_ITEM_BYTES_MAX);
   const responses: unknown[] = [];
   let totalBytes = 0;
   // Fail fast: validate every item's field names BEFORE the snapshot or any edit runs, so a

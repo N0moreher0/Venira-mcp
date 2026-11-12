@@ -2,6 +2,28 @@
 
 Local release notes for venira-mcp. Not published (not listed in `package.json` `files`) and not pushed to git.
 
+## Unreleased
+
+### Changed
+- Tool schema Phase 7 (the four items Phase 6 left open; `ROADMAP_TOOL_SCHEMA.md`), `tools/list` 71001 -> 70727 B (expert, -274 B) and 51180 -> 50906 B (default, -274 B):
+  - `project_read_batch` and `project_edit_batch` no longer advertise `max_response_bytes_per_item`, but still accept it (default unchanged: 1 MiB for edit, the host budget for read). Both are registered as loose objects so the SDK keeps the key. Because zod no longer range-checks it, the handler does (`checkItemBytes`: 1024..2 MiB for read, 256..1 MiB for edit) and answers a bad value with `invalid_request` and a hint.
+  - `project_read_file.start_line` and `ranges[].start_line` advertise `minimum: 1` (before, the schema showed a minimum of -9007199254740991). It is the JSON Schema only: the parser stays permissive, so `start_line=0` still reaches the handler, which refuses it with `[invalid_request]` and a hint, instead of a generic validation error.
+  - `config()` is now `config(title, meta, annotations)` and `meta` is only `speed_profile` + `batch_safe`. The description text and the use/avoid/output strings it used to take were dead (`applyToolDocs` overwrote them from `TOOL_DOCS`, and they had drifted); 43 registrations lost them (129 strings). No effect on `tools/list`. README and CONTRIBUTING describe the new rule.
+  - Left as is, on purpose: the `provider`/`repo` parameters of the 11 PR/CI tools. They are already shared constants with one-line descriptions; shortening them would drop the default-resolution rule the model needs.
+  - Tests: `test:tool-schema` +4 checks (20), `test:p2-clarity` +1 check (30). `scripts/schema-budget.json` ceilings ratcheted down (expert 70727 B, default 50906 B).
+- Tool schema Phase 6 (model-facing wording only, no behavior change; `ROADMAP_TOOL_SCHEMA.md`), `tools/list` 72869 -> 71001 B (expert, -1868 B) and 52826 -> 51180 B (default, -1646 B):
+  - The shared `reason` description lost "Required only on project_ci_control.": it was repeated on 13 tools, and `project_ci_control` has its own `reason` text.
+  - The checkpoint reminder is no longer repeated in the parameter text of `project_write_file.mode`, `project_edit_file.edits`, `project_edit_batch.edits`, `project_delete_path.relative_path` and `project_execute_js.code`. `project_snapshot` and `project_delete_path.recursive` still carry it (`delete_path_teaches_snapshot_first` pins the latter).
+  - `project_execute_js` names only the active `VENIRA_JS_EXEC_MODE` (`aboutFor`), like the fuzzy note on `project_edit_file`; before, it described all three modes.
+  - Duplicated or redundant wording trimmed in `project_read_file`, `project_edit_file`, `project_shell_run` (the list of "fast" commands), `project_read_audit` (timestamps stated twice), `project_detect_harnesses` (the client list duplicated the `project_install_self` enum), `project_create` and `project_symbol_references`.
+  - `project_health` grew by 89 B on purpose (1156 -> 1245 B): `sections` now lists every report key and tells `caches`/`shells` (live state) from `cache`/`shell` (configuration).
+- `scripts/schema-budget.json` ceilings re-based to the measured values (expert 71001 B, default 51180 B). They had drifted above the numbers recorded at Phase 5 (67975 / 50690 B).
+
+### Fixed
+- Model-facing text that did not match the code:
+  - `project_search` with `queries`: scoring is per line, not per file; `must` is required per line, not per file; `weight` is added to the score (it is not a multiplier); there is no NOT (a negative weight only lowers the score and the line is still a hit).
+  - `project_health.sections` was missing `notice`, `approvals`, `warnings` and `posture`, and its `out` line listed only some of the keys.
+
 ## 1.21.0 — 2026-11-10
 
 ### Breaking

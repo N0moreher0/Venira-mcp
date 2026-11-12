@@ -1,5 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { editFuzzyEnabled } from "../lib/env.js";
+import { JS_EXEC_MODE, type JsExecMode } from "../lib/workspace.js";
 import { renderDescription } from "./project-schema.js";
 
 /**
@@ -30,7 +31,7 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
     about: "Read a text file, whole or by line range (start_line/end_line, 1-based; ranges[] for several disjoint ranges of one file).",
     use: "you need one file's content. When truncated, call again with start_line=next_start_line.",
     avoid: "you need 2+ files (project_read_batch) or only size/mtime (project_get_file_info).",
-    out: "text, first_line, last_line, total_bytes, truncated, next_start_line (when truncated). sha256 is the whole-file hash (sha256_scope: file), safe to send as expected_sha256; text_sha256 covers the returned text only. In compact mode the text arrives as preview (preview_truncated marks a cut). Missing path gives not_found.",
+    out: "text (as preview in compact mode; preview_truncated marks a cut), first_line, last_line, total_bytes, truncated, next_start_line (when truncated). sha256 hashes the whole file and is safe as expected_sha256; text_sha256 covers only the returned text. Missing path gives not_found.",
   },
   project_get_file_info: {
     about: "Return kind, size and modification time of a path.",
@@ -39,9 +40,9 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
     out: "kind, size_bytes, modified_unix_seconds. Missing path gives not_found.",
   },
   project_search: {
-    about: "Search by kind: file_name, directory_name, literal_content (regex=1 for regex) or definition (symbol declaration lines). Set `queries` to rank files by AND/OR/NOT patterns (must/weight) instead — hits then carry score/matched.",
-    use: "you must locate code, strings or symbols before reading. hybrid=1 tags each hit with source and confidence. `queries` ranks files by several keywords at once.",
-    avoid: "you know the path (project_read_file), want one file's structure (project_outline_symbol) or a symbol's usages (project_symbol_references).",
+    about: "Search by kind: file_name, directory_name, literal_content (regex=1 for regex) or definition (symbol declarations). `queries` instead ranks matching lines by several weighted patterns (must/weight).",
+    use: "you must locate code, strings or symbols before reading. Keep relative_path narrow: a scan stops at 50000 files.",
+    avoid: "you know the path (project_read_file), want a file's structure (project_outline_symbol), a symbol's usages (project_symbol_references) or an executable on PATH (project_shell_run: `where <name>`).",
     out: "hits[] {relative_path, line_number, snippet}, complete, total_match_lines, files_matched. With queries: hits also carry score/matched, plus total_files/total_hits. No match is ok with empty hits.",
   },
   project_recent_files: {
@@ -66,9 +67,9 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
   },
   project_edit_file: {
     about: "Replace exact text: old_text to new_text, or edits[] for several replacements in one file (edits[] wins).",
-    use: "you make a targeted change. old_text must match exactly once; replace_all=1 replaces every match. pass expected_sha256 (project_read_file's whole-file sha256, or sha256_after from your last write) to refuse stale content and get a verified re-read.",
+    use: "you make a targeted change. old_text must match exactly once unless replace_all=1. Pass expected_sha256 (read_file's sha256 or your last sha256_after) to refuse stale content and get a verified re-read.",
     avoid: "you rewrite the whole file (project_write_file) or change several files at once (project_edit_batch).",
-    out: "replacements, sha256_before, sha256_after, verified (when expected_sha256 is given). Failures: old_text_not_found (data.mismatch says the file, the line, the first differing character and how many characters are off; data.context is three lines around the wrong spot, without line numbers - the file is unchanged), old_text_ambiguous (returns each match with line context).",
+    out: "replacements, sha256_before, sha256_after, verified (when expected_sha256 is given). Failures leave the file unchanged: old_text_not_found (data.mismatch locates the first difference, data.context shows the nearby lines) and old_text_ambiguous (lists each match with context).",
   },
   project_edit_batch: {
     about: "Apply edits across one or more files all-or-nothing. Each item takes edit_file arguments (relative_path, old_text, new_text, ...). The first failure rolls back every touched file from an automatic snapshot and skips the rest.",
@@ -85,16 +86,16 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
   project_create: {
     about: "Create a directory; missing parents are created unless create_dirs=0.",
     use: "you need an empty directory. For a file use project_write_file, which also creates parent folders.",
-    avoid: "you write file content (project_write_file) or edit existing content (project_edit_file).",
+    avoid: "you edit existing content (project_edit_file).",
     out: "directory_created {relative_path, created, parents_created}.",
   },
 
   // ---- shell & JS ---------------------------------------------------------
   project_shell_run: {
-    about: "Run a shell command in the workspace (shell: powershell|cmd|bash, relative_cwd, timeout_ms). Default is background: returns run_id, poll project_shell_status. background=0 blocks until exit and returns stdout/stderr.",
-    use: "you build, test, run git or install packages. Use background=0 for short commands whose output you need now.",
+    about: "Run a shell command in the workspace (shell, relative_cwd, timeout_ms). Default is background: returns run_id, poll project_shell_status. background=0 blocks until exit and returns stdout/stderr.",
+    use: "you build, test, run git or install packages. background=0 for short commands you need now.",
     avoid: "you read or edit files (file tools) or run a tiny JS calculation (project_execute_js).",
-    out: "run_id, kill_key, running, exit_code, timed_out, stdout/stderr (background=0) or stdout_tail/stderr_tail. ok=true only means the call ran; status names the command (completed|failed|running|cancelled) and command_status repeats it. shell_path/shell_kind name the binary that ran it (on Windows bash may be the WSL launcher). approval_required: ask the user to approve, then retry once with approval_id. repeated_failure: the identical invocation already failed; read data.previous.stderr_tail, then change the command or pass retry_failed=1.",
+    out: "run_id, kill_key, running, exit_code, timed_out, stdout/stderr (background=0) or stdout_tail/stderr_tail. ok=true only means the call ran; status (completed|failed|running|cancelled) and command_status describe the command. shell_path/shell_kind name the binary that ran it (on Windows bash may be the WSL launcher). approval_required: ask the user to approve, then retry once with approval_id. repeated_failure: the identical invocation already failed; read data.previous.stderr_tail, then change the command or pass retry_failed=1.",
   },
   project_shell_status: {
     about: "Return the state and output tail of a shell run. wait_seconds (0-30) waits up to that long for it to finish.",
@@ -115,7 +116,7 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
     out: "cancelled_run_ids[], count.",
   },
   project_execute_js: {
-    about: "Run a short Node.js snippet in the workspace. Top-level await and require work, timeout defaults to 30s (max 10 min). Behaviour depends on `VENIRA_JS_EXEC_MODE`: `ask` needs per-call approval (first call returns approval_required: ask the user, then retry once with approval_id) and is contained; `semi-auto` needs no approval but is contained (network modules, fetch/WebSocket and reads outside the workspace are blocked, env is scrubbed); `auto` needs no approval and is not contained (full network, filesystem and env).",
+    about: "Run a short Node.js snippet in the workspace. Top-level await and require work, timeout defaults to 30s (max 10 min).",
     use: "you need a quick computation, data transform or prototype.",
     avoid: "you need a shell pipeline or a long-running process (project_shell_run), or a file edit (file tools).",
     out: "stdout_tail, stderr_tail, exit_code, timed_out. The envelope ok=true only means it ran: check data.ok and exit_code.",
@@ -126,7 +127,7 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
     about: "Server diagnostics: version, workspace, security posture and warnings, caches, queue, running shells, latency, snapshot store, audit status.",
     use: "you debug slowness or errors, or want the security warnings before risky work. include_audit=0 skips the audit query.",
     avoid: "normal file work.",
-    out: "server, corehost, capability {state, project_id, project_id_kind}, queue, caches, shells, posture, snapshots, metrics.",
+    out: "One key per report section (see sections); with sections set, also sections_requested and sections_unknown.",
   },
   project_cache_clear: {
     about: "Clear in-process caches (all, read, info, list, search, recent, negative, graph, shell).",
@@ -141,7 +142,7 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
     out: "enabled, file, buffered, recent[] (newest first, timestamp_ms is epoch milliseconds).",
   },
   project_read_audit: {
-    about: "Read recent audit-log rows, newest first. Filter by session_id, operation, outcome, since_unix (seconds); verify=1 checks the hash chain. Timestamps in the rows are epoch milliseconds.",
+    about: "Read recent audit-log rows, newest first. Filter by session_id, operation, outcome, since_unix (seconds); verify=1 checks the hash chain.",
     use: "you review what was done and why (the reason field), in this or an earlier session.",
     avoid: "you want live metrics (project_health).",
     out: "rows[] {session_id, operation, outcome, reason_code, reason, args_hash, command, request_id, started_at_ms, completed_at_ms, elapsed_ms}, count, truncated, chain_ok (verify=1). Timestamps are epoch milliseconds (since_unix filters in seconds). args_hash identifies the call, command is the redacted command line.",
@@ -161,7 +162,7 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
     out: "lines_added, lines_removed, unified_diff, truncated.",
   },
   project_symbol_references: {
-    about: "Find occurrences of a symbol name. scope=file needs relative_path (one file); scope=workspace (default) searches all files. max_references caps what comes back; limit caps the workspace scan (default: max_references).",
+    about: "Find occurrences of a symbol name. scope=file needs relative_path (one file); scope=workspace (default) searches all files.",
     use: "you check where a symbol is used before renaming or changing it.",
     avoid: "you only need its declaration (project_outline_symbol) or arbitrary text (project_search).",
     out: "count (matches found), returned (how many came back), omitted (cut by the cap), scan_limit (workspace only), references[] {relative_path, line_number, context}.",
@@ -199,7 +200,7 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
     out: "create: id, file_count, total_bytes, truncated, skipped[]. restore: restored[], deleted_count, skipped[].",
   },
   project_detect_harnesses: {
-    about: "Find MCP client configs on this machine (OpenCode, Claude Desktop, Cursor, Codex, Kimi, DeepSeek, Antigravity).",
+    about: "Find MCP client configs on this machine, for the harnesses project_install_self supports.",
     use: "before project_install_self, to see which configs exist.",
     avoid: "you already know the config path.",
     out: "harnesses[] {harness, detected, config_path, format, note}.",
@@ -305,9 +306,21 @@ type RegisterConfig = { description?: string; _meta?: { venira?: Record<string, 
  */
 const EDIT_FUZZY_ABOUT = " With no exact match it falls back to fuzzy matching (fuzzy_distance, ignore_indentation, case_insensitive).";
 
+/**
+ * Appended to the `project_execute_js` description: only the mode that is on (VENIRA_JS_EXEC_MODE), like the fuzzy
+ * note above. The tool is not registered at all when the mode is `off`.
+ */
+const JS_EXEC_ABOUT: Record<Exclude<JsExecMode, "off">, string> = {
+  ask: " Each call needs approval: the first call returns approval_required; ask the user, then retry once with approval_id. The snippet is contained (network modules, fetch/WebSocket and reads outside the workspace are blocked, env is scrubbed).",
+  "semi-auto": " No approval step; the snippet is contained (network modules, fetch/WebSocket and reads outside the workspace are blocked, env is scrubbed).",
+  auto: " No approval step and no containment (full network, filesystem and env).",
+};
+
 /** The `about` line served for a tool: its TOOL_DOCS entry plus any note that depends on the environment. */
 export function aboutFor(name: string, doc: ToolDoc): string {
-  return name === "project_edit_file" && editFuzzyEnabled() ? doc.about + EDIT_FUZZY_ABOUT : doc.about;
+  if (name === "project_edit_file" && editFuzzyEnabled()) return doc.about + EDIT_FUZZY_ABOUT;
+  if (name === "project_execute_js" && JS_EXEC_MODE !== "off") return doc.about + JS_EXEC_ABOUT[JS_EXEC_MODE];
+  return doc.about;
 }
 
 /**

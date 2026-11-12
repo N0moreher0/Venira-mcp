@@ -24,27 +24,11 @@ export function registerShellTools(server: McpServer, deps: ShellToolsDeps): voi
     "project_shell_run",
     {
       ...config(
-        `Run a shell command (cwd defaults to ${WORKSPACE}). ` +
-          "Asynchronous by default: returns run_id immediately, so poll project_shell_status for the output. " +
-          "Pass background=0 for a foreground run: the call blocks until the command exits and returns the final stdout/stderr. " +
-          "For commands that overwrite/delete existing workspace source files, create and verify a scoped project_snapshot first; prefer project file tools for targeted edits. " +
-          "Commands pass a policy gate: risky ones return an approval_required error with a pending approval_id; " +
-          "catastrophic ones are denied outright. Named overrides require operator allowlisting and a per-call reason. " +
-          "An invocation that already failed in this session is not run again: it returns repeated_failure with the previous exit code and stderr tail; change the command or pass retry_failed=1 to rerun it deliberately.",
         "Shell run",
         {
-          use_when:
-            "build/test/lint/long-running commands. For hard-to-reverse workspace file changes, checkpoint first. Default (background=1) returns run_id immediately so it never blocks other tools; " +
-            "set background=0 when you need the final output in this call — it blocks until the command exits, and you must not start other work while waiting. " +
-            "After approval_required, ask the user to approve the approval_id in an interactive terminal, then retry.",
-          avoid_when: "a command that may never finish: use the async default plus project_shell_status/project_shell_cancel.",
           speed_profile:
             "background=1 returns in ~5 ms, run time is up to the command; " +
             "background=0 blocks for the whole run (bounded by timeout_ms, default 10 min).",
-          output_kind:
-            "shell_run: run_id/shell_id, running, exit_code, background/foreground, stdout_tail/stderr_tail, timed_out, policy; " +
-            "background=0 also returns bounded stdout/stderr. " +
-            "approval_required: rule, reason, approval_id, retry_with.",
           batch_safe: false,
         },
         { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
@@ -59,8 +43,7 @@ export function registerShellTools(server: McpServer, deps: ShellToolsDeps): voi
           .max(16)
           .optional()
           .describe(
-            "Names of stored secrets (project_secret) to inject as environment variables for this command, " +
-              "e.g. [\"GITHUB_TOKEN\"]. The value never appears in the command, the audit log or the output.",
+            "Stored secret names (project_secret) injected as env vars, e.g. [\"GITHUB_TOKEN\"]. Values never appear in the command, audit log or output.",
           ),
         timeout_ms: z
           .number()
@@ -95,8 +78,7 @@ export function registerShellTools(server: McpServer, deps: ShellToolsDeps): voi
           .max(1)
           .optional()
           .describe(
-            "1 = run again although the identical invocation already failed here (you read the previous error and deliberately retry). " +
-              "Default 0: a repeat is refused with repeated_failure and the previous stderr tail.",
+            "1 = rerun an identical invocation that already failed (default 0: refused with repeated_failure and the previous stderr tail).",
           ),
         override: z
           .enum(["ALLOW_GIT_PUSH", "ALLOW_ENV_READ"])
@@ -118,13 +100,9 @@ export function registerShellTools(server: McpServer, deps: ShellToolsDeps): voi
     "project_shell_status",
     {
       ...config(
-        "Check status + output of a running command. wait_seconds (0..30) is an observation window, not a timeout.",
         "Shell status",
         {
-          use_when: "after project_shell_run; poll until running=false.",
-          avoid_when: "no run_id available yet.",
           speed_profile: "fast; not queued so it never blocks other tools.",
-          output_kind: "shell_run: running, exit_code, stdout_tail/stderr_tail.",
           batch_safe: false,
         },
         { readOnlyHint: true, openWorldHint: false },
@@ -140,11 +118,8 @@ export function registerShellTools(server: McpServer, deps: ShellToolsDeps): voi
   server.registerTool(
     "project_shell_cancel",
     {
-      ...config("Cancel a running shell command by run_id.", "Shell cancel", {
-        use_when: "the command is running too long or its result is no longer needed.",
-        avoid_when: "the command already finished (check with project_shell_status).",
+      ...config("Shell cancel", {
         speed_profile: "fast; kills the whole process tree so grandchildren do not keep running.",
-        output_kind: "cancellation: accepted, cleanup_complete.",
         batch_safe: false,
       }, { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false }),
       inputSchema: { run_id: z.string().describe("Run id from project_shell_run."), kill_key: z.string().describe("Kill key from project_shell_run; proves this caller started the run.") },

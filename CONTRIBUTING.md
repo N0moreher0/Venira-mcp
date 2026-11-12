@@ -42,9 +42,10 @@ compact output mode, and tool annotations.
   - List/search/recent: short TTL, wiped on any mutation.
   - Search with 0 hits: **never cached**.
   - `execute` is serial; `shell_status` and `cancel` are unqueued.
-- **Tool descriptions** always go through the `config()` helper in `tools/project.ts` so the
-  `Use when` / `Avoid when` / `Speed` / `Output` / `Batch-safe` fields land in both the
-  description and `_meta.venira`.
+- **Tool descriptions** live in `TOOL_DOCS` (`tools/project-docs.ts`): `applyToolDocs` serves the
+  description (`Use when` / `Avoid when` / `Output`) and copies those lines into `_meta.venira`.
+  The `config(title, meta, annotations)` helper only carries the machine metadata (`Speed`,
+  `Batch-safe`); it takes no description text, so there is nothing to keep in sync.
 
 ## Adding a tool
 
