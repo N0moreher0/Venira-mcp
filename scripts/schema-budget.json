@@ -1,11 +1,11 @@
 {
   "expert": {
-    "tool_count": 50,
-    "total_bytes": 83661
+    "tool_count": 51,
+    "total_bytes": 84794
   },
   "default": {
-    "tool_count": 37,
-    "total_bytes": 63851
+    "tool_count": 38,
+    "total_bytes": 64984
   },
   "tools": {
     "project_apply_patch": 2023,
@@ -23,7 +23,7 @@
     "project_diff_files": 985,
     "project_edit_batch": 2425,
     "project_edit_file": 2625,
-    "project_execute_js": 1612,
+    "project_execute_js": 1594,
     "project_explain_error": 1149,
     "project_get_file_info": 576,
     "project_git_branch": 1719,
@@ -49,12 +49,13 @@
     "project_read_file": 2078,
     "project_recent_files": 1139,
     "project_search": 4299,
-    "project_secret": 2224,
+    "project_secret": 2209,
     "project_shell_cancel": 701,
     "project_shell_cancel_session": 453,
-    "project_shell_run": 3185,
+    "project_shell_run": 3168,
     "project_shell_status": 824,
     "project_snapshot": 3076,
+    "project_switch_workspace": 1183,
     "project_symbol_references": 1450,
     "project_trace_status": 603,
     "project_write_file": 1691

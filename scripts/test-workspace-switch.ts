@@ -86,12 +86,13 @@ try {
     assertDenied(allowedDir);
   });
 
-  check("enabled_without_roots_only_allows_the_active_workspace", () => {
+  check("enabled_without_roots_allows_any_existing_directory", () => {
     setSwitching(true, "");
     assert.deepEqual(ws.allowedWorkspaceRoots(), [startDir]);
-    assert.equal(ws.canSwitchWorkspace(otherDir), null);
+    assert.equal(ws.canSwitchWorkspace(otherDir), otherDir, "no allowlist configured -> any existing directory");
     assert.equal(ws.canSwitchWorkspace(startDir), startDir);
-    assertDenied(otherDir);
+    assert.equal(ws.canSwitchWorkspace(aFile), null, "a file is never a workspace root");
+    assert.equal(ws.canSwitchWorkspace(path.join(allowedDir, "missing")), null, "a missing path is refused");
   });
 
   check("a_target_outside_every_allowed_root_is_refused", () => {
@@ -154,6 +155,14 @@ try {
     assert.equal(ws.WORKSPACE, secondAllowed);
     assert.throws(() => ws.switchWorkspaceRoot(otherDir), /\[workspace_switch_denied\]/);
     assert.equal(ws.WORKSPACE, secondAllowed, "a refused switch must not move the workspace");
+  });
+
+  check("without_an_allowlist_dynamic_switching_reaches_any_existing_directory", () => {
+    setSwitching(true, "");
+    assert.equal(ws.switchWorkspaceRoot(otherDir), otherDir);
+    assert.equal(ws.WORKSPACE, otherDir);
+    assert.throws(() => ws.switchWorkspaceRoot(path.join(otherDir, "missing")), /\[workspace_switch_denied\]/);
+    assert.equal(ws.switchWorkspaceRoot(startDir), startDir, "switching back to the original workspace works");
   });
 } finally {
   if (linkCreated) rmSync(escapeLink, { recursive: true, force: true });

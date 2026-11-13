@@ -25,6 +25,7 @@ import { createCachedExecutor } from "./project-executor.js";
 import { createCodeIntelRunners } from "./project-codeintel-runners.js";
 import { createReadPlanRunner } from "./project-read-plan.js";
 import { applyDisabledTools } from "./project-tool-mode.js";
+import { invalidateDependencyGraphCache } from "../lib/dependency-graph.js";
 import { applyToolDocs } from "./project-docs.js";
 import { createProjectSessionRuntime } from "./project-session-runtime.js";
 import { prepareRequest } from "./project-request.js";
@@ -240,7 +241,17 @@ export function registerProjectTools(server: McpServer): void {
 
   registerShellTools(server, { runOne, shellDeps });
 
-  registerOpsTools(server, { runOne, runCreate, healthDeps, auditDbPath, shellDeps });
+  registerOpsTools(server, {
+    runOne,
+    runCreate,
+    healthDeps,
+    auditDbPath,
+    shellDeps,
+    clearCaches: () => {
+      cache.invalidateAllCaches();
+      invalidateDependencyGraphCache();
+    },
+  });
 
   // -------------------------------------------------------------------------
   // P2/P3: code intelligence + workflow

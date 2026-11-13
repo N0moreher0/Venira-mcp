@@ -161,13 +161,29 @@ export function allowedWorkspaceRoots(): string[] {
   return roots;
 }
 
+/** True when VENIRA_WORKSPACE_ROOTS lists at least one entry (existence is not required). */
+export function workspaceRootsConfigured(): boolean {
+  const raw = process.env.VENIRA_WORKSPACE_ROOTS ?? "";
+  return raw
+    .split(/[,;]/)
+    .map((part) => part.trim())
+    .filter(Boolean).length > 0;
+}
+
 export function canSwitchWorkspace(target: string): string | null {
   const abs = path.resolve(target);
   if (!fs.existsSync(abs)) return null;
   // stat file check
   try { if (!fs.statSync(abs).isDirectory()) return null; } catch { return null; }
+  const dynamic = dynamicWorkspaceEnabled();
+  const unrestricted = envFlag("VENIRA_UNRESTRICTED", false);
+  if (!dynamic && !unrestricted) return null;
+  // Dynamic switching without an explicit allowlist: any existing directory may become the
+  // workspace (opt-in via VENIRA_DYNAMIC_WORKSPACE=1). This is what a stdio MCP client that
+  // cannot respawn the server per project (e.g. Claude Desktop) needs; configure
+  // VENIRA_WORKSPACE_ROOTS to narrow it back to an explicit set.
+  if (dynamic && !unrestricted && !workspaceRootsConfigured()) return abs;
   const roots = allowedWorkspaceRoots();
-  if (roots.length === 1 && roots[0] === WORKSPACE && !envFlag("VENIRA_DYNAMIC_WORKSPACE",false)) return null;
   return roots.some((root) => {
     try {
       const realRoot = fs.realpathSync(root);

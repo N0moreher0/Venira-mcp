@@ -21,7 +21,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import type { HostSnapshot } from "./types.js";
 import { loadShellPolicy, redactSecrets, type Decision } from "./shell-policy.js";
-import { WORKSPACE, dynamicWorkspaceEnabled, switchWorkspaceRoot, allowedWorkspaceRoots } from "./workspace.js";
+import { WORKSPACE, dynamicWorkspaceEnabled } from "./workspace.js";
 import { opSnapshotCreate, opSnapshotDelete, opSnapshotList, opSnapshotRestore, sanitizeReason } from "./snapshots.js";
 import { opSnapshotMirror } from "./snapshot-mirror.js";
 import { opCiControl, opCiLogs, opCiStatus, opCiTrigger, opPrClose, opPrComment, opPrCreate, opPrList, opPrMerge, opPrReopen } from "./git-provider.js";
@@ -33,7 +33,7 @@ import { opCiWait } from "./ci-wait.js";
 import { auditDecision, auditDetailInsert, auditFinish, auditStart, closeAuditDb } from "./audit-store.js";
 import { buildAuditDetail } from "./audit-detail.js";
 import { type RustResponse } from "./corehost-common.js";
-import { opReadFile, opGetFileInfo, opListFiles, clearListFilesCache } from "./corehost-fileread.js";
+import { opReadFile, opGetFileInfo, opListFiles, opWorkspaceSwitch } from "./corehost-fileread.js";
 import { opSearch } from "./corehost-search.js";
 import { queryRecentFiles } from "./recent-index.js";
 import { shellRuns, killTree, SHELL_EXIT_EARLY, SHELL_MAX_TIMEOUT_MS } from "./corehost-shell-state.js";
@@ -402,6 +402,7 @@ const operations: Record<string, OperationHandler> = {
   change_impact: opChangeImpact,
   secret: opSecret,
   github_connect: opGithubConnect,
+  workspace_switch: opWorkspaceSwitch,
 };
 
 /**
@@ -605,13 +606,9 @@ export class CoreHost {
 
       case "project_tool.workspace.switch": {
         if (!dynamicWorkspaceEnabled() && !envFlag("VENIRA_UNRESTRICTED", false)) {
-          throw new Error('[workspace_switch_denied] dynamic workspace disabled; set VENIRA_DYNAMIC_WORKSPACE=1 plus VENIRA_WORKSPACE_ROOTS.');
+          throw new Error('[workspace_switch_denied] dynamic workspace disabled; set VENIRA_DYNAMIC_WORKSPACE=1 plus, optionally, VENIRA_WORKSPACE_ROOTS.');
         }
-        const target = String((p as any).root ?? (p as any).relative_path ?? (p as any).absolute_path ?? "");
-        if (!target.trim()) throw new Error("[invalid_request] root/relative_path required.");
-        const next = switchWorkspaceRoot(target);
-        clearListFilesCache();
-        return { workspace_root: next, allowed_roots: allowedWorkspaceRoots() } as T;
+        return (await opWorkspaceSwitch(p)) as T;
       }
 
       case "project_tool.execute": {

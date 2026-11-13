@@ -4,6 +4,22 @@ Local release notes for venira-mcp. Not published (not listed in `package.json` 
 
 ## Unreleased
 
+## 1.23.0 — 2026-11-14
+
+### Added
+- `project_switch_workspace {root}`: re-roots the workspace at runtime. `root` is an absolute path to an existing directory. Refused with `[workspace_switch_denied]` unless `VENIRA_DYNAMIC_WORKSPACE=1`; when `VENIRA_WORKSPACE_ROOTS` is set the target must resolve inside it (realpath-checked), otherwise **any existing directory** may be chosen — the opt-in stdio clients that cannot respawn the server per project (e.g. Claude Desktop) need. `VENIRA_UNRESTRICTED=1` also permits any existing directory.
+  - All file-tool path guards (`toHostPath` / `resolveWithin`) and the audit `workspace` column follow the new root; the read/list/search/recent/info/negative caches and the import graph cache are invalidated on a successful switch (the tools-layer LRU included). Shell runs keep their cwd and are not affected.
+  - `project_health` already reported `server.workspace_switching` (`enabled`, `allowed_roots`); unchanged.
+  - The gated core op `project_tool.workspace.switch` now delegates to the same implementation as the tool (one code path, one audit shape).
+  - `INSTRUCTIONS` gained a pointer to the tool (step 16).
+  - Tool counts: default 37 -> 38, expert 50 -> 51 (39 / 52 with `VENIRA_JS_EXEC_MODE` on). `tools/list`: expert 83661 -> 84794 B, default 63851 -> 64984 B (+1133 B each, `scripts/schema-budget.json` ceilings re-based on purpose).
+  - Tests: `test:workspace-switch` gained 3 checks for the un-allowlisted dynamic mode (12 total); `test:tool-schema` and `test:schema-budget` register the new tool like the rest.
+
+### Changed
+- `VENIRA_DYNAMIC_WORKSPACE=1` with `VENIRA_WORKSPACE_ROOTS` unset now allows switching the workspace to **any existing directory** (previously: only the spawn workspace itself was allowed, which made dynamic switching useless without an allowlist). Set `VENIRA_WORKSPACE_ROOTS` to narrow it back to an allowlist; switching stays refused entirely while `VENIRA_DYNAMIC_WORKSPACE` is unset, exactly as before.
+
+## 1.22.0 — 2026-11-13
+
 ### Added
 - `project_move_path` and `project_copy_path` (`ROADMAP_TOOLS.md`, phase 1). Renaming, relocating and duplicating files no longer needs `shell_run`.
   - `project_move_path {from, to, overwrite?, create_dirs?}`: moves or renames a file or directory. `overwrite=1` replaces an existing target **file** (never a directory); `create_dirs` defaults to 1. A cross-volume move falls back to copy + remove. On Windows a change of letter case only (`Foo.ts` -> `foo.ts`) is allowed.
@@ -42,9 +58,6 @@ Local release notes for venira-mcp. Not published (not listed in `package.json` 
 - CI (verify `consistency.ts`): the harness writes fixture files directly via `fs` (not through the MCP tools), so a dependency-graph cache entry built moments earlier by another verify section hid `.verify-tmp/impact/alpha.ts` from `project_change_impact` (the 5 s `INDEX_CACHE_TTL_MS` race; Node-24 runners on ubuntu-22/24, macos-24, windows-24 saw the unresolvable seed, Node-20/22 runners did not). The section now calls `project_cache_clear` with `type: "graph"` before seeding fixtures — deterministic regardless of runner speed.
 - CI (Node 20): `test:js-executor` no longer hard-requires a global `WebSocket` (unflagged only in Node 22+); it asserts WebSocket availability when the runtime exposes it and its absence on Node < 22 ("JS executor tests FAILED (2 of 32)" on `ubuntu-latest, 20` and `macos-latest, 20`). Node 20 fails/passes the same elsewhere.
 
-## 1.22.0 — 2026-11-13
-
-### Changed
 - Fewer variables in a client config (`ROADMAP_ENV_SLIM.md`, phases 1, 2a-2d). Nothing is removed: every old variable still works, an explicitly set variable always beats a preset, and a bad value still fails closed with `[config_invalid]`.
   - README: the examples keep only `VENIRA_WORKSPACE` and `VENIRA_TOOL_MODE`, a "Config recipes" section lists the minimal, trusted and full-trust setups, and no example restates a default (`VENIRA_OUTPUT_MODE=full`, `VENIRA_SECURITY_PROFILE=balanced`).
   - New security profile `open` (`lib/profile-env.ts`, imported first by `server.ts` and `native-adapter.ts`): shell policy off plus `VENIRA_UNRESTRICTED=1`, `VENIRA_PERMISSION_MODE=allow_all`, `VENIRA_JS_EXEC_MODE=auto`, `VENIRA_SHELL_ELICIT=0` and `VENIRA_SHELL_ENV_PASS_ALL=1`, for variables left unset. `VENIRA_SHELL_OVERRIDES`, `VENIRA_ALLOW_SELF_INSTALL`, `VENIRA_SECRET_ALLOW_REVEAL` and `VENIRA_SECRET_KEYCHAIN` are never implied. Posture and doctor report it as full trust.

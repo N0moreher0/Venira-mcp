@@ -254,6 +254,7 @@ All tools return the standard envelope (`ok`, `kind`, `data`, `hint`, `elapsed_m
 | `project_recent_files` | Recently modified files (index-first, scan-fallback) |
 | `project_read_batch` | Up to 8 read-only ops in one call; each item takes the same arguments as its standalone tool (`search` items support `regex`, `case_sensitive`, `hybrid`, ...) |
 | `project_health` | Diagnostics: capability, queue, cache hit-rates, p50/p95, security limits notice, and `server.workspace_switching` (`enabled`, `allowed_roots`) |
+| `project_switch_workspace` | Re-root the workspace to another directory mid-session — for clients that spawn the server once (e.g. Claude Desktop). Requires `VENIRA_DYNAMIC_WORKSPACE=1` |
 | `project_read_audit` | Read recent audit log rows |
 
 **Whole-file hashes.** `project_read_file` returns `sha256` = the hash of the **whole file** (`sha256_scope: "file"`), even when the call returned only a slice, and `text_sha256` = the hash of the text that was returned. `sha256` is therefore safe to send back as `expected_sha256`; `text_sha256` is not. The hash covers the raw bytes, so a file with a BOM round-trips. When a write or edit refuses a stale hash (`stale_content`), the file is left untouched and the response asks for a fresh read: re-read the file, rebuild the patch against the current content and send the new hash - never replay the same edit unchanged. In `compact` mode the text arrives as `preview` (`preview_truncated` marks a cut); the hash fields are always there.
@@ -420,8 +421,8 @@ Sensible defaults; leave any of these unset unless you know why you set them.
 | `VENIRA_SHELL_CACHE` | `"1"` | Cache read-only shell results |
 | `VENIRA_SHELL_CACHE_READ_ONLY` | `"1"` | Compatibility flag (shell output caching is always read-only — nothing mutating is ever cached) |
 | `VENIRA_CONFIG_FILE` | unset | Explicit path of the JSON config file (git provider settings); never auto-read from a workspace |
-| `VENIRA_DYNAMIC_WORKSPACE` | `"0"` | Allow switching workspace at runtime within `VENIRA_WORKSPACE_ROOTS` |
-| `VENIRA_WORKSPACE_ROOTS` | unset | Allowed workspace roots for dynamic workspace switching (absolute paths) |
+| `VENIRA_DYNAMIC_WORKSPACE` | `"0"` | Allow switching workspace at runtime via `project_switch_workspace`. Without `VENIRA_WORKSPACE_ROOTS`, any existing directory may be chosen; set the roots to narrow switching to an allowlist |
+| `VENIRA_WORKSPACE_ROOTS` | unset | Allowlist of roots `project_switch_workspace` may reach (absolute paths, both `,` and `;` separators). Unset = any existing directory while dynamic switching is enabled |
 | `VENIRA_CACHE_LIST_ONLY` | unset | Enable only the directory-listing cache |
 | `VENIRA_CACHE_SEARCH_ONLY` | unset | Enable only the search cache |
 | `VENIRA_LIST_CACHE_MS` | `1500` | Directory-listing cache lifetime |

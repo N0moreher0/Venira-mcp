@@ -25,10 +25,12 @@ export type OpsToolsDeps = {
   healthDeps: HealthDeps;
   auditDbPath: () => string;
   shellDeps: ShellDeps;
+  /** Drops the tools-layer read/list/search caches; called after a successful workspace switch. */
+  clearCaches: () => void;
 };
 
 export function registerOpsTools(server: McpServer, deps: OpsToolsDeps): void {
-  const { runOne, runCreate, healthDeps, auditDbPath, shellDeps } = deps;
+  const { runOne, runCreate, healthDeps, auditDbPath, shellDeps, clearCaches } = deps;
   server.registerTool(
     "project_create",
     {
@@ -196,6 +198,34 @@ export function registerOpsTools(server: McpServer, deps: OpsToolsDeps): void {
       },
     },
     (args) => runReadAudit(args as Args, auditDbPath()),
+  );
+
+  server.registerTool(
+    "project_switch_workspace",
+    {
+      ...config(
+        "Switch workspace",
+        {
+          speed_profile: "instant; runtime re-root of every path the tools resolve.",
+          batch_safe: false,
+        },
+        { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      ),
+      inputSchema: {
+        root: z
+          .string()
+          .min(1)
+          .describe(
+            "Absolute path of the directory to make the workspace. Requires VENIRA_DYNAMIC_WORKSPACE=1; when VENIRA_WORKSPACE_ROOTS is set the target must be inside it, otherwise any existing directory may be chosen.",
+          ),
+        reason: reason_,
+      },
+    },
+    async (args) => {
+      const result = await runOne("workspace_switch", args as Args);
+      if (!result.isError) clearCaches();
+      return result;
+    },
   );
 
   server.registerTool(

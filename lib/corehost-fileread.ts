@@ -6,7 +6,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { resolveInWorkspace, errorWithData, type RustResponse } from "./corehost-common.js";
-import { isProtectedPath } from "./workspace.js";
+import { isProtectedPath, switchWorkspaceRoot, allowedWorkspaceRoots } from "./workspace.js";
 
 
 export async function opReadFile(
@@ -371,4 +371,38 @@ export async function opListFiles(
     listFilesCache.delete(oldest);
   }
   return response;
+}
+
+/**
+ * Switch the active workspace root at runtime (VENIRA_DYNAMIC_WORKSPACE=1).
+ * Returns the new root and the roots a switch may reach. The file-tool path
+ * guard (	oHostPath) follows the new root; the read/list/search caches keep
+ * their absolute-path keys, and the caller additionally invalidates the
+ * tools-layer LRU caches after a successful switch.
+ */
+export async function opWorkspaceSwitch(
+  args: Record<string, unknown>,
+  _root?: string,
+  _sessionId?: string,
+): Promise<RustResponse> {
+  const target = String(args.root ?? args.relative_path ?? args.absolute_path ?? "").trim();
+  if (!target) {
+    throw new Error(
+      "[invalid_request] root is required: an absolute path to the directory to make the workspace. " +
+        "Hint: pass the absolute path of the project folder (e.g. C:\\\\repo or /home/user/proj).",
+    );
+  }
+  const next = switchWorkspaceRoot(target); // throws [workspace_switch_denied] unless allowed
+  clearListFilesCache();
+  return {
+    status: "completed",
+    truncated: false,
+    result: {
+      kind: "workspace_switch",
+      data: {
+        workspace_root: next,
+        allowed_roots: allowedWorkspaceRoots(),
+      },
+    },
+  };
 }

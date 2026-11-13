@@ -184,6 +184,12 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
     avoid: "normal file work.",
     out: "One key per report section (see sections); with sections set, also sections_requested and sections_unknown.",
   },
+  project_switch_workspace: {
+    about: "Re-root the workspace to another directory at runtime (requires VENIRA_DYNAMIC_WORKSPACE=1; any existing directory unless VENIRA_WORKSPACE_ROOTS is set, then only inside it).",
+    use: "the client spawned the server once (e.g. Claude Desktop) and the user changed to a different project folder; switch instead of restarting the client.",
+    avoid: "one-shot tasks in the spawn directory, or when VENIRA_DYNAMIC_WORKSPACE is unset (the call is refused).",
+    out: "workspace_root (the new root), allowed_roots. All subsequent path guards and caches operate on the new root.",
+  },
   project_cache_clear: {
     about: "Clear in-process caches (all, read, info, list, search, recent, negative, graph, shell).",
     use: "reads look stale because a tool changed files outside Venira.",

@@ -97,6 +97,7 @@ ops.registerOpsTools(fakeServer, {
   } as never,
   auditDbPath: () => "",
   shellDeps: { execute: dummy, callHost: dummy } as never,
+  clearCaches: () => undefined,
 });
 codeintel.registerCodeIntelTools(fakeServer, {
   runOne: dummy,
