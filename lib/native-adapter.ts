@@ -216,20 +216,11 @@ export function createCorehost(config: WorkspaceConfig = {}): VeniraCorehost {
   if (config.outputMode) {
     process.env.VENIRA_OUTPUT_MODE = config.outputMode;
   }
-  if (config.shellExitEarly !== undefined) {
-    process.env.VENIRA_SHELL_EXIT_EARLY = config.shellExitEarly ? "1" : "0";
-  }
   if (config.jsExecMode !== undefined) {
     process.env.VENIRA_JS_EXEC_MODE = config.jsExecMode;
   }
   if (config.allowSelfInstall !== undefined) {
     process.env.VENIRA_ALLOW_SELF_INSTALL = config.allowSelfInstall ? "1" : "0";
-  }
-  if (config.auditFast !== undefined) {
-    process.env.VENIRA_AUDIT_FAST = config.auditFast ? "1" : "0";
-  }
-  if (config.cacheAll !== undefined) {
-    process.env.VENIRA_CACHE_ALL = config.cacheAll ? "1" : "0";
   }
   if (config.cacheListOnly !== undefined) {
     process.env.VENIRA_CACHE_LIST_ONLY = config.cacheListOnly ? "1" : "0";
@@ -379,11 +370,8 @@ export function createCorehost(config: WorkspaceConfig = {}): VeniraCorehost {
       if (newConfig.permissionMode) process.env.VENIRA_PERMISSION_MODE = newConfig.permissionMode;
       if (newConfig.shellMode) process.env.VENIRA_SHELL_MODE = newConfig.shellMode;
       if (newConfig.outputMode) process.env.VENIRA_OUTPUT_MODE = newConfig.outputMode;
-      if (newConfig.shellExitEarly !== undefined) process.env.VENIRA_SHELL_EXIT_EARLY = newConfig.shellExitEarly ? "1" : "0";
       if (newConfig.jsExecMode !== undefined) process.env.VENIRA_JS_EXEC_MODE = newConfig.jsExecMode;
       if (newConfig.allowSelfInstall !== undefined) process.env.VENIRA_ALLOW_SELF_INSTALL = newConfig.allowSelfInstall ? "1" : "0";
-      if (newConfig.auditFast !== undefined) process.env.VENIRA_AUDIT_FAST = newConfig.auditFast ? "1" : "0";
-      if (newConfig.cacheAll !== undefined) process.env.VENIRA_CACHE_ALL = newConfig.cacheAll ? "1" : "0";
       if (newConfig.cacheListOnly !== undefined) process.env.VENIRA_CACHE_LIST_ONLY = newConfig.cacheListOnly ? "1" : "0";
       if (newConfig.cacheSearchOnly !== undefined) process.env.VENIRA_CACHE_SEARCH_ONLY = newConfig.cacheSearchOnly ? "1" : "0";
     },

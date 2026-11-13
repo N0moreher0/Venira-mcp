@@ -47,19 +47,13 @@ export function verifyEnv(
     VENIRA_CACHE_LIST_ONLY: "1",
     VENIRA_SHELL_CACHE: "0",
     VENIRA_AUDIT_STRICT: "0",
-    VENIRA_AUDIT_FAST: "1",
-    VENIRA_SHELL_EXIT_EARLY: "0",
-    VENIRA_SHELL_ENV_PASS_ALL: "0",
     VENIRA_EDIT_FUZZY: "0",
     VENIRA_SETUP_TOOLS: "1", // verify/secrets.ts still exercises project_install_self; the default-off listing is pinned in test-tool-schema.ts
     VENIRA_SHELL_AUTO_APPROVE_TOKEN: "0",
-    VENIRA_SECRET_ALLOW_REVEAL: "0",
-    VENIRA_SHELL_ELICIT: "0",
     VENIRA_PRETTY: "0",
     VENIRA_ALLOW_SELF_INSTALL: "0",
     VENIRA_GIT_ALLOW_HTTP: "0",
     VENIRA_GITHUB_ALLOW_HTTP: "0",
-    VENIRA_TRACE: "0",
     VENIRA_VERIFY_DEBUG: "0",
     // Most verify transports need the full surface (shell, JS eval, CI/CD);
     // the default tool mode is the lean coding set, so opt them into `expert`.

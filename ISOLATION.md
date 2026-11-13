@@ -101,8 +101,9 @@ MCP client config (stdio piped into the container):
 - Docker Desktop on Windows/macOS adds a VM layer, but bind mounts still expose
   the mounted folder with the host user's permissions.
 - Approvals need a human with a TTY. In a headless container, either use
-  `VENIRA_SHELL_ELICIT=1` with an elicitation-capable client, or grant approvals
-  from a terminal that can see the same data dir.
+  `VENIRA_SHELL_MODE=balanced` (ask-rule commands prompt through an elicitation-capable client),
+  `strict`/`permissive` for the CLI grant path, or grant approvals from a terminal that can see
+  the same data dir.
 
 ## WSL 2
 

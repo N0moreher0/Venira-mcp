@@ -1,8 +1,8 @@
 /**
- * project_shell_run MCP elicitation regressions (VENIRA_SHELL_ELICIT=1).
+ * project_shell_run MCP elicitation regressions (elicitation is part of VENIRA_SHELL_MODE).
  *
- * The elicitation path lives in tools/project-shell.ts. scripts/verify/harness.ts pins
- * VENIRA_SHELL_ELICIT to 0, so this dedicated script covers it with a fake MCP server and a fake
+ * The elicitation path lives in tools/project-shell.ts. scripts/verify/harness pins the
+ * default `balanced` mode, so this dedicated script covers it with a fake MCP server and a fake
  * backend executor that redeems real approvals (real data dir, real HMAC grants):
  *   - client without the `elicitation` capability: no prompt, approval_required envelope;
  *   - accept + approve (remember off): grant recorded as `once`, command retried and runs;
@@ -22,7 +22,8 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const dataDir = await mkdtemp(path.join(os.tmpdir(), "venira-shell-elicitation-"));
 process.env.VENIRA_DATA_DIR = dataDir;
-process.env.VENIRA_SHELL_ELICIT = "1";
+// Elicitation is selected by the shell mode; `balanced` prompts for every ask-rule command.
+process.env.VENIRA_SHELL_MODE = "balanced";
 // Only `git_push` may be approved for the whole session in this test.
 process.env.VENIRA_SESSION_GRANT_RULES = "git_push";
 
@@ -144,8 +145,19 @@ async function check(name: string, fn: () => Promise<void>) {
 }
 
 try {
-  await check("SHELL_ELICIT is on when VENIRA_SHELL_ELICIT=1", async () => {
+  await check("SHELL_ELICIT is on in balanced mode", async () => {
     assert.equal(shellMod.SHELL_ELICIT, true);
+  });
+
+  await check("elicitation matrix across modes", async () => {
+    assert.equal(shellMod.shellElicitForMode("balanced", undefined), true, "balanced asks always");
+    assert.equal(shellMod.shellElicitForMode("balanced", "ask.git_push"), true, "balanced: ordinary ask prompts");
+    assert.equal(shellMod.shellElicitForMode("balanced", "ask.network_access"), true, "balanced: high-risk ask prompts");
+    assert.equal(shellMod.shellElicitForMode("permissive", "ask.network_access"), true, "permissive: high-risk prompts");
+    assert.equal(shellMod.shellElicitForMode("permissive", "ask.command_substitution"), true, "permissive: command substitution prompts");
+    assert.equal(shellMod.shellElicitForMode("permissive", "ask.git_push"), false, "permissive: ordinary ask does not prompt");
+    assert.equal(shellMod.shellElicitForMode("strict", "ask.network_access"), false, "strict: CLI grant path only");
+    assert.equal(shellMod.shellElicitForMode("off", "ask.network_access"), false, "off: bypass");
   });
 
   await check("client without elicitation capability is never prompted", async () => {

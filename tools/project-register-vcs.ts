@@ -404,7 +404,7 @@ export function registerVcsTools(server: McpServer, deps: VcsDeps): void {
           .describe("action=set: absolute expiry (epoch ms or ISO-8601), instead of expires_in_days."),
         reveal: flag01
           .optional()
-          .describe("action=get: 1 returns the plaintext value and requires VENIRA_SECRET_ALLOW_REVEAL=1 on the host; prefer secret_env injection."),
+          .describe("action=get: 1 prints plaintext; needs VENIRA_SHELL_MODE=permissive or off; prefer secret_env injection."),
         reason: reason_,
       },
     },

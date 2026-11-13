@@ -5,9 +5,8 @@
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { PLATFORM } from "./workspace.js";
-import { envChoice, envFlag } from "./env.js";
 import { assertSecretName } from "./secrets.js";
-import { describeShellPolicy, recordApproval, shellStats } from "./shell-policy.js";
+import { describeShellPolicy, loadShellPolicy, recordApproval, shellStats } from "./shell-policy.js";
 
 
 export type ShellRun = {
@@ -63,13 +62,12 @@ export const TAIL_LIMIT = (() => {
 })();
 /** Effective tail length; `project_health` reports this so it cannot drift from the real default. */
 export const SHELL_TAIL_LIMIT = TAIL_LIMIT;
-/** VENIRA_SHELL_EXIT_EARLY=1: pollers return immediately when the exit code is
- * already known, without waiting out the full wait_seconds window. */
-export const SHELL_EXIT_EARLY = envFlag("VENIRA_SHELL_EXIT_EARLY", false);
-/** VENIRA_SHELL_TIMEOUT_POLICY=soft (default): an expired command only warns and is
- * left to finish; =hard: kill the whole process tree at the timeout. */
-export const SHELL_TIMEOUT_POLICY: "soft" | "hard" =
-  envChoice("VENIRA_SHELL_TIMEOUT_POLICY", "soft", ["soft", "hard"]);
+/** Pollers return immediately when the exit code is already known, without
+ * waiting out the full wait_seconds window. (VENIRA_SHELL_EXIT_EARLY removed; always on.) */
+export const SHELL_EXIT_EARLY = true;
+/** An expired command kills the whole process tree at the timeout.
+ * (VENIRA_SHELL_TIMEOUT_POLICY removed; always `hard` — `soft` is gone.) */
+export const SHELL_TIMEOUT_POLICY: "hard" = "hard";
 
 /** Hard cap per stream; keeps a runaway build from exhausting server memory. */
 export const MAX_OUTPUT_BYTES = (() => {
@@ -99,7 +97,8 @@ export function appendCapped(current: string, chunk: string, limit: number): { t
 /**
  * Environment allow list. The shell inherits only what toolchains actually
  * need; agent secrets (API keys, registry tokens) are not passed through.
- * Opt out with VENIRA_SHELL_ENV_PASS_ALL=1, extend with
+ * The full host environment is passed through only in the trusting modes
+ * (`off` and `permissive`, same as secret reveal); extend with
  * VENIRA_SHELL_ENV_ALLOW="VAR1,VAR2".
  */
 const BASE_ENV_ALLOW = [
@@ -131,7 +130,10 @@ const NON_INTERACTIVE_ENV: Record<string, string> = {
 };
 
 export function buildShellEnv(overrides: Record<string, string> = {}): NodeJS.ProcessEnv {
-  if (envFlag("VENIRA_SHELL_ENV_PASS_ALL", false)) {
+  // VENIRA_SHELL_ENV_PASS_ALL was removed; the full environment is passed in
+  // `off` and `permissive` (the trusting modes), scrubbed otherwise.
+  const { mode } = loadShellPolicy();
+  if (mode === "off" || mode === "permissive") {
     return { ...NON_INTERACTIVE_ENV, ...process.env, ...overrides };
   }
   const extra = (process.env.VENIRA_SHELL_ENV_ALLOW ?? "")

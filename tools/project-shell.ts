@@ -1,11 +1,12 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { approveCommand } from "../lib/approval-gate.js";
 import * as approvals from "../lib/approvals.js";
-import { envFlag } from "../lib/env.js";
 import { recordMetric } from "../lib/metrics.js";
 import { buildEnvelope, errorEnvelope, newRequestId, toolResult } from "../lib/output.js";
 import type { RustResponse, ToolResult } from "../lib/output.js";
 import { SESSION_ID } from "../lib/session.js";
+import { loadShellPolicy } from "../lib/shell-policy.js";
+import { isHighRiskAskRule } from "../lib/shell-risk.js";
 
 // project_shell_run (approval flow + optional MCP elicitation) and project_shell_cancel_session.
 // Extracted from tools/project.ts (P1 #6, step 5g); behavior is unchanged. The cached backend
@@ -26,8 +27,27 @@ export type ShellDeps = {
 // Shell approval flow
 // ---------------------------------------------------------------------------
 
-export const SHELL_ELICIT = envFlag("VENIRA_SHELL_ELICIT", false);
+// Elicitation is part of the shell mode (VENIRA_SHELL_ELICIT removed):
+//   strict    - no prompt, the caller gets `approval_required` for the CLI grant;
+//   balanced  - ask-rule commands prompt through the client's elicitation UI;
+//   permissive - prompts only for ask-rule ids in the high-risk set (config-posture's RISKY_SESSION_RULES);
+//   off       - bypass: no prompts, everything runs.
+const SHELL_MODE = loadShellPolicy().mode;
+/** True when this mode may prompt at all (balanced always; permissive for high risk). */
+export const SHELL_ELICIT = SHELL_MODE === "balanced" || SHELL_MODE === "permissive";
 const ELICIT_TIMEOUT_MS = 5 * 60 * 1000;
+
+/** Pure elicitation decision, shared with the tests: balanced asks always;
+ * permissive asks only the high-risk rules; strict and off never prompt. */
+export function shellElicitForMode(mode: "strict" | "balanced" | "permissive" | "off", rule?: string | null): boolean {
+  if (mode === "balanced") return true;
+  if (mode === "permissive") return isHighRiskAskRule(rule ?? undefined);
+  return false;
+}
+
+/** Whether to elicit for this specific ask (balanced: always; permissive: high risk only). */
+const elicitForAsk = (data: ShellApprovalData | undefined): boolean =>
+  shellElicitForMode(SHELL_MODE, typeof data?.rule === "string" ? data.rule : undefined);
 
 type ShellApprovalData = {
   approval_id?: unknown;
@@ -67,7 +87,7 @@ function approvalFailure(
 }
 
 /**
- * Optional MCP elicitation (`VENIRA_SHELL_ELICIT=1`). Clients that do not
+ * Optional MCP elicitation (part of `VENIRA_SHELL_MODE`). Clients that do not
  * advertise the `elicitation` capability are skipped, so the caller still gets
  * the `approval_required` envelope with an `approval_id` for the CLI flow.
  */
@@ -122,7 +142,7 @@ export async function runShell(args: Args, server: McpServer, deps: ShellDeps): 
     let { response, cached } = await deps.execute("shell_run", args);
     let data = response.result?.data as ShellApprovalData | undefined;
 
-    if (response.result?.kind === "shell_approval" && SHELL_ELICIT) {
+    if (response.result?.kind === "shell_approval" && elicitForAsk(data)) {
       const verdict = await elicitShellApproval(server, data ?? {});
       if (verdict.approved) {
         // The person accepted in their own client UI: record the grant on their

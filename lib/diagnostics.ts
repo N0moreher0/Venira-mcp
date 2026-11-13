@@ -288,7 +288,7 @@ const RULES: Rule[] = [
     fix: [
       "Raise the budget where it is supported (project_shell_run timeout_ms, or the tool's own timeout).",
       "Poll instead of blocking: project_shell_run returns a run_id; project_shell_status(wait_seconds=5..30) observes it.",
-      "Check VENIRA_SHELL_TIMEOUT_POLICY=hard|soft for long-running commands.",
+      "Commands are killed at their timeout; raise VENIRA_SHELL_MAX_TIMEOUT_MS for long builds.",
     ],
   },
   {

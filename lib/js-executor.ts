@@ -14,48 +14,16 @@ const DEFAULT_TIMEOUT = 30_000;
 const MAX_BUFFER = 1_048_576; // 1 MiB
 
 /**
- * Best-effort network guard prepended to the user's snippet (single line, so
- * error line numbers stay aligned with the submitted code). Node's permission
- * model has no network permission, so without this `fetch`/`require("node:http")`
- * would give the snippet unrestricted egress. This is containment, not a
- * sandbox: a determined snippet can still dynamic-import a net module.
- */
-const NETWORK_GUARD =
-  'try{if(typeof require==="function"){const M=require("node:module");const L=M._load;' +
-  'const B=new Set(["node:net","net","node:tls","tls","node:http","http","node:https","https","node:http2","http2","node:dgram","dgram","node:dns","dns"]);' +
-  'M._load=function(r,...a){if(B.has(String(r))){const e=new Error("ERR_ACCESS_DENIED: network modules are blocked in project_execute_js");e.code="ERR_ACCESS_DENIED";throw e;}return L.call(this,r,...a);};}}catch{}' +
-  'for(const k of ["fetch","WebSocket","EventSource","XMLHttpRequest"]){try{delete globalThis[k];}catch{}}';
-
-/**
  * ESM preamble (roadmap item 15, P2).
  *
  * A snippet with a top-level `await` makes Node run it as an ES module, and
  * there `require` does not exist - the description promised `require` and the
  * snippet failed with "require is not defined". The shim gives the snippet the
- * same `require` it has in CommonJS mode, and it is created *after* the guard
- * patched `Module._load`, so a required network module is still blocked.
+ * same `require` it has in CommonJS mode.
  */
 const ESM_PREAMBLE =
   'import{createRequire as __veniraCreateRequire}from"node:module";' +
   'const require=__veniraCreateRequire(process.cwd()+"/__venira__.js");';
-
-/** The network modules the guard blocks; also the ones a static import may not name. */
-const NETWORK_MODULES = [
-  "node:net",
-  "net",
-  "node:tls",
-  "tls",
-  "node:http",
-  "http",
-  "node:https",
-  "https",
-  "node:http2",
-  "http2",
-  "node:dgram",
-  "dgram",
-  "node:dns",
-  "dns",
-];
 
 /**
  * Does the snippet look like an ES module? Node decides the same way (it
@@ -72,25 +40,6 @@ export function looksLikeEsm(code: string): boolean {
 }
 
 /**
- * A static `import` of a network module bypasses the guard (the guard patches
- * CommonJS `require`). In the contained modes the snippet is refused with a
- * clear message; in `auto` (uncontained) the operator opted out, so it runs.
- *
- * Only `import` counts: a `require` of a network module is blocked at runtime
- * by the guard, and a snippet that mentions one inside a try/catch (to prove
- * that it is blocked) must still run.
- */
-export function networkImportIn(code: string): string | null {
-  const names = NETWORK_MODULES.map((name) => name.replace(":", "\\:")).join("|");
-  const pattern = new RegExp(
-    `(?:import\\s+[^;\\n]*?\\bfrom\\s*|import\\s*\\(\\s*|import\\s+)["'](${names})["']`,
-    "g",
-  );
-  const match = pattern.exec(code);
-  return match ? match[1] : null;
-}
-
-/**
  * On an uncaught error Node echoes the offending source line (our prefix + the caller's line 1) and a caret
  * line. Drop the prefix from that echo, and shift line-1 columns back, so stderr shows only the caller's code.
  */
@@ -100,7 +49,7 @@ function stripGuardEcho(stderr: string, prefixLength: number): string {
   const out: string[] = [];
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i] ?? "";
-    if (line.startsWith(NETWORK_GUARD) || line.startsWith(ESM_PREAMBLE)) {
+    if (line.startsWith(ESM_PREAMBLE)) {
       out.push(line.slice(shift));
       if (/^\s*\^+\s*$/.test(lines[i + 1] ?? "")) i += 1;
       continue;
@@ -144,12 +93,12 @@ function snippetError(error: string, stderr: string, timedOut: boolean, timeout:
 
 /**
  * Workspace-scoped synchronous JS evaluation. With `contained: false` (mode `auto`) every restriction
- * described below is dropped: no network guard, no permission model, inherited environment.
+ * described below is dropped: no permission model, inherited environment.
  * Runs `node` in the workspace, reading code from stdin, capturing stdout/stderr.
  * Node's permission model limits filesystem access to the workspace and does not
  * grant child-process or worker permissions. Protected files inside the workspace
- * are still readable, and network blocking is best-effort: this is containment,
- * not a sandbox.
+ * are still readable; network access is always open in every mode (the egress guard was removed).
+ * This is containment, not a sandbox.
  */
 export function executeJs(
   code: string,
@@ -166,31 +115,11 @@ export function executeJs(
   ];
   // Roadmap item 15 (P2): a snippet with a top-level await runs as an ES
   // module, where `require` does not exist. The preamble gives it the same
-  // `require`; it comes *before* the guard, so the guard still patches
-  // Module._load and a required network module stays blocked.
+  // `require`; Node reports it as line 1, so the echo is stripped below.
   const esm = looksLikeEsm(code);
-  const prefix = !contained ? "" : esm ? `${ESM_PREAMBLE};${NETWORK_GUARD}` : NETWORK_GUARD;
-  const input = contained ? `${prefix};${code}` : code;
+  const prefix = contained && esm ? ESM_PREAMBLE : "";
+  const input = contained ? `${prefix}${code}` : code;
   const inputType = esm ? ["--input-type=module"] : [];
-  // Roadmap item 15 (P2): a static import of a network module bypasses the
-  // guard (it only patches CommonJS `require`). In the contained modes the
-  // snippet is refused with a clear reason.
-  if (contained) {
-    const netImport = networkImportIn(code);
-    if (netImport) {
-      return {
-        ok: false,
-        exit_code: null,
-        timed_out: false,
-        stdout_tail: "",
-        stderr_tail: "",
-        error:
-          `[unsupported] The snippet imports the network module "${netImport}". ` +
-          "Hint: project_execute_js blocks network access in the contained modes (ask, semi-auto); " +
-          "use project_shell_run for network work, or set VENIRA_JS_EXEC_MODE=auto in a trusted environment.",
-      };
-    }
-  }
   try {
     const r = spawnSync(process.execPath, [...permissionArgs, ...inputType, "-", ...((options.args ?? []) as string[])], {
       input,
@@ -209,7 +138,8 @@ export function executeJs(
     });
     const timed = Boolean(r.signal === "SIGTERM" || r.signal === "SIGKILL");
     const stdout = (r.stdout ?? "").slice(-MAX_BUFFER);
-    const stderr = (contained ? stripGuardEcho(r.stderr ?? "", prefix.length) : (r.stderr ?? "")).slice(-MAX_BUFFER);
+    const stderrRaw = r.stderr ?? "";
+    const stderr = (contained && prefix ? stripGuardEcho(stderrRaw, prefix.length) : stderrRaw).slice(-MAX_BUFFER);
     if (r.error) {
       return {
         ok: false,

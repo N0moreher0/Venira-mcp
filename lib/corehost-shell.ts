@@ -727,7 +727,7 @@ export async function opShellStatus(
   }
 
   if (waitSeconds > 0 && run.running) {
-    // P1: VENIRA_SHELL_EXIT_EARLY=1 — return as soon as the exit code is known
+    // Exit-early is always on — return as soon as the exit code is known
     // instead of waiting out the entire window.
     const pollEarly = SHELL_EXIT_EARLY;
     const deadline = Date.now() + waitSeconds * 1000;

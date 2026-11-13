@@ -13,6 +13,7 @@
  * trusted/off deployments and there is no measured demand for an acknowledgement
  * gate; revisit only with usage evidence.
  */
+import { RISKY_SESSION_RULES, normalizeAskRule } from "./shell-risk.js";
 import { envFlag } from "./env.js";
 import {
   resolveSecurityProfile,
@@ -57,25 +58,7 @@ export interface ConfigPosture {
   notes: string;
 }
 
-/** Ask-rule ids whose effects are too broad for a session-wide grant. */
-const RISKY_SESSION_RULES = new Set([
-  "network_access",
-  "git_history_rewrite",
-  "dynamic_execution",
-  "writes_outside_workspace",
-  "read_outside_workspace",
-  "command_substitution",
-  "process_control",
-  "container_control",
-  "secret_dump",
-  "unresolved_file_argument",
-]);
-
 const SEVERITY_RANK: Record<PostureSeverity, number> = { ok: 0, info: 1, warning: 2, critical: 3 };
-
-function normalizeRule(rule: string): string {
-  return rule.trim().replace(/^(ask|deny)\./, "").toLowerCase();
-}
 
 function worst(findings: PostureFinding[]): PostureSeverity {
   let level: PostureSeverity = "ok";
@@ -86,7 +69,7 @@ function worst(findings: PostureFinding[]): PostureSeverity {
 }
 
 function riskySessionRules(rules: string[]): string[] {
-  return [...new Set(rules.map(normalizeRule).filter((rule) => RISKY_SESSION_RULES.has(rule)))].sort();
+  return [...new Set(rules.map(normalizeAskRule).filter((rule) => RISKY_SESSION_RULES.has(rule)))].sort();
 }
 
 /**
@@ -191,7 +174,7 @@ export function evaluateConfigPosture(input: ConfigPostureInput): ConfigPosture 
       id: "secret.reveal_enabled",
       severity: "warning",
       summary: "Secret plaintext reveal is enabled.",
-      detail: "`project_secret reveal=1` can print a stored secret value into the transcript (VENIRA_SECRET_ALLOW_REVEAL=1).",
+      detail: "`project_secret reveal=1` can print a stored secret value into the transcript (VENIRA_SHELL_MODE=permissive or off).",
       recommendation: "Keep reveal off and inject secrets through `secret_env` instead.",
     });
   }
@@ -260,7 +243,7 @@ export function configPostureInput(overrides: {
     jsExecApproval: overrides.jsExecApproval ?? (modeKnown ? rawMode === "ask" : true),
     unrestricted: readFlag("VENIRA_UNRESTRICTED", false),
     allowSelfInstall: readFlag("VENIRA_ALLOW_SELF_INSTALL", false),
-    secretAllowReveal: readFlag("VENIRA_SECRET_ALLOW_REVEAL", false),
+    secretAllowReveal: overrides.shellMode === "off" || overrides.shellMode === "permissive",
     gitAllowHttp: readFlag("VENIRA_GIT_ALLOW_HTTP", false) || readFlag("VENIRA_GITHUB_ALLOW_HTTP", false),
     legacyAutoApproveToken: readFlag("VENIRA_SHELL_AUTO_APPROVE_TOKEN", false),
     sessionGrantRules: overrides.sessionGrantRules ?? [],

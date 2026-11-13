@@ -10,12 +10,12 @@ if (readme.includes("44 tools by default")) {
   console.error("README tool count is out of date; expected Default/Expert tool modes.");
   failed = true;
 }
-if (!readme.includes("Two tool modes") || !readme.includes("VENIRA_TOOL_MODE")) {
-  console.error("README tool-mode contract is out of date; expected Default/Expert modes (VENIRA_TOOL_MODE) documented.");
+if (!readme.includes("Three tool modes") || !readme.includes("VENIRA_TOOL_MODE")) {
+  console.error("README tool-mode contract is out of date; expected Core/Default/Expert modes (VENIRA_TOOL_MODE) documented.");
   failed = true;
 }
-if (!readme.includes("VENIRA_PROFILE")) {
-  console.error("README missing VENIRA_PROFILE.");
+if (readme.includes("`VENIRA_PROFILE`")) {
+  console.error("README still documents removed VENIRA_PROFILE; use VENIRA_TOOL_MODE=core.");
   failed = true;
 }
 if (!readme.includes("> **Security scope.**") || !readme.includes("not a sandbox")) {

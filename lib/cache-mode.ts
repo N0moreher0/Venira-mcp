@@ -1,16 +1,16 @@
 /**
- * `VENIRA_CACHE=all|list|search|off`: one variable instead of three cache flags
+ * `VENIRA_CACHE=all|list|search|off`: one variable decides every cache
  * (ROADMAP_ENV_SLIM.md phase 2b).
  *
  *   all    every read/list/search cache on (the default)
  *   list   only the directory-listing cache
  *   search only the search cache
- *   off    always fresh, no TTL caches (same as VENIRA_CACHE_ALL=0)
+ *   off    always fresh, no TTL caches
  *
- * The three older flags stay as aliases. A legacy flag that is set explicitly
- * ALWAYS wins over `VENIRA_CACHE`, per variable; a legacy flag left unset takes
- * its value from the mode. An unknown mode fails closed with `[config_invalid]`,
- * the same as an invalid boolean.
+ * `VENIRA_CACHE_ALL` was removed (no alias). `VENIRA_CACHE_LIST_ONLY` and
+ * `VENIRA_CACHE_SEARCH_ONLY` remain aliases: an explicitly set legacy flag
+ * ALWAYS wins over `VENIRA_CACHE`, per variable; an unknown mode fails closed
+ * with `[config_invalid]`, the same as an invalid boolean.
  *
  * Keep this file dependency-free apart from `env.ts`.
  */
@@ -20,8 +20,7 @@ export const CACHE_MODES = ["all", "list", "search", "off"] as const;
 export type CacheMode = (typeof CACHE_MODES)[number];
 export type CachePart = "all" | "list" | "search";
 
-const LEGACY_FLAG: Record<CachePart, string> = {
-  all: "VENIRA_CACHE_ALL",
+const LEGACY_FLAG: Partial<Readonly<Record<CachePart, string>>> = {
   list: "VENIRA_CACHE_LIST_ONLY",
   search: "VENIRA_CACHE_SEARCH_ONLY",
 };
@@ -53,7 +52,7 @@ export function cachePartFromMode(mode: CacheMode, part: CachePart): boolean {
 /** Effective on/off for one cache part: explicit legacy flag first, then `VENIRA_CACHE`. */
 export function cacheEnabled(part: CachePart, env: NodeJS.ProcessEnv = process.env): boolean {
   const legacy = LEGACY_FLAG[part];
-  const explicit = env[legacy];
-  if (explicit !== undefined) return envFlag(legacy, true, explicit);
+  const explicit = legacy === undefined ? undefined : env[legacy];
+  if (explicit !== undefined) return envFlag(legacy as string, true, explicit);
   return cachePartFromMode(cacheModeFromEnv(env), part);
 }

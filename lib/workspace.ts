@@ -63,9 +63,10 @@ export const UNRESTRICTED = envFlag("VENIRA_UNRESTRICTED", false);
 /**
  * `project_execute_js` mode — the single gate for the tool:
  *   - `off`  (default): the tool is not registered at all.
- *   - `ask`: registered; each call needs a human approval bound to the code.
- *   - `semi-auto`: registered; no approval step, but the snippet stays contained (network guard,
- *     workspace-only fs permission, scrubbed env).
+ *   - `ask`: registered; each call needs a human approval bound to the code — unless
+ *     `VENIRA_PERMISSION_MODE=allow_all` (the prompt is folded into the permission mode).
+ *   - `semi-auto`: registered; no approval step; the snippet stays contained (workspace-only fs
+ *     permission, scrubbed env, no child processes; network is always open).
  *   - `auto`: registered; no approval step AND no containment (full network, full fs, inherited env).
  *     Trusted personal machines only.
  * `VENIRA_ALLOW_JS_EXEC` / `VENIRA_JS_EXEC_APPROVAL` are removed (registry
@@ -83,7 +84,10 @@ function resolveJsExecMode(): JsExecMode {
 
 export const JS_EXEC_MODE: JsExecMode = resolveJsExecMode();
 export const ALLOW_JS_EXEC = JS_EXEC_MODE !== "off";
-export const JS_EXEC_APPROVAL = JS_EXEC_MODE === "ask";
+// The JS approval prompt is folded into VENIRA_PERMISSION_MODE: allow_all (the default) means no
+// per-call approval even in `ask` mode; any other permission mode keeps the gate.
+const permissionAllowsAll = (process.env.VENIRA_PERMISSION_MODE ?? "allow_all").trim().toLowerCase() === "allow_all";
+export const JS_EXEC_APPROVAL = JS_EXEC_MODE === "ask" && !permissionAllowsAll;
 export const JS_EXEC_CONTAINED = JS_EXEC_MODE !== "auto";
 
 export const PROTECTED_BASENAMES = new Set([
@@ -287,9 +291,9 @@ export function resolveWithin(root: string, input: string | undefined): string {
 }
 
 // ---------------------------------------------------------------------------
-// P1: cache control (VENIRA_CACHE=all|list|search|off; legacy VENIRA_CACHE_ALL / _LIST_ONLY / _SEARCH_ONLY win when set)
+// P1: cache control (VENIRA_CACHE=all|list|search|off; legacy VENIRA_CACHE_LIST_ONLY / _SEARCH_ONLY aliases remain)
 // ---------------------------------------------------------------------------
-/** VENIRA_CACHE_ALL=0 disables every read/list/search/recent cache (strict "always fresh" mode). */
+/** VENIRA_CACHE=off disables every read/list/search/recent cache (strict "always fresh" mode). */
 export const CACHE_ALL_ENABLED = cacheEnabled("all");
 /** VENIRA_CACHE_LIST_ONLY=0 disables only the list_files TTL cache. */
 export const CACHE_LIST_ONLY_ENABLED = cacheEnabled("list");

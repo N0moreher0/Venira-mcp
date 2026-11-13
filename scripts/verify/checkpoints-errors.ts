@@ -654,8 +654,8 @@ export async function runCheckpointsErrors(
   await rootGuardClient.close();
   await fs.rm(rootGuardDir, { recursive: true, force: true });
 
-  // 17d. execute_js (semi-auto) output is redacted and the network globals are removed.
-  // Approval is switched off here so the redaction/network assertions run in one
+  // 17d. execute_js (semi-auto) output is redacted; network is always open in every mode.
+  // Approval is switched off here so the redaction assertion runs in one
   // call; 17e covers the approval gate separately.
   const jsTransport = new StdioClientTransport({
     command: "node",
@@ -684,15 +684,15 @@ export async function runCheckpointsErrors(
     }),
   );
   check(
-    "execute_js_output_redacted_and_network_off",
+    "execute_js_output_redacted_and_network_open",
     !JSON.stringify(jsLeak).includes("abc123") &&
-      String(jsLeak.data?.stdout_tail ?? "").includes("fetch:undefined"),
+      String(jsLeak.data?.stdout_tail ?? "").includes("fetch:function"),
     jsLeak,
   );
   await jsClient.close();
 
-  // 17d-2. Mode `auto` is the uncontained mode: no approval and no network guard,
-  // so the globals that `semi-auto` removes are present. Output is still redacted.
+  // 17d-2. Mode `auto` is the fully uncontained mode: no approval step and no
+  // permission model. Output is still redacted.
   const jsOpenTransport = new StdioClientTransport({
     command: "node",
     args: ["dist/server.js"],
@@ -737,6 +737,8 @@ export async function runCheckpointsErrors(
       {
         VENIRA_SESSION_ID: `${SESSION_ID}-js-approval`,
         VENIRA_JS_EXEC_MODE: "ask",
+        // The JS approval prompt is folded into VENIRA_PERMISSION_MODE; allow_all (the default) skips it.
+        VENIRA_PERMISSION_MODE: "manual",
       },
       "full",
     ),

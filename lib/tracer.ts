@@ -1,7 +1,6 @@
 /**
- * Request tracing (VENIRA_TRACE=1).
+ * Request tracing — always on (VENIRA_TRACE was removed; no flag, no alias).
  *
- *   VENIRA_TRACE=1                 log every tool call to stderr
  *   VENIRA_TRACE_FILE=<path>       also append to this file (rotates at 10 MB)
  *
  * The last MAX_TRACE_BUFFER entries are kept in memory so the
@@ -11,7 +10,7 @@ import { appendFileSync, existsSync, mkdirSync, renameSync, statSync } from "nod
 import path from "node:path";
 import { envFlag } from "./env.js";
 
-const TRACE_ENABLED = envFlag("VENIRA_TRACE", false);
+const TRACE_ENABLED = true;
 const TRACE_FILE_PATH = (process.env.VENIRA_TRACE_FILE ?? "").trim();
 const TRACE_FILE_MAX_BYTES = 10 * 1024 * 1024;
 const MAX_TRACE_BUFFER = 100;
@@ -54,7 +53,7 @@ function writeTraceFile(line: string): void {
   }
 }
 
-/** Record one tool call. No-op unless VENIRA_TRACE is enabled. */
+/** Record one tool call. Always enabled. */
 export function addTrace(entry: Omit<TraceEntry, "timestamp_ms">): void {
   if (!TRACE_ENABLED) return;
   const record: TraceEntry = { timestamp_ms: Date.now(), ...entry };

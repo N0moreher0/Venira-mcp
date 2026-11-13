@@ -68,6 +68,9 @@ async function check(text: string, result: unknown, args: Record<string, unknown
 function mcpEnv(extra: Record<string, string> = {}) {
   return {
     ...process.env,
+    // The health payload is trimmed in compact mode (dropped sections are named there);
+    // doctor must see the whole report, so pin the full output mode.
+    VENIRA_OUTPUT_MODE: "full",
     VENIRA_WORKSPACE: WORKSPACE,
     VENIRA_DATA_DIR: DATA_DIR,
     VENIRA_UNRESTRICTED: "0",

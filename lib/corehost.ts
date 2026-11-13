@@ -20,7 +20,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import type { HostSnapshot } from "./types.js";
-import { redactSecrets, type Decision } from "./shell-policy.js";
+import { loadShellPolicy, redactSecrets, type Decision } from "./shell-policy.js";
 import { WORKSPACE, dynamicWorkspaceEnabled, switchWorkspaceRoot, allowedWorkspaceRoots } from "./workspace.js";
 import { opSnapshotCreate, opSnapshotDelete, opSnapshotList, opSnapshotRestore, sanitizeReason } from "./snapshots.js";
 import { opSnapshotMirror } from "./snapshot-mirror.js";
@@ -105,7 +105,7 @@ function isScopeValid(capabilityId: string): boolean {
 // Values are never returned by default: `get`/`list` expose only metadata
 // (length + sha256 prefix + update time) so an agent can confirm a key exists
 // without ever putting it in a transcript. `reveal=1` is an explicit opt-in
-// *and* needs VENIRA_SECRET_ALLOW_REVEAL=1 on the host, so a compromised agent
+// *and* needs VENIRA_SHELL_MODE=permissive or off on the host, so a compromised agent
 // cannot exfiltrate keys from a normal install.
 // ---------------------------------------------------------------------------
 
@@ -216,13 +216,13 @@ async function opSecret(args: Record<string, unknown>): Promise<RustResponse> {
           hint:
             "Metadata only (the value stays out of the transcript). Hint: inject it with project_shell_run secret_env=[\"" +
             name +
-            '"], or set VENIRA_SECRET_ALLOW_REVEAL=1 and pass reveal=1.',
+            '"], or set VENIRA_SHELL_MODE=permissive or off and pass reveal=1.',
         };
       }
-      if (!envFlag("VENIRA_SECRET_ALLOW_REVEAL", false)) {
+      if (!(loadShellPolicy().mode === "off" || loadShellPolicy().mode === "permissive")) {
         throw new Error(
-          "[feature_disabled] Plaintext reveal is disabled on this host (operator flag, not a per-call approval). " +
-            "Hint: use project_shell_run secret_env; set VENIRA_SECRET_ALLOW_REVEAL=1 only if the user wants it printed.",
+          "[feature_disabled] Plaintext reveal is disabled on this host (VENIRA_SHELL_MODE must be permissive or off; not a per-call approval). " +
+            "Hint: use project_shell_run secret_env; set VENIRA_SHELL_MODE=permissive or off only if the user wants it printed.",
         );
       }
       const value = getSecretValueSync(name);
@@ -241,7 +241,7 @@ async function opSecret(args: Record<string, unknown>): Promise<RustResponse> {
             value: value.slice(0, MAX_REVEAL_VALUE_CHARS),
           },
         },
-        hint: "Revealed because reveal=1 and VENIRA_SECRET_ALLOW_REVEAL=1. The value is now in this transcript.",
+        hint: "Revealed because reveal=1 and VENIRA_SHELL_MODE is permissive or off. The value is now in this transcript.",
       };
     }
 

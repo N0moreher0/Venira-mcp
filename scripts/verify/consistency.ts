@@ -312,12 +312,12 @@ export async function runConsistency(
       reason: "VERIFY_REASON_TIMESTAMP_CLEANUP",
     });
   }
-  // The trace buffer needs VENIRA_TRACE=1, so it gets its own client.
+  // Tracing is always on; this client exists so the trace assertions get a clean session.
   const traceTransport = new StdioClientTransport({
     command: "node",
     args: ["dist/server.js"],
     cwd: process.cwd(),
-    env: $h.verifyEnv({ VENIRA_TRACE: "1" }, "full"),
+    env: $h.verifyEnv({}, "full"),
     stderr: "pipe",
   });
   const traceClient = new Client(

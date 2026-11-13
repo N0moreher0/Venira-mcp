@@ -3,7 +3,7 @@ import { APPROVAL_PENDING_TTL_MS, APPROVAL_WAIT_MAX_MS } from "../lib/approval-g
 import * as approvals from "../lib/approvals.js";
 import { computeConfigPosture } from "../lib/config-posture.js";
 import { SHELL_TAIL_LIMIT, shellPolicySnapshot } from "../lib/corehost.js";
-import { envChoice, envFlag } from "../lib/env.js";
+import { envFlag } from "../lib/env.js";
 import { checkEnvironment } from "../lib/env-registry.js";
 import { githubHealth } from "../lib/git-provider.js";
 import { metricsSnapshot, recordMetric } from "../lib/metrics.js";
@@ -158,7 +158,7 @@ export async function runHealth(args: Args, deps: HealthDeps): Promise<ToolResul
         // Roadmap item 15 (P2): the data dir holds the audit DB and the
         // secrets; the checkpoint store lives elsewhere (see snapshots.store).
         data_dir_kind: "audit_and_secrets",
-        audit_fast: envFlag("VENIRA_AUDIT_FAST", true),
+        audit_fast: true,
       },
       capability: deps.capability(),
       queue: deps.queue(),
@@ -187,8 +187,8 @@ export async function runHealth(args: Args, deps: HealthDeps): Promise<ToolResul
       trace: traceSnapshot(),
       shell: {
         tail_max: SHELL_TAIL_LIMIT,
-        exit_early: envFlag("VENIRA_SHELL_EXIT_EARLY", false),
-        timeout_policy: envChoice("VENIRA_SHELL_TIMEOUT_POLICY", "soft", ["soft", "hard"]),
+        exit_early: true,
+        timeout_policy: "hard",
       },
       // Typos, removed variables and lenient values the registry can detect (warnings only).
       environment: { issues: checkEnvironment() },

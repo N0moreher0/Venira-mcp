@@ -174,7 +174,7 @@ export const ENV_REGISTRY: readonly EnvVarSpec[] = [
   secEnum("VENIRA_SHELL_MODE", "Advanced override of the shell policy mode; wins over the security profile.", true, {
     choices: ["strict", "balanced", "permissive", "off"],
   }),
-  secEnum("VENIRA_JS_EXEC_MODE", "`project_execute_js` gate: `off` hides the tool, `ask` requires per-call approval, `semi-auto` runs without approval but keeps the network guard and workspace-only fs, `auto` runs without approval and without any containment.", true, {
+  secEnum("VENIRA_JS_EXEC_MODE", "`project_execute_js` gate: `off` hides the tool, `ask` requires per-call approval (unless VENIRA_PERMISSION_MODE=allow_all), `semi-auto` runs without approval but keeps workspace-only fs and scrubbed env (network is always open), `auto` runs without approval and without containment.", true, {
     default: "off",
     choices: ["off", "ask", "semi-auto", "auto"],
     allowEmpty: true,
@@ -196,7 +196,6 @@ export const ENV_REGISTRY: readonly EnvVarSpec[] = [
   }),
   secList("VENIRA_SESSION_GRANT_RULES", "Extra shell rule ids a human may approve for a whole session.", true),
   secInt("VENIRA_SHELL_APPROVAL_TTL_MS", "Lifetime of a session-wide shell grant.", true, { default: "600000" }),
-  secFlag("VENIRA_SHELL_ELICIT", "Ask the MCP client to confirm risky shell commands via elicitation.", true),
   secList("VENIRA_SHELL_OVERRIDES", "Named exceptions the operator enables (ALLOW_GIT_PUSH, ALLOW_ENV_READ).", true),
   secPath("VENIRA_SHELL_POLICY_FILE", "JSON file with extra shell allow/ask/deny rules and an optional mode.", true),
   secFlag("VENIRA_ALLOW_SELF_INSTALL", "Let `project_install_self` write other MCP clients' config files.", true, {
@@ -205,7 +204,7 @@ export const ENV_REGISTRY: readonly EnvVarSpec[] = [
   secStr("VENIRA_SESSION_ID", "Session id used to bind approvals and tag audit rows.", true),
   secStr(
     "VENIRA_PERMISSION_MODE",
-    "Client-facing permission mode, set by the native adapter or the client environment.",
+    "Client-facing permission mode (manual / best_effort / allow_all), set by the native adapter or the client. `allow_all` (the default) also means no per-call approval for project_execute_js in ask mode.",
     true,
   ),
   removed(
@@ -218,19 +217,69 @@ export const ENV_REGISTRY: readonly EnvVarSpec[] = [
     "VENIRA_NETWORK",
     "string",
     "Application-level network kill switch (removed).",
-    "Git-provider calls are always allowed. Restrict outbound network at the OS, container or firewall level instead.",
+    "network access is always open. Dangerous or unclear commands still ask by mode: VENIRA_SHELL_MODE=strict blocks, balanced asks, permissive asks only on the high-risk rule set, off bypasses. Restrict outbound network at the OS, container or firewall level instead.",
+  ),
+  removed(
+    "VENIRA_SHELL_EXIT_EARLY",
+    "flag",
+    "Pollers return as soon as the exit code is known (removed; always on).",
+    "nothing to set: always on.",
+  ),
+  removed(
+    "VENIRA_SHELL_TIMEOUT_POLICY",
+    "string",
+    "`soft` warns on timeout, `hard` kills the process tree (removed; always `hard`).",
+    "nothing to set: an expired command kills its process tree; raise VENIRA_SHELL_MAX_TIMEOUT_MS for longer budgets.",
+  ),
+  removed(
+    "VENIRA_SHELL_ENV_PASS_ALL",
+    "flag",
+    "Pass the full parent environment to shell runs (removed; merged into VENIRA_SHELL_MODE).",
+    "nothing to set: the full host environment is passed in VENIRA_SHELL_MODE=permissive and off; other modes get the scrubbed allow list.",
+  ),
+  removed(
+    "VENIRA_SHELL_ELICIT",
+    "flag",
+    "Ask the MCP client to confirm risky shell commands via elicitation (removed; merged into VENIRA_SHELL_MODE).",
+    "nothing to set: elicitation is VENIRA_SHELL_MODE=balanced (all ask-rule prompts) and =permissive (high-risk rules only); strict never prompts, off bypasses.",
+  ),
+  removed(
+    "VENIRA_SECRET_ALLOW_REVEAL",
+    "flag",
+    "Allow `project_secret reveal=1` to print a stored secret (removed; merged into VENIRA_SHELL_MODE).",
+    "nothing to set: secrets may be revealed only in VENIRA_SHELL_MODE=permissive or off; strict and balanced refuse.",
+  ),
+  removed(
+    "VENIRA_AUDIT_FAST",
+    "flag",
+    "No effect on audit writes; only reported by project_health (removed).",
+    "nothing to set: audit_fast is always reported as true.",
+  ),
+  removed(
+    "VENIRA_CACHE_ALL",
+    "flag",
+    "Alias of VENIRA_CACHE (removed).",
+    "use VENIRA_CACHE=all|list|search|off (default all).",
+  ),
+  removed(
+    "VENIRA_TRACE",
+    "flag",
+    "Write a trace of tool calls to stderr (removed; always on).",
+    "nothing to set: tracing is always on; set VENIRA_TRACE_FILE to also append to a rotating file.",
   ),
 
   // --- tools / output ------------------------------------------------------
-  toolEnum("VENIRA_TOOL_MODE", "Tool surface: the coding-focused default set or the full expert set.", true, {
+  toolEnum("VENIRA_TOOL_MODE", "Tool surface: `core` (small models: default minus code-intelligence tools), `default` (full coding toolset, no CI/CD) or `expert` (everything).", true, {
     default: "default",
-    choices: ["default", "expert"],
+    choices: ["default", "expert", "core"],
     allowEmpty: true,
   }),
-  toolEnum("VENIRA_PROFILE", "Tool profile preset; `core` hides dependency-graph and change-impact tools.", true, {
-    default: "full",
-    choices: ["full", "core"],
-  }),
+  removed(
+    "VENIRA_PROFILE",
+    "string",
+    "Tool-surface split (removed; merged into VENIRA_TOOL_MODE).",
+    "use VENIRA_TOOL_MODE (core | default | expert).",
+  ),
   toolList("VENIRA_DISABLE_TOOLS", "Comma-separated tool names kept out of tools/list entirely.", true),
   toolStr("VENIRA_TOOL_POLICY_JSON", "Inline JSON tool policy (per-tool allow/deny).", true),
   toolPath("VENIRA_TOOL_POLICY_FILE", "JSON file with the per-tool policy.", true),
@@ -249,12 +298,6 @@ export const ENV_REGISTRY: readonly EnvVarSpec[] = [
   toolInt("VENIRA_SEARCH_MAX_FILES", "Max files collected by the JS fallback walker (collectFiles) before the walk stops and `complete=false` is returned. Bounds searches rooted at huge trees (e.g. VENIRA_UNRESTRICTED=1 with an absolute path outside the workspace).", true, { default: "50000" }),
 
   // --- shell ---------------------------------------------------------------
-  shFlag("VENIRA_SHELL_EXIT_EARLY", "Pollers return as soon as the exit code is known.", true, { default: "0" }),
-  shEnum("VENIRA_SHELL_TIMEOUT_POLICY", "`soft` warns on timeout; `hard` kills the process tree.", true, {
-    default: "soft",
-    choices: ["soft", "hard"],
-  }),
-  shFlag("VENIRA_SHELL_ENV_PASS_ALL", "Pass the full parent environment to shell runs.", true, { default: "0" }),
   shList("VENIRA_SHELL_ENV_ALLOW", "Extra environment variable names passed to shell runs.", false, {
     reason: NOT_DOC,
   }),
@@ -294,12 +337,11 @@ export const ENV_REGISTRY: readonly EnvVarSpec[] = [
   }),
 
   // --- cache ---------------------------------------------------------------
-  cacheEnum("VENIRA_CACHE", "Cache preset: `all` every cache, `list` only directory listings, `search` only searches, `off` always fresh. The three flags below are aliases and win when set.", true, {
+  cacheEnum("VENIRA_CACHE", "Cache preset: `all` every cache, `list` only directory listings, `search` only searches, `off` always fresh.", true, {
     default: "all",
     choices: ["all", "list", "search", "off"],
     allowEmpty: true,
   }),
-  cacheFlag("VENIRA_CACHE_ALL", "Alias of VENIRA_CACHE: `0` is `off`. Enable every read/list/search cache.", true),
   cacheFlag("VENIRA_CACHE_LIST_ONLY", "Enable only the directory-listing cache.", false, { reason: NOT_DOC }),
   cacheFlag("VENIRA_CACHE_SEARCH_ONLY", "Enable only the search cache.", false, { reason: NOT_DOC }),
   cacheInt("VENIRA_LIST_CACHE_MS", "Directory-listing cache lifetime.", false, { default: "1500", reason: NOT_DOC }),
@@ -330,7 +372,6 @@ export const ENV_REGISTRY: readonly EnvVarSpec[] = [
     default: "0",
     reason: NOT_DOC,
   }),
-  auditFlag("VENIRA_AUDIT_FAST", "No effect on audit writes: it is only reported by project_health (audit_fast) and can be set through the native adapter config. Kept so existing configs stay valid.", false, { reason: NOT_DOC }),
   auditEnum("VENIRA_AUDIT_DETAIL", "How much of each job project_read_audit can show: `summary` keeps one-line args and result, `full` also keeps the redacted, size-capped JSON, `off` keeps neither.", false, {
     default: "summary",
     choices: ["off", "summary", "full"],
@@ -406,9 +447,6 @@ export const ENV_REGISTRY: readonly EnvVarSpec[] = [
   }),
 
   // --- secrets -------------------------------------------------------------
-  secretFlag("VENIRA_SECRET_ALLOW_REVEAL", "Allow `project_secret reveal=1` to print a stored secret.", true, {
-    default: "0",
-  }),
   secretEnum("VENIRA_SECRET_KEYCHAIN", "Windows keychain use for the secret store key.", false, {
     default: "auto",
     choices: ["auto", "off", "required", "0", "1", "false", "true"],
@@ -416,7 +454,6 @@ export const ENV_REGISTRY: readonly EnvVarSpec[] = [
   }),
 
   // --- observability -------------------------------------------------------
-  obsFlag("VENIRA_TRACE", "Write a trace of tool calls to stderr.", true),
   obsPath("VENIRA_TRACE_FILE", "Also append the trace to this file (rotates at 10 MB).", false, { reason: NOT_DOC }),
 
   // --- internal / test -----------------------------------------------------

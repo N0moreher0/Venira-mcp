@@ -1,5 +1,5 @@
 // Tests for `project_execute_js` containment and the VENIRA_JS_EXEC_MODE resolution table.
-//   semi-auto: no approval, contained (network guard, workspace-only fs, scrubbed env)
+//   semi-auto: no approval, contained (workspace-only fs, scrubbed env, no child processes; network always open)
 //   auto:      no approval, nothing contained
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -55,8 +55,8 @@ try {
     ["contained: true", { contained: true }],
   ] as const) {
     const r = run(options);
-    check(`${label}: network modules are blocked`, r.https === "ERR_ACCESS_DENIED" && r.net === "ERR_ACCESS_DENIED", r);
-    check(`${label}: fetch and WebSocket are removed`, r.fetch === "undefined" && r.websocket === "undefined", r);
+    check(`${label}: network modules load`, r.https === "ok" && r.net === "ok", r);
+    check(`${label}: fetch and WebSocket are available`, r.fetch === "function" && r.websocket === "function", r);
     check(`${label}: environment is scrubbed`, r.marker === "" && r.home === "", r);
     check(`${label}: reads outside the workspace are denied`, r.outside === "ERR_ACCESS_DENIED", r);
   }
@@ -71,7 +71,7 @@ try {
   // --- errors keep working in both shapes ---
   const boomContained = executeJs('throw new Error("boom-contained")', { cwd, contained: true });
   check(
-    "contained: an uncaught error is reported without the guard echo",
+    "contained: an uncaught error is reported",
     !boomContained.ok && boomContained.stderr_tail.includes("boom-contained") && !boomContained.stderr_tail.includes("Module._load"),
     boomContained.stderr_tail,
   );
@@ -86,10 +86,12 @@ try {
     `import(${JSON.stringify(workspaceUrl)})` +
     `.then(m => console.log(JSON.stringify({ mode: m.JS_EXEC_MODE, allow: m.ALLOW_JS_EXEC, approval: m.JS_EXEC_APPROVAL, contained: m.JS_EXEC_CONTAINED })))` +
     `.catch(e => { console.log(JSON.stringify({ error: String(e && e.message || e) })); });`;
-  function resolveMode(value: string | undefined): Record<string, unknown> {
+  function resolveMode(value: string | undefined, permissionMode?: string): Record<string, unknown> {
     const env: NodeJS.ProcessEnv = { ...process.env, VENIRA_WORKSPACE: cwd };
     delete env.VENIRA_JS_EXEC_MODE;
     if (value !== undefined) env.VENIRA_JS_EXEC_MODE = value;
+    delete env.VENIRA_PERMISSION_MODE;
+    if (permissionMode !== undefined) env.VENIRA_PERMISSION_MODE = permissionMode;
     const r = spawnSync(process.execPath, ["--import", "tsx", "-e", resolveScript], { cwd, env, encoding: "utf8", timeout: 60_000 });
     const lines = (r.stdout ?? "").trim().split(/\r?\n/);
     try {
@@ -99,21 +101,24 @@ try {
     }
   }
 
-  const table: Array<[string | undefined, string, boolean, boolean, boolean]> = [
-    // value, mode, allow, approval, contained
-    [undefined, "off", false, false, true],
-    ["", "off", false, false, true],
-    ["off", "off", false, false, true],
-    ["ask", "ask", true, true, true],
-    ["semi-auto", "semi-auto", true, false, true],
-    ["auto", "auto", true, false, false],
-    ["  SEMI-AUTO ", "semi-auto", true, false, true],
-    ["AUTO", "auto", true, false, false],
+  const table: Array<[string | undefined, string | undefined, string, boolean, boolean, boolean]> = [
+    // value, permissionMode, mode, allow, approval, contained
+    [undefined, undefined, "off", false, false, true],
+    ["", undefined, "off", false, false, true],
+    ["off", undefined, "off", false, false, true],
+    ["ask", undefined, "ask", true, false, true],
+    ["ask", "manual", "ask", true, true, true],
+    ["ask", "best_effort", "ask", true, true, true],
+    ["ask", "allow_all", "ask", true, false, true],
+    ["semi-auto", undefined, "semi-auto", true, false, true],
+    ["auto", undefined, "auto", true, false, false],
+    ["  SEMI-AUTO ", undefined, "semi-auto", true, false, true],
+    ["AUTO", undefined, "auto", true, false, false],
   ];
-  for (const [value, mode, allow, approval, contained] of table) {
-    const r = resolveMode(value);
+  for (const [value, permissionMode, mode, allow, approval, contained] of table) {
+    const r = resolveMode(value, permissionMode);
     check(
-      `mode ${value === undefined ? "(unset)" : JSON.stringify(value)} -> ${mode} (allow=${allow}, approval=${approval}, contained=${contained})`,
+      `mode ${value === undefined ? "(unset)" : JSON.stringify(value)}${permissionMode ? ` perm=${permissionMode}` : ""} -> ${mode} (allow=${allow}, approval=${approval}, contained=${contained})`,
       r.mode === mode && r.allow === allow && r.approval === approval && r.contained === contained,
       r,
     );
@@ -159,12 +164,9 @@ try {
     contained: true,
   });
   check(
-    "a static import of a network module is refused before it runs",
-    !netImport.ok &&
-      /\[unsupported\]/.test(netImport.error ?? "") &&
-      /node:https/.test(netImport.error ?? "") &&
-      netImport.stdout_tail === "",
-    { error: netImport.error },
+    "a static import of a network module runs in every mode (network is always open)",
+    netImport.ok && netImport.stdout_tail.includes("object"),
+    { error: netImport.error, stdout: netImport.stdout_tail },
   );
   const netImportOpen = executeJs('import https from "node:https"; console.log(typeof https);', {
     cwd,

@@ -38,15 +38,15 @@ export interface SecurityProfileSettings {
 /**
  * `open` = the "full trust" posture people used to spell out as several variables.
  * Only variables whose default is NOT already the open value belong here:
- * `VENIRA_PERMISSION_MODE` already defaults to `allow_all` and
- * `VENIRA_SHELL_ELICIT` to off, so they are not repeated.
- * `SHELL_OVERRIDES`, `ALLOW_SELF_INSTALL`, `SECRET_ALLOW_REVEAL` and
+ * `VENIRA_PERMISSION_MODE` already defaults to `allow_all`, and an `off` shell
+ * policy already passes the full host env, allows secret reveal and never prompts,
+ * so `SHELL_ENV_PASS_ALL` needed no slot.
+ * `SHELL_OVERRIDES`, `ALLOW_SELF_INSTALL` and
  * `SECRET_KEYCHAIN` are deliberate opt-ins and are NOT implied by it.
  */
 export const OPEN_PROFILE_ENV_DEFAULTS: Readonly<Record<string, string>> = {
   VENIRA_UNRESTRICTED: "1",
   VENIRA_JS_EXEC_MODE: "auto",
-  VENIRA_SHELL_ENV_PASS_ALL: "1",
 };
 
 export const SECURITY_PROFILE_TABLE: Readonly<Record<SecurityProfile, SecurityProfileSettings>> = {

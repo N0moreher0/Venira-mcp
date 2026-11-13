@@ -347,7 +347,7 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
   project_secret: {
     about: "Store and inspect tokens without exposing them (AES-256-GCM at rest). action: set | get (metadata only) | list | delete. Inject into commands with project_shell_run secret_env=[NAME]; the GitHub tools read GITHUB_TOKEN on their own.",
     use: "you save a non-GitHub token, check expiry or rotation, or remove one. Prefer value_env over value so the secret never appears in chat.",
-    avoid: "the value is plain config (use .env or the config file). reveal=1 prints plaintext and needs VENIRA_SECRET_ALLOW_REVEAL=1.",
+    avoid: "the value is plain config (use .env or the config file). reveal=1 prints plaintext and needs VENIRA_SHELL_MODE=permissive or off.",
     out: "set: name, length, expires_at, days_left. get and list: metadata only.",
   },
 };
@@ -366,8 +366,8 @@ const EDIT_FUZZY_ABOUT = " With no exact match it falls back to fuzzy matching (
  * note above. The tool is not registered at all when the mode is `off`.
  */
 const JS_EXEC_ABOUT: Record<Exclude<JsExecMode, "off">, string> = {
-  ask: " Each call needs approval: the first call returns approval_required; ask the user, then retry once with approval_id. The snippet is contained (network modules, fetch/WebSocket and reads outside the workspace are blocked, env is scrubbed).",
-  "semi-auto": " No approval step; the snippet is contained (network modules, fetch/WebSocket and reads outside the workspace are blocked, env is scrubbed).",
+  ask: " Per-call approval: first call returns approval_required; ask the user, retry with approval_id. Skipped when VENIRA_PERMISSION_MODE=allow_all. Contained: workspace-only fs, scrubbed env, no child processes; network open.",
+  "semi-auto": " No approval; contained: workspace-only fs, scrubbed env, no child processes; network open.",
   auto: " No approval step and no containment (full network, filesystem and env).",
 };
 

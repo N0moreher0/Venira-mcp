@@ -119,7 +119,7 @@ const ENV_CASES: Array<{ id: string; env: Record<string, string | undefined>; ex
       VENIRA_JS_EXEC_MODE: "ask",
       VENIRA_SNAPSHOT_KEEP: "10",
       VENIRA_TOOL_MODE: "expert",
-      VENIRA_SHELL_TIMEOUT_POLICY: "hard",
+      VENIRA_SHELL_MODE: "strict",
       PATH: "/usr/bin",
     },
     expect: [],
@@ -141,19 +141,29 @@ const ENV_CASES: Array<{ id: string; env: Record<string, string | undefined>; ex
   },
   {
     id: "removed variables are flagged",
-    env: { VENIRA_NETWORK: "off", VENIRA_SHELL_AUTO_APPROVE_TOKEN: "1", VENIRA_ALLOW_JS_EXEC: "1", VENIRA_JS_EXEC_APPROVAL: "0" },
+    env: { VENIRA_NETWORK: "off", VENIRA_SHELL_AUTO_APPROVE_TOKEN: "1", VENIRA_ALLOW_JS_EXEC: "1", VENIRA_JS_EXEC_APPROVAL: "0", VENIRA_PROFILE: "core", VENIRA_SHELL_EXIT_EARLY: "1", VENIRA_SHELL_TIMEOUT_POLICY: "hard", VENIRA_SHELL_ENV_PASS_ALL: "1", VENIRA_SHELL_ELICIT: "1", VENIRA_SECRET_ALLOW_REVEAL: "1", VENIRA_AUDIT_FAST: "1", VENIRA_CACHE_ALL: "1", VENIRA_TRACE: "1" },
     expect: [
       { code: "removed_var", name: "VENIRA_ALLOW_JS_EXEC" },
+      { code: "removed_var", name: "VENIRA_AUDIT_FAST" },
+      { code: "removed_var", name: "VENIRA_CACHE_ALL" },
       { code: "removed_var", name: "VENIRA_JS_EXEC_APPROVAL" },
       { code: "removed_var", name: "VENIRA_NETWORK" },
+      { code: "removed_var", name: "VENIRA_PROFILE" },
+      { code: "removed_var", name: "VENIRA_SECRET_ALLOW_REVEAL" },
       { code: "removed_var", name: "VENIRA_SHELL_AUTO_APPROVE_TOKEN" },
+      { code: "removed_var", name: "VENIRA_SHELL_ELICIT" },
+      { code: "removed_var", name: "VENIRA_SHELL_ENV_PASS_ALL" },
+      { code: "removed_var", name: "VENIRA_SHELL_EXIT_EARLY" },
+      { code: "removed_var", name: "VENIRA_SHELL_TIMEOUT_POLICY" },
+      { code: "removed_var", name: "VENIRA_TRACE" },
     ],
   },
   {
     id: "flags must be exactly 0 or 1",
-    env: { VENIRA_UNRESTRICTED: "true", VENIRA_ALLOW_SELF_INSTALL: "2", VENIRA_TRACE: "1", VENIRA_PRETTY: "0" },
+    env: { VENIRA_UNRESTRICTED: "true", VENIRA_ALLOW_SELF_INSTALL: "2", VENIRA_EDIT_FUZZY: "2", VENIRA_PRETTY: "0" },
     expect: [
       { code: "invalid_flag", name: "VENIRA_ALLOW_SELF_INSTALL" },
+      { code: "invalid_flag", name: "VENIRA_EDIT_FUZZY" },
       { code: "invalid_flag", name: "VENIRA_UNRESTRICTED" },
     ],
   },
@@ -227,7 +237,7 @@ check("checkEnvironment: the removed VENIRA_NETWORK message keeps its documented
   const [issue] = checkEnvironment({ VENIRA_NETWORK: "off" });
   assert.equal(
     `[env] WARNING: ${issue.message}`,
-    "[env] WARNING: VENIRA_NETWORK was removed and is ignored; Git-provider calls are always allowed. " +
+    "[env] WARNING: VENIRA_NETWORK was removed and is ignored; network access is always open. Dangerous or unclear commands still ask by mode: VENIRA_SHELL_MODE=strict blocks, balanced asks, permissive asks only on the high-risk rule set, off bypasses. " +
       "Restrict outbound network at the OS, container or firewall level instead.",
   );
 });
@@ -251,17 +261,11 @@ check("startup boolean validation never loses a legacy flag", () => {
     "VENIRA_UNRESTRICTED",
     "VENIRA_ALLOW_JS_EXEC",
     "VENIRA_JS_EXEC_APPROVAL",
-    "VENIRA_CACHE_ALL",
     "VENIRA_CACHE_LIST_ONLY",
     "VENIRA_CACHE_SEARCH_ONLY",
     "VENIRA_AUDIT_STRICT",
-    "VENIRA_AUDIT_FAST",
-    "VENIRA_SHELL_EXIT_EARLY",
-    "VENIRA_SHELL_ENV_PASS_ALL",
     "VENIRA_EDIT_FUZZY",
     "VENIRA_SHELL_AUTO_APPROVE_TOKEN",
-    "VENIRA_SECRET_ALLOW_REVEAL",
-    "VENIRA_SHELL_ELICIT",
     "VENIRA_PRETTY",
     "VENIRA_ALLOW_SELF_INSTALL",
     "VENIRA_GIT_ALLOW_HTTP",
@@ -322,12 +326,11 @@ check("open profile fills exactly its defaults into an empty environment", () =>
   assert.deepEqual([...applied].sort(), Object.keys(OPEN_PROFILE_ENV_DEFAULTS).sort());
   assert.equal(env.VENIRA_UNRESTRICTED, "1");
   assert.equal(env.VENIRA_JS_EXEC_MODE, "auto");
-  assert.equal(env.VENIRA_SHELL_ENV_PASS_ALL, "1");
 });
 
 check("open profile only sets variables whose default differs (no restated defaults)", () => {
   assert.equal(OPEN_PROFILE_ENV_DEFAULTS.VENIRA_PERMISSION_MODE, undefined);
-  assert.equal(OPEN_PROFILE_ENV_DEFAULTS.VENIRA_SHELL_ELICIT, undefined);
+  assert.equal(OPEN_PROFILE_ENV_DEFAULTS.VENIRA_SHELL_ENV_PASS_ALL, undefined);
 });
 
 check("open profile never overrides a variable the operator set, even to an empty string", () => {
@@ -339,10 +342,10 @@ check("open profile never overrides a variable the operator set, even to an empt
   const applied = applySecurityProfileEnvDefaults(env);
   assert.equal(env.VENIRA_UNRESTRICTED, "0");
   assert.equal(env.VENIRA_JS_EXEC_MODE, "ask");
-  assert.deepEqual(applied, ["VENIRA_SHELL_ENV_PASS_ALL"]);
-  const blank: NodeJS.ProcessEnv = { VENIRA_SECURITY_PROFILE: "open", VENIRA_SHELL_ENV_PASS_ALL: "" };
+  assert.deepEqual(applied, []);
+  const blank: NodeJS.ProcessEnv = { VENIRA_SECURITY_PROFILE: "open", VENIRA_UNRESTRICTED: "" };
   applySecurityProfileEnvDefaults(blank);
-  assert.equal(blank.VENIRA_SHELL_ENV_PASS_ALL, "");
+  assert.equal(blank.VENIRA_UNRESTRICTED, "");
 });
 
 check("open profile does not imply the deliberate opt-ins", () => {
@@ -524,20 +527,19 @@ check("cache: each VENIRA_CACHE mode yields the documented effective values", ()
 });
 
 check("cache: legacy flags alone behave exactly as before", () => {
-  assert.deepEqual(cacheState({ VENIRA_CACHE_ALL: "0" }), { all: false, list: true, search: true });
   assert.deepEqual(cacheState({ VENIRA_CACHE_LIST_ONLY: "0" }), { all: true, list: false, search: true });
   assert.deepEqual(cacheState({ VENIRA_CACHE_SEARCH_ONLY: "0" }), { all: true, list: true, search: false });
 });
 
 check("cache: an explicit legacy flag overrides VENIRA_CACHE, per variable", () => {
-  assert.deepEqual(cacheState({ VENIRA_CACHE: "off", VENIRA_CACHE_ALL: "1" }), { all: true, list: false, search: false });
+  assert.deepEqual(cacheState({ VENIRA_CACHE: "off", VENIRA_CACHE_LIST_ONLY: "1" }), { all: false, list: true, search: false });
   assert.deepEqual(cacheState({ VENIRA_CACHE: "list", VENIRA_CACHE_SEARCH_ONLY: "1" }), { all: true, list: true, search: true });
   assert.deepEqual(cacheState({ VENIRA_CACHE: "all", VENIRA_CACHE_LIST_ONLY: "0" }), { all: true, list: false, search: true });
 });
 
 check("cache: an unknown mode or a bad legacy flag fails closed", () => {
   assert.throws(() => cacheState({ VENIRA_CACHE: "some" }), /\[config_invalid\] VENIRA_CACHE must be one of/);
-  assert.throws(() => cacheState({ VENIRA_CACHE_ALL: "yes" }), /\[config_invalid\] VENIRA_CACHE_ALL/);
+  assert.throws(() => cacheState({ VENIRA_CACHE_LIST_ONLY: "yes" }), /\[config_invalid\] VENIRA_CACHE_LIST_ONLY/);
 });
 
 check("cache: VENIRA_CACHE is registered, documented and enum-checked", () => {
