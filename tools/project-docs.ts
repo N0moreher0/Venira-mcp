@@ -142,10 +142,10 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
     out: "enabled, file, buffered, recent[] (newest first, timestamp_ms is epoch milliseconds).",
   },
   project_read_audit: {
-    about: "Read recent audit-log rows, newest first. Filter by session_id, operation, outcome, since_unix (seconds); verify=1 checks the hash chain.",
-    use: "you review what was done and why (the reason field), in this or an earlier session.",
+    about: "Read recent audit-log rows, newest first: what each job was asked and returned. Filter by session_id, operation, outcome, request_id, since_unix (seconds); verify=1 checks the hash chain.",
+    use: "you review what ran and how it ended, or look one job up by request_id.",
     avoid: "you want live metrics (project_health).",
-    out: "rows[] {session_id, operation, outcome, reason_code, reason, args_hash, command, request_id, started_at_ms, completed_at_ms, elapsed_ms}, count, truncated, chain_ok (verify=1). Timestamps are epoch milliseconds (since_unix filters in seconds). args_hash identifies the call, command is the redacted command line.",
+    out: "rows[] {session_id, operation, outcome, reason_code, reason, args_hash, command, request_id, started_at_ms, completed_at_ms, elapsed_ms, args_summary, result_summary, result_bytes}, count, truncated, chain_ok (verify=1). Output mode full adds redacted args and result per row; bulk text is kept as its length only. Timestamps are epoch milliseconds (since_unix filters in seconds). args_hash identifies the call, command is the redacted command line.",
   },
 
   // ---- code intelligence --------------------------------------------------

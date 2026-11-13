@@ -113,6 +113,7 @@ const cacheFlag = spec("flag", "cache");
 const cacheInt = spec("int", "cache");
 const auditFlag = spec("flag", "audit");
 const auditInt = spec("int", "audit");
+const auditEnum = spec("enum", "audit");
 const snapInt = spec("int", "snapshot");
 const snapPath = spec("path", "snapshot");
 
@@ -324,6 +325,11 @@ export const ENV_REGISTRY: readonly EnvVarSpec[] = [
     reason: NOT_DOC,
   }),
   auditFlag("VENIRA_AUDIT_FAST", "Relax audit durability for speed.", false, { reason: NOT_DOC }),
+  auditEnum("VENIRA_AUDIT_DETAIL", "How much of each job project_read_audit can show: `summary` keeps one-line args and result, `full` also keeps the redacted, size-capped JSON, `off` keeps neither.", false, {
+    default: "summary",
+    choices: ["off", "summary", "full"],
+    reason: NOT_DOC,
+  }),
   auditInt("VENIRA_AUDIT_KEEP_DAYS", "Audit rows older than this many days are pruned.", false, {
     default: "90",
     reason: NOT_DOC,

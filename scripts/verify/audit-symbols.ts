@@ -267,6 +267,38 @@ export async function runAuditSymbols(
     (auditShellRead.data?.rows ?? []).slice(0, 3),
   );
 
+  // 16-ter. Every job keeps what it was asked and what it returned (lib/audit-detail.ts), redacted.
+  const auditShellRows = (auditShellRead.data?.rows ?? []) as Array<{
+    request_id?: string;
+    args_summary?: string;
+    result_summary?: string;
+    args?: unknown;
+    result?: unknown;
+  }>;
+  check(
+    "audit_rows_carry_args_and_result_summary",
+    auditShellRows.some((r) => typeof r.args_summary === "string" && r.args_summary.length > 0) &&
+      auditShellRows.some((r) => typeof r.result_summary === "string" && r.result_summary.length > 0),
+    auditShellRows.slice(0, 3),
+  );
+  check(
+    "audit_detail_never_holds_secret_value",
+    !JSON.stringify(auditShellRows).includes(SECRET_VALUE),
+    auditShellRows.map((r) => r.args_summary),
+  );
+  const oneJobId = auditShellRows.find((r) => typeof r.request_id === "string")?.request_id;
+  const oneJob = asEnvelope(await call("project_read_audit", { request_id: oneJobId ?? "missing", limit: 5 }));
+  check(
+    "audit_lookup_by_request_id",
+    (oneJob.data?.rows ?? []).length === 1 && (oneJob.data?.rows?.[0] as { request_id?: string })?.request_id === oneJobId,
+    oneJob.data?.rows,
+  );
+  check(
+    "audit_outcome_accepts_documented_words",
+    asEnvelope(await call("project_read_audit", { outcome: "success", limit: 3 })).data?.rows?.length > 0,
+    null,
+  );
+
   // 16-bis. Audit hash chain: keyed, actually recomputed, and tamper-evident.
   const auditVerify = asEnvelope(
     await call("project_read_audit", { limit: 5, verify: 1 }),

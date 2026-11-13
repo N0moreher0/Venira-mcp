@@ -57,6 +57,22 @@ export function ensureAuditDb(): Database.Database | null {
         elapsed_ms INTEGER
       );
     `);
+    // What each job was asked to do and what it returned (lib/audit-detail.ts). A separate table keyed by
+    // request_id, so the hash-chained rows above stay exactly as they were.
+    auditDb.exec(`
+      CREATE TABLE IF NOT EXISTS project_tool_audit_detail (
+        request_id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        operation TEXT NOT NULL,
+        args_summary TEXT,
+        result_summary TEXT,
+        args_json TEXT,
+        result_json TEXT,
+        result_bytes INTEGER,
+        stored_truncated INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL
+      );
+    `);
     // Additive migration for shell-policy auditing. SQLite has no
     // `ADD COLUMN IF NOT EXISTS`, so probe the table first.
     const columns = new Set(
@@ -133,6 +149,7 @@ export function ensureAuditDb(): Database.Database | null {
       if (Number.isFinite(days) && days > 0) {
         const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
         auditDb.prepare("DELETE FROM project_tool_audit WHERE started_at < ?").run(cutoff);
+        auditDb.prepare("DELETE FROM project_tool_audit_detail WHERE created_at < ?").run(cutoff);
         auditDb.prepare("DELETE FROM project_file_index WHERE updated_at < ?").run(cutoff);
         auditDb.exec("VACUUM;");
       }
@@ -376,5 +393,48 @@ export function closeAuditDb(): void {
       /* already closed */
     }
     auditDb = null;
+  }
+}
+
+export type AuditDetailRow = {
+  args_summary: string;
+  result_summary: string;
+  args_json: string | null;
+  result_json: string | null;
+  result_bytes: number;
+  stored_truncated: boolean;
+};
+
+/**
+ * Store the readable args/result of a job next to its audit row (best-effort: the detail is an aid, so
+ * a failure here never fails the tool call, even under VENIRA_AUDIT_STRICT=1, which guards the chain).
+ */
+export function auditDetailInsert(
+  sessionId: string,
+  requestId: string,
+  operation: string,
+  detail: AuditDetailRow,
+): void {
+  const db = ensureAuditDb();
+  if (!db) return;
+  try {
+    db.prepare(
+      `INSERT OR REPLACE INTO project_tool_audit_detail
+         (request_id, session_id, operation, args_summary, result_summary, args_json, result_json, result_bytes, stored_truncated, created_at)
+       VALUES (@request_id, @session_id, @operation, @args_summary, @result_summary, @args_json, @result_json, @result_bytes, @stored_truncated, @created_at)`,
+    ).run({
+      request_id: requestId,
+      session_id: sessionId,
+      operation,
+      args_summary: detail.args_summary,
+      result_summary: detail.result_summary,
+      args_json: detail.args_json,
+      result_json: detail.result_json,
+      result_bytes: detail.result_bytes,
+      stored_truncated: detail.stored_truncated ? 1 : 0,
+      created_at: Date.now(),
+    });
+  } catch (error) {
+    console.error(`[corehost] audit detail write failed: ${error instanceof Error ? error.message : String(error)}`);
   }
 }

@@ -188,8 +188,9 @@ export function registerOpsTools(server: McpServer, deps: OpsToolsDeps): void {
       inputSchema: {
         session_id: z.string().optional().describe("Only rows from this session."),
         operation: z.string().optional().describe("Only rows for this operation (e.g. edit_file, shell_run)."),
-        outcome: z.enum(["success", "failure", "running"]).optional().describe("Only rows with this outcome."),
-        limit: z.number().int().min(1).max(200).optional().describe("Max rows, newest first (default 50, max 200)."),
+        outcome: z.enum(["succeeded", "failed", "running", "success", "failure"]).optional().describe("Only rows with this outcome."),
+        request_id: z.string().optional().describe("One job by request_id: its args and result."),
+        limit: z.number().int().min(1).max(200).optional().describe("Max rows, newest first (default 50; 15 in VENIRA_OUTPUT_MODE=compact; max 200)."),
         since_unix: z.number().int().min(0).optional().describe("Only rows at or after this Unix timestamp (seconds)."),
         verify: flag01.optional().describe("1 verifies the audit hash chain and returns chain_ok; 0 disables verification."),
       },

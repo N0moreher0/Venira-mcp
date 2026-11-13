@@ -351,6 +351,7 @@ Full reference: the source reads 90+ distinct `VENIRA_*` names; this table lists
 | `VENIRA_WORKSPACE` | `process.cwd()` | Workspace root; all paths resolve against it |
 | `VENIRA_TOOL_MODE` | `default` | `default` (27 tools) or `expert` (40 tools); +2 with `VENIRA_SETUP_TOOLS=1`, +1 with `VENIRA_JS_EXEC_MODE=ask`, `semi-auto` or `auto` |
 | `VENIRA_OUTPUT_MODE` | `full` | `full` or `compact` (summarize/trim payloads > 8 KiB; generic payloads use `preview_text`) |
+| `VENIRA_AUDIT_DETAIL` | `summary` | What `project_read_audit` can show per job: `off` stores nothing extra, `summary` keeps one args line and one result line, `full` also keeps redacted JSON args/result (up to 16 KiB per job). Long or sensitive values (file content, `old_text`/`new_text`, secret values) are stored as a length only |
 | `VENIRA_PROFILE` | `full` | `full` or `core` (disables dependency graph, change impact, outline_symbol, symbol_references and recent_files — smaller tools/list, for small models / restricted context) |
 | `VENIRA_UNRESTRICTED` | `"0"` | `"1"` disables workspace lock (never in production) |
 | `VENIRA_SECURITY_PROFILE` | `balanced` | Selects the shell policy: `strict`, `balanced`, `trusted`, or `off` |

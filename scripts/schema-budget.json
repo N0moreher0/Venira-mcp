@@ -1,11 +1,11 @@
 {
   "expert": {
     "tool_count": 41,
-    "total_bytes": 68971
+    "total_bytes": 69293
   },
   "default": {
     "tool_count": 28,
-    "total_bytes": 49161
+    "total_bytes": 49483
   },
   "tools": {
     "project_cache_clear": 708,
@@ -35,7 +35,7 @@
     "project_pr_list": 1060,
     "project_pr_merge": 1600,
     "project_pr_reopen": 969,
-    "project_read_audit": 1549,
+    "project_read_audit": 1871,
     "project_read_batch": 5555,
     "project_read_file": 2078,
     "project_recent_files": 1139,

@@ -30,7 +30,8 @@ import { GithubDeviceFlow } from "./github-device-flow.js";
 import { envFlag } from "./env.js";
 import { buildChangeImpact, buildDependencyGraph } from "./dependency-graph.js";
 import { opCiWait } from "./ci-wait.js";
-import { auditDecision, auditFinish, auditStart, closeAuditDb } from "./audit-store.js";
+import { auditDecision, auditDetailInsert, auditFinish, auditStart, closeAuditDb } from "./audit-store.js";
+import { buildAuditDetail } from "./audit-detail.js";
 import { type RustResponse } from "./corehost-common.js";
 import { opReadFile, opGetFileInfo, opListFiles, clearListFilesCache } from "./corehost-fileread.js";
 import { opSearch } from "./corehost-search.js";
@@ -629,6 +630,9 @@ export class CoreHost {
           ...(externalSummary ? { command: externalSummary } : {}),
         });
 
+        // Every path below returns or throws; the wrapper records what the job was asked and what it
+        // returned next to its audit row (lib/audit-detail.ts), then passes the result or error through.
+        const runAudited = async (): Promise<unknown> => {
         if (operation === "shell_run") {
           const projectId = p.project_id ?? "chat-terminal";
           const commandText =
@@ -696,6 +700,17 @@ export class CoreHost {
           const codeMatch = /^\[([a-z0-9_]+)\]/i.exec(message);
           const reasonCode = codeMatch ? codeMatch[1] : "operation_failed";
           auditFinish(sessionId, p.project_id ?? "chat-terminal", operation, requestId, startedAt, "failed", reasonCode);
+          throw error;
+        }
+        };
+        try {
+          const out = await runAudited();
+          const detail = buildAuditDetail(args, { ok: true, response: out });
+          if (detail) auditDetailInsert(sessionId, requestId, operation, detail);
+          return out as T;
+        } catch (error) {
+          const detail = buildAuditDetail(args, { ok: false, error });
+          if (detail) auditDetailInsert(sessionId, requestId, operation, detail);
           throw error;
         }
       }

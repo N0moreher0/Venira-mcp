@@ -3,7 +3,7 @@ import path from "node:path";
 import { auditKeyPath, verifyAuditRows } from "../lib/audit-hash.js";
 import { readHexKey } from "../lib/keyfile.js";
 import { recordMetric } from "../lib/metrics.js";
-import { buildEnvelope, errorEnvelope, newRequestId, toolResult } from "../lib/output.js";
+import { OUTPUT_MODE, buildEnvelope, errorEnvelope, newRequestId, toolResult } from "../lib/output.js";
 import type { RustResponse, ToolResult } from "../lib/output.js";
 import { SESSION_ID } from "../lib/session.js";
 
@@ -16,21 +16,35 @@ type Args = Record<string, unknown>;
 export async function runReadAudit(args: Args, dbPath: string): Promise<ToolResult> {
   const started = performance.now();
   const requestId = newRequestId();
-  const limit = Math.max(1, Math.min(200, Number(args.limit ?? 50)));
+  // compact mode trims payloads over 8 KiB, so ask for fewer rows by default and let each carry its summary.
+  const limit = Math.max(1, Math.min(200, Number(args.limit ?? (OUTPUT_MODE === "compact" ? 15 : 50))));
   try {
     const Database = (await import("better-sqlite3")).default;
     const db = new Database(dbPath, { readonly: true, fileMustExist: true });
     const where: string[] = [];
     const values: unknown[] = [];
-    if (typeof args.session_id === "string") { where.push("session_id = ?"); values.push(args.session_id); }
-    if (typeof args.operation === "string") { where.push("operation = ?"); values.push(args.operation); }
-    if (typeof args.outcome === "string") { where.push("outcome = ?"); values.push(args.outcome); }
-    if (typeof args.since_unix === "number") { where.push("started_at >= ?"); values.push(Math.floor(args.since_unix * 1000)); }
+    if (typeof args.session_id === "string") { where.push("a.session_id = ?"); values.push(args.session_id); }
+    if (typeof args.operation === "string") { where.push("a.operation = ?"); values.push(args.operation); }
+    if (typeof args.request_id === "string") { where.push("a.request_id = ?"); values.push(args.request_id); }
+    if (typeof args.outcome === "string") {
+      // The log stores succeeded/failed; the tool's documented words are success/failure. Accept both.
+      const outcomes: Record<string, string> = { success: "succeeded", failure: "failed" };
+      where.push("a.outcome = ?");
+      values.push(outcomes[args.outcome] ?? args.outcome);
+    }
+    if (typeof args.since_unix === "number") { where.push("a.started_at >= ?"); values.push(Math.floor(args.since_unix * 1000)); }
     // `reason` is a newer additive column: probe first so an older DB file
     // (written before the migration) still returns rows instead of erroring.
     const columns = new Set(
       (db.prepare("PRAGMA table_info(project_tool_audit)").all() as Array<{ name: string }>).map((c) => c.name),
     );
+    // The readable args/result of each job live in a separate table (lib/audit-detail.ts); an older DB
+    // file may not have it yet.
+    const hasDetail =
+      db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'project_tool_audit_detail'").get() !== undefined;
+    const detailColumns = hasDetail
+      ? ", d.args_summary, d.result_summary, d.args_json, d.result_json, d.result_bytes, d.stored_truncated"
+      : "";
     const reasonColumn = columns.has("reason") ? ", reason" : "";
     // The hash of the arguments and the (redacted) command are what say
     // *which* call a row belongs to; the roadmap called the missing "why" out
@@ -38,9 +52,9 @@ export async function runReadAudit(args: Args, dbPath: string): Promise<ToolResu
     const argsHashColumn = columns.has("args_hash") ? ", args_hash" : "";
     const commandColumn = columns.has("command") ? ", command" : "";
     const sql =
-      `SELECT session_id, operation, outcome, reason_code, request_id, started_at, completed_at, elapsed_ms${reasonColumn}${argsHashColumn}${commandColumn} ` +
-      `FROM project_tool_audit ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ` +
-      `ORDER BY started_at DESC LIMIT ?`;
+      `SELECT a.session_id, a.operation, a.outcome, a.reason_code, a.request_id, a.started_at, a.completed_at, a.elapsed_ms${reasonColumn}${argsHashColumn}${commandColumn}${detailColumns} ` +
+      `FROM project_tool_audit a ${hasDetail ? "LEFT JOIN project_tool_audit_detail d ON d.request_id = a.request_id " : ""}${where.length ? `WHERE ${where.join(" AND ")}` : ""} ` +
+      `ORDER BY a.started_at DESC LIMIT ?`;
     const rows = db.prepare(sql).all(...values, limit + 1) as unknown[];
     const truncated = rows.length > limit;
     let verified: boolean | null = null;
@@ -84,6 +98,37 @@ export async function runReadAudit(args: Args, dbPath: string): Promise<ToolResu
       }
     }
     db.close();
+    // What the job was asked and what it returned. Short summaries always; the redacted JSON only in
+    // VENIRA_OUTPUT_MODE=full, within a total budget so a 200-row read cannot flood the context (pass
+    // request_id to get one job in full).
+    let jsonBudget = 256 * 1024;
+    const detailFields = (row: Record<string, unknown>): Record<string, unknown> => {
+      const out: Record<string, unknown> = {};
+      if (typeof row.args_summary === "string" && row.args_summary) out.args_summary = row.args_summary;
+      if (typeof row.result_summary === "string" && row.result_summary) out.result_summary = row.result_summary;
+      if (typeof row.result_bytes === "number") out.result_bytes = row.result_bytes;
+      if (OUTPUT_MODE !== "full") return out;
+      const parse = (text: unknown): unknown => {
+        if (typeof text !== "string") return undefined;
+        try {
+          return JSON.parse(text);
+        } catch {
+          return text; // cut at the storage cap: still readable, just not valid JSON
+        }
+      };
+      const size = (typeof row.args_json === "string" ? row.args_json.length : 0) + (typeof row.result_json === "string" ? row.result_json.length : 0);
+      if (size === 0) return out;
+      if (size > jsonBudget) return { ...out, detail_omitted: true };
+      jsonBudget -= size;
+      const args = parse(row.args_json);
+      const result = parse(row.result_json);
+      return {
+        ...out,
+        ...(args !== undefined ? { args } : {}),
+        ...(result !== undefined ? { result } : {}),
+        ...(row.stored_truncated ? { detail_truncated: true } : {}),
+      };
+    };
     const data = {
       db_path: dbPath,
       count: truncated ? limit : rows.length,
@@ -107,6 +152,7 @@ export async function runReadAudit(args: Args, dbPath: string): Promise<ToolResu
           started_at_ms: typeof row.started_at === "number" ? row.started_at : Number(row.started_at ?? 0),
           ...(row.completed_at != null ? { completed_at_ms: Number(row.completed_at) } : {}),
           ...(row.elapsed_ms != null ? { elapsed_ms: row.elapsed_ms } : {}),
+          ...detailFields(row),
         };
       }),
     };
