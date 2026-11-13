@@ -366,7 +366,7 @@ try {
     );
     assert.equal(
       policy.evaluateShellCommand("cmd /c git push origin main", workspaceDir, { shell: "cmd", mode: "balanced" }).rule,
-      "ask.git_history_rewrite",
+      "balanced.local_dev",
     );
     assert.equal(
       policy.evaluateShellCommand("cmd /c npm publish", workspaceDir, { shell: "cmd", mode: "balanced" }).rule,

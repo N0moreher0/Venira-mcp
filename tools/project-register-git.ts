@@ -33,7 +33,7 @@ export function registerGitTools(server: McpServer, deps: GitToolsDeps): void {
   const { runOne } = deps;
   // -------------------------------------------------------------------------
   // Local git: read-only queries run free; commit/branch/stash mutations need
-  // an audit reason and never push (push stays an explicit named shell override).
+  // an audit reason and never push (routine git is allowed; force/delete/URL pushes need approval).
   // -------------------------------------------------------------------------
 
   server.registerTool(

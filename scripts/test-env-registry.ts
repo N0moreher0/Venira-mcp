@@ -29,8 +29,9 @@ import {
 import {
   SECURITY_PROFILES,
   SECURITY_PROFILE_TABLE,
-  OPEN_PROFILE_ENV_DEFAULTS,
+  OFF_PROFILE_ENV_DEFAULTS,
   applySecurityProfileEnvDefaults,
+  resolveSecurityProfile,
 } from "../lib/security-profile.js";
 import { scanRuntimeEnvNames } from "./env-source-scan.js";
 import { cacheEnabled, cacheModeFromEnv } from "../lib/cache-mode.js";
@@ -302,11 +303,11 @@ check("every shell mode a profile maps to is an accepted VENIRA_SHELL_MODE value
   }
 });
 
-check("profile entries carry a shell mode and env defaults; only `open` has env defaults", () => {
+check("profile entries carry a shell mode and env defaults; only `off` has env defaults", () => {
   for (const profile of SECURITY_PROFILES) {
     assert.deepEqual(Object.keys(SECURITY_PROFILE_TABLE[profile]).sort(), ["envDefaults", "shellMode"], profile);
     const count = Object.keys(SECURITY_PROFILE_TABLE[profile].envDefaults).length;
-    assert.equal(count > 0, profile === "open", profile);
+    assert.equal(count > 0, profile === "off", profile);
   }
 });
 
@@ -320,22 +321,37 @@ check("profile env defaults name registered, supported variables with valid valu
   }
 });
 
-check("open profile fills exactly its defaults into an empty environment", () => {
+check("`open` was merged into `off`: the alias is accepted and fills off's defaults", () => {
   const env: NodeJS.ProcessEnv = { VENIRA_SECURITY_PROFILE: "open" };
   const applied = applySecurityProfileEnvDefaults(env);
-  assert.deepEqual([...applied].sort(), Object.keys(OPEN_PROFILE_ENV_DEFAULTS).sort());
+  assert.deepEqual([...applied].sort(), Object.keys(OFF_PROFILE_ENV_DEFAULTS).sort());
+  assert.equal(env.VENIRA_UNRESTRICTED, "1");
+  assert.equal(env.VENIRA_JS_EXEC_MODE, "auto");
+  assert.equal(resolveSecurityProfile("open"), "off");
+});
+
+check("`open` is accepted as a deprecated alias of `off` everywhere (env scan, shell, exec gate)", () => {
+  assert.deepEqual(checkEnvironment({ VENIRA_SECURITY_PROFILE: "open" }), []);
+  assert.equal(resolveSecurityProfile("OPEN"), "off");
+  assert.equal(resolveSecurityProfile("open"), "off");
+});
+
+check("off profile fills exactly its defaults into an empty environment", () => {
+  const env: NodeJS.ProcessEnv = { VENIRA_SECURITY_PROFILE: "off" };
+  const applied = applySecurityProfileEnvDefaults(env);
+  assert.deepEqual([...applied].sort(), Object.keys(OFF_PROFILE_ENV_DEFAULTS).sort());
   assert.equal(env.VENIRA_UNRESTRICTED, "1");
   assert.equal(env.VENIRA_JS_EXEC_MODE, "auto");
 });
 
-check("open profile only sets variables whose default differs (no restated defaults)", () => {
-  assert.equal(OPEN_PROFILE_ENV_DEFAULTS.VENIRA_PERMISSION_MODE, undefined);
-  assert.equal(OPEN_PROFILE_ENV_DEFAULTS.VENIRA_SHELL_ENV_PASS_ALL, undefined);
+check("off profile only sets variables whose default differs (no restated defaults)", () => {
+  assert.equal(OFF_PROFILE_ENV_DEFAULTS.VENIRA_PERMISSION_MODE, undefined);
+  assert.equal(OFF_PROFILE_ENV_DEFAULTS.VENIRA_SHELL_ENV_PASS_ALL, undefined);
 });
 
-check("open profile never overrides a variable the operator set, even to an empty string", () => {
+check("off profile never overrides a variable the operator set, even to an empty string", () => {
   const env: NodeJS.ProcessEnv = {
-    VENIRA_SECURITY_PROFILE: "open",
+    VENIRA_SECURITY_PROFILE: "off",
     VENIRA_UNRESTRICTED: "0",
     VENIRA_JS_EXEC_MODE: "ask",
   };
@@ -343,13 +359,13 @@ check("open profile never overrides a variable the operator set, even to an empt
   assert.equal(env.VENIRA_UNRESTRICTED, "0");
   assert.equal(env.VENIRA_JS_EXEC_MODE, "ask");
   assert.deepEqual(applied, []);
-  const blank: NodeJS.ProcessEnv = { VENIRA_SECURITY_PROFILE: "open", VENIRA_UNRESTRICTED: "" };
+  const blank: NodeJS.ProcessEnv = { VENIRA_SECURITY_PROFILE: "off", VENIRA_UNRESTRICTED: "" };
   applySecurityProfileEnvDefaults(blank);
   assert.equal(blank.VENIRA_UNRESTRICTED, "");
 });
 
-check("open profile does not imply the deliberate opt-ins", () => {
-  const env: NodeJS.ProcessEnv = { VENIRA_SECURITY_PROFILE: "open" };
+check("off profile does not imply the deliberate opt-ins", () => {
+  const env: NodeJS.ProcessEnv = { VENIRA_SECURITY_PROFILE: "off" };
   applySecurityProfileEnvDefaults(env);
   for (const name of [
     "VENIRA_SHELL_OVERRIDES",
@@ -362,7 +378,7 @@ check("open profile does not imply the deliberate opt-ins", () => {
 });
 
 check("every other profile, an unset profile and an invalid profile fill nothing", () => {
-  for (const profile of SECURITY_PROFILES.filter((name) => name !== "open")) {
+  for (const profile of SECURITY_PROFILES.filter((name) => name !== "off")) {
     const env: NodeJS.ProcessEnv = { VENIRA_SECURITY_PROFILE: profile };
     assert.deepEqual(applySecurityProfileEnvDefaults(env), [], profile);
     assert.deepEqual(env, { VENIRA_SECURITY_PROFILE: profile }, profile);
@@ -439,10 +455,10 @@ check("matrix: each documented condition maps to exactly its finding id", () => 
     const unapprovedJs = input.jsExecEnabled && !input.jsExecApproval;
     const expectations: Array<[string, boolean]> = [
       ["workspace.unrestricted", input.unrestricted],
-      ["profile.off", input.securityProfile === "off" || input.securityProfile === "open"],
+      ["profile.off", input.securityProfile === "off"],
       [
         "shell.mode_off",
-        input.securityProfile !== "off" && input.securityProfile !== "open" && input.shellMode === "off",
+        input.securityProfile !== "off" && input.shellMode === "off",
       ],
       ["shell.mode_permissive", input.shellMode === "permissive"],
       ["js.exec_without_approval", unapprovedJs],

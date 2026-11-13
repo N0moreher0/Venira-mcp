@@ -152,9 +152,9 @@ Pick one block and put its variables in the `env` section of your client config.
 |---|---|
 | Minimal (recommended) | `VENIRA_WORKSPACE`, `VENIRA_TOOL_MODE=expert` |
 | Fewer prompts on a personal machine | Minimal, plus `VENIRA_SECURITY_PROFILE=trusted` |
-| Full trust (isolated or personal machine only) | Minimal, plus `VENIRA_SECURITY_PROFILE=open` |
+| Full trust (isolated or personal machine only) | Minimal, plus `VENIRA_SECURITY_PROFILE=off` |
 
-`open` sets `VENIRA_UNRESTRICTED=1`, `VENIRA_PERMISSION_MODE=allow_all`, `VENIRA_JS_EXEC_MODE=auto` and turns the shell policy off (an off policy also passes the full host env to shell runs, lets `reveal=1` print secrets and never prompts for approvals). A variable you set yourself always wins over the profile. Deliberate opt-ins are never implied: `VENIRA_SHELL_OVERRIDES`, `VENIRA_ALLOW_SELF_INSTALL` and `VENIRA_SECRET_KEYCHAIN`.
+`off` keeps full trust: shell checks off (hard-deny included), no workspace lock (`VENIRA_UNRESTRICTED=1`), `VENIRA_JS_EXEC_MODE=auto` as the default JS mode, no elicitation, full env passed to shell, `reveal=1` prints secrets and nothing prompts. A variable you set yourself always wins over the profile (e.g. `VENIRA_JS_EXEC_MODE=off` stays `off`). Deliberate opt-ins are never implied: `VENIRA_SHELL_OVERRIDES`, `VENIRA_ALLOW_SELF_INSTALL` and `VENIRA_SECRET_KEYCHAIN`.
 
 Do not write a variable just to restate its default (for example `VENIRA_OUTPUT_MODE=full`, `VENIRA_USE_RIPGREP=1` or `VENIRA_SECURITY_PROFILE=balanced`).
 
@@ -165,8 +165,7 @@ Do not write a variable just to restate its default (for example `VENIRA_OUTPUT_
 | `strict` | `strict` | Read-only and workspace-local allowlist runs without approval |
 | `balanced` (default) | `balanced` | Recommended general-purpose setting |
 | `trusted` | `permissive` | Ask-rule and unclassified commands run; hard-deny commands require approval |
-| `off` | `off` | Trusted environments only; prints a warning and audits shell commands |
-| `open` | `off` | Full trust on a personal machine: shell checks off, no workspace lock, JS exec `auto`, no elicitation, full env passed to shell. Replaces setting those variables one by one; any of them you set explicitly still wins |
+| `off` | `off` | Full trust: shell checks off, no workspace lock, JS exec `auto`, no elicitation, full env passed to shell. Prints a warning and audits shell commands. Replaces setting those variables one by one; any of them you set explicitly still wins |
 
 `VENIRA_SHELL_MODE` is an advanced override and takes precedence over the profile. `VENIRA_JS_EXEC_MODE` separately gates the JavaScript tool: `off` (default) hides it, `ask` registers it with per-call human approval (skipped when `VENIRA_PERMISSION_MODE=allow_all`), `semi-auto` registers it without approval but keeps the containment (workspace-only fs, scrubbed env, no child processes; network is always open), `auto` registers it without approval and without any containment (full fs access, inherited env; personal machines only).
 
@@ -399,7 +398,7 @@ Full reference: the source reads 80+ distinct supported `VENIRA_*` names; this t
 | `VENIRA_GIT_LOG_TIMEOUT_MS` | `90000` | Timeout for CI log downloads (1 000–900 000) |
 | `VENIRA_GIT_LOG_ZIP_BYTES` | `33554432` | Max bytes of a CI log archive; larger declared sizes are refused before download |
 | `VENIRA_GIT_LOG_ENTRY_BYTES` / `VENIRA_GIT_LOG_TEXT_BYTES` | `4194304` / `8388608` | Per-entry and total decoded log text caps |
-| `VENIRA_SHELL_OVERRIDES` | unset | Operator allowlist: `ALLOW_GIT_PUSH`, `ALLOW_ENV_READ` |
+| `VENIRA_SHELL_OVERRIDES` | unset | Operator allowlist: `ALLOW_ENV_READ` (the `ALLOW_GIT_PUSH` override was removed) |
 | `VENIRA_PERMISSION_MODE` | `allow_all` | Permission mode passed when the session scope opens (`manual` / `best_effort` / `allow_all`); `allow_all` also skips the `VENIRA_JS_EXEC_MODE=ask` approval prompt; shown in `project_health` |
 | `VENIRA_SESSION_ID` | auto | Set for test/verify runs to separate audit rows |
 | `VENIRA_SESSION_GRANT_RULES` | built-in: `cd_outside_workspace` | Extra ask-rule ids (comma-separated) that may be approved with `--approve --session` |
@@ -486,9 +485,9 @@ Sensible defaults; leave any of these unset unless you know why you set them.
 | `project_execute_js` | Every call | `VENIRA_JS_EXEC_MODE` (`off`: tool not registered; `ask`: per-call approval, skipped when `VENIRA_PERMISSION_MODE=allow_all`; `semi-auto`: no approval, contained; `auto`: no approval, no containment) |
 | Secret plaintext | `project_secret` with `reveal=1` | `VENIRA_SHELL_MODE` (`off` / `permissive`) |
 | Self-install | `project_install_self` writes another client's config | `VENIRA_ALLOW_SELF_INSTALL` (`0`) |
-| Named shell override | `ALLOW_GIT_PUSH` / `ALLOW_ENV_READ` | `VENIRA_SHELL_OVERRIDES` (unset), plus `override` and a `reason` on the call |
+| Named shell override | `ALLOW_ENV_READ` | `VENIRA_SHELL_OVERRIDES` (unset), plus `override` and a `reason` on the call |
 
-`ALLOW_GIT_PUSH` covers one `git push` command with publish flags only (`-u`, `--follow-tags`, `--tags`, `--atomic`, `--dry-run`, ...) to a remote *name* and plain refs. It does not cover staging, committing, or chained commands; run those separately under normal policy so the operator can review repository changes before publishing. Force (`-f`, `+ref`, `--force-with-lease`), deletes (`:ref`, `--delete`), `--mirror`, `--prune`, `--no-verify`, URLs as remotes, pipes, redirects and substitutions fall back to the normal verdict (ask/deny).
+Routine git (`status`, `diff`, `log`, `add`, `commit`, `rm`, `push` fast-forward with publish flags, `pull`, `fetch`, `clone`, `merge`, `rebase`, `cherry-pick`, `revert`, `tag`, `branch`, `reset` without `--hard`/`--keep`, `checkout`, `switch`, `stash`) runs in `balanced` without an approval; force/delete/URL pushes and the other git history rewrites (`reset --hard`, `clean -fd`, `branch -D`, `filter-branch`, `reflog`) stay in `git_history_rewrite` and still need one. The removed `ALLOW_GIT_PUSH` override no longer exists; setting it fails closed with `[config_invalid] VENIRA_SHELL_OVERRIDES accepts only: ALLOW_ENV_READ`. `ALLOW_ENV_READ` covers exactly one plain `.env` file in the workspace (no globs, no redirects, no substitutes); overrides require a `reason` and win for exactly one call.
 
 Granting a shell or JS approval:
 

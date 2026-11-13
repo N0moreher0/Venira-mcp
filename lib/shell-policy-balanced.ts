@@ -10,7 +10,11 @@
  *   - the same toolchain run through `npx` (`npx tsc --noEmit`) only when the bin is already installed
  *     in the workspace's `node_modules/.bin`, so npx can never download or run a remote package
  *     (`npx tsc` without a local TypeScript would fetch the unrelated `tsc` package);
- *   - reversible git branch/stash operations (`checkout -b`, `switch`, `stash`, `restore --staged`).
+ *   - reversible git branch/stash operations (`checkout -b`, `switch`, `stash`, `restore --staged`);
+ *   - routine git mutations the operator runs constantly (`add`, `rm`, `commit`, `push` when it is a
+ *     plain fast-forward push, `pull`, `fetch`, `clone`, `merge`, `rebase`, `cherry-pick`, `tag`,
+ *     `branch`, `revert`, `reset` without `--hard`, ...): local, reversible, or needing no explicit
+ *     approval; `reset --hard`, `clean`, force/delete/URL pushes and anything else stay ask rules.
  *
  * Everything here still requires: no redirect / background / substitution, workspace-bound
  * paths, no unresolved variables, and no flag that writes outside the workspace or runs
@@ -25,7 +29,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { ParsedCommand, Segment } from "./shell-parser.js";
-import { balancedSegmentOk, devToolFlagsOk, gitSubcommandIndex, isOutsideWorkspace, TSC_UNSAFE_FLAG } from "./shell-policy-tables.js";
+import { balancedSegmentOk, devToolFlagsOk, gitSubcommandIndex, isOutsideWorkspace, isPlainGitPushSegment, TSC_UNSAFE_FLAG } from "./shell-policy-tables.js";
 import { extraReadOnlyOk, installSegmentOk, redirectKind, writeSegmentOk, writeTargetOk } from "./shell-policy-balanced-write.js";
 import { dockerReadOnlySegment } from "./shell-policy-balanced-docker.js";
 import { deleteSegmentOk } from "./shell-policy-balanced-delete.js";
@@ -39,7 +43,7 @@ const READ_ONLY: BalancedAllow = {
 };
 const LOCAL_DEV: BalancedAllow = {
   rule: "balanced.local_dev",
-  reason: "Local build/test command or reversible git branch/stash operation inside the workspace.",
+  reason: "Local build/test command or routine git operation inside the workspace.",
 };
 
 const WORKSPACE_WRITE: BalancedAllow = {
@@ -308,9 +312,35 @@ function gitLocalOk(segment: Segment, cwd: string): boolean {
   if (i < 0) return false;
   const rest = segment.argv.slice(i + 1);
   switch (segment.argv[i].toLowerCase()) {
+    case "add":
+    case "rm":
+    case "commit":
+    case "fetch":
+    case "pull":
+    case "clone":
+    case "init":
+    case "merge":
+    case "rebase":
+    case "cherry-pick":
+    case "revert":
+    case "tag":
+      // Workspace-local, routine agent flow. Commit/amend/revert only create local history;
+      // `--hard` resets and `clean` stay ask rules (they discard uncommitted bytes).
+      return true;
+    case "branch":
+      // Local branch create/switch/delete: recoverable via reflog, never touches a remote.
+      return true;
+    case "push":
+      // Plain fast-forward pushes only; force/delete/URL/deletion pushes stay ask rules.
+      return isPlainGitPushSegment(segment, cwd);
+    case "reset":
+      return !rest.some((arg) => /^--hard(=.*)?$/i.test(arg) || /^--keep(=.*)?$/i.test(arg));
     case "checkout":
-      // Only creating a branch; `checkout <x>` / `checkout -- <file>` can discard work.
-      return rest[0] === "-b" && rest.length >= 2 && rest.length <= 3 && rest.slice(1).every((arg) => REF_NAME.test(arg));
+      // Switching branches, or creating one; `checkout <file>` / `.` can discard edits.
+      if (rest[0] === "-b" || rest[0] === "-B") {
+        return rest.length >= 2 && rest.length <= 3 && rest.slice(1).every((arg) => REF_NAME.test(arg));
+      }
+      return rest.length === 1 && (rest[0] === "-" || REF_NAME.test(rest[0]));
     case "switch":
       if (rest.length === 1) return rest[0] === "-" || REF_NAME.test(rest[0]);
       if ((rest[0] === "-c" || rest[0] === "--create") && rest.length >= 2 && rest.length <= 3) {
@@ -323,7 +353,6 @@ function gitLocalOk(segment: Segment, cwd: string): boolean {
       if (rest.some((arg) => arg === "-s" || arg === "--source" || arg.startsWith("--source="))) return false;
       const staged = rest.includes("--staged") || rest.includes("-S");
       const worktree = rest.some((arg) => arg === "--worktree" || arg === "-W");
-      // Unstaging only, or restoring explicit worktree files (see restoreFilesOk).
       if (staged) return !worktree;
       return restoreFilesOk(rest, cwd);
     }

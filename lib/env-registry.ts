@@ -165,9 +165,9 @@ const removed = (name: string, kind: EnvKind, description: string, removedNote: 
 
 export const ENV_REGISTRY: readonly EnvVarSpec[] = [
   // --- security / approvals ------------------------------------------------
-  secEnum("VENIRA_SECURITY_PROFILE", "Approval posture preset: shell policy plus defaults for related variables. `open` is full trust (shell off, no workspace lock, JS auto, no elicitation); explicitly set variables still win.", true, {
+  secEnum("VENIRA_SECURITY_PROFILE", "Approval posture preset: shell policy plus defaults for related variables. `off` is full trust (shell off, no workspace lock, JS auto, no elicitation); the deprecated alias `open` means the same and prints a one-time note; explicitly set variables still win.", true, {
     default: "balanced",
-    choices: ["strict", "balanced", "trusted", "off", "open"],
+    choices: ["strict", "balanced", "trusted", "off"],
     allowEmpty: true,
   }),
   secEnum("VENIRA_SHELL_MODE", "Advanced override of the shell policy mode; wins over the security profile.", true, {
@@ -195,7 +195,7 @@ export const ENV_REGISTRY: readonly EnvVarSpec[] = [
   }),
   secList("VENIRA_SESSION_GRANT_RULES", "Extra shell rule ids a human may approve for a whole session.", true),
   secInt("VENIRA_SHELL_APPROVAL_TTL_MS", "Lifetime of a session-wide shell grant.", true, { default: "600000" }),
-  secList("VENIRA_SHELL_OVERRIDES", "Named exceptions the operator enables (ALLOW_GIT_PUSH, ALLOW_ENV_READ).", true),
+  secList("VENIRA_SHELL_OVERRIDES", "Named exceptions the operator enables (ALLOW_ENV_READ).", true),
   secPath("VENIRA_SHELL_POLICY_FILE", "JSON file with extra shell allow/ask/deny rules and an optional mode.", true),
   secFlag("VENIRA_ALLOW_SELF_INSTALL", "Let `project_install_self` write other MCP clients' config files.", true, {
     default: "0",
@@ -511,7 +511,10 @@ export function checkEnvironment(env: Readonly<Record<string, string | undefined
       issues.push({ code: "invalid_flag", name: key, message: `${key} must be "0" or "1" (got "${value}").` });
     } else if (entry.kind === "enum" && entry.choices) {
       const normalized = value.trim().toLowerCase();
-      const ok = normalized === "" ? entry.allowEmpty === true : entry.choices.includes(normalized);
+      // `open` was merged into `off` (it is a deprecated alias; resolution happens in
+      // lib/security-profile.ts, which notes and maps it to `off`). Not an error.
+      const isProfileAlias = key === "VENIRA_SECURITY_PROFILE" && normalized === "open";
+      const ok = isProfileAlias || (normalized === "" ? entry.allowEmpty === true : entry.choices.includes(normalized));
       if (!ok) {
         issues.push({
           code: "invalid_enum",

@@ -156,19 +156,19 @@ export async function runShellPolicy(
   }
   const originalOverrides = process.env.VENIRA_SHELL_OVERRIDES;
   delete process.env.VENIRA_SHELL_OVERRIDES;
-  const selfGrantedGitPush = policyModule.evaluateShellCommand(
-    "git push origin main",
+  const selfGrantedEnvRead = policyModule.evaluateShellCommand(
+    "cat .env",
     ws,
     {
       mode: "balanced",
-      override: "ALLOW_GIT_PUSH",
+      override: "ALLOW_ENV_READ",
       overrideReason: "reason alone must not grant access",
     },
   );
   check(
     "named_override_requires_operator_gate",
-    selfGrantedGitPush.tier === "ask",
-    selfGrantedGitPush,
+    selfGrantedEnvRead.rule !== "override.ALLOW_ENV_READ" && selfGrantedEnvRead.tier !== "allow",
+    selfGrantedEnvRead,
   );
   const permissiveGitPush = policyModule.evaluateShellCommand(
     "git push origin main",
@@ -176,39 +176,36 @@ export async function runShellPolicy(
     { mode: "permissive" },
   );
   check(
-    "permissive_asks_are_allowed",
+    "permissive_plain_git_push_is_allowed",
     permissiveGitPush.tier === "allow",
     permissiveGitPush,
   );
-  process.env.VENIRA_SHELL_OVERRIDES = "ALLOW_GIT_PUSH,ALLOW_ENV_READ";
-  const explicitGitPush = policyModule.evaluateShellCommand(
+  process.env.VENIRA_SHELL_OVERRIDES = "ALLOW_ENV_READ";
+  const routinePushOverridden = policyModule.evaluateShellCommand(
     "git push -u origin main",
     ws,
     {
       mode: "strict",
-      override: "ALLOW_GIT_PUSH",
-      overrideReason: "operator enabled this specific action",
+      override: "ALLOW_ENV_READ",
+      overrideReason: "plain pushes are routine, even in strict it stays an approval",
     },
   );
   check(
-    "named_git_push_override",
-    explicitGitPush.tier === "allow" &&
-      explicitGitPush.rule === "override.ALLOW_GIT_PUSH",
-    explicitGitPush,
+    "git_push_not_covered_by_any_override",
+    routinePushOverridden.rule !== "override.ALLOW_ENV_READ",
+    routinePushOverridden,
   );
   const unsafeGitPush = policyModule.evaluateShellCommand(
     "git push --no-verify origin main",
     ws,
     {
       mode: "strict",
-      override: "ALLOW_GIT_PUSH",
-      overrideReason: "the override must not cover hook bypass",
+      overrideReason: "the plain-push allowance must never apply to hook bypasses",
     },
   );
   check(
-    "named_git_push_override_excludes_hook_bypass",
-    unsafeGitPush.tier !== "allow" &&
-      unsafeGitPush.rule !== "override.ALLOW_GIT_PUSH",
+    "dangerous_push_is_never_routine",
+    unsafeGitPush.tier !== "allow" && unsafeGitPush.rule !== "balanced.local_dev",
     unsafeGitPush,
   );
   const overrideWorkspace = path.resolve(dir);
@@ -284,18 +281,18 @@ export async function runShellPolicy(
     invalidOverrideConfig.includes("VENIRA_SHELL_OVERRIDES accepts only"),
     invalidOverrideConfig,
   );
-  process.env.VENIRA_SHELL_OVERRIDES = "ALLOW_GIT_PUSH,ALLOW_ENV_READ";
+  process.env.VENIRA_SHELL_OVERRIDES = "ALLOW_ENV_READ";
   const policyFixture = path.join(dir, "shell-policy.json");
   await fs.writeFile(
     policyFixture,
     JSON.stringify({
-      allow: [{ command: "git", subcommand: "push" }, { command: "cat" }],
+      allow: [{ command: "git", subcommand: "reset" }, { command: "cat" }],
     }),
   );
   process.env.VENIRA_SHELL_POLICY_FILE = policyFixture;
   policyModule.resetShellPolicyCache();
-  const customAllowPush = policyModule.evaluateShellCommand(
-    "git push origin main",
+  const customAllowReset = policyModule.evaluateShellCommand(
+    "git reset --hard",
     ws,
     { mode: "balanced" },
   );
@@ -304,8 +301,8 @@ export async function runShellPolicy(
   });
   check(
     "custom_allow_cannot_override_builtin_ask",
-    customAllowPush.tier === "ask",
-    customAllowPush,
+    customAllowReset.tier === "ask" && customAllowReset.rule === "ask.git_history_rewrite",
+    customAllowReset,
   );
   check(
     "custom_allow_cannot_override_hard_deny",

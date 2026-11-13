@@ -23,7 +23,7 @@ export type AskRule = {
 
 type StrictAllowRule = { command: string; subcommands?: string[] };
 type OverrideDecision = {
-  name: "ALLOW_GIT_PUSH" | "ALLOW_ENV_READ";
+  name: "ALLOW_ENV_READ";
   reason: string;
   enabled: boolean;
   matches: (parsed: ParsedCommand, cwd: string) => boolean;

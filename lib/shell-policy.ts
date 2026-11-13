@@ -55,7 +55,7 @@ export { isOutsideWorkspace } from "./shell-policy-tables.js";
 // ---------------------------------------------------------------------------
 
 export type ShellMode = "strict" | "balanced" | "permissive" | "off";
-export type ShellOverride = "ALLOW_GIT_PUSH" | "ALLOW_ENV_READ";
+export type ShellOverride = "ALLOW_ENV_READ";
 export type Tier = "allow" | "ask" | "deny";
 
 export type ShellRule = {
@@ -119,7 +119,7 @@ function normaliseMode(value: string | undefined): ShellMode | null {
   return null;
 }
 
-const SHELL_OVERRIDE_NAMES = new Set<ShellOverride>(["ALLOW_GIT_PUSH", "ALLOW_ENV_READ"]);
+const SHELL_OVERRIDE_NAMES = new Set<ShellOverride>(["ALLOW_ENV_READ"]);
 
 export function isShellOverride(value: unknown): value is ShellOverride {
   return typeof value === "string" && SHELL_OVERRIDE_NAMES.has(value as ShellOverride);
@@ -142,74 +142,12 @@ export function enabledShellOverrides(): Set<ShellOverride> {
 }
 
 /**
- * Flags a fast-forward publish needs. Anything else (force, delete, mirror, prune, --no-verify, --exec,
- * --receive-pack, --repo, config injection) is not covered by the override and goes through the normal verdict.
+ * Commands the override may wrap (ALLOW_ENV_READ): one plain `.env` file read, workspace-local.
+ * Everything the git-push override needed now lives in the balanced-mode allow rules (routine git is
+ * allowed); force/delete/URL pushes stay `git_history_rewrite` ask rules.
  */
-const PUSH_SAFE_FLAGS = new Set([
-  "-u", "--set-upstream", "--follow-tags", "--tags", "--atomic", "-n", "--dry-run",
-  "-v", "--verbose", "-q", "--quiet", "--progress", "--porcelain", "--no-progress",
-]);
-/** Remote names and branch/tag refs: no leading `-`/`+`/`:` (option, force, delete), no URLs or shell characters. */
-const PUSH_REF_RE = /^[A-Za-z0-9_][A-Za-z0-9._/@-]{0,199}$/;
-
-/** `git push [safe flags] [<remote> [<ref>[:<ref>]]]`: never a force, a delete, a URL or an option that runs code. */
-function isPlainPush(args: string[]): boolean {
-  const positional: string[] = [];
-  for (const arg of args) {
-    if (arg.startsWith("-")) {
-      if (!PUSH_SAFE_FLAGS.has(arg)) return false;
-    } else {
-      positional.push(arg);
-    }
-  }
-  if (positional.length > 2) return false;
-  for (const item of positional) {
-    const parts = item.split(":");
-    if (parts.length > 2) return false;
-    // `src:dst` needs both sides (an empty src deletes the remote ref); `+src` is a force, rejected by the regex.
-    if (!parts.every((part) => PUSH_REF_RE.test(part) && !part.includes("..") && !part.endsWith(".lock"))) return false;
-  }
-  // The remote is a name, not a URL: `git push <url>` could publish to an unreviewed destination.
-  if (positional[0] && /[:@]/.test(positional[0])) return false;
-  return true;
-}
-
-/** Upper bound on steps in one overridden command line, so a long script cannot ride along with a push. */
-const OVERRIDE_MAX_SEGMENTS = 8;
-
-function isPushSegment(segment: Segment): boolean {
-  return (
-    segment.command === "git" &&
-    segment.subcommand === "push" &&
-    segment.argv[1]?.toLowerCase() === "push" &&
-    isPlainPush(segment.argv.slice(2))
-  );
-}
-
-/**
- * The unattended override authorizes plain fast-forward pushes. A command line may chain steps
- * (`git add . && git commit -m x && git push origin main`): each segment must then be either such a
- * push or a segment normal policy already treats as routine (`isSafeSegment`), and at least one must
- * be a push. Hard-deny and always-ask rules are evaluated before the override, so they still win.
- * Pipes, redirects, background jobs and substitutions stay out of scope, as do force/delete pushes.
- */
-function matchesGitPushOverride(parsed: ParsedCommand): boolean {
-  const count = parsed.segments.length;
-  if (count < 1 || count > OVERRIDE_MAX_SEGMENTS) return false;
-  if (parsed.has_pipe || parsed.has_redirect || parsed.has_background || parsed.has_substitution) return false;
-  let pushes = 0;
-  for (const segment of parsed.segments) {
-    if (isPushSegment(segment)) {
-      pushes += 1;
-    } else if (!isSafeSegment(segment)) {
-      return false;
-    }
-  }
-  return pushes > 0;
-}
 
 function matchesOverride(parsed: ParsedCommand, cwd: string, name: ShellOverride): boolean {
-  if (name === "ALLOW_GIT_PUSH") return matchesGitPushOverride(parsed);
   if (
     parsed.segments.length !== 1 ||
     parsed.has_pipe ||

@@ -507,6 +507,8 @@ export function gitHealth(): {
   repo_source: string | null;
   branch: string | null;
   auth: "present" | "missing";
+  /** Leading `[code]` of the gitContext() failure (e.g. repo_unresolved, secret_expired); null when resolved. Never the message. */
+  error_code: string | null;
   token_origin: string;
   secret: string;
   username: string | null;
@@ -551,6 +553,7 @@ export function gitHealth(): {
       branch: currentBranch(),
       auth: "missing",
       token_origin: error ? "config_error" : "missing",
+      error_code: error ? (/^\[([a-z_]+)\]/.exec(error)?.[1] ?? "unknown") : null,
       secret: "GITHUB_TOKEN",
       username: null,
       config: configPath(),
@@ -578,6 +581,7 @@ export function gitHealth(): {
     branch: currentBranch(),
     auth: ctx.token ? "present" : "missing",
     token_origin: ctx.token_origin,
+    error_code: null,
     secret: ctx.secret_name,
     username: ctx.username,
     config: ctx.config_path,

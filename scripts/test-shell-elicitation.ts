@@ -36,7 +36,7 @@ const { SESSION_ID } = await load("lib/session.ts");
 type Args = Record<string, unknown>;
 type ToolResult = { content: { type: "text"; text: string }[]; isError?: boolean };
 
-const COMMAND = "git push origin main";
+const COMMAND = "git push --force origin main";
 const SHELL = "bash";
 const CWD = repoRoot;
 const RULE_SESSION_OK = "ask.git_push";

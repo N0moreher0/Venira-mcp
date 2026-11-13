@@ -81,7 +81,7 @@ export function registerShellTools(server: McpServer, deps: ShellToolsDeps): voi
             "1 = rerun an identical invocation that already failed (default 0: refused with repeated_failure and the previous stderr tail).",
           ),
         override: z
-          .enum(["ALLOW_GIT_PUSH", "ALLOW_ENV_READ"])
+          .enum(["ALLOW_ENV_READ"])
           .optional()
           .describe("Named exception; only works when the operator enabled this exact name in VENIRA_SHELL_OVERRIDES."),
         reason: z

@@ -6,13 +6,14 @@
  *   strict    | strict
  *   balanced  | balanced   (default)
  *   trusted   | permissive (personal machine)
- *   off       | off        (loud warning, trusted environments only)
- *   open      | off + full-trust env defaults (UNRESTRICTED=1, JS auto, env passthrough); loud warning
+ *   off       | off        (full trust: shell off, UNRESTRICTED, JS auto; laut warning)
  *
- * The individual variable (VENIRA_SHELL_MODE) still wins over the profile;
- * it is the "Advanced" override. JS exec is gated separately by
+ * `open` was merged into `off` (it only ever meant `off` plus the two env
+ * defaults `open` added). Setting `open` prints a one-time note and behaves as
+ * `off`. The individual variable (VENIRA_SHELL_MODE) still wins over the
+ * profile; it is the "Advanced" override. JS exec is gated separately by
  * VENIRA_JS_EXEC_MODE (off/ask/semi-auto/auto), not by the profile, EXCEPT
- * that a profile may supply a default for it (`open` does).
+ * that a profile may supply a default for it (`off` does).
  *
  * ROADMAP_ENV_SLIM.md phase 2a: a profile can also carry `envDefaults`, values
  * for other VENIRA_* variables that are applied only when the operator left
@@ -24,7 +25,7 @@
  * shell-policy.ts, so any import here risks a cycle.
  */
 
-export const SECURITY_PROFILES = ["strict", "balanced", "trusted", "off", "open"] as const;
+export const SECURITY_PROFILES = ["strict", "balanced", "trusted", "off"] as const;
 export type SecurityProfile = (typeof SECURITY_PROFILES)[number];
 
 export type ProfileShellMode = "strict" | "balanced" | "permissive" | "off";
@@ -36,15 +37,15 @@ export interface SecurityProfileSettings {
 }
 
 /**
- * `open` = the "full trust" posture people used to spell out as several variables.
- * Only variables whose default is NOT already the open value belong here:
+ * `off` = the "full trust" posture people used to spell out as several variables (the old `open`).
+ * Only variables whose default is NOT already the full-trust value belong here:
  * `VENIRA_PERMISSION_MODE` already defaults to `allow_all`, and an `off` shell
  * policy already passes the full host env, allows secret reveal and never prompts,
  * so `SHELL_ENV_PASS_ALL` needed no slot.
  * `SHELL_OVERRIDES`, `ALLOW_SELF_INSTALL` and
  * `SECRET_KEYCHAIN` are deliberate opt-ins and are NOT implied by it.
  */
-export const OPEN_PROFILE_ENV_DEFAULTS: Readonly<Record<string, string>> = {
+export const OFF_PROFILE_ENV_DEFAULTS: Readonly<Record<string, string>> = {
   VENIRA_UNRESTRICTED: "1",
   VENIRA_JS_EXEC_MODE: "auto",
 };
@@ -53,20 +54,30 @@ export const SECURITY_PROFILE_TABLE: Readonly<Record<SecurityProfile, SecurityPr
   strict: { shellMode: "strict", envDefaults: {} },
   balanced: { shellMode: "balanced", envDefaults: {} },
   trusted: { shellMode: "permissive", envDefaults: {} },
-  off: { shellMode: "off", envDefaults: {} },
-  open: { shellMode: "off", envDefaults: OPEN_PROFILE_ENV_DEFAULTS },
+  off: { shellMode: "off", envDefaults: OFF_PROFILE_ENV_DEFAULTS },
 };
 
 export const DEFAULT_SECURITY_PROFILE: SecurityProfile = "balanced";
 
 /**
- * Read VENIRA_SECURITY_PROFILE. Unset/empty -> `balanced`. An unknown value
- * throws `[config_invalid]` so a typo can never silently weaken the posture.
+ * `open` was merged into `off`: it only ever meant `off` plus the two env defaults
+ * `off` now carries. Setting `open` prints a one-time note and behaves as `off`.
+ * Any other unknown value throws `[config_invalid]` so a typo can never silently
+ * weaken the posture.
  */
+const notedAlias = new Set<string>();
+
 export function resolveSecurityProfile(raw: string | undefined = process.env.VENIRA_SECURITY_PROFILE): SecurityProfile {
   if (raw === undefined) return DEFAULT_SECURITY_PROFILE;
   const value = raw.trim().toLowerCase();
   if (value === "") return DEFAULT_SECURITY_PROFILE;
+  if (value === "open") {
+    if (!notedAlias.has("open")) {
+      notedAlias.add("open");
+      console.error("[env] NOTE: VENIRA_SECURITY_PROFILE=open was merged into off (off now carries its defaults); using off. Set VENIRA_SECURITY_PROFILE=off explicitly.");
+    }
+    return "off";
+  }
   if ((SECURITY_PROFILES as readonly string[]).includes(value)) return value as SecurityProfile;
   throw new Error(`[config_invalid] VENIRA_SECURITY_PROFILE must be one of: ${SECURITY_PROFILES.join(", ")}.`);
 }

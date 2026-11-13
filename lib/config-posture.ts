@@ -90,7 +90,7 @@ export function evaluateConfigPosture(input: ConfigPostureInput): ConfigPosture 
     });
   }
 
-  if (input.securityProfile === "off" || input.securityProfile === "open") {
+  if (input.securityProfile === "off") {
     add({
       id: "profile.off",
       severity: "critical",

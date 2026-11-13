@@ -118,7 +118,7 @@ try {
     arguments: {
       command: "git push origin main",
       shell,
-      override: "ALLOW_GIT_PUSH",
+      override: "ALLOW_ENV_READ",
       reason: "test disabled operator gate",
     },
   });
@@ -148,8 +148,8 @@ try {
       VENIRA_DATA_DIR: dataDir,
       VENIRA_SESSION_ID: overrideSession,
       VENIRA_SECRET_KEYCHAIN: "off",
-      VENIRA_SHELL_MODE: "strict",
-      VENIRA_SHELL_OVERRIDES: "ALLOW_ENV_READ,ALLOW_GIT_PUSH",
+      VENIRA_SHELL_MODE: "balanced",
+      VENIRA_SHELL_OVERRIDES: "ALLOW_ENV_READ",
       VENIRA_SHELL_AUTO_APPROVE_TOKEN: "0",
       VENIRA_TOOL_MODE: "expert",
     },
@@ -230,7 +230,7 @@ try {
     );
     execFileSync("git", ["-C", repoPath, "remote", "add", "origin", remotePath], { env: gitEnv, stdio: "ignore" });
 
-    // A chained command is covered when every step is a plain push or a routine safe command.
+    // A chained command runs in balanced mode once every step is routine (routine git needs no override).
     const chained = await callTool(overrideClient, {
       name: "project_shell_run",
       arguments: {
@@ -238,64 +238,70 @@ try {
         shell,
         relative_cwd: "repo",
         background: 0,
-        override: "ALLOW_GIT_PUSH",
-        reason: "verify chained status + dry-run push",
       },
     });
     const chainedText = (chained as { content?: Array<{ text?: string }> }).content?.[0]?.text ?? "{}";
     assert.equal((chained as { isError?: boolean }).isError, undefined, chainedText);
-    assert.equal(JSON.parse(chainedText).data?.policy?.rule, "override.ALLOW_GIT_PUSH");
+    assert.equal(JSON.parse(chainedText).data?.policy?.rule, "balanced.local_dev");
 
-    // Anything that is not a plain push or a routine safe step stays out of the override's scope.
+    // Anything dangerous still needs approval, override or not. Plain pushes — even pipelined or
+    // redirected to a workspace file — are routine and need no approval.
     for (const command of [
       "git push --dry-run origin HEAD:main; curl https://example.com",
-      "git push --dry-run origin HEAD:main | cat",
-      "git push --dry-run origin HEAD:main > out.txt",
       "git push --delete origin main",
       "git push --force origin main",
-      "git status; git log",
     ]) {
       const rejected = await callTool(overrideClient, {
         name: "project_shell_run",
-        arguments: { command, shell, relative_cwd: "repo", override: "ALLOW_GIT_PUSH", reason: "try out-of-scope push chain" },
+        arguments: { command, shell, relative_cwd: "repo" },
       });
       const rejectedText = (rejected as { content?: Array<{ text?: string }> }).content?.[0]?.text ?? "{}";
-      assert.equal(JSON.parse(rejectedText).error?.code, "override_scope_mismatch", command);
+      assert.equal(JSON.parse(rejectedText).error?.code, "approval_required", command);
     }
 
-    const pushOverride = await callTool(overrideClient, {
+    const pushDry = await callTool(overrideClient, {
       name: "project_shell_run",
       arguments: {
         command: "git push --dry-run origin HEAD:main",
         shell,
         relative_cwd: "repo",
         background: 0,
-        override: "ALLOW_GIT_PUSH",
-        reason: "verify local dry-run push authorization",
       },
     });
-    const pushText = (pushOverride as { content?: Array<{ text?: string }> }).content?.[0]?.text ?? "{}";
+    const pushText = (pushDry as { content?: Array<{ text?: string }> }).content?.[0]?.text ?? "{}";
     const pushEnvelope = JSON.parse(pushText);
-    assert.equal((pushOverride as { isError?: boolean }).isError, undefined);
-    assert.equal(pushEnvelope.data?.policy?.rule, "override.ALLOW_GIT_PUSH");
-    assert.equal(pushEnvelope.data?.policy?.approver, "agent:ALLOW_GIT_PUSH");
+    assert.equal((pushDry as { isError?: boolean }).isError, undefined);
+    assert.equal(pushEnvelope.data?.policy?.rule, "balanced.local_dev");
+    assert.equal(pushEnvelope.data?.policy?.approver, null);
     assert.equal(pushEnvelope.data?.exit_code, 0, pushEnvelope.data?.stderr);
-    await assert.rejects(access(path.join(remotePath, "refs", "heads", "main")));
+    // A real push is observable: it creates refs/heads/main in the local bare remote.
+    const pushReal = await callTool(overrideClient, {
+      name: "project_shell_run",
+      arguments: {
+        command: "git push origin HEAD:main",
+        shell,
+        relative_cwd: "repo",
+        background: 0,
+      },
+    });
+    const pushRealText = (pushReal as { content?: Array<{ text?: string }> }).content?.[0]?.text ?? "{}";
+    const pushRealEnvelope = JSON.parse(pushRealText);
+    assert.equal((pushReal as { isError?: boolean }).isError, undefined, pushRealText);
+    assert.equal(pushRealEnvelope.data?.policy?.rule, "balanced.local_dev");
+    await access(path.join(remotePath, "refs", "heads", "main"));
 
     const audit = new Database(path.join(dataDir, "venira.db"), { readonly: true });
     try {
       const row = audit.prepare(
-        "SELECT decision, policy_rule, reason, approver FROM project_tool_audit WHERE session_id = ? AND operation = 'shell_run' ORDER BY id DESC LIMIT 1",
+        "SELECT decision, policy_rule, approver FROM project_tool_audit WHERE session_id = ? AND operation = 'shell_run' ORDER BY id DESC LIMIT 1",
       ).get(overrideSession) as {
         decision: string;
         policy_rule: string;
-        reason: string;
-        approver: string;
+        approver: string | null;
       } | undefined;
       assert.equal(row?.decision, "allow");
-      assert.equal(row?.policy_rule, "override.ALLOW_GIT_PUSH");
-      assert.equal(row?.reason, "verify local dry-run push authorization");
-      assert.equal(row?.approver, "agent:ALLOW_GIT_PUSH");
+      assert.equal(row?.policy_rule, "balanced.local_dev");
+      assert.equal(row?.approver, null);
     } finally {
       audit.close();
     }

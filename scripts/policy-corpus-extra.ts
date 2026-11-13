@@ -717,30 +717,51 @@ export const extraPolicyCorpus: PolicyCorpusCase[] = [
   {
     "command": "git push",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "ask.git_history_rewrite",
-    "description": "history-changing git operation requires approval"
+    "expected_tier": "allow",
+    "expected_rule": "balanced.local_dev",
+    "description": "a plain fast-forward push is routine and does not require approval"
   },
   {
     "command": "git push origin main",
     "shell": "bash",
-    "expected_tier": "ask",
-    "expected_rule": "ask.git_history_rewrite",
-    "description": "history-changing git operation requires approval"
+    "expected_tier": "allow",
+    "expected_rule": "balanced.local_dev",
+    "description": "a plain fast-forward push is routine and does not require approval"
+  },
+  {
+    "command": "git add -A && git commit -m x && git push origin main",
+    "shell": "bash",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.local_dev",
+    "description": "the routine add/commit/push batch is allowed"
+  },
+  {
+    "command": "git pull --ff-only",
+    "shell": "bash",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.local_dev",
+    "description": "pull with a safe fast-forward flag is routine"
+  },
+  {
+    "command": "git rm -f dist/old.bin && git commit -m release",
+    "shell": "bash",
+    "expected_tier": "allow",
+    "expected_rule": "balanced.local_dev",
+    "description": "tracked file removal plus commit is routine"
   },
   {
     "command": "git push --force",
     "shell": "bash",
     "expected_tier": "ask",
     "expected_rule": "ask.git_history_rewrite",
-    "description": "history-changing git operation requires approval"
+    "description": "force push remains an approval gate"
   },
   {
     "command": "git push --force-with-lease",
     "shell": "bash",
     "expected_tier": "ask",
     "expected_rule": "ask.git_history_rewrite",
-    "description": "history-changing git operation requires approval"
+    "description": "force-with-lease remains an approval gate"
   },
   {
     "command": "git reset --hard HEAD",

@@ -567,14 +567,20 @@ export const ASK_RULES: AskRule[] = [
   {
     id: "git_history_rewrite",
     reason: "This can overwrite commits or discard working-tree changes.",
-    test: (parsed) =>
+    test: (parsed, cwd) =>
       parsed.segments.some((segment) => {
       if (segment.command !== "git") return false;
       if (!segment.subcommand) {
         return segment.argv.length > 1 && !segment.argv.slice(1).every((arg) => ["--version", "--help", "-v", "-h"].includes(arg));
       }
       const args = segment.argv.join(" ");
-        if (segment.subcommand === "push") return true;
+        if (segment.subcommand === "push") {
+          const i = gitSubcommandIndex(segment, cwd);
+          // Plain pushes (fast-forward, named remote, no force/delete/URL) are routine;
+          // only a dangerous push stays in this rule.
+          if (i < 0) return true;
+          return !isPlainGitPushArgs(segment.argv.slice(i + 1));
+        }
         if (segment.subcommand === "reset") return /--hard/.test(args);
         if (segment.subcommand === "clean") return /\s-[a-z]*[fx]/.test(args);
         if (segment.subcommand === "branch") return /\s-D\b/.test(args);
@@ -905,6 +911,54 @@ export function gitSubcommandIndex(segment: Segment, cwd?: string): number {
   // `--filters` runs configured smudge/clean drivers.
   if (segment.argv.slice(i + 1).some((arg) => GIT_UNSAFE_FLAG.test(arg) || arg.startsWith("-O") || arg === "--filters")) return -1;
   return i;
+}
+
+/**
+ * Flags a plain (fast-forward) push needs. Anything else (force, delete, mirror, prune,
+ * --no-verify, --exec, ...) is not plain and goes through the normal verdict.
+ */
+const PUSH_SAFE_FLAGS = new Set([
+  "-u", "--set-upstream", "--follow-tags", "--tags", "--atomic", "-n", "--dry-run",
+  "-v", "--verbose", "-q", "--quiet", "--progress", "--porcelain", "--no-progress",
+]);
+/** Remote names and branch/tag refs: no leading `-`/`+`/`:` (option, force, delete), no URLs or shell characters. */
+const PUSH_REF_RE = /^[A-Za-z0-9_][A-Za-z0-9._/@-]{0,199}$/;
+
+/**
+ * `git push [safe flags] [<remote> [<ref>[:<ref>]]]`: never a force, a delete, a URL or an option
+ * that runs code. Shared by the `git_history_rewrite` ask rule (dangerous pushes) and the
+ * balanced-mode routine allow (plain pushes are routine).
+ */
+export function isPlainGitPushArgs(args: string[]): boolean {
+  const positional: string[] = [];
+  for (const arg of args) {
+    if (arg.startsWith("-")) {
+      if (!PUSH_SAFE_FLAGS.has(arg)) return false;
+    } else {
+      positional.push(arg);
+    }
+  }
+  if (positional.length > 2) return false;
+  for (const item of positional) {
+    const parts = item.split(":");
+    if (parts.length > 2) return false;
+    if (!parts.every((part) => PUSH_REF_RE.test(part) && !part.includes("..") && !part.endsWith(".lock"))) return false;
+  }
+  // The remote is a name, not a URL: `git push <url>` could publish to an unreviewed destination.
+  if (positional[0] && /[:@]/.test(positional[0])) return false;
+  return true;
+}
+
+/**
+ * True when this git push may run without asking: the segment is a plain fast-forward push
+ * (see `isPlainGitPushArgs`). Chains (`git add . && git commit -m x && git push origin main`)
+ * are judged per segment — this helper only cares about the push segment itself.
+ */
+export function isPlainGitPushSegment(segment: Segment, cwd: string): boolean {
+  if (segment.command !== "git" || segment.subcommand !== "push") return false;
+  const i = gitSubcommandIndex(segment, cwd);
+  if (i < 0) return false;
+  return isPlainGitPushArgs(segment.argv.slice(i + 1));
 }
 
 const GIT_MUTATING_TAG_FLAG = /^(-[dDfamsuF]|--delete|--force|--annotate|--message|--sign|--local-user|--file)$/;

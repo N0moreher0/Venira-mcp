@@ -74,7 +74,7 @@ export async function opShellRun(
   let override: ShellOverride | undefined;
   if (args.override !== undefined) {
     if (!isShellOverride(args.override)) {
-      throw new Error("[invalid_request] override must be ALLOW_GIT_PUSH or ALLOW_ENV_READ.");
+      throw new Error("[invalid_request] override must be ALLOW_ENV_READ.");
     }
     override = args.override;
     const reason = typeof args.reason === "string" ? args.reason.trim() : "";

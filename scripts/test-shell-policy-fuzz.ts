@@ -70,7 +70,7 @@ const SEEDS: Seed[] = [
   { id: "recursive_rd", shell: "cmd", kind: "ask", command: "rd /s /q ./probe-dir" },
   { id: "forced_del", shell: "cmd", kind: "ask", command: "del /f /q ./probe-file.txt" },
   // ask — git/provider and package/network actions that leave the workspace or run fetched code
-  { id: "git_push", shell: "posix", kind: "ask", command: "git push origin main" },
+  { id: "git_push_force", shell: "posix", kind: "ask", command: "git push --force origin main" },
   { id: "git_reset_hard", shell: "posix", kind: "ask", command: "git reset --hard HEAD~1" },
   { id: "git_clean", shell: "posix", kind: "ask", command: "git clean -fdx" },
   { id: "npm_publish", shell: "posix", kind: "ask", command: "npm publish" },

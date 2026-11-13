@@ -719,7 +719,7 @@ const INVALID_REQUEST_HINTS: Array<[RegExp, string]> = [
   [/old_text must be a non-empty/i, "old_text is the exact text to replace; to replace a whole file use project_write_file."],
   [/Directory requires recursive=1/i, "Set recursive=1 only after a scoped project_snapshot of it."],
   [/`command` must be a non-empty/i, "Pass command as the shell command line."],
-  [/override must be/i, "override: ALLOW_GIT_PUSH or ALLOW_ENV_READ (operator-enabled), plus reason."],
+  [/override must be/i, "override: ALLOW_ENV_READ (operator-enabled), plus reason."],
   [/reason of at most 400/i, "Add reason (one line, max 400 chars)."],
   [/kill_key/i, "Use the kill_key from the project_shell_run response."],
   [/secret_env/i, "secret_env: array of up to 16 names from project_secret action=list."],
