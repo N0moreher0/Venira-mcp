@@ -3,6 +3,27 @@
 Repo-specific notes for coding agents. `README.md` (user docs) and `CONTRIBUTING.md` (release
 process) are loaded too; this file only holds what is slow to re-derive.
 
+## How to work in this repo
+
+This is the MCP server the other agents talk to; an edit that breaks its contract, breaks every
+client. Follow the same loop the skills teach, scoped to the server itself:
+
+1. **Orient** — `project_recent_files` for what moved; `project_list_files`/`project_search` for
+   exact layout. In unfamiliar territory call `project_plan_read_batch` and run its suggestion
+   (`project_read_batch`, max 8 files per call).
+2. **Checkpoint** — `project_snapshot action=create` with a narrow `paths` set and a descriptive
+   label before touching behavior, config, or more than one file. Git is the floor, snapshots
+   are the ceiling.
+3. **Edit** — smallest change that fixes the problem; no drive-by cleanups. Prefer
+   `project_edit_file` (exact `old_text`, `expected_sha256` on re-reads); `project_apply_patch` /
+   `project_edit_batch` for a multi-file change that cannot land half-written. Routine git
+   (`add`, `commit`, `merge`, `rebase`, plain `push`) runs without approval; force / delete /
+   URL pushes do not — see `README.md` § Approvals.
+4. **Verify** — read the diff (`project_git_diff`), build if you compiled anything
+   (`npm run build`), then the narrowest check first: `npm run test:<suite>`. Full gate =
+   `npm run verify` (must be green) plus `npm run doctor` on host-sensitive changes. If a check
+   fails, read the log first and only then edit; do not retry the identical command blindly.
+
 ## Shape of the repo
 
 - One npm package, no monorepo. `server.ts` = MCP entrypoint (stdio transport + the model-facing
@@ -17,7 +38,14 @@ process) are loaded too; this file only holds what is slow to re-derive.
 - Tool schemas: shared zod fragments + the `config()` helper live in `tools/project-schema.ts`.
   The model-facing wording for every tool lives in `tools/project-docs.ts` (`TOOL_DOCS`).
 - Shell command classification (allow/ask/deny) lives in `lib/shell-policy*.ts` — many small
-  modules, one per rule family.
+  modules, one per rule family (`shell-policy-tables.ts` is the rule tables).
+- Local git is a first-class capability (`tools/project-git*` + `lib/git-local*.ts`): status,
+  diff, log, blame, branch, commit, stash. Read-only git runs free; plain push is allowed;
+  everything else with an effect still respects the shell policy.
+- Routines are cache-aware: write/move/apply/edit invalidate the whole cache; list/search are
+  TTL-cached. `project_recent_files`, `project_read_batch` etc. are served warm; distorted
+  behaviour usually means the binary changed but the running server did not — re-ask or
+  restart the client.
 
 ## Commands
 
@@ -27,7 +55,7 @@ npm run build              # tsc -> dist/  (REQUIRED before verify/doctor; see b
 npx tsc --noEmit           # type-check only
 npm run check:source-shape # no file in lib/scripts/tools may be a single line >2 KB
 npm run check:docs         # README/tool-count/version/env-doc gate (first step of `verify`)
-npm run verify             # behavioural suite (~20 focused scripts + scripts/verify.ts)
+npm run verify             # behavioural suite (many focused scripts + scripts/verify.ts)
 npm run smoke              # in-process sanity check
 npm run doctor             # preflight: workspace, data dir, ripgrep, tool count, health, shell
 npm run bench:mcp          # end-to-end numbers for PRs
@@ -35,16 +63,9 @@ npm run bench:mcp          # end-to-end numbers for PRs
 
 - **`npm run build` first.** `scripts/verify.ts` and `scripts/doctor.ts` launch `node dist/server.js`,
   so they test the *build*, not your source. `npm run verify` does not build for you.
-- Single suites: `npm run test:<name>` — `cache-layer`, `tool-schema`, `schema-budget`,
-  `env-registry`, `edit-verify`, `edit-fuzzy-gate`, `tool-envelopes`, `audit-verify`,
-  `snapshot-lifecycle`, `snapshot-mirror`, `workspace-switch`, `js-executor`,
-  `approval-lifecycle`, `config-posture`, `protected-snapshot-paths`, `github-device-flow`,
-  `provider-secret-guard`, `shell-unavailable`, `shell-elicitation`, `shell-repeat`,
-  `git-url-fuzz`, `policy-corpus`, `move-copy`, `apply-patch`, `git-local`.
-- **Not** in the `verify` chain (run them by hand when the area changes):
-  `test:shell-security`, `test:shell-policy-fuzz`, `test:shell-policy-adversarial`,
-  `test:shell-tokenizer-edges`, `test:shell-session-cache`, `test:shell-policy-file`,
-  `test:balanced-read-only`, `test:restore-checkpoint`, `test:audit-fallback`.
+- Single suites: `npm run test:<name>` — current list in `package.json` under `scripts`.
+  `test:shell-*`, `test:balanced-read-only`, `test:restore-checkpoint`, `test:audit-fallback`
+  are **not** in the `verify` chain; run them by hand when the area changes.
 - CI order (`.github/workflows/ci.yml`): build → `tsc --noEmit` → `check:source-shape` → smoke →
   doctor → verify → `test:policy-corpus` → `bench:mcp`. Matrix: ubuntu/windows/macOS × Node 20/22/24.
 - `npm run coverage:shell` needs Node >= 22.8 (the coverage flags do not exist on Node 20);
@@ -88,6 +109,10 @@ npm run bench:mcp          # end-to-end numbers for PRs
 - Git-ignored local-only files — do not treat as canonical and do not commit:
   `.mcp.json`, `mcp.json`, `Bug.txt`, `ROADMAP*.md`, `PUSH-NOTES.md`, `docs/`, `set-secret.js`,
   `wait-ci.js`.
+- `G:\Venira\Venira-mcp-skills\` (outside this repo) holds the Claude-skills versions of the
+  workflows in this file (`venira-coding-workflow`, `venira-add-tool`, `venira-debug-ci`,
+  `venira-git-pr`). If you are asked to follow those skills, prefer the exact text there —
+  this file is deliberately a compact index, not a copy.
 - Commits follow conventional commits (`feat(scope):`, `fix(scope):`, `chore(release):`).
   A release = bump the version in the four places above, then
   `npm run build && npm run check:docs && npm run check:source-shape && npm run verify`,
