@@ -37,6 +37,12 @@ export async function runConsistency(
   const { call, check, textOf, dir } = $h;
   const { asEnvelope, shellFor, runWithCliApproval } = $prior;
 
+  // The harness writes fixture files directly (not through the MCP tools), so
+  // the dependency-graph cache may hold a pre-fixture index: the server does
+  // not know .verify-tmp/impact/alpha.ts exists yet, and a shared 5 s cache
+  // entry built moments earlier hides it. Flush it before seeding.
+  await call("project_cache_clear", { type: "graph" });
+
   // -------------------------------------------------------------------------
   // 1. change_impact: the seeds' problems, not the graph's noise
   // -------------------------------------------------------------------------
