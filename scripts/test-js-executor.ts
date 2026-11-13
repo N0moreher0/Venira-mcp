@@ -56,7 +56,14 @@ try {
   ] as const) {
     const r = run(options);
     check(`${label}: network modules load`, r.https === "ok" && r.net === "ok", r);
-    check(`${label}: fetch and WebSocket are available`, r.fetch === "function" && r.websocket === "function", r);
+    check(`${label}: fetch is available`, r.fetch === "function", r);
+    // Global WebSocket landed in Node 22; on Node 20 it does not exist,
+    // so both modes must simply not pretend it does.
+    if (typeof WebSocket === "function") {
+      check(`${label}: WebSocket is available`, r.websocket === "function", r);
+    } else {
+      check(`${label}: WebSocket is absent on Node < 22 as expected`, r.websocket === "undefined", r);
+    }
     check(`${label}: environment is scrubbed`, r.marker === "" && r.home === "", r);
     check(`${label}: reads outside the workspace are denied`, r.outside === "ERR_ACCESS_DENIED", r);
   }
