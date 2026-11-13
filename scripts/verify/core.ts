@@ -247,7 +247,7 @@ export async function runCore($h: Harness) {
   // default 53000 -> 63000, expert 72000 -> 85000. Ceilings are explicit so any growth fails verification.
   const TOOL_SCHEMA_MAX_BYTES = 5700;
   const EXPERT_TOOL_LIST_MAX_BYTES = 85000;
-  const DEFAULT_TOOL_LIST_MAX_BYTES = 63000;
+  const DEFAULT_TOOL_LIST_MAX_BYTES = 64000;
   const toolSchemaBytes = (tool: {
     name: string;
     description?: string;

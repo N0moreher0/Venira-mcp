@@ -4,6 +4,13 @@ Local release notes for venira-mcp. Not published (not listed in `package.json` 
 
 ## Unreleased
 
+## 1.24.0 — 2026-11-14
+
+### Changed
+- `VENIRA_DYNAMIC_WORKSPACE` now defaults to `"1"` (was `"0"`): `project_switch_workspace` is available out of the box. stdio clients that spawn the server once (Claude Desktop / Cowork) can follow the active project without any env in the client config. `VENIRA_WORKSPACE_ROOTS` still narrows switching to an allowlist; `VENIRA_DYNAMIC_WORKSPACE=0` opts back into the spawn-workspace lock. `VENIRA_UNRESTRICTED=1` behaviour is unchanged.
+  - Docs updated (README env table + quick reference, `INSTRUCTIONS` step 16, `TOOL_DOCS`, env-registry). `test:workspace-switch` updated (13 checks).
+  - `.mcp.json` bundles in the plugin explicitly set `VENIRA_DYNAMIC_WORKSPACE=1` — redundant but deliberate (self-documenting for end users).
+
 ## 1.23.0 — 2026-11-14
 
 ### Added

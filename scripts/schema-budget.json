@@ -1,11 +1,11 @@
 {
   "expert": {
     "tool_count": 51,
-    "total_bytes": 84794
+    "total_bytes": 84822
   },
   "default": {
     "tool_count": 38,
-    "total_bytes": 64984
+    "total_bytes": 65012
   },
   "tools": {
     "project_apply_patch": 2023,
@@ -55,7 +55,7 @@
     "project_shell_run": 3168,
     "project_shell_status": 824,
     "project_snapshot": 3076,
-    "project_switch_workspace": 1183,
+    "project_switch_workspace": 1211,
     "project_symbol_references": 1450,
     "project_trace_status": 603,
     "project_write_file": 1691

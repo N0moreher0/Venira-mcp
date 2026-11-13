@@ -1,11 +1,14 @@
 /**
  * Runtime workspace switching: root validation (`lib/workspace.ts`).
  *
- * The gated core op `project_tool.workspace.switch` is not exposed by any tool yet. These checks pin the
- * validation it relies on, so exposing it later cannot widen what a switch may reach:
+ * The gated core op `project_tool.workspace.switch` is not exposed directly; the tool is
+ * `project_switch_workspace`. These checks pin the validation so a wider switch cannot happen
+ * by accident:
  *
- *   - switching is refused unless `VENIRA_DYNAMIC_WORKSPACE=1`, even when roots are configured;
- *   - the target must be an existing directory inside `VENIRA_WORKSPACE_ROOTS` (or the active workspace);
+ *   - switching is ON by default (VENIRA_DYNAMIC_WORKSPACE unset) and refused with
+ *     `[workspace_switch_denied]` when it is set to 0, even when roots are configured;
+ *   - the target must be an existing directory; with no VENIRA_WORKSPACE_ROOTS configured any
+ *     existing directory is allowed, otherwise the target must resolve inside the roots;
  *   - `..` traversal, a sibling directory, a file, a missing path and a link that resolves outside the
  *     allowed roots are all refused with `[workspace_switch_denied]`;
  *   - nonexistent root entries are ignored and both `,` and `;` separate roots;
@@ -50,8 +53,7 @@ process.env.VENIRA_DATA_DIR = path.join(tempRoot, "data");
 const ws = await import(pathToFileURL(path.join(repoRoot, "lib", "workspace.ts")).href);
 
 function setSwitching(enabled: boolean, roots: string): void {
-  if (enabled) process.env.VENIRA_DYNAMIC_WORKSPACE = "1";
-  else delete process.env.VENIRA_DYNAMIC_WORKSPACE;
+  process.env.VENIRA_DYNAMIC_WORKSPACE = enabled ? "1" : "0";
   if (roots) process.env.VENIRA_WORKSPACE_ROOTS = roots;
   else delete process.env.VENIRA_WORKSPACE_ROOTS;
 }
@@ -78,7 +80,17 @@ try {
     assert.equal(ws.WORKSPACE, startDir);
   });
 
-  check("switching_is_refused_unless_dynamic_workspace_is_enabled_even_with_roots_configured", () => {
+  check("dynamic_workspace_is_enabled_by_default_unless_opted_out", () => {
+    delete process.env.VENIRA_DYNAMIC_WORKSPACE;
+    assert.equal(ws.dynamicWorkspaceEnabled(), true, "default (unset) enables switching");
+    process.env.VENIRA_DYNAMIC_WORKSPACE = "0";
+    assert.equal(ws.dynamicWorkspaceEnabled(), false, "=0 opts out");
+    process.env.VENIRA_DYNAMIC_WORKSPACE = "1";
+    assert.equal(ws.dynamicWorkspaceEnabled(), true);
+    delete process.env.VENIRA_DYNAMIC_WORKSPACE;
+  });
+
+  check("switching_is_refused_when_dynamic_workspace_is_disabled_even_with_roots_configured", () => {
     setSwitching(false, allowedDir);
     assert.equal(ws.dynamicWorkspaceEnabled(), false);
     assert.equal(ws.canSwitchWorkspace(allowedDir), null);
@@ -133,7 +145,7 @@ try {
     assert.deepEqual(ws.allowedWorkspaceRoots(), [startDir, allowedDir], "blanks and duplicates are dropped");
   });
 
-  check("an_unset_dynamic_flag_ignores_roots_in_allowed_workspace_roots", () => {
+  check("a_disabled_dynamic_flag_ignores_roots_in_allowed_workspace_roots", () => {
     setSwitching(false, `${allowedDir};${secondAllowed}`);
     assert.deepEqual(ws.allowedWorkspaceRoots(), [startDir]);
   });

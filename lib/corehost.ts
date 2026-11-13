@@ -606,7 +606,7 @@ export class CoreHost {
 
       case "project_tool.workspace.switch": {
         if (!dynamicWorkspaceEnabled() && !envFlag("VENIRA_UNRESTRICTED", false)) {
-          throw new Error('[workspace_switch_denied] dynamic workspace disabled; set VENIRA_DYNAMIC_WORKSPACE=1 plus, optionally, VENIRA_WORKSPACE_ROOTS.');
+          throw new Error("[workspace_switch_denied] dynamic workspace disabled; unset VENIRA_DYNAMIC_WORKSPACE (on by default) or set it to 1. VENIRA_WORKSPACE_ROOTS may narrow switching to an allowlist.");
         }
         return (await opWorkspaceSwitch(p)) as T;
       }

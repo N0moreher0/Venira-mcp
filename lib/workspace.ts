@@ -139,7 +139,10 @@ function normalizedProtectedBase(canonicalPath: string): string {
 
 
 export function dynamicWorkspaceEnabled(): boolean {
-  return envFlag("VENIRA_DYNAMIC_WORKSPACE", false);
+  // Default ON: stdio MCP clients often spawn the server once and cannot re-root it per
+  // project; the agent re-roots with project_switch_workspace instead. Set
+  // VENIRA_DYNAMIC_WORKSPACE=0 to keep the server locked to the spawn workspace.
+  return envFlag("VENIRA_DYNAMIC_WORKSPACE", true);
 }
 
 export function allowedWorkspaceRoots(): string[] {
@@ -179,9 +182,9 @@ export function canSwitchWorkspace(target: string): string | null {
   const unrestricted = envFlag("VENIRA_UNRESTRICTED", false);
   if (!dynamic && !unrestricted) return null;
   // Dynamic switching without an explicit allowlist: any existing directory may become the
-  // workspace (opt-in via VENIRA_DYNAMIC_WORKSPACE=1). This is what a stdio MCP client that
-  // cannot respawn the server per project (e.g. Claude Desktop) needs; configure
-  // VENIRA_WORKSPACE_ROOTS to narrow it back to an explicit set.
+  // workspace (on by default; VENIRA_DYNAMIC_WORKSPACE=0 keeps the spawn lock). This is what a
+  // stdio MCP client that cannot respawn the server per project (e.g. Claude Desktop) needs;
+  // configure VENIRA_WORKSPACE_ROOTS to narrow it back to an explicit set.
   if (dynamic && !unrestricted && !workspaceRootsConfigured()) return abs;
   const roots = allowedWorkspaceRoots();
   return roots.some((root) => {
@@ -199,7 +202,7 @@ export function canSwitchWorkspace(target: string): string | null {
 export function switchWorkspaceRoot(target: string): string {
   const next = canSwitchWorkspace(target);
   if (!next) {
-    throw new Error("[workspace_switch_denied] Path is not in allowed roots. Set VENIRA_DYNAMIC_WORKSPACE=1 and VENIRA_WORKSPACE_ROOTS.");
+    throw new Error("[workspace_switch_denied] Path is not an existing directory inside VENIRA_WORKSPACE_ROOTS. Unset VENIRA_WORKSPACE_ROOTS to allow any existing directory, or add this path to the allowlist.");
   }
   WORKSPACE = next;
   return WORKSPACE;
