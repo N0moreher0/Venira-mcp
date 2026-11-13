@@ -156,6 +156,69 @@ await check("the WSL hint names the problem and the way out", () => {
 });
 
 // ---------------------------------------------------------------------------
+// win32 shell resolution, simulated cross-platform (fake PATH, fake fs probe)
+// ---------------------------------------------------------------------------
+await check("resolveShellBinary names WSL for a System32 bash (simulated win32)", () => {
+  const entry = "c:\\windows\\system32";
+  const hit = `${entry}\\bash.exe`;
+  const fake = (candidate: string) => candidate.toLowerCase() === hit.toLowerCase();
+  const resolved = invocation.resolveShellBinary("bash", "win32", entry, fake);
+  assert.equal(resolved.kind, "wsl");
+  assert.equal(resolved.path?.toLowerCase(), hit.toLowerCase());
+});
+
+await check("resolveShellBinary tells Git Bash from WSL (simulated win32)", () => {
+  const entry = "c:\\program files\\git\\bin";
+  const hit = `${entry}\\bash.exe`;
+  const fake = (candidate: string) => candidate.toLowerCase() === hit.toLowerCase();
+  const resolved = invocation.resolveShellBinary("bash", "win32", entry, fake);
+  assert.equal(resolved.kind, "git-bash");
+  assert.equal(resolved.path?.toLowerCase(), hit.toLowerCase());
+});
+
+await check("resolveShellBinary names a non-System32 non-Git bash as unknown (simulated win32)", () => {
+  const entry = "c:\\msys64\\usr\\bin";
+  const hit = `${entry}\\bash.exe`;
+  const fake = (candidate: string) => candidate.toLowerCase() === hit.toLowerCase();
+  const resolved = invocation.resolveShellBinary("bash", "win32", entry, fake);
+  assert.equal(resolved.kind, "unknown");
+  assert.equal(resolved.path?.toLowerCase(), hit.toLowerCase());
+});
+
+await check("resolveShellBinary reports native for cmd.exe and pwsh.exe (simulated win32)", () => {
+  const fake = (candidate: string) =>
+    candidate === "c:\\windows\\system32\\cmd.exe" || candidate === "c:\\tools\\pwsh.exe";
+  assert.equal(invocation.resolveShellBinary("cmd", "win32", "c:\\windows\\system32", fake).kind, "native");
+  assert.equal(invocation.resolveShellBinary("pwsh", "win32", "c:\\tools", fake).kind, "native");
+});
+
+await check("resolveShellBinary handles quotes and extra separators in PATH (simulated win32)", () => {
+  const entry = "c:\\tools";
+  const hit = `${entry}\\cmd.exe`;
+  const pathEnv = ' "c:\\missing" ;"c:\\tools"; "" ;';
+  const fake = (candidate: string) => candidate === hit;
+  const resolved = invocation.resolveShellBinary("cmd", "win32", pathEnv, fake);
+  assert.equal(resolved.path, hit);
+});
+
+await check("resolveShellBinary reports unknown when no entry contains the binary (simulated win32)", () => {
+  const resolved = invocation.resolveShellBinary("fish", "win32", "c:\\nothing", () => false);
+  assert.deepEqual(resolved, { path: null, kind: "unknown" });
+});
+
+await check("resolveShellBinary reports unknown for a shell name it does not map (simulated win32)", () => {
+  const resolved = invocation.resolveShellBinary("yarn", "win32", "c:\\nothing", () => true);
+  assert.deepEqual(resolved, { path: null, kind: "unknown" });
+});
+
+await check("resolveShellBinary off-win32 never probes the filesystem", () => {
+  const resolved = invocation.resolveShellBinary("bash", "linux", "", () => {
+    throw new Error("must not probe the filesystem off-win32");
+  });
+  assert.deepEqual(resolved, { path: null, kind: "native" });
+});
+
+// ---------------------------------------------------------------------------
 // End to end: what the agent actually sees
 // ---------------------------------------------------------------------------
 await check("cmd prints the command as written (no backslash escaping)", async () => {

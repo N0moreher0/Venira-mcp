@@ -114,13 +114,33 @@ const WINDOWS_BINARY_NAMES: Record<string, string> = {
   fish: "fish.exe",
 };
 
-function pathEntries(): string[] {
-  const raw = process.env.PATH ?? "";
-  const separator = PLATFORM === "win32" ? ";" : ":";
+function pathEntries(raw: string, platform: NodeJS.Platform): string[] {
+  const separator = platform === "win32" ? ";" : ":";
   return raw
     .split(separator)
     .map((entry) => entry.trim().replace(/^"|"$/g, ""))
     .filter(Boolean);
+}
+
+/** Pure resolver: given PATH entries and an existence check, pick the binary and its kind. */
+function resolveOnWindows(
+  binary: string,
+  entries: string[],
+  exists: (candidate: string) => boolean,
+): { path: string | null; kind: ShellKind } {
+  const pathImpl = path.win32;
+  for (const entry of entries) {
+    const candidate = pathImpl.join(entry, binary);
+    if (!exists(candidate)) continue;
+    const lower = candidate.toLowerCase();
+    if (binary === "bash.exe") {
+      if (lower.includes("\\system32\\")) return { path: candidate, kind: "wsl" };
+      if (lower.includes("\\git\\")) return { path: candidate, kind: "git-bash" };
+      return { path: candidate, kind: "unknown" };
+    }
+    return { path: candidate, kind: "native" };
+  }
+  return { path: null, kind: "unknown" };
 }
 
 /**
@@ -131,23 +151,17 @@ function pathEntries(): string[] {
  * filesystem view), while `C:\Program Files\Git\bin\bash.exe` is Git Bash.
  * The agent needs to know which one answered.
  */
-export function resolveShellBinary(shell: string): { path: string | null; kind: ShellKind } {
-  if (PLATFORM !== "win32") return { path: null, kind: "native" };
+export function resolveShellBinary(
+  shell: string,
+  platform: NodeJS.Platform = PLATFORM,
+  pathEnv?: string,
+  exists: (candidate: string) => boolean = existsSync,
+): { path: string | null; kind: ShellKind } {
+  if (platform !== "win32") return { path: null, kind: "native" };
   const binary = WINDOWS_BINARY_NAMES[shell];
   if (!binary) return { path: null, kind: "unknown" };
-  const entries = pathEntries();
-  for (const entry of entries) {
-    const candidate = path.join(entry, binary);
-    if (!existsSync(candidate)) continue;
-    const lower = candidate.toLowerCase();
-    if (binary === "bash.exe") {
-      if (lower.includes("\\system32\\")) return { path: candidate, kind: "wsl" };
-      if (lower.includes("\\git\\")) return { path: candidate, kind: "git-bash" };
-      return { path: candidate, kind: "unknown" };
-    }
-    return { path: candidate, kind: "native" };
-  }
-  return { path: null, kind: "unknown" };
+  const entries = pathEntries(pathEnv ?? process.env.PATH ?? "", platform);
+  return resolveOnWindows(binary, entries, exists);
 }
 
 /**
