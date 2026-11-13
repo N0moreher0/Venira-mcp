@@ -176,6 +176,11 @@ function detectHarnessConfig(harness: HarnessName): DetectResult {
  * Keep the defaults cross-platform: do not pin a shell or a data directory.
  * The server resolves both from the host OS when they are unset, and the CLI
  * and MCP client then share the same per-user vault.
+ *
+ * ROADMAP_ENV_SLIM.md phase 1: write only what differs from the defaults. The
+ * workspace is the one value every config needs; restating UNRESTRICTED=0,
+ * SECURITY_PROFILE=balanced, PERMISSION_MODE=allow_all or OUTPUT_MODE=full only
+ * bloats the user's client config.
  */
 function veniraMcpEntry(opts: { workspace?: string; dataDir?: string }): {
   executable: string;
@@ -186,10 +191,6 @@ function veniraMcpEntry(opts: { workspace?: string; dataDir?: string }): {
   const workspace = opts.workspace ?? process.cwd();
   const environment: Record<string, string> = {
     VENIRA_WORKSPACE: workspace,
-    VENIRA_UNRESTRICTED: "0",
-    VENIRA_SECURITY_PROFILE: "balanced",
-    VENIRA_PERMISSION_MODE: "allow_all",
-    VENIRA_OUTPUT_MODE: "full",
   };
   if (opts.dataDir) environment.VENIRA_DATA_DIR = opts.dataDir;
   return {

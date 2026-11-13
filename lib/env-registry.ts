@@ -110,6 +110,7 @@ const wsPath = spec("path", "workspace");
 // cache / audit / snapshot
 // ---------------------------------------------------------------------------
 const cacheFlag = spec("flag", "cache");
+const cacheEnum = spec("enum", "cache");
 const cacheInt = spec("int", "cache");
 const auditFlag = spec("flag", "audit");
 const auditInt = spec("int", "audit");
@@ -165,9 +166,9 @@ const removed = (name: string, kind: EnvKind, description: string, removedNote: 
 
 export const ENV_REGISTRY: readonly EnvVarSpec[] = [
   // --- security / approvals ------------------------------------------------
-  secEnum("VENIRA_SECURITY_PROFILE", "Approval posture preset: shell policy plus JavaScript approval defaults.", true, {
+  secEnum("VENIRA_SECURITY_PROFILE", "Approval posture preset: shell policy plus defaults for related variables. `open` is full trust (shell off, no workspace lock, JS auto, no elicitation); explicitly set variables still win.", true, {
     default: "balanced",
-    choices: ["strict", "balanced", "trusted", "off"],
+    choices: ["strict", "balanced", "trusted", "off", "open"],
     allowEmpty: true,
   }),
   secEnum("VENIRA_SHELL_MODE", "Advanced override of the shell policy mode; wins over the security profile.", true, {
@@ -293,7 +294,12 @@ export const ENV_REGISTRY: readonly EnvVarSpec[] = [
   }),
 
   // --- cache ---------------------------------------------------------------
-  cacheFlag("VENIRA_CACHE_ALL", "Enable every read/list/search cache.", true),
+  cacheEnum("VENIRA_CACHE", "Cache preset: `all` every cache, `list` only directory listings, `search` only searches, `off` always fresh. The three flags below are aliases and win when set.", true, {
+    default: "all",
+    choices: ["all", "list", "search", "off"],
+    allowEmpty: true,
+  }),
+  cacheFlag("VENIRA_CACHE_ALL", "Alias of VENIRA_CACHE: `0` is `off`. Enable every read/list/search cache.", true),
   cacheFlag("VENIRA_CACHE_LIST_ONLY", "Enable only the directory-listing cache.", false, { reason: NOT_DOC }),
   cacheFlag("VENIRA_CACHE_SEARCH_ONLY", "Enable only the search cache.", false, { reason: NOT_DOC }),
   cacheInt("VENIRA_LIST_CACHE_MS", "Directory-listing cache lifetime.", false, { default: "1500", reason: NOT_DOC }),
@@ -324,7 +330,7 @@ export const ENV_REGISTRY: readonly EnvVarSpec[] = [
     default: "0",
     reason: NOT_DOC,
   }),
-  auditFlag("VENIRA_AUDIT_FAST", "Relax audit durability for speed.", false, { reason: NOT_DOC }),
+  auditFlag("VENIRA_AUDIT_FAST", "No effect on audit writes: it is only reported by project_health (audit_fast) and can be set through the native adapter config. Kept so existing configs stay valid.", false, { reason: NOT_DOC }),
   auditEnum("VENIRA_AUDIT_DETAIL", "How much of each job project_read_audit can show: `summary` keeps one-line args and result, `full` also keeps the redacted, size-capped JSON, `off` keeps neither.", false, {
     default: "summary",
     choices: ["off", "summary", "full"],
@@ -372,13 +378,13 @@ export const ENV_REGISTRY: readonly EnvVarSpec[] = [
     default: "0",
     reason: NOT_DOC,
   }),
-  gitFlag("VENIRA_GITHUB_ALLOW_HTTP", "Same as VENIRA_GIT_ALLOW_HTTP, GitHub spelling.", false, {
+  gitFlag("VENIRA_GITHUB_ALLOW_HTTP", "Deprecated alias of VENIRA_GIT_ALLOW_HTTP (prints a one-time note); VENIRA_GIT_ALLOW_HTTP wins when both are set.", false, {
     default: "0",
     reason: NOT_DOC,
   }),
   gitList("VENIRA_GIT_ALLOWED_HOSTS", "Extra API hosts the provider client may call.", false, { reason: NOT_DOC }),
   gitStr("VENIRA_GIT_API_URL", "Provider API base URL (self-hosted instances).", false, { reason: NOT_DOC }),
-  gitStr("VENIRA_GITHUB_API_URL", "Alias of VENIRA_GIT_API_URL.", false, { reason: NOT_DOC }),
+  gitStr("VENIRA_GITHUB_API_URL", "Deprecated alias of VENIRA_GIT_API_URL (prints a one-time note); VENIRA_GIT_API_URL wins when both are set.", false, { reason: NOT_DOC }),
   gitStr("VENIRA_GIT_PROXY", "HTTP(S) proxy for provider calls.", false, { reason: NOT_DOC }),
   gitStr("VENIRA_GIT_REPO", "Repository slug override (owner/name).", false, { reason: NOT_DOC }),
   gitStr("VENIRA_GITHUB_REPO", "GitHub repository slug override.", false, { reason: NOT_DOC }),

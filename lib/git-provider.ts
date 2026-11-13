@@ -11,6 +11,7 @@
  *   - `lib/git-bitbucket.ts` Bitbucket Cloud `/2.0`
  */
 import { gitContext, gitHealth, normalizeApiBase, type GitContext } from "./git-config.js";
+import { noteDeprecatedAlias } from "./env-deprecation.js";
 import type { GitDialect } from "./git-dialect.js";
 import { githubDialect } from "./git-github.js";
 import { gitlabDialect } from "./git-gitlab.js";
@@ -112,6 +113,7 @@ export { parseRepoRef, parsePrOrRepo, currentBranch, type RepoRef } from "./git-
 
 /** Back-compat helper used by verify/doctor: validate the configured API base. */
 export function apiBaseUrl(): string {
+  noteDeprecatedAlias("VENIRA_GITHUB_API_URL", "VENIRA_GIT_API_URL");
   const raw =
     (process.env.VENIRA_GIT_API_URL ?? process.env.VENIRA_GITHUB_API_URL ?? "https://api.github.com").trim();
   return normalizeApiBase(raw, "VENIRA_GIT_API_URL");

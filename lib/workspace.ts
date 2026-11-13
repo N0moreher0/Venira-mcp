@@ -5,6 +5,7 @@
 import path from "node:path";
 import fs from "node:fs";
 import { envFlag } from "./env.js";
+import { cacheEnabled } from "./cache-mode.js";
 import { snapshotProtectedRoots } from "./snapshot-paths.js";
 export const PLATFORM = process.platform;
 
@@ -286,11 +287,11 @@ export function resolveWithin(root: string, input: string | undefined): string {
 }
 
 // ---------------------------------------------------------------------------
-// P1: cache control (VENIRA_CACHE_ALL / VENIRA_CACHE_LIST_ONLY / VENIRA_CACHE_SEARCH_ONLY)
+// P1: cache control (VENIRA_CACHE=all|list|search|off; legacy VENIRA_CACHE_ALL / _LIST_ONLY / _SEARCH_ONLY win when set)
 // ---------------------------------------------------------------------------
 /** VENIRA_CACHE_ALL=0 disables every read/list/search/recent cache (strict "always fresh" mode). */
-export const CACHE_ALL_ENABLED = envFlag("VENIRA_CACHE_ALL", true);
+export const CACHE_ALL_ENABLED = cacheEnabled("all");
 /** VENIRA_CACHE_LIST_ONLY=0 disables only the list_files TTL cache. */
-export const CACHE_LIST_ONLY_ENABLED = envFlag("VENIRA_CACHE_LIST_ONLY", true);
+export const CACHE_LIST_ONLY_ENABLED = cacheEnabled("list");
 /** VENIRA_CACHE_SEARCH_ONLY=0 disables only the search TTL cache. */
-export const CACHE_SEARCH_ONLY_ENABLED = envFlag("VENIRA_CACHE_SEARCH_ONLY", true);
+export const CACHE_SEARCH_ONLY_ENABLED = cacheEnabled("search");

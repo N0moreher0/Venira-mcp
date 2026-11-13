@@ -10,9 +10,7 @@
         // On Windows, JSON paths need escaped backslashes (C:\\path\\to\\project).
         "VENIRA_WORKSPACE": "C:\\path\\to\\your-project",
         // "default" = lean coding set (no shell/JS/CI-CD shipping); "expert" = full surface.
-        "VENIRA_TOOL_MODE": "expert",
-        // "full" keeps envelopes complete; "compact" trims payloads over 8 KB.
-        "VENIRA_OUTPUT_MODE": "full"
+        "VENIRA_TOOL_MODE": "expert"
         // All other VENIRA_* flags keep safe defaults; only set them in this block
         // when you intentionally need to change the default (e.g. VENIRA_SECURITY_PROFILE="strict").
       }

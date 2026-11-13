@@ -17,6 +17,7 @@
  * ```
  */
 
+import "./profile-env.js"; // must stay first: fills VENIRA_SECURITY_PROFILE env defaults before constants are computed
 import { CoreHost } from "./corehost.js";
 import { WORKSPACE, migrateLegacyDataDirIfNeeded } from "./workspace.js";
 import { loadShellPolicy, enabledShellOverrides } from "./shell-policy.js";

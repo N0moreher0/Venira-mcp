@@ -107,13 +107,13 @@ export function evaluateConfigPosture(input: ConfigPostureInput): ConfigPosture 
     });
   }
 
-  if (input.securityProfile === "off") {
+  if (input.securityProfile === "off" || input.securityProfile === "open") {
     add({
       id: "profile.off",
       severity: "critical",
-      summary: "The security profile is off.",
+      summary: `The security profile is ${input.securityProfile}.`,
       detail: "Shell policy checks (hard-deny included) and the per-call JavaScript approval gate are disabled.",
-      recommendation: "Use `strict` or `balanced`; keep `off` only for a trusted, isolated environment.",
+      recommendation: "Use `strict` or `balanced`; keep `off` or `open` only for a trusted, isolated environment.",
     });
   } else if (input.shellMode === "off") {
     add({

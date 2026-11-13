@@ -1,3 +1,4 @@
+import "./lib/profile-env.js"; // must stay first: fills VENIRA_SECURITY_PROFILE env defaults before constants are computed
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {

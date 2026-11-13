@@ -8,11 +8,7 @@
       ],
       "env": {
         "VENIRA_WORKSPACE": "${workspaceFolder}",
-        "VENIRA_UNRESTRICTED": "0",
-        "VENIRA_DEFAULT_SHELL": "powershell",
-        "VENIRA_SHELL_MODE": "balanced",
-        "VENIRA_PERMISSION_MODE": "allow_all",
-        "VENIRA_OUTPUT_MODE": "full"
+        "VENIRA_DEFAULT_SHELL": "powershell"
       }
     }
   }

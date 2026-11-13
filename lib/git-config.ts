@@ -10,6 +10,7 @@
  * which the HTTP layer turns into a header immediately.
  */
 import { existsSync, readFileSync, statSync } from "node:fs";
+import { noteDeprecatedAlias } from "./env-deprecation.js";
 import os from "node:os";
 import path from "node:path";
 import { envFlagValue } from "./env.js";
@@ -220,6 +221,7 @@ function hostOf(raw: string): string | null {
 }
 
 function allowHttp(): boolean {
+  noteDeprecatedAlias("VENIRA_GITHUB_ALLOW_HTTP", "VENIRA_GIT_ALLOW_HTTP");
   const name = process.env.VENIRA_GIT_ALLOW_HTTP !== undefined
     ? "VENIRA_GIT_ALLOW_HTTP"
     : "VENIRA_GITHUB_ALLOW_HTTP";
@@ -420,6 +422,7 @@ export function gitContext(args: Record<string, unknown> = {}): GitContext {
     providerSource = "default";
   }
 
+  noteDeprecatedAlias("VENIRA_GITHUB_API_URL", "VENIRA_GIT_API_URL");
   const apiRaw = envText("VENIRA_GIT_API_URL", "VENIRA_GITHUB_API_URL");
   let apiBase: string;
   let apiSource: string;

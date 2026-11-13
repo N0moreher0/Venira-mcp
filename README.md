@@ -38,7 +38,7 @@ All use the same `npx` command. See §2 for ready-to-copy JSON/TOML.
 In this repo `.vscode/mcp.json` is git-ignored because it holds machine-specific settings (and may relax security flags). Copy `.vscode/mcp.example.json` to `.vscode/mcp.json` and adjust it locally.
 ## 2. Client configs (copy-paste)
 
-The examples use four environment variables: workspace, tool set, output size, and security posture. For most users, change only `VENIRA_WORKSPACE` and keep `VENIRA_SECURITY_PROFILE=balanced`.
+The examples use two environment variables: the workspace and the tool set. Everything else has a safe default, so you only add a `VENIRA_*` variable when you want to change that default (see [Config recipes](#config-recipes)).
 
 **OpenCode / VS Code / Cursor / Claude / Kimi / DeepSeek / Antigravity** — use the wrapper format supported by your client:
 
@@ -53,8 +53,6 @@ The examples use four environment variables: workspace, tool set, output size, a
       "environment": {
         "VENIRA_WORKSPACE": "/absolute/path/to/project",
         "VENIRA_TOOL_MODE": "expert",
-        "VENIRA_OUTPUT_MODE": "full",
-        "VENIRA_SECURITY_PROFILE": "balanced",
         // Small model / restricted context? Uncomment to slim tools/list:
         // "VENIRA_PROFILE": "core"
       }
@@ -71,9 +69,7 @@ The examples use four environment variables: workspace, tool set, output size, a
       "args": ["--yes", "--package=venira-mcp@latest", "venira-mcp"],
       "env": {
         "VENIRA_WORKSPACE": "${workspaceFolder}",
-        "VENIRA_TOOL_MODE": "expert",
-        "VENIRA_OUTPUT_MODE": "full",
-        "VENIRA_SECURITY_PROFILE": "balanced"
+        "VENIRA_TOOL_MODE": "expert"
       }
     }
   }
@@ -87,9 +83,7 @@ The examples use four environment variables: workspace, tool set, output size, a
       "args": ["--yes", "--package=venira-mcp@latest", "venira-mcp"],
       "env": {
         "VENIRA_WORKSPACE": "/absolute/path/to/project",
-        "VENIRA_TOOL_MODE": "expert",
-        "VENIRA_OUTPUT_MODE": "full",
-        "VENIRA_SECURITY_PROFILE": "balanced"
+        "VENIRA_TOOL_MODE": "expert"
       }
     }
   }
@@ -111,9 +105,7 @@ Windows:
       "env": {
         "VENIRA_WORKSPACE": "C:\\Users\\YourName\\Projects\\my-app",
         "VENIRA_DATA_DIR": "C:\\Users\\YourName\\AppData\\Local\\venira",
-        "VENIRA_TOOL_MODE": "expert",
-        "VENIRA_OUTPUT_MODE": "full",
-        "VENIRA_SECURITY_PROFILE": "balanced"
+        "VENIRA_TOOL_MODE": "expert"
       }
     }
   }
@@ -131,9 +123,7 @@ Linux:
       "env": {
         "VENIRA_WORKSPACE": "/home/yourname/projects/my-app",
         "VENIRA_DATA_DIR": "/home/yourname/.local/share/venira-mcp",
-        "VENIRA_TOOL_MODE": "expert",
-        "VENIRA_OUTPUT_MODE": "full",
-        "VENIRA_SECURITY_PROFILE": "balanced"
+        "VENIRA_TOOL_MODE": "expert"
       }
     }
   }
@@ -152,9 +142,21 @@ args = ["--yes", "--package=venira-mcp@latest", "venira-mcp"]
 [mcp_servers.venira.env]
 VENIRA_WORKSPACE = "C:\\path\\to\\project"
 VENIRA_TOOL_MODE = "expert"
-VENIRA_OUTPUT_MODE = "full"
-VENIRA_SECURITY_PROFILE = "balanced"
 ```
+
+### Config recipes
+
+Pick one block and put its variables in the `env` section of your client config. Every other variable keeps its default.
+
+| Recipe | Variables |
+|---|---|
+| Minimal (recommended) | `VENIRA_WORKSPACE`, `VENIRA_TOOL_MODE=expert` |
+| Fewer prompts on a personal machine | Minimal, plus `VENIRA_SECURITY_PROFILE=trusted` |
+| Full trust (isolated or personal machine only) | Minimal, plus `VENIRA_SECURITY_PROFILE=open` |
+
+`open` sets `VENIRA_UNRESTRICTED=1`, `VENIRA_PERMISSION_MODE=allow_all`, `VENIRA_JS_EXEC_MODE=auto`, `VENIRA_SHELL_ELICIT=0` and `VENIRA_SHELL_ENV_PASS_ALL=1` for you, and turns the shell policy off. A variable you set yourself always wins over the profile. Deliberate opt-ins are never implied: `VENIRA_SHELL_OVERRIDES`, `VENIRA_ALLOW_SELF_INSTALL`, `VENIRA_SECRET_ALLOW_REVEAL` and `VENIRA_SECRET_KEYCHAIN`.
+
+Do not write a variable just to restate its default (for example `VENIRA_OUTPUT_MODE=full`, `VENIRA_USE_RIPGREP=1` or `VENIRA_SECURITY_PROFILE=balanced`).
 
 ### Security profiles
 
@@ -164,6 +166,7 @@ VENIRA_SECURITY_PROFILE = "balanced"
 | `balanced` (default) | `balanced` | Recommended general-purpose setting |
 | `trusted` | `permissive` | Ask-rule and unclassified commands run; hard-deny commands require approval |
 | `off` | `off` | Trusted environments only; prints a warning and audits shell commands |
+| `open` | `off` | Full trust on a personal machine: shell checks off, no workspace lock, JS exec `auto`, no elicitation, full env passed to shell. Replaces setting those variables one by one; any of them you set explicitly still wins |
 
 `VENIRA_SHELL_MODE` is an advanced override and takes precedence over the profile. `VENIRA_JS_EXEC_MODE` separately gates the JavaScript tool: `off` (default) hides it, `ask` registers it with per-call human approval, `semi-auto` registers it without approval but keeps the containment (network guard, workspace-only fs, scrubbed env), `auto` registers it without approval and without any containment (full network and fs access, inherited env; personal machines only).
 
@@ -363,7 +366,8 @@ Full reference: the source reads 90+ distinct `VENIRA_*` names; this table lists
 | `VENIRA_JS_EXEC_MODE` | `"off"` | `"off"` hides `project_execute_js` · `"ask"` registers it with per-call approval · `"semi-auto"` registers it without approval, contained (network guard, workspace-only fs, scrubbed env) · `"auto"` registers it without approval and without containment |
 | `VENIRA_USE_RIPGREP` | `"1"` | `"1"` uses ripgrep if installed (faster on big repos) |
 | `VENIRA_SEARCH_MAX_FILES` | `"50000"` | Max files collected by the JS fallback walker before it stops and reports `complete: false`. Bounds searches rooted at huge trees (e.g. with `VENIRA_UNRESTRICTED=1` and an absolute path outside the workspace) |
-| `VENIRA_CACHE_ALL` | `"1"` | `"1"` TTL caches on · `"0"` always-fresh (slower) |
+| `VENIRA_CACHE` | `"all"` | `all` every TTL cache on · `list` only directory listings · `search` only searches · `off` always fresh (slower). Replaces the three flags below; any of them you set explicitly still wins |
+| `VENIRA_CACHE_ALL` | `"1"` | Alias of `VENIRA_CACHE`: `"1"` TTL caches on · `"0"` always-fresh (same as `off`) |
 | `VENIRA_EDIT_FUZZY` | `"0"` | `"1"` enables fuzzy-match fallback for `old_text`, and adds `fuzzy_distance`, `ignore_indentation` and `case_insensitive` to the `project_edit_file` / `project_edit_batch` schemas. `tools/list` changes with this flag, so reconnect the client after changing it. With `"0"` those options are not advertised and a call that still sends them is refused with `[unsupported]` |
 | `VENIRA_DATA_DIR` | per-user OS path | Where audit DB + encrypted secrets live |
 | `VENIRA_SNAPSHOT_ROOT` | `<per-user data dir>/snapshots` | Shared checkpoint root for every project and client; each workspace gets its own sub-folder (absolute path) |

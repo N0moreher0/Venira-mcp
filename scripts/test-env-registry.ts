@@ -26,8 +26,15 @@ import {
   type ConfigShellMode,
   type PostureSeverity,
 } from "../lib/config-posture.js";
-import { SECURITY_PROFILES, SECURITY_PROFILE_TABLE } from "../lib/security-profile.js";
+import {
+  SECURITY_PROFILES,
+  SECURITY_PROFILE_TABLE,
+  OPEN_PROFILE_ENV_DEFAULTS,
+  applySecurityProfileEnvDefaults,
+} from "../lib/security-profile.js";
 import { scanRuntimeEnvNames } from "./env-source-scan.js";
+import { cacheEnabled, cacheModeFromEnv } from "../lib/cache-mode.js";
+import { noteDeprecatedAlias, resetDeprecatedAliasNotes } from "../lib/env-deprecation.js";
 
 let checks = 0;
 function check(name: string, fn: () => void): void {
@@ -291,10 +298,78 @@ check("every shell mode a profile maps to is an accepted VENIRA_SHELL_MODE value
   }
 });
 
-check("profile entries carry the shell mode only (JS exec is gated by VENIRA_JS_EXEC_MODE)", () => {
+check("profile entries carry a shell mode and env defaults; only `open` has env defaults", () => {
   for (const profile of SECURITY_PROFILES) {
-    assert.deepEqual(Object.keys(SECURITY_PROFILE_TABLE[profile]), ["shellMode"], profile);
+    assert.deepEqual(Object.keys(SECURITY_PROFILE_TABLE[profile]).sort(), ["envDefaults", "shellMode"], profile);
+    const count = Object.keys(SECURITY_PROFILE_TABLE[profile].envDefaults).length;
+    assert.equal(count > 0, profile === "open", profile);
   }
+});
+
+check("profile env defaults name registered, supported variables with valid values", () => {
+  for (const profile of SECURITY_PROFILES) {
+    const defaults = SECURITY_PROFILE_TABLE[profile].envDefaults;
+    for (const name of Object.keys(defaults)) {
+      assert.equal(envSpec(name)?.status, "supported", `${profile}: ${name}`);
+    }
+    assert.deepEqual(checkEnvironment({ ...defaults }), [], `${profile} defaults must pass env validation`);
+  }
+});
+
+check("open profile fills exactly its defaults into an empty environment", () => {
+  const env: NodeJS.ProcessEnv = { VENIRA_SECURITY_PROFILE: "open" };
+  const applied = applySecurityProfileEnvDefaults(env);
+  assert.deepEqual([...applied].sort(), Object.keys(OPEN_PROFILE_ENV_DEFAULTS).sort());
+  assert.equal(env.VENIRA_UNRESTRICTED, "1");
+  assert.equal(env.VENIRA_JS_EXEC_MODE, "auto");
+  assert.equal(env.VENIRA_SHELL_ENV_PASS_ALL, "1");
+});
+
+check("open profile only sets variables whose default differs (no restated defaults)", () => {
+  assert.equal(OPEN_PROFILE_ENV_DEFAULTS.VENIRA_PERMISSION_MODE, undefined);
+  assert.equal(OPEN_PROFILE_ENV_DEFAULTS.VENIRA_SHELL_ELICIT, undefined);
+});
+
+check("open profile never overrides a variable the operator set, even to an empty string", () => {
+  const env: NodeJS.ProcessEnv = {
+    VENIRA_SECURITY_PROFILE: "open",
+    VENIRA_UNRESTRICTED: "0",
+    VENIRA_JS_EXEC_MODE: "ask",
+  };
+  const applied = applySecurityProfileEnvDefaults(env);
+  assert.equal(env.VENIRA_UNRESTRICTED, "0");
+  assert.equal(env.VENIRA_JS_EXEC_MODE, "ask");
+  assert.deepEqual(applied, ["VENIRA_SHELL_ENV_PASS_ALL"]);
+  const blank: NodeJS.ProcessEnv = { VENIRA_SECURITY_PROFILE: "open", VENIRA_SHELL_ENV_PASS_ALL: "" };
+  applySecurityProfileEnvDefaults(blank);
+  assert.equal(blank.VENIRA_SHELL_ENV_PASS_ALL, "");
+});
+
+check("open profile does not imply the deliberate opt-ins", () => {
+  const env: NodeJS.ProcessEnv = { VENIRA_SECURITY_PROFILE: "open" };
+  applySecurityProfileEnvDefaults(env);
+  for (const name of [
+    "VENIRA_SHELL_OVERRIDES",
+    "VENIRA_ALLOW_SELF_INSTALL",
+    "VENIRA_SECRET_ALLOW_REVEAL",
+    "VENIRA_SECRET_KEYCHAIN",
+  ]) {
+    assert.equal(env[name], undefined, name);
+  }
+});
+
+check("every other profile, an unset profile and an invalid profile fill nothing", () => {
+  for (const profile of SECURITY_PROFILES.filter((name) => name !== "open")) {
+    const env: NodeJS.ProcessEnv = { VENIRA_SECURITY_PROFILE: profile };
+    assert.deepEqual(applySecurityProfileEnvDefaults(env), [], profile);
+    assert.deepEqual(env, { VENIRA_SECURITY_PROFILE: profile }, profile);
+  }
+  const unset: NodeJS.ProcessEnv = {};
+  assert.deepEqual(applySecurityProfileEnvDefaults(unset), []);
+  assert.deepEqual(unset, {});
+  const bad: NodeJS.ProcessEnv = { VENIRA_SECURITY_PROFILE: "opne" };
+  assert.doesNotThrow(() => applySecurityProfileEnvDefaults(bad));
+  assert.deepEqual(bad, { VENIRA_SECURITY_PROFILE: "opne" });
 });
 
 // ---------------------------------------------------------------------------
@@ -361,8 +436,11 @@ check("matrix: each documented condition maps to exactly its finding id", () => 
     const unapprovedJs = input.jsExecEnabled && !input.jsExecApproval;
     const expectations: Array<[string, boolean]> = [
       ["workspace.unrestricted", input.unrestricted],
-      ["profile.off", input.securityProfile === "off"],
-      ["shell.mode_off", input.securityProfile !== "off" && input.shellMode === "off"],
+      ["profile.off", input.securityProfile === "off" || input.securityProfile === "open"],
+      [
+        "shell.mode_off",
+        input.securityProfile !== "off" && input.securityProfile !== "open" && input.shellMode === "off",
+      ],
       ["shell.mode_permissive", input.shellMode === "permissive"],
       ["js.exec_without_approval", unapprovedJs],
       ["combo.unrestricted_open_shell", input.unrestricted && open],
@@ -421,6 +499,90 @@ check("matrix: the documented defaults produce a clean posture", () => {
   const result = evaluateConfigPosture(baseline);
   assert.equal(result.level, "ok");
   assert.deepEqual(result.findings, []);
+});
+
+// ---------------------------------------------------------------------------
+// 4b. VENIRA_CACHE group (ROADMAP_ENV_SLIM phase 2b)
+// ---------------------------------------------------------------------------
+const cacheState = (env: NodeJS.ProcessEnv) => ({
+  all: cacheEnabled("all", env),
+  list: cacheEnabled("list", env),
+  search: cacheEnabled("search", env),
+});
+
+check("cache: unset VENIRA_CACHE keeps today's behaviour (everything on)", () => {
+  assert.deepEqual(cacheState({}), { all: true, list: true, search: true });
+  assert.equal(cacheModeFromEnv({ VENIRA_CACHE: "" }), "all");
+});
+
+check("cache: each VENIRA_CACHE mode yields the documented effective values", () => {
+  assert.deepEqual(cacheState({ VENIRA_CACHE: "all" }), { all: true, list: true, search: true });
+  assert.deepEqual(cacheState({ VENIRA_CACHE: "list" }), { all: true, list: true, search: false });
+  assert.deepEqual(cacheState({ VENIRA_CACHE: "search" }), { all: true, list: false, search: true });
+  assert.deepEqual(cacheState({ VENIRA_CACHE: "off" }), { all: false, list: false, search: false });
+  assert.deepEqual(cacheState({ VENIRA_CACHE: " OFF " }), { all: false, list: false, search: false });
+});
+
+check("cache: legacy flags alone behave exactly as before", () => {
+  assert.deepEqual(cacheState({ VENIRA_CACHE_ALL: "0" }), { all: false, list: true, search: true });
+  assert.deepEqual(cacheState({ VENIRA_CACHE_LIST_ONLY: "0" }), { all: true, list: false, search: true });
+  assert.deepEqual(cacheState({ VENIRA_CACHE_SEARCH_ONLY: "0" }), { all: true, list: true, search: false });
+});
+
+check("cache: an explicit legacy flag overrides VENIRA_CACHE, per variable", () => {
+  assert.deepEqual(cacheState({ VENIRA_CACHE: "off", VENIRA_CACHE_ALL: "1" }), { all: true, list: false, search: false });
+  assert.deepEqual(cacheState({ VENIRA_CACHE: "list", VENIRA_CACHE_SEARCH_ONLY: "1" }), { all: true, list: true, search: true });
+  assert.deepEqual(cacheState({ VENIRA_CACHE: "all", VENIRA_CACHE_LIST_ONLY: "0" }), { all: true, list: false, search: true });
+});
+
+check("cache: an unknown mode or a bad legacy flag fails closed", () => {
+  assert.throws(() => cacheState({ VENIRA_CACHE: "some" }), /\[config_invalid\] VENIRA_CACHE must be one of/);
+  assert.throws(() => cacheState({ VENIRA_CACHE_ALL: "yes" }), /\[config_invalid\] VENIRA_CACHE_ALL/);
+});
+
+check("cache: VENIRA_CACHE is registered, documented and enum-checked", () => {
+  const entry = envSpec("VENIRA_CACHE");
+  assert.ok(entry);
+  assert.equal(entry.kind, "enum");
+  assert.equal(entry.documented, true);
+  assert.deepEqual([...(entry.choices ?? [])], ["all", "list", "search", "off"]);
+});
+
+// ---------------------------------------------------------------------------
+// 4c. Deprecated git aliases (ROADMAP_ENV_SLIM phase 2d)
+// ---------------------------------------------------------------------------
+check("alias note: printed once, only when the old name is set, never touches the value", () => {
+  resetDeprecatedAliasNotes();
+  const lines: string[] = [];
+  const write = (line: string) => lines.push(line);
+  assert.equal(noteDeprecatedAlias("VENIRA_GITHUB_API_URL", "VENIRA_GIT_API_URL", {}, write), false);
+  const env = { VENIRA_GITHUB_API_URL: "https://ghe.example/api/v3" };
+  assert.equal(noteDeprecatedAlias("VENIRA_GITHUB_API_URL", "VENIRA_GIT_API_URL", env, write), true);
+  assert.equal(noteDeprecatedAlias("VENIRA_GITHUB_API_URL", "VENIRA_GIT_API_URL", env, write), false);
+  assert.equal(lines.length, 1);
+  assert.match(lines[0], /VENIRA_GITHUB_API_URL is a deprecated alias of VENIRA_GIT_API_URL; it still works/);
+  assert.equal(env.VENIRA_GITHUB_API_URL, "https://ghe.example/api/v3");
+});
+
+check("alias note: says the old name is ignored when the new one is also set", () => {
+  resetDeprecatedAliasNotes();
+  const lines: string[] = [];
+  noteDeprecatedAlias(
+    "VENIRA_GITHUB_ALLOW_HTTP",
+    "VENIRA_GIT_ALLOW_HTTP",
+    { VENIRA_GITHUB_ALLOW_HTTP: "1", VENIRA_GIT_ALLOW_HTTP: "0" },
+    (line) => lines.push(line),
+  );
+  assert.match(lines[0], /ignored because VENIRA_GIT_ALLOW_HTTP is set/);
+});
+
+check("git aliases: both old names are still registered as supported variables", () => {
+  for (const name of ["VENIRA_GITHUB_ALLOW_HTTP", "VENIRA_GITHUB_API_URL"]) {
+    const entry = envSpec(name);
+    assert.ok(entry, name);
+    assert.equal(entry.status, "supported", name);
+    assert.match(entry.description, /Deprecated alias/, name);
+  }
 });
 
 // ---------------------------------------------------------------------------
