@@ -15,6 +15,12 @@ const REASON_REQUIRED_OPS = new Set([
   "edit_file",
   "create_directory",
   "delete_path",
+  "move_path",
+  "copy_path",
+  "apply_patch",
+  "git_commit",
+  "git_branch",
+  "git_stash",
   "snapshot_create",
   "snapshot_restore",
   "snapshot_delete",
@@ -25,6 +31,9 @@ function autoReason(operation: string, out: Args): string {
   const target =
     (typeof out.relative_path === "string" && out.relative_path) ||
     (Array.isArray(out.paths) && out.paths.length > 0 ? String(out.paths[0]) : undefined) ||
+    (typeof out.name === "string" && out.name) ||
+    (typeof out.message === "string" && out.message.slice(0, 120)) ||
+    (typeof out.action === "string" && out.action) ||
     (typeof out.command === "string" ? out.command.slice(0, 120) : undefined) ||
     (typeof out.id === "string" ? out.id : "");
   return `auto: ${operation} ${target}`.trim().slice(0, 400);
@@ -59,7 +68,11 @@ export function prepareRequest(operation: string, args: Args): Args {
   // --- reason: optional everywhere; auto-generated for mutating ops when absent;
   // required outright when VENIRA_SECURITY_PROFILE=strict.
   const reason = typeof out.reason === "string" ? out.reason.trim() : "";
-  if (!reason && REASON_REQUIRED_OPS.has(operation)) {
+  const dryRun = out.dry_run === true || out.dry_run === 1 || out.dry_run === "1" || out.dry_run === "true";
+  const gitReadOnly =
+    (operation === "git_branch" && ["list", "current"].includes(String(out.action ?? "list").trim().toLowerCase())) ||
+    (operation === "git_stash" && ["list", "show"].includes(String(out.action ?? "list").trim().toLowerCase()));
+  if (!reason && REASON_REQUIRED_OPS.has(operation) && !(operation === "apply_patch" && dryRun) && !gitReadOnly) {
     if (resolveSecurityProfile() === "strict") {
       throw new Error(
         `[invalid_request] reason is required when VENIRA_SECURITY_PROFILE=strict (operation: ${operation}). ` +

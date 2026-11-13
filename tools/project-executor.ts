@@ -19,7 +19,22 @@ export type CachedExecutorDeps = {
   trackShell: (operation: string, data: unknown) => void;
 };
 
-const MUTATING = new Set(["write_file", "edit_file", "delete_path"]);
+const MUTATING = new Set(["write_file", "edit_file", "delete_path", "apply_patch"]);
+/** Two-path mutations: both `from` and `to` must be invalidated. */
+const PAIR_MUTATING = new Set(["move_path", "copy_path"]);
+/** Worktree-wide mutations with no single path in args. */
+const isGitWorktreeMutation = (operation: string, args: Args): boolean => {
+  if (operation === "git_commit") return true;
+  const rawAction = typeof args.action === "string" ? args.action.trim().toLowerCase() : undefined;
+  if (operation === "git_branch") return !["list", "current"].includes(rawAction ?? "list");
+  if (operation === "git_stash") return !["list", "show"].includes(rawAction ?? "list");
+  return false;
+};
+
+/** 0|1 integer or boolean dry_run shapes (project_apply_patch). */
+function isDryRunFlag(value: unknown): boolean {
+  return value === true || value === 1 || value === "1" || value === "true";
+}
 
 /** Central policy/cache/invalidation wrapper for tool backend operations. */
 export function createCachedExecutor({
@@ -93,13 +108,53 @@ export function createCachedExecutor({
           : await cache.searchCached(args);
       } else {
         const response = await execute(operation, args);
-        if (MUTATING.has(operation)) {
+        const skipInvalidation = operation === "apply_patch" && isDryRunFlag(args.dry_run);
+        if (operation === "apply_patch" && !skipInvalidation) {
+          // Paths live inside the patch, not in args: collect them from the result.
+          const data = response.result?.data as
+            | { files?: Array<{ relative_path?: string; old_path?: string; new_path?: string }> }
+            | undefined;
+          const paths = new Set<string>();
+          for (const file of data?.files ?? []) {
+            if (file.relative_path) paths.add(file.relative_path);
+            if (file.old_path) paths.add(file.old_path);
+            if (file.new_path) paths.add(file.new_path);
+          }
+          for (const rel of paths) {
+            try {
+              const absolutePath = toHostPath(rel);
+              cache.invalidatePath(absolutePath);
+              rememberEdit(absolutePath);
+            } catch {
+              /* invalid paths already return an error; there is no cache entry to clean */
+            }
+          }
+          cache.invalidateListCaches();
+          invalidateDependencyGraphCache();
+        } else if (isGitWorktreeMutation(operation, args)) {
+          cache.invalidateAllCaches();
+          clearRecentEdits();
+          invalidateDependencyGraphCache();
+        } else if (MUTATING.has(operation) && !skipInvalidation) {
           try {
             const absolutePath = toHostPath(args.relative_path as string | undefined);
             cache.invalidatePath(absolutePath);
             rememberEdit(absolutePath);
           } catch {
             /* invalid paths already return an error; there is no cache entry to clean */
+          }
+          cache.invalidateListCaches();
+          invalidateDependencyGraphCache();
+        }
+        if (PAIR_MUTATING.has(operation)) {
+          for (const key of ["from", "to"] as const) {
+            try {
+              const absolutePath = toHostPath(args[key] as string | undefined);
+              cache.invalidatePath(absolutePath);
+              rememberEdit(absolutePath);
+            } catch {
+              /* invalid paths already return an error; there is no cache entry to clean */
+            }
           }
           cache.invalidateListCaches();
           invalidateDependencyGraphCache();

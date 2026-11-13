@@ -38,7 +38,9 @@ import { opSearch } from "./corehost-search.js";
 import { queryRecentFiles } from "./recent-index.js";
 import { shellRuns, killTree, SHELL_EXIT_EARLY, SHELL_MAX_TIMEOUT_MS } from "./corehost-shell-state.js";
 export { SHELL_TAIL_LIMIT, SHELL_EXIT_EARLY, SHELL_MAX_TIMEOUT_MS, shellPolicySnapshot } from "./corehost-shell-state.js";
-import { opWriteFile, opEditFile, opCreateDirectory, opDeletePath } from "./corehost-filewrite.js";
+import { opWriteFile, opEditFile, opCreateDirectory, opDeletePath, opMovePath, opCopyPath } from "./corehost-filewrite.js";
+import { opApplyPatch } from "./corehost-patch.js";
+import { opGitStatus, opGitDiff, opGitLog, opGitBranch, opGitCommit, opGitStash } from "./corehost-git.js";
 import { opShellRun, opShellStatus, opShellCancel } from "./corehost-shell.js";
 export { queryRecentFiles } from "./recent-index.js";
 
@@ -353,6 +355,11 @@ async function opChangeImpact(
   };
 }
 
+/** True for the 0|1 integer or boolean flag shapes clients send for dry_run. */
+function isDryRunFlag(value: unknown): boolean {
+  return value === true || value === 1 || value === "1" || value === "true";
+}
+
 type OperationHandler = (args: Record<string, unknown>, root: string, sessionId: string) => Promise<RustResponse>;
 
 const operations: Record<string, OperationHandler> = {
@@ -364,6 +371,15 @@ const operations: Record<string, OperationHandler> = {
   edit_file: opEditFile,
   create_directory: opCreateDirectory,
   delete_path: opDeletePath,
+  move_path: opMovePath,
+  copy_path: opCopyPath,
+  apply_patch: opApplyPatch,
+  git_status: opGitStatus,
+  git_diff: opGitDiff,
+  git_log: opGitLog,
+  git_branch: opGitBranch,
+  git_commit: opGitCommit,
+  git_stash: opGitStash,
   recent_files: async (args: Record<string, unknown>) => opRecentFiles(args),
   snapshot_create: opSnapshotCreate,
   snapshot_list: (args: Record<string, unknown>) => opSnapshotList(args),
@@ -617,6 +633,12 @@ export class CoreHost {
         // point at a row that no longer exists).
         if (operation === "shell_status") {
           const response = await opShellStatus(args);
+          return response as T;
+        }
+        // apply_patch with dry_run=1 reads and validates only: it writes nothing, so it is
+        // treated like a read-only observation and skips the audit row (like shell_status).
+        if (operation === "apply_patch" && isDryRunFlag(args.dry_run)) {
+          const response = await opApplyPatch(args, WORKSPACE);
           return response as T;
         }
         const externalSummary = describeExternalOp(operation, args);

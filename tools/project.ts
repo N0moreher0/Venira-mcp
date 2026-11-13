@@ -33,6 +33,7 @@ import { createProjectWarmUp } from "./project-startup.js";
 import { MAX_BATCH_RESPONSE_BYTES, createCacheLayer, envInt, stableKey } from "./project-cache.js";
 import type { Args } from "./project-cache.js";
 import { registerVcsTools } from "./project-register-vcs.js";
+import { registerGitTools } from "./project-register-git.js";
 import { registerFileTools } from "./project-register-files.js";
 import { registerShellTools } from "./project-register-shell.js";
 import { registerOpsTools } from "./project-register-ops.js";
@@ -252,5 +253,6 @@ export function registerProjectTools(server: McpServer): void {
     runPlanReadBatch,
   });
 
+  registerGitTools(server, { runOne });
   registerVcsTools(server, { runOne, runSecret });
 }

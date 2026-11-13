@@ -89,6 +89,61 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
     avoid: "you edit existing content (project_edit_file).",
     out: "directory_created {relative_path, created, parents_created}.",
   },
+  project_move_path: {
+    about: "Move or rename a file or directory inside the workspace. overwrite=1 replaces an existing file, never a directory; create_dirs (default 1) makes missing parents of `to`.",
+    use: "you rename or relocate files or folders. Not undoable: take a project_snapshot first when they are not in git.",
+    avoid: "you duplicate (project_copy_path) or remove (project_delete_path).",
+    out: "from, to, kind, overwritten, entries, bytes. Missing source gives not_found, an existing target without overwrite gives conflict.",
+  },
+  project_copy_path: {
+    about: "Copy a file, or a directory with recursive=1, inside the workspace. overwrite=1 replaces an existing file; symbolic links and protected files inside a directory are skipped.",
+    use: "you duplicate a file or folder, for example to start from a template.",
+    avoid: "you move or rename (project_move_path).",
+    out: "from, to, kind, overwritten, entries, bytes, skipped_symlinks/skipped_protected when any. Missing source gives not_found, an existing target without overwrite gives conflict.",
+  },
+  project_apply_patch: {
+    about: "Apply a unified diff (git apply compatible) to one or more files, all-or-nothing. Every file is validated in memory before anything is written; a failing hunk rolls every file back from an automatic checkpoint, like project_edit_batch. dry_run=1 validates and reports without writing.",
+    use: "a change arrives as a diff (git diff, a patch file, another tool's output) and must land completely or not at all — files created, modified, deleted or renamed.",
+    avoid: "you have no diff (project_edit_file/project_edit_batch) or only need a new file (project_write_file). Not for directories or symbolic links.",
+    out: "dry_run: files[] {action, relative_path, hunks, bytes} plus added/modified/deleted/renamed counts; nothing is written. success: same list plus sha256_after per file. Failure: nothing is changed; data carries rollback_succeeded and, for a mismatching hunk, nearest_context lines for the file and hunk that failed.",
+  },
+
+  project_git_status: {
+    about: "Parsed local git status: branch, ahead/behind vs upstream, and every changed file with staged/unstaged/untracked state and staged/worktree status letters.",
+    use: "you need the current repo state in a parseable form (before committing, stashing or opening a PR).",
+    avoid: "you only need the raw command (project_shell_run) or a remote host’s CI status (project_ci_status).",
+    out: "ok, branch/detached, upstream (gone flag), ahead/behind, files[] {path, old_path?, staged, unstaged, untracked, unmerged, kind, status, index_status/worktree_status}, counts{}, clean.",
+  },
+  project_git_diff: {
+    about: "Parsed git diff (staged or worktree): files + hunks (old_start/lines, new_start/lines, section). Patch text is opt-in via include_patch=1.",
+    use: "you need per-file hunk info for review/preview or a test, not free text.",
+    avoid: "you need a raw unified blob (use include_patch=1 or project_diff_files) or a PR diff (provider tools).",
+    out: "files[] {old_path|null, new_path|null, action (added|modified|deleted|renamed), binary, hunks[] {old_start, old_lines, new_start, new_lines, section}}, counts{}, patch_bytes, patch/patch_truncated when include_patch=1.",
+  },
+  project_git_log: {
+    about: "Local commit log, or per-line blame when blame=1 with path. Filters: ref, author, grep, paths.",
+    use: "you need recent commits or who last touched lines (blame).",
+    avoid: "you need tags/remote refs only (git branch --all) or a remote CI’s log (project_ci_logs).",
+    out: "mode=log: commits[] {sha, short_sha, author, email, authored_at, committer, subject, body}, count. mode=blame: entries[] {line, commit, author, authored_at, summary}, lines.",
+  },
+  project_git_branch: {
+    about: "List local (and optionally remote-tracking) branches, or create/switch/delete one.",
+    use: "you need the current branch, want to branch off HEAD, switch branches, or prune a merged branch.",
+    avoid: "you need the worktree state (project_git_status) or a remote PR’s head branch (project_pr_list).",
+    out: "list: current, branches[] {name, current, commit, upstream, track, remote}, branch_count. create/switch/delete: branch, commit/created/switched/deleted/force. Missing branch gives not_found; duplicate name gives conflict.",
+  },
+  project_git_commit: {
+    about: "Commit changes. Without paths: commit whatever is staged (paths given to it are staged first with git add). Amend is opt-in.",
+    use: "your edits are ready to be committed locally.",
+    avoid: "nothing should be committed (git only stages when paths are given, or you already staged). Merge/rebase and push are not performed.",
+    out: "sha, short_sha, subject, files_changed, files, amend. No staged changes gives invalid_request (pass paths or stage first).",
+  },
+  project_git_stash: {
+    about: "Stash push/list/apply/pop/drop/show. Push stashes staged+unstaged tracked changes (add include_untracked=1 for untracked files).",
+    use: "you need to pause work to switch branches or commit selectively.",
+    avoid: "you need to stash and keep a copy (stash keeps one; use apply over pop) or drop permanently (prefer apply, then commit).",
+    out: "push: pushed, message, selector, output. list: entries[] {selector, sha, subject}, count. apply/pop/drop: applied/dropped. show: files[], count.",
+  },
 
   // ---- shell & JS ---------------------------------------------------------
   project_shell_run: {

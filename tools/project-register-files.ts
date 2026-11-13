@@ -340,4 +340,58 @@ export function registerFileTools(server: McpServer, deps: FileToolsDeps): void 
     },
     (args) => runOne("delete_path", args),
   );
+
+  server.registerTool(
+    "project_move_path",
+    {
+      ...config("Move path", {
+        speed_profile: "fast; clears the read/list/search cache for both paths.",
+        batch_safe: false,
+      }, { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false }),
+      inputSchema: {
+        from: path_.describe("Existing workspace path to move or rename."),
+        to: path_.describe("New workspace path: the final name, not a parent directory."),
+        overwrite: flag01.optional().describe("1 replaces an existing target file (default 0). A directory is never replaced."),
+        create_dirs: flag01.optional().describe("1 creates missing parent directories of `to` (default 1)."),
+        reason: reason_,
+      },
+    },
+    (args) => runOne("move_path", args),
+  );
+
+  server.registerTool(
+    "project_copy_path",
+    {
+      ...config("Copy path", {
+        speed_profile: "fast for files; directory copies scale with size. Clears the read/list/search cache.",
+        batch_safe: false,
+      }, { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }),
+      inputSchema: {
+        from: path_.describe("Existing workspace path to copy."),
+        to: path_.describe("New workspace path: the final name, not a parent directory."),
+        recursive: flag01.optional().describe("1 is required to copy a directory (default 0)."),
+        overwrite: flag01.optional().describe("1 replaces an existing target file (default 0). A directory is never replaced."),
+        create_dirs: flag01.optional().describe("1 creates missing parent directories of `to` (default 1)."),
+        reason: reason_,
+      },
+    },
+    (args) => runOne("copy_path", args),
+  );
+
+  server.registerTool(
+    "project_apply_patch",
+    {
+      ...config("Apply patch", {
+        speed_profile: "scales with patch size; validates every file before writing and rolls back the whole patch on failure.",
+        batch_safe: false,
+      }, { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false }),
+      inputSchema: {
+        patch: z.string().min(1).describe("Unified diff. Multiple files supported: each section starts with 'diff --git a/old b/new' or '--- a/old' + '+++ b/new' ('/dev/null' for created/deleted files)."),
+        dry_run: flag01.optional().describe("1 validates the patch against the current files and reports what would change, writing nothing (default 0)."),
+        expected_sha256: z.record(z.string(), z.string()).optional().describe("Optional map of workspace-relative path -> hex SHA-256; the patch is refused if a file changed since it was read. Keys must be paths the patch touches."),
+        reason: reason_,
+      },
+    },
+    (args) => runOne("apply_patch", args),
+  );
 }

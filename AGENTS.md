@@ -40,7 +40,7 @@ npm run bench:mcp          # end-to-end numbers for PRs
   `snapshot-lifecycle`, `snapshot-mirror`, `workspace-switch`, `js-executor`,
   `approval-lifecycle`, `config-posture`, `protected-snapshot-paths`, `github-device-flow`,
   `provider-secret-guard`, `shell-unavailable`, `shell-elicitation`, `shell-repeat`,
-  `git-url-fuzz`, `policy-corpus`.
+  `git-url-fuzz`, `policy-corpus`, `move-copy`, `apply-patch`, `git-local`.
 - **Not** in the `verify` chain (run them by hand when the area changes):
   `test:shell-security`, `test:shell-policy-fuzz`, `test:shell-policy-adversarial`,
   `test:shell-tokenizer-edges`, `test:shell-session-cache`, `test:shell-policy-file`,
@@ -61,8 +61,8 @@ npm run bench:mcp          # end-to-end numbers for PRs
      ceiling fails the check, and ceilings otherwise only ratchet **down**);
   4. tool counts changed → update the README count strings **and**
      `scripts/check-docs.ts` (`EXPECTED_DEFAULT_TOOLS` / `EXPECTED_EXPERT_TOOLS`) together.
-     README says 32 default / 43 expert (+1 with `project_execute_js`); `schema-budget.json`
-     records 33/44 because it registers the JS tool.
+     README says 36 default / 49 expert (+1 with `project_execute_js`); `schema-budget.json`
+     records 37/50 because it registers the JS tool.
 - **Version bump** — `package.json`, `package-lock.json` (both `version` and `packages[""].version`),
   `server.json` (both `version` and `packages[]`) and `lib/version.ts` must all agree;
   `check:docs` fails otherwise.

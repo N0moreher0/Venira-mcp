@@ -57,6 +57,7 @@ const codeintel = (await load(
 const workflow = (await load(
   "tools/project-register-workflow.ts",
 )) as typeof import("../tools/project-register-workflow.js");
+const git = (await load("tools/project-register-git.ts")) as typeof import("../tools/project-register-git.js");
 const vcs = (await load("tools/project-register-vcs.ts")) as typeof import("../tools/project-register-vcs.js");
 const toolMode = (await load("tools/project-tool-mode.ts")) as typeof import("../tools/project-tool-mode.js");
 const docs = (await load("tools/project-docs.ts")) as typeof import("../tools/project-docs.js");
@@ -106,6 +107,7 @@ workflow.registerWorkflowTools(fakeServer, {
   runPlanReadBatch: dummy,
   runSnapshot: dummy,
 });
+git.registerGitTools(fakeServer, { runOne: dummy });
 vcs.registerVcsTools(fakeServer, { runOne: dummy, runSecret: dummy });
 
 /** Bytes one tool contributes to tools/list. */

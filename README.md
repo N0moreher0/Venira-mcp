@@ -1,7 +1,7 @@
 # venira-mcp
 
 Fast, workspace-scoped MCP server for coding agents (OpenCode, Claude Desktop, any MCP client).
-Two tool modes — **Default** (27 coding tools + shell, no CI/CD) · **Expert** (40 tools: default + CI/CD). Setting `VENIRA_JS_EXEC_MODE=ask`, `semi-auto` or `auto` adds `project_execute_js` (28 / 41). `VENIRA_SETUP_TOOLS=1` adds the two setup tools `project_detect_harnesses` and `project_install_self` (+2); `npx venira-mcp --install` and `--print-config` do the same from a terminal.
+Two tool modes — **Default** (36 coding tools + shell, no CI/CD) · **Expert** (49 tools: default + CI/CD). Setting `VENIRA_JS_EXEC_MODE=ask`, `semi-auto` or `auto` adds `project_execute_js` (37 / 50). `VENIRA_SETUP_TOOLS=1` adds the two setup tools `project_detect_harnesses` and `project_install_self` (+2); `npx venira-mcp --install` and `--print-config` do the same from a terminal.
 Pure Node, 1 native dependency (better-sqlite3), no GUI, no external binary.
 
 > **Security scope.** Venira is a guard rail with an audit trail, not a sandbox. It runs with the privileges of the OS user that started it. The workspace lock limits the paths the file tools can touch (unless `VENIRA_UNRESTRICTED=1`), not what a shell command does: commands are classified by rules (allow / ask / deny) and every call is audited, but a malicious prompt can still steer the agent into running a harmful command that the active profile lets through (with `off`, every command runs). Anything running as the same OS user can read the keys in `VENIRA_DATA_DIR`. For untrusted workspaces, or whenever you need a real isolation boundary, run Venira in a container or VM. Details: [`SECURITY.md`](./SECURITY.md).
@@ -233,8 +233,8 @@ Two tool modes set which tools the client sees. Set via `VENIRA_TOOL_MODE` env v
 
 | Mode | Tools | Includes |
 |---|---|---|
-| `default` | **29** (30 with `VENIRA_JS_EXEC_MODE=ask`, `semi-auto` or `auto`) | Read/write/edit/search, code intel, snapshots, shell, `project_delete_path`, optional JS exec — **no** CI/CD; `project_explain_error` and `project_plan_read_batch` are expert-only |
-| `expert` | **42** (43 with `VENIRA_JS_EXEC_MODE=ask`, `semi-auto` or `auto`) | Everything in default + `project_pr_*`, `project_ci_*`, `project_explain_error`, `project_plan_read_batch` |
+| `default` | **36** (37 with `VENIRA_JS_EXEC_MODE=ask`, `semi-auto` or `auto`) | Read/write/edit/search, code intel, snapshots, shell, `project_delete_path`, optional JS exec — **no** CI/CD; `project_explain_error` and `project_plan_read_batch` are expert-only |
+| `expert` | **49** (50 with `VENIRA_JS_EXEC_MODE=ask`, `semi-auto` or `auto`) | Everything in default + `project_pr_*`, `project_ci_*`, `project_explain_error`, `project_plan_read_batch` |
 
 `project_delete_path` is always available. In `balanced` / `strict` mode, shell `rm -rf /` / `~` and Windows drive-wide deletes are hard-denied, and recursive/force deletes (`Remove-Item -Recurse -Force`, `rd /s /q`, `del /f /q`) need approval. `permissive` mode lets ordinary ask-rule and unclassified commands run without a prompt, but hard-denies require approval and uninspectable command substitutions require approval in every policy-enabled mode.
 
@@ -271,6 +271,9 @@ All tools return the standard envelope (`ok`, `kind`, `data`, `hint`, `elapsed_m
 | `project_edit_file` | Replace `old_text`→`new_text`; `edits[]` (up to 64); fuzzy edit opt-in |
 | `project_edit_batch` | Multiple edits; stops at first failure and attempts checkpoint rollback. Check `data.atomic` and `data.rollback_succeeded`; snapshot failure/incompleteness or a partial restore means changes may remain. A batch that rolled back cleanly removes its own checkpoint (`data.checkpoint_deleted: true`), so a failed attempt does not eat a `VENIRA_SNAPSHOT_KEEP` slot; a **failed** rollback keeps the checkpoint - it is the recovery path. |
 | `project_create` | Create a directory (missing parents are created; use `project_write_file` for file content) |
+| `project_move_path` | Move or rename a file/dir; `overwrite=1` replaces a file (never a directory); **not undoable** |
+| `project_copy_path` | Copy a file, or a directory with `recursive=1`; skips symbolic links and protected files inside a directory |
+| `project_apply_patch` | Apply a unified diff (create/modify/delete/rename), all-or-nothing; `dry_run=1` to validate first; rolls back every file on failure |
 | `project_delete_path` | Delete file/dir; **not undoable** |
 
 **Checkpoints (git-free rollback)**
@@ -307,6 +310,19 @@ All tools return the standard envelope (`ok`, `kind`, `data`, `hint`, `elapsed_m
 **What the shell really did.** The response names the binary that ran the command (`shell_path`, `shell_kind`: `native`, `wsl`, `git-bash` or `unknown`) - on Windows `bash` is often the WSL launcher, which runs the command inside a Linux distro and reports its own messages in UTF-16 (those are decoded for you, and a WSL without a distribution comes back with a `shell_hint`). `cmd.exe` receives the command verbatim, so double quotes survive; PowerShell reports the **native** exit code of the last command (`git status` outside a repository reports 128, not 1), while a failing cmdlet still reports 1.
 
 **Choosing a shell on Windows.** `powershell` starts `powershell.exe` (5.1), which has no `&&` / `||` pipeline-chain operators; `pwsh` starts PowerShell 7+ (`winget install --id Microsoft.PowerShell`), which has them. `pwsh` must be on the `PATH` of the server process, so restart the MCP client after installing it. Policy treats both as the same PowerShell dialect: every segment of an `&&` / `||` chain is classified on its own, so a denied command after `&&` is still denied (`policy_adv_dialect_pwsh_chain_operators`). `pwsh` starts slower than `cmd`; set `VENIRA_DEFAULT_SHELL=pwsh` only if you want it for every call. A shell binary that is not installed fails with `[shell_unavailable]` and an install hint instead of returning exit code -1. In PowerShell an unquoted `(...)`, `@(...)` or `{...}` counts as a substitution the policy cannot inspect, so a command that carries one always asks for approval in policy-enabled modes, including `permissive`: PowerShell evaluates the group before the command runs, so `git status (Remove-Item -Recurse -Force $HOME)` would otherwise delete while looking like read-only git (`policy_adv_dialect_powershell_grouping_expressions`).
+
+**Local git (this repo)**
+
+| Tool | Purpose |
+|---|---|
+| `project_git_status` | Parsed worktree status: branch/detached, upstream (+ `upstream_gone`), ahead/behind, per-file `{path, old_path?, staged, unstaged, untracked, unmerged, kind, status, index_status, worktree_status}` + `counts`; `clean` flag; `paths[]` limits |
+| `project_git_diff` | Parsed diff (`staged=1` for the index): per-file `action` (`added|modified|deleted|renamed`) + `hunks[]` (`old_start/old_lines`, `new_start/new_lines`, `section`), `counts`, `patch_bytes`; `include_patch=1` adds the unified text capped at `max_bytes` |
+| `project_git_log` | Commit list (`ref`, `limit`, `paths[]`, `author`, `grep`) — or `blame=1` with `path` for per-line blame (`line, commit, author, authored_at, summary, prev_*`); `max_lines` caps blame |
+| `project_git_branch` | `action=list` (local; `include_remote=1` for remotes), `current`, `create` (`from=` optional), `switch`, `delete` (`force=1`) |
+| `project_git_commit` | Commit staged changes, or stage `paths[]` first; `amend=1` / `allow_empty=1` opt-in; reports `sha`, `files_changed`, `files` |
+| `project_git_stash` | `action=push|list|apply|pop|drop|show` (`stash@{N}`); `include_untracked=1` includes untracked files |
+
+Read-only git (`status`, `diff`, `log`/blame, `branch` list/current, `stash` list/show) needs no `reason`; mutating calls do. Mutations invalidate the whole cache (worktree-wide change). Local only against the workspace repository root (`git rev-parse --show-toplevel`; paths stay workspace-relative); **push is never performed** — it stays an explicit named shell override.
 
 **Git provider: PR/CI (GitHub, GitLab, Bitbucket)**
 
@@ -352,7 +368,7 @@ Full reference: the source reads 90+ distinct `VENIRA_*` names; this table lists
 | Variable | Default | What it does |
 |---|---|---|
 | `VENIRA_WORKSPACE` | `process.cwd()` | Workspace root; all paths resolve against it |
-| `VENIRA_TOOL_MODE` | `default` | `default` (27 tools) or `expert` (40 tools); +2 with `VENIRA_SETUP_TOOLS=1`, +1 with `VENIRA_JS_EXEC_MODE=ask`, `semi-auto` or `auto` |
+| `VENIRA_TOOL_MODE` | `default` | `default` (36 tools) or `expert` (49 tools); +2 with `VENIRA_SETUP_TOOLS=1`, +1 with `VENIRA_JS_EXEC_MODE=ask`, `semi-auto` or `auto` |
 | `VENIRA_OUTPUT_MODE` | `full` | `full` or `compact` (summarize/trim payloads > 8 KiB; generic payloads use `preview_text`) |
 | `VENIRA_AUDIT_DETAIL` | `summary` | What `project_read_audit` can show per job: `off` stores nothing extra, `summary` keeps one args line and one result line, `full` also keeps redacted JSON args/result (up to 16 KiB per job). Long or sensitive values (file content, `old_text`/`new_text`, secret values) are stored as a length only |
 | `VENIRA_PROFILE` | `full` | `full` or `core` (disables dependency graph, change impact, outline_symbol, symbol_references and recent_files — smaller tools/list, for small models / restricted context) |

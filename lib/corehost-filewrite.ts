@@ -3,7 +3,7 @@
  * create_directory, delete_path. Extracted from corehost.ts; behaviour is
  * unchanged.
  */
-import { existsSync, promises as fs } from "node:fs";
+import { constants as fsConstants, existsSync, promises as fs, type Stats } from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { resolveInWorkspace, errorWithData, type RustResponse } from "./corehost-common.js";
@@ -549,6 +549,274 @@ export async function opDeletePath(
         kind: stat.isDirectory() ? "directory" : "file",
         entries_deleted: entriesDeleted,
         bytes_deleted: bytesDeleted,
+        reason: sanitizeReason(args.reason),
+      },
+    },
+  };
+}
+
+
+// ---------------------------------------------------------------------------
+// move_path / copy_path (ROADMAP_TOOLS.md, phase 1)
+// ---------------------------------------------------------------------------
+
+const caseFoldPath = (value: string): string => (PLATFORM === "win32" ? value.toLowerCase() : value);
+
+/** True when `child` is `parent` itself or lies inside it (case-insensitive on Windows). */
+function isInsidePath(parent: string, child: string): boolean {
+  const rel = path.relative(caseFoldPath(path.resolve(parent)), caseFoldPath(path.resolve(child)));
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
+}
+
+function relativeOf(root: string, abs: string): string {
+  return path.relative(root, abs).replace(/\\/g, "/") || ".";
+}
+
+async function countTree(dir: string): Promise<{ files: number; dirs: number; bytes: number }> {
+  let files = 0;
+  let dirs = 0;
+  let bytes = 0;
+  const entries = await fs.readdir(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    const abs = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      const sub = await countTree(abs);
+      files += sub.files;
+      dirs += sub.dirs + 1;
+      bytes += sub.bytes;
+    } else {
+      try {
+        bytes += (await fs.lstat(abs)).size;
+      } catch { /* best-effort */ }
+      files += 1;
+    }
+  }
+  return { files, dirs, bytes };
+}
+
+type TransferPlan = {
+  absFrom: string;
+  absTo: string;
+  srcStat: Stats;
+  /** Source and target differ only by letter case on a case-insensitive file system. */
+  caseOnly: boolean;
+  /** The target is an existing file that overwrite=1 allows replacing. */
+  overwrites: boolean;
+  createDirs: boolean;
+};
+
+/** Shared validation for move_path and copy_path. Nothing on disk changes here. */
+async function planTransfer(
+  verb: "move" | "copy",
+  args: Record<string, unknown>,
+  root: string,
+): Promise<TransferPlan> {
+  const from = args.from;
+  const to = args.to;
+  if (typeof from !== "string" || from.trim() === "" || typeof to !== "string" || to.trim() === "") {
+    throw new Error(`[invalid_request] ${verb}_path needs non-empty from and to. Hint: pass workspace-relative paths.`);
+  }
+  const absFrom = resolveInWorkspace(from, root);
+  const absTo = resolveInWorkspace(to, root);
+  for (const [label, abs, rel] of [["source", absFrom, from], ["target", absTo, to]] as const) {
+    if (isProtectedPath(abs)) {
+      throw new Error(`[sensitive_result] The ${label} path is protected by policy: ${rel}. Hint: do not ${verb} protected files.`);
+    }
+  }
+  if (isInsidePath(absFrom, root)) {
+    throw new Error(
+      `[invalid_request] Refusing to ${verb} the workspace root: ${from}. Hint: pass a file or subdirectory inside the workspace.`,
+    );
+  }
+  const sameFolded = caseFoldPath(path.resolve(absFrom)) === caseFoldPath(path.resolve(absTo));
+  if (path.resolve(absFrom) === path.resolve(absTo)) {
+    throw new Error(`[invalid_request] from and to are the same path: ${from}. Hint: pass a different target path.`);
+  }
+  const caseOnly = sameFolded; // distinct strings, same folded path: only possible on win32
+  if (caseOnly && verb === "copy") {
+    throw new Error(
+      `[invalid_request] from and to differ only by letter case, which is the same file on this file system: ${from} -> ${to}. Hint: use project_move_path to rename it, or pick a different name.`,
+    );
+  }
+
+  let srcStat: Stats;
+  try {
+    srcStat = await fs.lstat(absFrom);
+  } catch {
+    throw new Error(`[not_found] Source does not exist: ${from}. Hint: check it with project_list_files.`);
+  }
+  if (srcStat.isDirectory() && !caseOnly && isInsidePath(absFrom, absTo)) {
+    throw new Error(`[invalid_request] Cannot ${verb} a directory into itself: ${from} -> ${to}. Hint: choose a target outside ${from}.`);
+  }
+
+  let overwrites = false;
+  if (!caseOnly) {
+    const dstStat = await fs.lstat(absTo).catch(() => null);
+    if (dstStat) {
+      if (args.overwrite !== true) {
+        throw new Error(`[conflict] Target already exists: ${to}. Hint: pass overwrite=1 to replace a file, or choose another target.`);
+      }
+      if (dstStat.isDirectory() || srcStat.isDirectory()) {
+        throw new Error(
+          `[conflict] overwrite=1 only replaces a file with a file; ${to} or ${from} is a directory. ` +
+            "Hint: delete the target with project_delete_path first, or choose another target.",
+        );
+      }
+      overwrites = true;
+    }
+  }
+  return { absFrom, absTo, srcStat, caseOnly, overwrites, createDirs: args.create_dirs !== false };
+}
+
+async function ensureTargetParent(plan: TransferPlan, root: string): Promise<void> {
+  const parent = path.dirname(plan.absTo);
+  if (plan.createDirs) {
+    try {
+      await fs.mkdir(parent, { recursive: true });
+    } catch (error) {
+      throw new Error(`[io_error] Cannot create ${relativeOf(root, parent)}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    return;
+  }
+  const stat = await fs.stat(parent).catch(() => null);
+  if (!stat || !stat.isDirectory()) {
+    throw new Error(
+      `[invalid_request] The target's parent directory does not exist: ${relativeOf(root, parent)}. Hint: pass create_dirs=1 (the default) or create it with project_create.`,
+    );
+  }
+}
+
+export async function opMovePath(
+  args: Record<string, unknown>,
+  root: string,
+): Promise<RustResponse> {
+  const plan = await planTransfer("move", args, root);
+  await ensureTargetParent(plan, root);
+  try {
+    await fs.rename(plan.absFrom, plan.absTo);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EXDEV") {
+      // Different volume: copy, then remove the source.
+      try {
+        if (plan.srcStat.isDirectory()) {
+          await fs.cp(plan.absFrom, plan.absTo, { recursive: true, errorOnExist: true, force: false });
+        } else {
+          await fs.copyFile(plan.absFrom, plan.absTo, plan.overwrites ? 0 : fsConstants.COPYFILE_EXCL);
+        }
+        await fs.rm(plan.absFrom, { recursive: true, force: true });
+      } catch (inner) {
+        throw new Error(`[io_error] Cannot move ${args.from} to ${args.to}: ${inner instanceof Error ? inner.message : String(inner)}`);
+      }
+    } else {
+      throw new Error(`[io_error] Cannot move ${args.from} to ${args.to}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  removeFromRecentIndex(plan.absFrom, root);
+  let entries = 1;
+  let bytes = plan.srcStat.size;
+  if (plan.srcStat.isDirectory()) {
+    try {
+      const counted = await countTree(plan.absTo);
+      entries = counted.files + counted.dirs + 1;
+      bytes = counted.bytes;
+    } catch { /* best-effort */ }
+  } else {
+    recordRecentFile(plan.absTo, root);
+    try {
+      await fs.stat(plan.absTo).then((s) => recordRecentFileMeta(plan.absTo, s));
+    } catch { /* best-effort */ }
+  }
+
+  return {
+    status: "completed",
+    result: {
+      kind: "path_moved",
+      data: {
+        from: relativeOf(root, plan.absFrom),
+        to: relativeOf(root, plan.absTo),
+        kind: plan.srcStat.isDirectory() ? "directory" : "file",
+        overwritten: plan.overwrites,
+        entries,
+        bytes,
+        reason: sanitizeReason(args.reason),
+      },
+    },
+  };
+}
+
+export async function opCopyPath(
+  args: Record<string, unknown>,
+  root: string,
+): Promise<RustResponse> {
+  const plan = await planTransfer("copy", args, root);
+  if (plan.srcStat.isSymbolicLink()) {
+    throw new Error(`[unsupported] Symbolic links are not copied: ${args.from}. Hint: copy the file it points to.`);
+  }
+  const isDir = plan.srcStat.isDirectory();
+  if (isDir && args.recursive !== true) {
+    throw new Error(`[invalid_request] ${args.from} is a directory. Hint: pass recursive=1 to copy it.`);
+  }
+  await ensureTargetParent(plan, root);
+
+  let skippedSymlinks = 0;
+  let skippedProtected = 0;
+  try {
+    if (isDir) {
+      await fs.cp(plan.absFrom, plan.absTo, {
+        recursive: true,
+        errorOnExist: true,
+        force: false,
+        filter: async (src: string) => {
+          if (path.resolve(src) === path.resolve(plan.absFrom)) return true;
+          if (isProtectedPath(src)) {
+            skippedProtected += 1;
+            return false;
+          }
+          try {
+            if ((await fs.lstat(src)).isSymbolicLink()) {
+              skippedSymlinks += 1;
+              return false;
+            }
+          } catch { /* let fs.cp report it */ }
+          return true;
+        },
+      });
+    } else {
+      await fs.copyFile(plan.absFrom, plan.absTo, plan.overwrites ? 0 : fsConstants.COPYFILE_EXCL);
+    }
+  } catch (error) {
+    throw new Error(`[io_error] Cannot copy ${args.from} to ${args.to}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  let entries = 1;
+  let bytes = plan.srcStat.size;
+  if (isDir) {
+    try {
+      const counted = await countTree(plan.absTo);
+      entries = counted.files + counted.dirs + 1;
+      bytes = counted.bytes;
+    } catch { /* best-effort */ }
+  } else {
+    recordRecentFile(plan.absTo, root);
+    try {
+      await fs.stat(plan.absTo).then((s) => recordRecentFileMeta(plan.absTo, s));
+    } catch { /* best-effort */ }
+  }
+
+  return {
+    status: "completed",
+    result: {
+      kind: "path_copied",
+      data: {
+        from: relativeOf(root, plan.absFrom),
+        to: relativeOf(root, plan.absTo),
+        kind: isDir ? "directory" : "file",
+        overwritten: plan.overwrites,
+        entries,
+        bytes,
+        ...(skippedSymlinks > 0 ? { skipped_symlinks: skippedSymlinks } : {}),
+        ...(skippedProtected > 0 ? { skipped_protected: skippedProtected } : {}),
         reason: sanitizeReason(args.reason),
       },
     },

@@ -241,9 +241,13 @@ export async function runCore($h: Harness) {
   // every flag's schema, and project_read_batch (which enumerates four operations' args)
   // crossed the old 5100 ceiling at 5647 bytes. Totals are unchanged: expert 68624 (limit 72000),
   // default 49457 (limit 50000) both still fit.
+  // Raised deliberately again in ROADMAP_TOOLS phase 1+2 (move/copy/apply_patch grew the default list to ~52950 B, measured JS-off; expert ~71900 B, limit 72000):
+  // default 50000 -> 53000. Ceilings are explicit so any growth fails verification.
+  // Raised deliberately again in phase 3 (six project_git_* tools, ~9250 B measured with JS; expert/default totals re-based to 83661/63851 in scripts/schema-budget.json):
+  // default 53000 -> 63000, expert 72000 -> 85000. Ceilings are explicit so any growth fails verification.
   const TOOL_SCHEMA_MAX_BYTES = 5700;
-  const EXPERT_TOOL_LIST_MAX_BYTES = 72000;
-  const DEFAULT_TOOL_LIST_MAX_BYTES = 50000;
+  const EXPERT_TOOL_LIST_MAX_BYTES = 85000;
+  const DEFAULT_TOOL_LIST_MAX_BYTES = 63000;
   const toolSchemaBytes = (tool: {
     name: string;
     description?: string;
