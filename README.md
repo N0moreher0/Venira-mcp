@@ -409,6 +409,56 @@ Full reference: the source reads 80+ distinct supported `VENIRA_*` names; this t
 | `VENIRA_SHELL_POLICY_FILE` | unset | Path to a JSON shell policy file (allow/ask/deny rules); never read from the workspace automatically |
 | `VENIRA_TOOL_POLICY_JSON` / `VENIRA_TOOL_POLICY_FILE` | unset | Per-tool policy rules, inline JSON or a file (see `lib/tool-policy.ts`) |
 
+### Advanced tuning knobs (all optional)
+
+Sensible defaults; leave any of these unset unless you know why you set them.
+
+| Variable | Default | What it does |
+|---|---|---|
+| `VENIRA_PRETTY` | `"0"` | Pretty-print JSON envelopes |
+| `VENIRA_BATCH_ITEM_BYTES` | `524288` | Per-item response budget inside `project_read_batch`; larger items are trimmed |
+| `VENIRA_SHELL_ENV_ALLOW` | unset | Extra environment variable names passed through to shell runs, beyond the scrubbed baseline |
+| `VENIRA_SHELL_CACHE` | `"1"` | Cache read-only shell results |
+| `VENIRA_SHELL_CACHE_READ_ONLY` | `"1"` | Compatibility flag (shell output caching is always read-only — nothing mutating is ever cached) |
+| `VENIRA_CONFIG_FILE` | unset | Explicit path of the JSON config file (git provider settings); never auto-read from a workspace |
+| `VENIRA_DYNAMIC_WORKSPACE` | `"0"` | Allow switching workspace at runtime within `VENIRA_WORKSPACE_ROOTS` |
+| `VENIRA_WORKSPACE_ROOTS` | unset | Allowed workspace roots for dynamic workspace switching (absolute paths) |
+| `VENIRA_CACHE_LIST_ONLY` | unset | Enable only the directory-listing cache |
+| `VENIRA_CACHE_SEARCH_ONLY` | unset | Enable only the search cache |
+| `VENIRA_LIST_CACHE_MS` | `1500` | Directory-listing cache lifetime |
+| `VENIRA_NEGATIVE_CACHE_MS` | `500` | Lifetime of cached not-found results |
+| `VENIRA_RECENT_CACHE_MS` | `2000` | `project_recent_files` cache lifetime |
+| `VENIRA_SEARCH_CACHE_MS` | `3000` | Search cache lifetime |
+| `VENIRA_TTL_CACHE_BYTES` | `8388608` | Size cap of each list / search / recent / references cache |
+| `VENIRA_CACHE_RACY_MS` | `30` | Files modified this recently are re-read instead of served from the read cache (`0` disables) |
+| `VENIRA_READ_CACHE_BYTES` | `67108864` | Total size cap of the file-read cache |
+| `VENIRA_AUDIT_STRICT` | `"0"` | `"1"` fails a tool call when its audit row cannot be written (default: audit failure is a warning) |
+| `VENIRA_AUDIT_KEEP_DAYS` | `90` | Audit rows older than this many days are pruned |
+| `VENIRA_SNAPSHOT_MAX_BYTES` | `536870912` | Total size cap of a project checkpoint |
+| `VENIRA_SNAPSHOT_MAX_FILE_BYTES` | `33554432` | Largest single file a checkpoint captures |
+| `VENIRA_SNAPSHOT_MAX_FILES` | `0` | File-count cap of a checkpoint (`0` keeps the built-in limit) |
+| `VENIRA_GIT_MAX_BYTES` | built-in | Largest provider API response accepted |
+| `VENIRA_GIT_LOG_MAX_BYTES` | built-in | Total CI log bytes returned per call |
+| `VENIRA_GIT_MAX_REDIRECTS` | built-in | Redirects followed (same-origin only) |
+| `VENIRA_GIT_ALLOW_HTTP` | `"0"` | Allow plain-HTTP provider URLs (tokens may travel in clear text) |
+| `VENIRA_GITHUB_ALLOW_HTTP` | `"0"` | Deprecated alias of `VENIRA_GIT_ALLOW_HTTP`; the `GIT_*` name wins, prints a one-time note |
+| `VENIRA_GIT_ALLOWED_HOSTS` | unset | Extra API hosts the provider client may call |
+| `VENIRA_GIT_API_URL` | unset | Provider API base URL (self-hosted instances) |
+| `VENIRA_GITHUB_API_URL` | unset | Deprecated alias of `VENIRA_GIT_API_URL`; the `GIT_*` name wins, prints a one-time note |
+| `VENIRA_GIT_PROXY` | unset | HTTP(S) proxy for provider calls |
+| `VENIRA_GIT_REPO` | unset | Repository slug override (`owner/name`) |
+| `VENIRA_GITHUB_REPO` | unset | GitHub repository slug override |
+| `VENIRA_GITLAB_REPO` | unset | GitLab project path override |
+| `VENIRA_BITBUCKET_REPO` | unset | Bitbucket repository slug override |
+| `VENIRA_GIT_SECRET_NAME` | unset | Name of the stored secret holding the provider token (default `GITHUB_TOKEN`) |
+| `VENIRA_GIT_TOKEN_ENV` | unset | Name of another environment variable holding the provider token (e.g. `GITHUB_TOKEN`) |
+| `VENIRA_GIT_USERNAME` | unset | Username for providers that need one (Bitbucket app passwords) |
+| `VENIRA_GITHUB_TOKEN` | unset | GitHub token (falls back to `GITHUB_TOKEN` / `GH_TOKEN`) |
+| `VENIRA_GITLAB_TOKEN` | unset | GitLab token (falls back to `GITLAB_TOKEN` / `GL_TOKEN`) |
+| `VENIRA_BITBUCKET_TOKEN` | unset | Bitbucket token (falls back to `BITBUCKET_TOKEN` / `BB_TOKEN`) |
+| `VENIRA_SECRET_KEYCHAIN` | `"auto"` | Windows keychain for the secret store key (`auto` / `off` / `required`) |
+| `VENIRA_TRACE_FILE` | unset | Also append the trace to this file (rotates at 10 MB) |
+
 ## 7. Security model
 
 **Conservative by default:**

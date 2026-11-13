@@ -68,7 +68,6 @@ const spec =
     ...extra,
   });
 
-const NOT_DOC = "advanced tuning; listed in the README advanced-tuning table" as const;
 
 // ---------------------------------------------------------------------------
 // security / approvals
@@ -287,10 +286,9 @@ export const ENV_REGISTRY: readonly EnvVarSpec[] = [
     default: "full",
     choices: ["full", "compact"],
   }),
-  toolFlag("VENIRA_PRETTY", "Pretty-print JSON envelopes.", false, { default: "0", reason: NOT_DOC }),
-  toolInt("VENIRA_BATCH_ITEM_BYTES", "Per-item response budget inside project_read_batch.", false, {
+  toolFlag("VENIRA_PRETTY", "Pretty-print JSON envelopes.", true, { default: "0" }),
+  toolInt("VENIRA_BATCH_ITEM_BYTES", "Per-item response budget inside project_read_batch.", true, {
     default: "524288",
-    reason: NOT_DOC,
   }),
   toolFlag("VENIRA_EDIT_FUZZY", "Allow fuzzy matching as a fallback in project_edit_file. Also decides whether fuzzy_distance, ignore_indentation and case_insensitive are advertised in the edit tool schemas (tools/list changes with this flag).", true, { default: "0" }),
   toolFlag("VENIRA_SETUP_TOOLS", "Advertise project_detect_harnesses and project_install_self in tools/list (off by default; `npx venira-mcp --install` and `--print-config` do the same from a terminal). tools/list changes with this flag.", true, { default: "0" }),
@@ -298,9 +296,7 @@ export const ENV_REGISTRY: readonly EnvVarSpec[] = [
   toolInt("VENIRA_SEARCH_MAX_FILES", "Max files collected by the JS fallback walker (collectFiles) before the walk stops and `complete=false` is returned. Bounds searches rooted at huge trees (e.g. VENIRA_UNRESTRICTED=1 with an absolute path outside the workspace).", true, { default: "50000" }),
 
   // --- shell ---------------------------------------------------------------
-  shList("VENIRA_SHELL_ENV_ALLOW", "Extra environment variable names passed to shell runs.", false, {
-    reason: NOT_DOC,
-  }),
+  shList("VENIRA_SHELL_ENV_ALLOW", "Extra environment variable names passed to shell runs.", true, {}),
   shInt("VENIRA_SHELL_MAX_OUTPUT_BYTES", "Per-stream output cap for a shell run.", true, {
     default: "262144",
   }),
@@ -310,28 +306,20 @@ export const ENV_REGISTRY: readonly EnvVarSpec[] = [
   shInt("VENIRA_SHELL_TAIL_MAX", "Characters kept in a shell run's stdout/stderr tail (minimum 256).", true, {
     default: "2000",
   }),
-  shFlag("VENIRA_SHELL_CACHE", "Cache read-only shell results.", false, { default: "1", reason: NOT_DOC }),
-  shFlag("VENIRA_SHELL_CACHE_READ_ONLY", "Compatibility flag; shell output caching always stays read-only.", false, {
+  shFlag("VENIRA_SHELL_CACHE", "Cache read-only shell results.", true, { default: "1" }),
+  shFlag("VENIRA_SHELL_CACHE_READ_ONLY", "Compatibility flag; shell output caching always stays read-only.", true, {
     default: "1",
-    reason: NOT_DOC,
   }),
-  shStr("VENIRA_DEFAULT_SHELL", "Shell used when a call does not name one (powershell, pwsh, cmd or bash).", false, {
-    reason: NOT_DOC,
-  }),
+  shStr("VENIRA_DEFAULT_SHELL", "Shell used when a call does not name one (powershell, pwsh, cmd or bash).", true, {}),
 
   // --- workspace / data ----------------------------------------------------
   wsPath("VENIRA_WORKSPACE", "Workspace root; every path resolves against it.", true, { default: "process.cwd()" }),
   wsPath("VENIRA_DATA_DIR", "Directory for the audit DB, approvals and state.", true),
-  wsPath("VENIRA_CONFIG_FILE", "Explicit path of the JSON config file (git provider settings).", false, {
-    reason: NOT_DOC,
-  }),
-  wsFlag("VENIRA_DYNAMIC_WORKSPACE", "Allow switching workspace at runtime within VENIRA_WORKSPACE_ROOTS.", false, {
+  wsPath("VENIRA_CONFIG_FILE", "Explicit path of the JSON config file (git provider settings).", true, {}),
+  wsFlag("VENIRA_DYNAMIC_WORKSPACE", "Allow switching workspace at runtime within VENIRA_WORKSPACE_ROOTS.", true, {
     default: "0",
-    reason: NOT_DOC,
   }),
-  wsList("VENIRA_WORKSPACE_ROOTS", "Allowed workspace roots for dynamic workspace switching.", false, {
-    reason: NOT_DOC,
-  }),
+  wsList("VENIRA_WORKSPACE_ROOTS", "Allowed workspace roots for dynamic workspace switching.", true, {}),
 
   // --- cache ---------------------------------------------------------------
   cacheEnum("VENIRA_CACHE", "Cache preset: `all` every cache, `list` only directory listings, `search` only searches, `off` always fresh.", true, {
@@ -339,44 +327,36 @@ export const ENV_REGISTRY: readonly EnvVarSpec[] = [
     choices: ["all", "list", "search", "off"],
     allowEmpty: true,
   }),
-  cacheFlag("VENIRA_CACHE_LIST_ONLY", "Enable only the directory-listing cache.", false, { reason: NOT_DOC }),
-  cacheFlag("VENIRA_CACHE_SEARCH_ONLY", "Enable only the search cache.", false, { reason: NOT_DOC }),
-  cacheInt("VENIRA_LIST_CACHE_MS", "Directory-listing cache lifetime.", false, { default: "1500", reason: NOT_DOC }),
-  cacheInt("VENIRA_NEGATIVE_CACHE_MS", "Lifetime of cached not-found results.", false, {
+  cacheFlag("VENIRA_CACHE_LIST_ONLY", "Enable only the directory-listing cache.", true, {}),
+  cacheFlag("VENIRA_CACHE_SEARCH_ONLY", "Enable only the search cache.", true, {}),
+  cacheInt("VENIRA_LIST_CACHE_MS", "Directory-listing cache lifetime.", true, { default: "1500" }),
+  cacheInt("VENIRA_NEGATIVE_CACHE_MS", "Lifetime of cached not-found results.", true, {
     default: "500",
-    reason: NOT_DOC,
   }),
-  cacheInt("VENIRA_RECENT_CACHE_MS", "project_recent_files cache lifetime.", false, {
+  cacheInt("VENIRA_RECENT_CACHE_MS", "project_recent_files cache lifetime.", true, {
     default: "2000",
-    reason: NOT_DOC,
   }),
-  cacheInt("VENIRA_SEARCH_CACHE_MS", "Search cache lifetime.", false, { default: "3000", reason: NOT_DOC }),
-  cacheInt("VENIRA_TTL_CACHE_BYTES", "Size cap of each list/search/recent/references cache.", false, {
+  cacheInt("VENIRA_SEARCH_CACHE_MS", "Search cache lifetime.", true, { default: "3000" }),
+  cacheInt("VENIRA_TTL_CACHE_BYTES", "Size cap of each list/search/recent/references cache.", true, {
     default: "8388608",
-    reason: NOT_DOC,
   }),
-  cacheInt("VENIRA_CACHE_RACY_MS", "Files modified this recently are re-read instead of served from the read cache (0 disables).", false, {
+  cacheInt("VENIRA_CACHE_RACY_MS", "Files modified this recently are re-read instead of served from the read cache (0 disables).", true, {
     default: "30",
-    reason: NOT_DOC,
   }),
-  cacheInt("VENIRA_READ_CACHE_BYTES", "Total size cap of the file-read cache.", false, {
+  cacheInt("VENIRA_READ_CACHE_BYTES", "Total size cap of the file-read cache.", true, {
     default: "67108864",
-    reason: NOT_DOC,
   }),
 
   // --- audit ---------------------------------------------------------------
-  auditFlag("VENIRA_AUDIT_STRICT", "Fail a tool call when its audit row cannot be written.", false, {
+  auditFlag("VENIRA_AUDIT_STRICT", "Fail a tool call when its audit row cannot be written.", true, {
     default: "0",
-    reason: NOT_DOC,
   }),
-  auditEnum("VENIRA_AUDIT_DETAIL", "How much of each job project_read_audit can show: `summary` keeps one-line args and result, `full` also keeps the redacted, size-capped JSON, `off` keeps neither.", false, {
+  auditEnum("VENIRA_AUDIT_DETAIL", "How much of each job project_read_audit can show: `summary` keeps one-line args and result, `full` also keeps the redacted, size-capped JSON, `off` keeps neither.", true, {
     default: "summary",
     choices: ["off", "summary", "full"],
-    reason: NOT_DOC,
   }),
-  auditInt("VENIRA_AUDIT_KEEP_DAYS", "Audit rows older than this many days are pruned.", false, {
+  auditInt("VENIRA_AUDIT_KEEP_DAYS", "Audit rows older than this many days are pruned.", true, {
     default: "90",
-    reason: NOT_DOC,
   }),
 
   // --- snapshots -----------------------------------------------------------
@@ -385,17 +365,14 @@ export const ENV_REGISTRY: readonly EnvVarSpec[] = [
   snapInt("VENIRA_SNAPSHOT_KEEP", "Checkpoints kept per project before pruning.", true, { default: "20" }),
   snapPath("VENIRA_SNAPSHOT_MIRROR_DIR", "Existing folder that receives an append-only copy of the checkpoint store.", true),
   snapInt("VENIRA_SNAPSHOT_MIRROR_TIMEOUT_MS", "Time budget of one snapshot mirror run (milliseconds).", true, { default: "20000" }),
-  snapInt("VENIRA_SNAPSHOT_MAX_BYTES", "Total size cap of a project checkpoint.", false, {
+  snapInt("VENIRA_SNAPSHOT_MAX_BYTES", "Total size cap of a project checkpoint.", true, {
     default: "536870912",
-    reason: NOT_DOC,
   }),
-  snapInt("VENIRA_SNAPSHOT_MAX_FILE_BYTES", "Largest single file a checkpoint captures.", false, {
+  snapInt("VENIRA_SNAPSHOT_MAX_FILE_BYTES", "Largest single file a checkpoint captures.", true, {
     default: "33554432",
-    reason: NOT_DOC,
   }),
-  snapInt("VENIRA_SNAPSHOT_MAX_FILES", "File-count cap of a checkpoint (0 keeps the built-in limit).", false, {
+  snapInt("VENIRA_SNAPSHOT_MAX_FILES", "File-count cap of a checkpoint (0 keeps the built-in limit).", true, {
     default: "0",
-    reason: NOT_DOC,
   }),
 
   // --- git providers -------------------------------------------------------
@@ -409,49 +386,38 @@ export const ENV_REGISTRY: readonly EnvVarSpec[] = [
   gitInt("VENIRA_GIT_LOG_ZIP_BYTES", "Largest CI log archive accepted.", true),
   gitInt("VENIRA_GIT_LOG_ENTRY_BYTES", "Largest single log entry read from an archive.", true),
   gitInt("VENIRA_GIT_LOG_TEXT_BYTES", "Largest text kept from one log entry.", true),
-  gitInt("VENIRA_GIT_LOG_MAX_BYTES", "Total CI log bytes returned per call.", false, { reason: NOT_DOC }),
-  gitInt("VENIRA_GIT_MAX_BYTES", "Largest provider API response accepted.", false, { reason: NOT_DOC }),
-  gitInt("VENIRA_GIT_MAX_REDIRECTS", "Redirects followed (same-origin only).", false, { reason: NOT_DOC }),
-  gitFlag("VENIRA_GIT_ALLOW_HTTP", "Allow plain-HTTP provider URLs (tokens may travel in clear text).", false, {
+  gitInt("VENIRA_GIT_LOG_MAX_BYTES", "Total CI log bytes returned per call.", true, {}),
+  gitInt("VENIRA_GIT_MAX_BYTES", "Largest provider API response accepted.", true, {}),
+  gitInt("VENIRA_GIT_MAX_REDIRECTS", "Redirects followed (same-origin only).", true, {}),
+  gitFlag("VENIRA_GIT_ALLOW_HTTP", "Allow plain-HTTP provider URLs (tokens may travel in clear text).", true, {
     default: "0",
-    reason: NOT_DOC,
   }),
-  gitFlag("VENIRA_GITHUB_ALLOW_HTTP", "Deprecated alias of VENIRA_GIT_ALLOW_HTTP (prints a one-time note); VENIRA_GIT_ALLOW_HTTP wins when both are set.", false, {
+  gitFlag("VENIRA_GITHUB_ALLOW_HTTP", "Deprecated alias of VENIRA_GIT_ALLOW_HTTP (prints a one-time note); VENIRA_GIT_ALLOW_HTTP wins when both are set.", true, {
     default: "0",
-    reason: NOT_DOC,
   }),
-  gitList("VENIRA_GIT_ALLOWED_HOSTS", "Extra API hosts the provider client may call.", false, { reason: NOT_DOC }),
-  gitStr("VENIRA_GIT_API_URL", "Provider API base URL (self-hosted instances).", false, { reason: NOT_DOC }),
-  gitStr("VENIRA_GITHUB_API_URL", "Deprecated alias of VENIRA_GIT_API_URL (prints a one-time note); VENIRA_GIT_API_URL wins when both are set.", false, { reason: NOT_DOC }),
-  gitStr("VENIRA_GIT_PROXY", "HTTP(S) proxy for provider calls.", false, { reason: NOT_DOC }),
-  gitStr("VENIRA_GIT_REPO", "Repository slug override (owner/name).", false, { reason: NOT_DOC }),
-  gitStr("VENIRA_GITHUB_REPO", "GitHub repository slug override.", false, { reason: NOT_DOC }),
-  gitStr("VENIRA_GITLAB_REPO", "GitLab project path override.", false, { reason: NOT_DOC }),
-  gitStr("VENIRA_BITBUCKET_REPO", "Bitbucket repository slug override.", false, { reason: NOT_DOC }),
-  gitStr("VENIRA_GIT_SECRET_NAME", "Name of the stored secret holding the provider token.", false, {
-    reason: NOT_DOC,
-  }),
-  gitStr("VENIRA_GIT_TOKEN_ENV", "Name of another environment variable holding the provider token.", false, {
-    reason: NOT_DOC,
-  }),
-  gitStr("VENIRA_GIT_USERNAME", "Username for providers that need one (Bitbucket app passwords).", false, {
-    reason: NOT_DOC,
-  }),
-  gitStr("VENIRA_GITHUB_TOKEN", "GitHub token (falls back to GITHUB_TOKEN / GH_TOKEN).", false, { reason: NOT_DOC }),
-  gitStr("VENIRA_GITLAB_TOKEN", "GitLab token (falls back to GITLAB_TOKEN / GL_TOKEN).", false, { reason: NOT_DOC }),
-  gitStr("VENIRA_BITBUCKET_TOKEN", "Bitbucket token (falls back to BITBUCKET_TOKEN / BB_TOKEN).", false, {
-    reason: NOT_DOC,
-  }),
+  gitList("VENIRA_GIT_ALLOWED_HOSTS", "Extra API hosts the provider client may call.", true, {}),
+  gitStr("VENIRA_GIT_API_URL", "Provider API base URL (self-hosted instances).", true, {}),
+  gitStr("VENIRA_GITHUB_API_URL", "Deprecated alias of VENIRA_GIT_API_URL (prints a one-time note); VENIRA_GIT_API_URL wins when both are set.", true, {}),
+  gitStr("VENIRA_GIT_PROXY", "HTTP(S) proxy for provider calls.", true, {}),
+  gitStr("VENIRA_GIT_REPO", "Repository slug override (owner/name).", true, {}),
+  gitStr("VENIRA_GITHUB_REPO", "GitHub repository slug override.", true, {}),
+  gitStr("VENIRA_GITLAB_REPO", "GitLab project path override.", true, {}),
+  gitStr("VENIRA_BITBUCKET_REPO", "Bitbucket repository slug override.", true, {}),
+  gitStr("VENIRA_GIT_SECRET_NAME", "Name of the stored secret holding the provider token.", true, {}),
+  gitStr("VENIRA_GIT_TOKEN_ENV", "Name of another environment variable holding the provider token.", true, {}),
+  gitStr("VENIRA_GIT_USERNAME", "Username for providers that need one (Bitbucket app passwords).", true, {}),
+  gitStr("VENIRA_GITHUB_TOKEN", "GitHub token (falls back to GITHUB_TOKEN / GH_TOKEN).", true, {}),
+  gitStr("VENIRA_GITLAB_TOKEN", "GitLab token (falls back to GITLAB_TOKEN / GL_TOKEN).", true, {}),
+  gitStr("VENIRA_BITBUCKET_TOKEN", "Bitbucket token (falls back to BITBUCKET_TOKEN / BB_TOKEN).", true, {}),
 
   // --- secrets -------------------------------------------------------------
-  secretEnum("VENIRA_SECRET_KEYCHAIN", "Windows keychain use for the secret store key.", false, {
+  secretEnum("VENIRA_SECRET_KEYCHAIN", "Windows keychain use for the secret store key.", true, {
     default: "auto",
     choices: ["auto", "off", "required", "0", "1", "false", "true"],
-    reason: NOT_DOC,
   }),
 
   // --- observability -------------------------------------------------------
-  obsPath("VENIRA_TRACE_FILE", "Also append the trace to this file (rotates at 10 MB).", false, { reason: NOT_DOC }),
+  obsPath("VENIRA_TRACE_FILE", "Also append the trace to this file (rotates at 10 MB).", true, {}),
 
   // --- internal / test -----------------------------------------------------
   internal("flag", "observability", "VENIRA_VERIFY_DEBUG", "Extra logging inside the verify harness.", "developer diagnostics"),
