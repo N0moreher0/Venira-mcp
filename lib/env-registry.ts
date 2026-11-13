@@ -301,17 +301,14 @@ export const ENV_REGISTRY: readonly EnvVarSpec[] = [
   shList("VENIRA_SHELL_ENV_ALLOW", "Extra environment variable names passed to shell runs.", false, {
     reason: NOT_DOC,
   }),
-  shInt("VENIRA_SHELL_MAX_OUTPUT_BYTES", "Per-stream output cap for a shell run.", false, {
+  shInt("VENIRA_SHELL_MAX_OUTPUT_BYTES", "Per-stream output cap for a shell run.", true, {
     default: "262144",
-    reason: NOT_DOC,
   }),
-  shInt("VENIRA_SHELL_MAX_TIMEOUT_MS", "Upper bound for a caller-supplied shell timeout.", false, {
+  shInt("VENIRA_SHELL_MAX_TIMEOUT_MS", "Upper bound for a caller-supplied shell timeout.", true, {
     default: "1800000",
-    reason: NOT_DOC,
   }),
-  shInt("VENIRA_SHELL_TAIL_MAX", "Characters kept in a shell run's stdout/stderr tail (minimum 256).", false, {
+  shInt("VENIRA_SHELL_TAIL_MAX", "Characters kept in a shell run's stdout/stderr tail (minimum 256).", true, {
     default: "2000",
-    reason: NOT_DOC,
   }),
   shFlag("VENIRA_SHELL_CACHE", "Cache read-only shell results.", false, { default: "1", reason: NOT_DOC }),
   shFlag("VENIRA_SHELL_CACHE_READ_ONLY", "Compatibility flag; shell output caching always stays read-only.", false, {

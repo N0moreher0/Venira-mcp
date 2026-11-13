@@ -377,6 +377,9 @@ Full reference: the source reads 80+ distinct supported `VENIRA_*` names; this t
 | `VENIRA_SECURITY_PROFILE` | `balanced` | Selects the shell policy: `strict`, `balanced`, `trusted`, or `off` |
 | `VENIRA_SHELL_MODE` | Profile mapping | Advanced override for shell policy: `strict`, `balanced`, `permissive`, or `off` |
 | `VENIRA_DEFAULT_SHELL` | `cmd` on Windows, `$SHELL` / `bash` elsewhere | Shell used when a call does not name one: `powershell` (5.1), `pwsh` (7+), `cmd`, `bash` |
+| `VENIRA_SHELL_TAIL_MAX` | `2000` | Characters kept in a shell run's stdout/stderr **tail** (minimum `256`); the head of huge output is dropped so the exit code and last lines survive |
+| `VENIRA_SHELL_MAX_OUTPUT_BYTES` | `262144` | Per-stream cap (stdout and stderr each) that a shell run records |
+| `VENIRA_SHELL_MAX_TIMEOUT_MS` | `1800000` | Upper bound for a caller-supplied shell timeout (`timeout_ms`); larger values are clamped to this |
 | `VENIRA_JS_EXEC_MODE` | `"off"` | `"off"` hides `project_execute_js` · `"ask"` registers it with per-call approval (skipped when `VENIRA_PERMISSION_MODE=allow_all`) · `"semi-auto"` registers it without approval, contained (workspace-only fs, scrubbed env, no child processes; network always open) · `"auto"` registers it without approval and without containment |
 | `VENIRA_USE_RIPGREP` | `"1"` | `"1"` uses ripgrep if installed (faster on big repos) |
 | `VENIRA_SEARCH_MAX_FILES` | `"50000"` | Max files collected by the JS fallback walker before it stops and reports `complete: false`. Bounds searches rooted at huge trees (e.g. with `VENIRA_UNRESTRICTED=1` and an absolute path outside the workspace) |
