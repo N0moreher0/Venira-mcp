@@ -169,7 +169,7 @@ Do not write a variable just to restate its default (for example `VENIRA_OUTPUT_
 
 `VENIRA_SHELL_MODE` is an advanced override and takes precedence over the profile. `VENIRA_JS_EXEC_MODE` separately gates the JavaScript tool: `off` (default) hides it, `ask` registers it with per-call human approval (skipped when `VENIRA_PERMISSION_MODE=allow_all`), `semi-auto` registers it without approval but keeps the containment (workspace-only fs, scrubbed env, no child processes; network is always open), `auto` registers it without approval and without any containment (full fs access, inherited env; personal machines only).
 
-> Choose `trusted` when you want fewer prompts on a personal machine. Choose `off` only when you intentionally accept that shell checks are disabled; JS exec is still gated by `VENIRA_JS_EXEC_MODE` (a human gate for `project_execute_js` only counts when that mode is `ask` and `VENIRA_PERMISSION_MODE` is not `allow_all`). The `secret_env` gate remains active in every profile. Elicitation is part of the shell mode: `strict` never prompts (CLI grant only), `balanced` prompts for every ask-rule command, `permissive` prompts only for high-risk rules, `off` never prompts.
+> Choose `trusted` when you want fewer prompts on a personal machine. Choose `off` only when you intentionally accept that shell checks are disabled; JS exec is still gated by `VENIRA_JS_EXEC_MODE` (a human gate for `project_execute_js` only counts when that mode is `ask` and `VENIRA_PERMISSION_MODE` is not `allow_all`). The `secret_env` gate remains active in every profile. Elicitation hangs off the shell mode: `strict` never prompts (CLI grant only), `balanced` prompts for every unclassified ask-rule command, `permissive` never prompts at all (only the `command_substitution` always-ask rule, hard-deny commands downgraded to `ask.deny.*`, and `secret_env` still prompt), `off` never prompts.
 
 ### Advanced configuration
 
@@ -323,7 +323,7 @@ All tools return the standard envelope (`ok`, `kind`, `data`, `hint`, `elapsed_m
 | `project_git_commit` | Commit staged changes, or stage `paths[]` first; `amend=1` / `allow_empty=1` opt-in; reports `sha`, `files_changed`, `files` |
 | `project_git_stash` | `action=push|list|apply|pop|drop|show` (`stash@{N}`); `include_untracked=1` includes untracked files |
 
-Read-only git (`status`, `diff`, `log`/blame, `branch` list/current, `stash` list/show) needs no `reason`; mutating calls do. Mutations invalidate the whole cache (worktree-wide change). Local only against the workspace repository root (`git rev-parse --show-toplevel`; paths stay workspace-relative); **push is never performed** — it stays an explicit named shell override.
+Read-only git (`status`, `diff`, `log`/blame, `branch` list/current, `stash` list/show) needs no `reason`; mutating calls do. Mutations invalidate the whole cache (worktree-wide change). Local only against the workspace repository root (`git rev-parse --show-toplevel`; paths stay workspace-relative); **push is never performed by these tools** — routine git pushes need no approval, force/delete/URL pushes ask one, and `ALLOW_ENV_READ` is the only remaining named override.
 
 **Git provider: PR/CI (GitHub, GitLab, Bitbucket)**
 
@@ -502,7 +502,7 @@ Agent helpers:
 - `approval_wait_ms` (max 45000) on `project_shell_run` / `project_execute_js` keeps the call open while the human approves; a grant that arrives in time runs the command in the same call, otherwise you get the normal `[approval_required]` (the pending `approval_id` stays valid). Keep it below the client's request timeout.
 - `project_health` reports `approvals` (mode, JS gate, elicitation, session rules, TTL, max wait), the shared `posture` report (`level`, stable finding ids such as `workspace.unrestricted`, `profile.off`, `combo.unrestricted_open_shell`, `js.exec_without_approval`) and the flat `warnings` list. Posture findings are warnings only; invalid values already fail closed at startup. `doctor` surfaces the same report.
 
-Alternative (in `balanced` mode, `project_shell_run` only): ask-rule commands the policy cannot statically clear prompt through a confirmation dialog in MCP clients that support elicitation, and accepting it records the grant for you. In `permissive` only the high-risk rules prompt; `strict` never prompts; `off` never prompts.
+Alternative (in `balanced` mode, `project_shell_run` only): ask-rule commands the policy cannot statically clear prompt through a confirmation dialog in MCP clients that support elicitation, and accepting it records the grant for you. In `permissive` the prompt is reserved for the always-ask `command_substitution`, hard-deny commands (which arrive as `ask.deny.*`) and `secret_env`; ordinary ask-rule commands run without a prompt. `strict` never prompts; `off` never prompts.
 
 Removed in v1.15: `approval_token` and `VENIRA_SHELL_AUTO_APPROVE_TOKEN`. Passing `approval_token` now returns `[approval_invalid]` with a hint to use `approval_id`; setting the env var only logs a warning and is ignored.
 
