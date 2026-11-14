@@ -110,11 +110,6 @@ export async function runExecuteJs(args: Args): Promise<ToolResult> {
               pending,
               { tool: "execute_js", rule: JS_EXEC_RULE, reason },
               redactSecrets(code),
-              {
-                code,
-                ...(cliArgs ? { argv: cliArgs } : {}),
-                ...(typeof args.timeout_s === "number" ? { timeout_s: args.timeout_s } : {}),
-              },
             ),
             expires_at: expiresAt,
             // The retry call lives in `approval.retry_with` (the same shape

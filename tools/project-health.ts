@@ -1,16 +1,14 @@
 import path from "node:path";
-import { APPROVAL_PENDING_TTL_MS, APPROVAL_WAIT_MAX_S } from "../lib/approval-gate.js";
 import * as approvals from "../lib/approvals.js";
 import { computeConfigPosture } from "../lib/config-posture.js";
 import { SHELL_TAIL_LIMIT, shellPolicySnapshot } from "../lib/corehost.js";
-import { envFlag } from "../lib/env.js";
 import { checkEnvironment } from "../lib/env-registry.js";
 import { githubHealth } from "../lib/git-provider.js";
 import { metricsSnapshot, recordMetric } from "../lib/metrics.js";
 import { OUTPUT_MODE, buildEnvelope, errorEnvelope, newRequestId, toolResult } from "../lib/output.js";
 import type { ToolResult } from "../lib/output.js";
 import { secretsHealth } from "../lib/secrets.js";
-import { resolveSecurityProfile, securityProfileIsExplicit } from "../lib/security-profile.js";
+import { resolveSecurityProfile } from "../lib/security-profile.js";
 import { SESSION_ID } from "../lib/session.js";
 import { snapshotHealth } from "../lib/snapshots.js";
 import { mirrorHealth } from "../lib/snapshot-mirror.js";
@@ -41,7 +39,7 @@ type Args = Record<string, unknown>;
 function approvalsHealth(shellElicit: boolean): {
   approvals: Record<string, unknown>;
   warnings: string[];
-  posture: ReturnType<typeof computeConfigPosture>;
+  posture: { level: string; findings: Array<{ id: string; severity: string }>; summary: string; fail_closed: boolean };
 } {
   const policy = shellPolicySnapshot().policy;
   const securityProfile = resolveSecurityProfile();
@@ -55,28 +53,24 @@ function approvalsHealth(shellElicit: boolean): {
   return {
     approvals: {
       security_profile: securityProfile,
-      security_profile_explicit: securityProfileIsExplicit(),
       shell_mode: policy.mode,
-      // Roadmap item 15 (P2): `security_profile: balanced` next to
-      // `shell_mode: off` reads like a contradiction. Say what is actually
-      // enforced: the mode decides, and "off" means no checks run at all.
-      shell_checks: policy.mode === "off" ? "disabled" : "enforced",
-      shell_mode_decides: true,
-      policy_source: policy.source,
       js_exec_mode: JS_EXEC_MODE,
       js_exec_enabled: ALLOW_JS_EXEC,
       js_exec_approval: JS_EXEC_APPROVAL,
       elicitation: shellElicit,
       session_grant_rules: sessionGrantRules,
-      pending_ttl_ms: APPROVAL_PENDING_TTL_MS,
-      max_wait_ms: APPROVAL_WAIT_MAX_S * 1000,
     },
     // Kept for clients that already read the flat list; posture carries the
     // same findings with stable ids and severities.
     warnings: posture.findings
       .filter((finding) => finding.severity !== "info")
       .map((finding) => `${finding.id}: ${finding.summary}`),
-    posture,
+    posture: {
+      level: posture.level,
+      findings: posture.findings.map((finding) => ({ id: finding.id, severity: finding.severity })),
+      summary: posture.summary,
+      fail_closed: posture.fail_closed,
+    },
   };
 }
 
@@ -127,8 +121,15 @@ export async function runHealth(args: Args, deps: HealthDeps): Promise<ToolResul
     : null;
   try {
     const dbPath = path.join(dataDir, "venira.db");
+    const auditHealthResult = includeAudit ? await auditHealth(dbPath) : null;
+    const auditSection = auditHealthResult
+      ? (() => {
+          const { path: _path, bytes: _bytes, session: _session, ...rest } = auditHealthResult as unknown as Record<string, unknown>;
+          void _path; void _bytes; void _session;
+          return rest;
+        })()
+      : { skipped: true };
     const data = {
-      notice: "Venira is a guard rail with an audit trail, not a sandbox. It runs with the OS user’s privileges. The workspace lock limits file-tool paths, not shell effects; prompt injection can still steer commands allowed by the active profile. Same-user processes can read keys in VENIRA_DATA_DIR. Use a container or VM for real isolation. See SECURITY.md.",
       server: {
         name: "venira-coding",
         version: VERSION,
@@ -136,10 +137,6 @@ export async function runHealth(args: Args, deps: HealthDeps): Promise<ToolResul
         session_id: SESSION_ID,
         uptime_ms: Date.now() - deps.startedAt,
         workspace: WORKSPACE,
-        // Roadmap item 15 (P2): `allowed_roots` listed "/" (the unrestricted
-        // mode) next to `enabled: false`, which reads as "you may switch
-        // anywhere". While switching is off, only the current workspace is in
-        // play; unrestricted is reported on its own.
         workspace_switching: {
           enabled: dynamicWorkspaceEnabled(),
           allowed_roots: dynamicWorkspaceEnabled() ? allowedWorkspaceRoots() : [WORKSPACE],
@@ -148,17 +145,15 @@ export async function runHealth(args: Args, deps: HealthDeps): Promise<ToolResul
         unrestricted: UNRESTRICTED,
         permission_mode: deps.permissionMode,
         output_mode: OUTPUT_MODE,
-        pretty: envFlag("VENIRA_PRETTY", false),
         node: process.version,
       },
       corehost: {
-        ...hostInfo,
+        running: hostInfo.running,
+        pid: hostInfo.pid,
         exe: hostInfo.exe,
+        exe_error: hostInfo.exe_error,
+        restarts: hostInfo.restarts,
         data_dir: dataDir,
-        // Roadmap item 15 (P2): the data dir holds the audit DB and the
-        // secrets; the checkpoint store lives elsewhere (see snapshots.store).
-        data_dir_kind: "audit_and_secrets",
-        audit_fast: true,
       },
       capability: deps.capability(),
       queue: deps.queue(),
@@ -172,10 +167,25 @@ export async function runHealth(args: Args, deps: HealthDeps): Promise<ToolResul
         mirror: mirrorHealth(),
       },
       // Secrets: counts + encryption only; the store path is reported, never values.
-      secrets: secretsHealth(),
+      secrets: (() => {
+        const { store: _store, ...rest } = secretsHealth() as unknown as Record<string, unknown>;
+        void _store;
+        return rest;
+      })(),
       // GitHub/CI: repo detection, api base, auth presence (never the token).
       network: {
-        github: githubHealth(),
+        github: (() => {
+          const g = githubHealth() as unknown as Record<string, unknown>;
+          return {
+            provider: g.provider,
+            api: g.api,
+            repo: g.repo,
+            branch: g.branch,
+            auth: g.auth,
+            token_origin: g.token_origin,
+            error_code: g.error_code,
+          };
+        })(),
       },
       metrics: metricsSnapshot(),
       // P1: config + observability surfaces
@@ -192,7 +202,7 @@ export async function runHealth(args: Args, deps: HealthDeps): Promise<ToolResul
       },
       // Typos, removed variables and lenient values the registry can detect (warnings only).
       environment: { issues: checkEnvironment() },
-      audit: includeAudit ? await auditHealth(dbPath) : { skipped: true },
+      audit: auditSection,
     };
     const payload = wanted
       ? (() => {

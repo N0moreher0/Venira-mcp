@@ -2,6 +2,26 @@
 
 Local release notes for venira-mcp. Not published (not listed in `package.json` `files`) and not pushed to git.
 
+## Unreleased
+
+### Changed - leaner tool envelopes (fewer tokens per call)
+- Every envelope dropped elapsed_ms.
+- shell_run / shell_status dropped: shell_id (duplicate of run_id), shell, background, foreground, timeout_ms, policy (status only). run_elapsed_ms stayed on shell_status (its only duration is what the P2 contract needs).
+- Approval envelopes no longer echo the model's arguments: retry_with.arguments carries only approval_id.
+- shell_run keeps: run_id, kill_key (required by shell_cancel), running, exit_code, stdout/stderr[_tail], truncated, dropped_bytes, timed_out, policy, shell_kind, secret_env/shell_path/shell_hint (when present).
+- shell_status keeps: run_id, running, exit_code, cancelled, tails, truncated, dropped_bytes, timed_out, run_elapsed_ms.
+- Kept deliberately: request_id (needed for read_audit correlation), sha256/text_sha256/sha256_scope (needed for edit_file), shell_kind, policy (14 contract tests).
+
+### Changed - leaner health output (easier for agents to read)
+- health dropped the notice safety paragraph entirely.
+- posture findings now carry only id + severity (+ level, summary, fail_closed). The per-finding summary text is gone; warnings stays as a flat list.
+- metrics.operations[op] now reports only { count, errors, p95 } (was p50, p95, max, avg, last_ms).
+- shells.policy snapshot now reports only { policy, stats } (dropped limits, tracked_runs).
+- corehost reports only { running, pid, exe, exe_error, restarts, data_dir }.
+- network.github reports only { provider, api, repo, branch, auth, token_origin, error_code }.
+- approvals dropped: security_profile_explicit, shell_checks, shell_mode_decides, policy_source, pending_ttl_ms, max_wait_ms.
+- secrets dropped the store path. audit dropped path/bytes/session. server dropped pretty.
+
 ## 3.0.0 — 2026-11-14
 
 ### Breaking — tool time parameters now use seconds

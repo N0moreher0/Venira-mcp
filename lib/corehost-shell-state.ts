@@ -205,7 +205,5 @@ export function shellPolicySnapshot() {
   return {
     policy: describeShellPolicy(),
     stats: shellStats(),
-    limits: { max_output_bytes: MAX_OUTPUT_BYTES, max_timeout_ms: SHELL_MAX_TIMEOUT_MS, tail_chars: TAIL_LIMIT },
-    tracked_runs: shellRuns.size,
   };
 }

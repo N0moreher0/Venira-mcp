@@ -142,7 +142,6 @@ export function buildApprovalPayload(
   request: ApprovalRequest,
   subject: Pick<ApprovalSubject, "tool" | "rule" | "reason">,
   preview: string,
-  retryArguments: Record<string, unknown>,
 ): ApprovalPayload {
   return {
     approval_id: request.approval_id,
@@ -152,9 +151,10 @@ export function buildApprovalPayload(
     subject_preview: preview.slice(0, SUBJECT_PREVIEW_MAX),
     expires_at: request.expires_at,
     approve_command: request.approve_command,
+    // The model already has the arguments it sent; retry_with only carries the approval id back.
     retry_with: {
       tool: subject.tool,
-      arguments: { ...retryArguments, approval_id: request.approval_id },
+      arguments: { approval_id: request.approval_id },
     },
   };
 }

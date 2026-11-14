@@ -1,8 +1,8 @@
 /**
  * Standardizes the envelope returned by every venira tool:
- *   { ok, status, request_id, kind, data, truncated, summary, hint, cached, command_status, elapsed_ms }
+ *   { ok, status, request_id, kind, data, truncated, summary, hint, cached, command_status }
  * and on failure:
- *   { ok:false, status:"failed", request_id, kind, error:{code, message, retryable}, hint, elapsed_ms }
+ *   { ok:false, status:"failed", request_id, kind, error:{code, message, retryable}, hint }
  */
 import { randomBytes } from "node:crypto";
 import { envChoice, envFlag } from "./env.js";
@@ -52,7 +52,6 @@ export type Envelope = {
   /** Some items of a batch succeeded while others failed (roadmap item 15, P1). */
   partial?: boolean;
   command_status?: "running" | "succeeded" | "failed" | "cancelled" | "unknown";
-  elapsed_ms?: number;
 };
 
 const PREVIEW_BYTES = 8 * 1024;
@@ -63,7 +62,6 @@ const GENERIC_PREVIEW_BYTES = PREVIEW_BYTES / 2;
 
 type Loose = Record<string, any>;
 
-const round = (ms: number) => Math.round(ms * 100) / 100;
 const isObject = (value: unknown): value is Loose =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
@@ -410,7 +408,6 @@ export function buildEnvelope(
     status: response?.status ?? "completed",
     request_id: options.requestId ?? newRequestId(),
     kind,
-    elapsed_ms: round(options.elapsedMs ?? 0),
   };
   // Roadmap item 15 (P2): `status: "completed"` next to
   // `command_status: "running"` read as a contradiction. `status` now names
@@ -846,7 +843,6 @@ export function errorEnvelope(
     ...(Object.keys(summary).length > 0 ? { summary } : {}),
     ...(nextActions !== undefined ? { next_actions: nextActions } : {}),
     ...(compacted ? { trimmed: true, truncated: true } : {}),
-    elapsed_ms: round(options.elapsedMs ?? 0),
   };
 }
 
@@ -879,7 +875,6 @@ export function batchEnvelope(
         : {}),
       ...extra,
     },
-    elapsed_ms: round(elapsedMs),
   };
   if (failure) {
     const { code, message, hint } = failure;

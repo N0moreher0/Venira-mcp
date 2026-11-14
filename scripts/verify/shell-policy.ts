@@ -847,8 +847,6 @@ export async function runShellPolicy(
       "health_approvals_section",
       typeof ap.shell_mode === "string" &&
         typeof ap.js_exec_enabled === "boolean" &&
-        typeof ap.pending_ttl_ms === "number" &&
-        ap.max_wait_ms === 45000 &&
         Array.isArray(ap.session_grant_rules) &&
         Array.isArray(healthApprovals.data?.warnings),
       healthApprovals.data?.approvals,

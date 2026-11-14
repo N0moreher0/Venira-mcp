@@ -647,8 +647,6 @@ export async function runCore($h: Harness) {
       label,
       foreground.ok === true &&
         foreground.data?.running === false &&
-        foreground.data?.foreground === true &&
-        foreground.data?.background === false &&
         elapsed >= delay - 100,
       { elapsed_ms: elapsed, data: foreground.data },
     );

@@ -1,5 +1,5 @@
 /**
- * Minimal in-memory metrics: p50/p95/max per operation.
+ * Minimal in-memory metrics: p95 per operation.
  * A 256-sample ring buffer per op is enough for health to
  * reflect the current session without keeping unbounded history.
  */
@@ -31,11 +31,7 @@ const percentile = (sorted: number[], q: number): number => {
 export type OpMetrics = {
   count: number;
   errors: number;
-  p50: number;
   p95: number;
-  max: number;
-  avg: number;
-  last_ms: number;
 };
 
 export function metricsSnapshot(): {
@@ -46,15 +42,10 @@ export function metricsSnapshot(): {
   for (const [operation, list] of samples) {
     const times = list.map((sample) => sample.ms).sort((a, b) => a - b);
     const errors = list.reduce((sum, sample) => sum + (sample.ok ? 0 : 1), 0);
-    const avg = times.reduce((sum, ms) => sum + ms, 0) / times.length;
     operations[operation] = {
       count: list.length,
       errors,
-      p50: percentile(times, 0.5),
       p95: percentile(times, 0.95),
-      max: percentile(times, 1),
-      avg: Math.round(avg * 100) / 100,
-      last_ms: Math.round(list[list.length - 1].ms * 100) / 100,
     };
   }
   return {

@@ -192,17 +192,11 @@ export async function opShellRun(
           kind: "shell_run",
           data: {
             run_id: runId,
-            shell_id: runId,
-            kill_key: "",
-            shell,
             running: false,
             exit_code: cached.exitCode,
-            background: false,
-            foreground: true,
             truncated: false,
             dropped_bytes: 0,
             timed_out: false,
-            timeout_ms: 0,
             stdout: redactSecretValues(cached.output),
             stderr: redactSecretValues(cached.error),
             policy: { decision: decision.tier, rule: decision.rule, mode: decision.mode, approver },
@@ -299,12 +293,6 @@ export async function opShellRun(
       };
       const pending = requestApproval("shell", sessionId, shellSubject);
       const pendingId = pending.approval_id;
-      const retryArguments: Record<string, unknown> = {
-        command,
-        shell,
-        ...(typeof args.relative_cwd === "string" ? { relative_cwd: args.relative_cwd } : {}),
-        ...(secretNames.length > 0 ? { secret_env: secretNames } : {}),
-      };
       // Optional: wait for the human inside this call (saves a round-trip).
       const waitMs = parseApprovalWaitSeconds(args.approval_wait_s);
       const granted = waitMs > 0 && (await awaitApprovalGrant(sessionId, pendingId, approvalBinding, waitMs));
@@ -333,7 +321,7 @@ export async function opShellRun(
               reason: decision.reason,
               mode: decision.mode,
               ...(waitMs > 0 ? { waited_ms: waitMs } : {}),
-              approval: buildApprovalPayload("shell", pending, shellSubject, redactSecrets(command), retryArguments),
+              approval: buildApprovalPayload("shell", pending, shellSubject, redactSecrets(command)),
               note: `A human must run: ${pending.approve_command} (then retry once with approval_id). Do not loop or retry before they confirm.`,
             },
           },
@@ -672,13 +660,9 @@ export async function opShellRun(
       kind: "shell_run",
       data: {
         run_id: runId,
-        shell_id: runId,
         kill_key: run.kill_key,
-        shell,
         running: run.running,
         exit_code: run.exit_code,
-        background: !foreground,
-        foreground,
         ...(foreground
           ? {}
           : {
@@ -688,7 +672,6 @@ export async function opShellRun(
         truncated: run.stdout_full.length >= MAX_OUTPUT_BYTES || run.stderr_full.length >= MAX_OUTPUT_BYTES,
         dropped_bytes: run.dropped_bytes,
         timed_out: run.timed_out,
-        timeout_ms: run.timeout_ms,
         ...(foreground
           ? {
               stdout: redactSecretValues(run.stdout_full),
@@ -746,8 +729,6 @@ export async function opShellStatus(
       kind: "shell_status",
       data: {
         run_id: runId,
-        shell_id: runId,
-        shell: run.shell,
         running: run.running,
         exit_code: run.exit_code,
         cancelled: run.cancelled,
@@ -756,14 +737,8 @@ export async function opShellStatus(
         truncated: run.stdout_full.length >= MAX_OUTPUT_BYTES || run.stderr_full.length >= MAX_OUTPUT_BYTES,
         dropped_bytes: run.dropped_bytes,
         timed_out: run.timed_out,
-        timeout_ms: run.timeout_ms,
         // The envelope's elapsed_ms is the call; this one is the run.
         run_elapsed_ms: Date.now() - run.started_at,
-        policy: {
-          decision: run.decision.tier,
-          rule: run.decision.rule,
-          approver: run.decision.approver,
-        },
       },
     },
   };
