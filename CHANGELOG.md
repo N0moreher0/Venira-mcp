@@ -2,7 +2,7 @@
 
 Local release notes for venira-mcp. Not published (not listed in `package.json` `files`) and not pushed to git.
 
-## Unreleased - 2026-11-14
+## 4.1.0 - 2026-11-14
 
 ### Added - `memory` tool (handoff note between AI sessions)
 - New tool `memory` (default, core and expert modes; 32/39/52 tools). `action=read` returns the saved note; `action=write` replaces it entirely (overwrite, never append; max 6000 bytes so a read always comes back whole, even in compact output mode).
