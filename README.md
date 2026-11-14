@@ -1,7 +1,7 @@
 # venira-mcp
 
 Fast, workspace-scoped MCP server for coding agents (OpenCode, Claude Desktop, any MCP client).
-Three tool modes — **Core** (29 tools: coding set minus code intelligence, for small models) · **Default** (36 coding tools + shell, no CI/CD) · **Expert** (49 tools: default + CI/CD). Setting `VENIRA_JS_EXEC_MODE=ask`, `semi-auto` or `auto` adds `execute_js` (+1). `VENIRA_SETUP_TOOLS=1` adds the two setup tools `detect_harnesses` and `install_self` (+2); `npx venira-mcp --install` and `--print-config` do the same from a terminal.
+Three tool modes — **Core** (31 tools: coding set minus code intelligence, for small models) · **Default** (38 coding tools + shell, no CI/CD) · **Expert** (51 tools: default + CI/CD). `VENIRA_JS_EXEC_MODE=off` hides `execute_js` in every mode (51 → 50, 38 → 37, 31 → 30); otherwise it is registered and approval-gated. `VENIRA_SETUP_TOOLS=1` adds the two setup tools `detect_harnesses` and `install_self` (+2); `npx venira-mcp --install` and `--print-config` do the same from a terminal.
 Pure Node, 1 native dependency (better-sqlite3), no GUI, no external binary.
 
 > **Security scope.** Venira is a guard rail with an audit trail, not a sandbox. It runs with the privileges of the OS user that started it. The workspace lock limits the paths the file tools can touch (unless `VENIRA_UNRESTRICTED=1`), not what a shell command does: commands are classified by rules (allow / ask / deny) and every call is audited, but a malicious prompt can still steer the agent into running a harmful command that the active profile lets through (with `off`, every command runs). Anything running as the same OS user can read the keys in `VENIRA_DATA_DIR`. For untrusted workspaces, or whenever you need a real isolation boundary, run Venira in a container or VM. Details: [`SECURITY.md`](./SECURITY.md).
@@ -233,9 +233,9 @@ Three tool modes set which tools the client sees. Set via `VENIRA_TOOL_MODE` env
 
 | Mode | Tools | Includes |
 |---|---|---|
-| `core` | **29** (30 with `VENIRA_JS_EXEC_MODE=ask`, `semi-auto` or `auto`) | `default` minus the code-intelligence tools: `dependency_graph`, `change_impact`, `outline_symbol`, `diff_files`, `symbol_references`, `recent_files`, `execute_js` |
-| `default` | **36** (37 with `VENIRA_JS_EXEC_MODE=ask`, `semi-auto` or `auto`) | Read/write/edit/search, code intel, snapshots, shell, `delete_path`, optional JS exec — **no** CI/CD; `explain_error` and `plan_read_batch` are expert-only |
-| `expert` | **49** (50 with `VENIRA_JS_EXEC_MODE=ask`, `semi-auto` or `auto`) | Everything in default + `pr_*`, `ci_*`, `explain_error`, `plan_read_batch` |
+| `core` | **31** | `default` minus the code-intelligence tools: `dependency_graph`, `change_impact`, `outline_symbol`, `diff_files`, `symbol_references`, `recent_files`, `execute_js` |
+| `default` | **38** | Read/write/edit/search, code intel, snapshots, shell, `delete_path`, `execute_js` — **no** CI/CD; `explain_error` and `plan_read_batch` are expert-only |
+| `expert` | **51** | Everything in default + `pr_*`, `ci_*`, `explain_error`, `plan_read_batch` |
 
 `delete_path` is always available. In `balanced` / `strict` mode, shell `rm -rf /` / `~` and Windows drive-wide deletes are hard-denied, and recursive/force deletes (`Remove-Item -Recurse -Force`, `rd /s /q`, `del /f /q`) need approval. `permissive` mode lets ordinary ask-rule and unclassified commands run without a prompt, but hard-denies require approval and uninspectable command substitutions require approval in every policy-enabled mode.
 
@@ -370,7 +370,7 @@ Full reference: the source reads 80+ distinct supported `VENIRA_*` names; this t
 | Variable | Default | What it does |
 |---|---|---|
 | `VENIRA_WORKSPACE` | `process.cwd()` | Workspace root; all paths resolve against it |
-| `VENIRA_TOOL_MODE` | `default` | `core` (29 tools) / `default` (36 tools) / `expert` (49 tools); +2 with `VENIRA_SETUP_TOOLS=1`, +1 with `VENIRA_JS_EXEC_MODE=ask`, `semi-auto` or `auto` |
+| `VENIRA_TOOL_MODE` | `default` | `core` (31 tools) / `default` (38 tools) / `expert` (51 tools); +2 with `VENIRA_SETUP_TOOLS=1` |
 | `VENIRA_OUTPUT_MODE` | `full` | `full` or `compact` (summarize/trim payloads > 8 KiB; generic payloads use `preview_text`) |
 | `VENIRA_AUDIT_DETAIL` | `summary` | What `read_audit` can show per job: `off` stores nothing extra, `summary` keeps one args line and one result line, `full` also keeps redacted JSON args/result (up to 16 KiB per job). Long or sensitive values (file content, `old_text`/`new_text`, secret values) are stored as a length only |
 | `VENIRA_UNRESTRICTED` | `"0"` | `"1"` disables workspace lock (never in production) |

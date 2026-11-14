@@ -150,7 +150,8 @@ async function main() {
       await new Promise((r) => setTimeout(r, 500)); // let warm-up finish
 
       const tools = await client.listTools();
-      const expectedTools = 49; // expert mode exposes 49 tools (setup tools need VENIRA_SETUP_TOOLS=1); JS exec remains approval-gated
+      // Doctor pins VENIRA_JS_EXEC_MODE="off", which hides execute_js: expert = 51 - 1 = 50.
+      const expectedTools = 50; // expert minus the off-gated execute_js (51 with JS exec on; same as schema-budget's 51)
       results.push(await check("tools_count", tools.tools.length === expectedTools, { actual: tools.tools.length, expected: expectedTools }));
 
       const healthRes = await client.callTool({ name: "health", arguments: { include_audit: 0 } });
@@ -158,7 +159,8 @@ async function main() {
         ((healthRes as { content?: { text?: string }[] })?.content?.[0]?.text ?? "{}"),
       );
       results.push(await check("health_ok", healthData.ok === true, healthData));
-      results.push(await check("health_notice", typeof healthData.data?.notice === "string" && healthData.data.notice.includes("not a sandbox"), { notice: healthData.data?.notice }));
+      // 4.0.0 removed the safety notice from health (token diet); the contract is now: no notice key.
+      results.push(await check("health_no_notice", healthData.data?.notice === undefined, { notice: healthData.data?.notice ?? null }));
       results.push(await check("health_capability_open", healthData.data?.capability?.state === "open", healthData.data?.capability));
 
       await client.close();
