@@ -258,6 +258,19 @@ export async function opSearch(
   /** How many matches the scan collected at most (the rg fast path has a cap). */
   let scanCap: number | undefined;
   /**
+   * WHY the result is incomplete, so the hint can say the right thing:
+   *   file_cap  - the JS walker / rg fallback stopped at the file cap
+   *               (matches in later files are missing entirely)
+   *   match_cap - too many matching LINES were collected before ranking
+   *   limit     - matches were collected fine, the output was trimmed to `limit`
+   */
+  let cutReason: "file_cap" | "match_cap" | "limit" | null = null;
+  const markCut = (reason: "file_cap" | "match_cap" | "limit", cap?: number) => {
+    complete = false;
+    if (cutReason === null || reason === "file_cap") cutReason = reason;
+    if (cap !== undefined && reason === "match_cap") scanCap = cap;
+  };
+  /**
    * One hint for the two ways a search can disappoint the caller.
    * Roadmap item 15 (P2): the cut case used to say "see diagnostics" while
    * `diagnostics` was empty, and `total_match_lines` looked like the real
@@ -265,16 +278,26 @@ export async function opSearch(
    */
   const searchHint = (): string | undefined => {
     if (!complete && hits.length === 0) {
-      return `The search was cut before any hit was found (file cap ${scanCap ?? maxScanFiles()}). Narrow relative_path/glob, or raise VENIRA_SEARCH_MAX_FILES. For an executable on PATH run \`where <name>\` via shell_run.`;
+      return cutReason === "file_cap"
+        ? `The file scan stopped at the file cap (${maxScanFiles()} files) before finding any hit; more files were not inspected. Narrow relative_path/glob, or raise VENIRA_SEARCH_MAX_FILES.`
+        : "The scan was cut before any hit was found. Narrow relative_path/glob, or raise the limit (max 200).";
     }
     if (hits.length === 0) {
       return "No matches. Broaden the search: drop glob/relative_path, set regex=0, or use kind=file_name.";
     }
     if (!complete) {
+      if (cutReason === "file_cap") {
+        return `The file scan stopped at the file cap (${maxScanFiles()} files); matching files beyond it are missing (${totalMatchLines} collected match(es) so far). Narrow relative_path/glob, or raise VENIRA_SEARCH_MAX_FILES.`;
+      }
+      if (cutReason === "match_cap") {
+        return (
+          `The search collected more than ${scanCap ?? "the cap"} matching lines and stopped before ranking, ` +
+          "so this is not the full picture. Narrow it with glob/relative_path."
+        );
+      }
       return (
-        `The search was cut after ${totalMatchLines} collected match(es)` +
-        (scanCap ? ` (the scan cap is ${scanCap})` : "") +
-        ", so this is not the full picture. Narrow it with glob/relative_path, or raise limit (max 200)."
+        `More matches existed than the limit (${limit}); the best-ranked ${limit} are returned ` +
+        `(${totalMatchLines} collected). Raise limit (max 200) or narrow the query.`
       );
     }
     return undefined;
@@ -282,7 +305,8 @@ export async function opSearch(
   /** The fields that say what the numbers mean. */
   const searchMeta = () => ({
     limit,
-    ...(scanCap ? { match_scan_cap: scanCap } : {}),
+    ...(scanCap !== undefined ? { match_scan_cap: scanCap } : {}),
+    ...(cutReason !== null ? { limited_by: cutReason } : {}),
     files_matched_scope: "returned_hits" as const,
   });
 
@@ -323,9 +347,9 @@ export async function opSearch(
 
   if (kind === "file_name" || kind === "directory_name") {
     const { files, scanTruncated } = await collectFiles(searchRoot);
-    if (scanTruncated) { complete = false; scanCap = maxScanFiles(); }
+    if (scanTruncated) markCut("file_cap");
     for (const abs of files) {
-      if (hits.length >= limit) { complete = false; break; }
+      if (hits.length >= limit) { markCut("limit"); break; }
       const basename = path.basename(abs);
       const match = caseSensitive ? basename.includes(query) : basename.toLowerCase().includes(needle);
       if (!match) continue;
@@ -380,6 +404,7 @@ export async function opSearch(
           // No per-file --max-count and no early global break before ranking:
           // rg runs multithreaded, so its output order is not stable. Collect
           // a bounded set, rank, then trim to the caller's limit.
+          const COLLECT_CAP = Math.max(limit * 10, 1000);
           argList.push(searchRoot);
           const resp = await ripgrepExec(argList, 10000);
 
@@ -392,8 +417,6 @@ export async function opSearch(
             const lines = String(resp.stdout ?? "").split(/\r?\n/).filter(Boolean);
             // Safety cap only: never cut at `limit` before ranking, because
             // rg's multithreaded output order is not stable.
-            const COLLECT_CAP = Math.max(limit * 10, 1000);
-            scanCap = COLLECT_CAP;
             for (const raw of lines) {
               let rec: any = null;
               try { rec = JSON.parse(raw); } catch { continue; }
@@ -415,14 +438,14 @@ export async function opSearch(
               const snippet = lineText.trim().slice(0, 200);
               hits.push({ relative_path: rel, line_number: ln, snippet });
               totalMatchLines += 1;
-              if (hits.length >= COLLECT_CAP) { complete = false; break; }
+              if (hits.length >= COLLECT_CAP) { markCut("match_cap", COLLECT_CAP); break; }
             }
             // Rank first, then trim to the caller's limit, so high-ranked hits
             // survive regardless of rg's thread ordering.
             rankHits(hits, needle);
             if (hits.length > limit) {
               hits.length = limit;
-              complete = false;
+              markCut("limit");
             }
             if (contextLines > 0 && hits.length > 0) {
               const hitsByRel = new Map<string, Hit[]>();
@@ -480,7 +503,7 @@ export async function opSearch(
     }
 
     const { files, scanTruncated } = await collectFiles(searchRoot);
-    if (scanTruncated) { complete = false; scanCap = maxScanFiles(); }
+    if (scanTruncated) markCut("file_cap");
     const useRegex = args.regex === true;
     let wordRe: RegExp | null = null;
     if (wholeWord) {
@@ -522,7 +545,7 @@ export async function opSearch(
     if (!countOnly) {
       for (const entry of entries) {
         if (!entry) continue;
-        if (hits.length >= limit) { complete = false; break; }
+        if (hits.length >= limit) { markCut("limit"); break; }
         const { rel, content } = entry;
 
         const lines = content.split(/\r?\n/);
@@ -547,7 +570,7 @@ export async function opSearch(
           // Same collection cap as the rg path: collect, rank, then trim so the
           // two backends agree on which hits survive `limit`.
           if (hits.length >= Math.max(limit * 10, 1000)) {
-            complete = false;
+            markCut("match_cap", Math.max(limit * 10, 1000));
             break;
           }
           const snippet = lines[idx].trim().slice(0, 200);
@@ -564,7 +587,7 @@ export async function opSearch(
       rankHits(hits, needleConst);
       if (hits.length > limit) {
         hits.length = limit;
-        complete = false;
+        markCut("limit");
       }
     } else {
       // countOnly = true: count all matches without limit, don't collect hits
@@ -610,7 +633,9 @@ export async function opSearch(
         }
       }
       countedFilesMatched = filesWithMatches.size;
-      complete = true;
+      // A file-cap truncation still applies in count-only mode: do not claim
+      // the count is complete when the scan stopped early.
+      complete = cutReason === null;
     }
   }
 
