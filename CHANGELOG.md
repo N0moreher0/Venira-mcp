@@ -2,7 +2,7 @@
 
 Local release notes for venira-mcp. Not published (not listed in `package.json` `files`) and not pushed to git.
 
-## Unreleased
+## 3.0.0 — 2026-11-14
 
 ### Breaking — tool time parameters now use seconds
 - Time inputs are unified to **seconds** (fractional ok), matching wait_seconds. Env vars (VENIRA_SHELL_MAX_TIMEOUT_MS, VENIRA_GIT_*) and internal/envelope fields keep their ms units.
