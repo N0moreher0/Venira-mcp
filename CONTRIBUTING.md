@@ -54,7 +54,7 @@ compact output mode, and tool annotations.
 3. Envelope + hint: use `buildEnvelope` / `errorEnvelope` from `lib/output.ts` — never hand-roll.
 4. `scripts/verify/`: add a `check("…", …)` block in the matching section module; update `expectedCount` in that section module (section modules own their counts; `scripts/verify.ts` only orchestrates).
 5. `server.ts` → `INSTRUCTIONS` decision tree: one line if it belongs in the flow.
-6. `README.md` → tool table + §4 section for the family it belongs to.
+6. `README.md` → tool table + §4 section for the family it belongs to. Tool counts changed? Update `README.md` count strings **and** `scripts/check-docs.ts` (`EXPECTED_DEFAULT_TOOLS` / `EXPECTED_EXPERT_TOOLS`) together in the same commit — `check:docs` fails otherwise (it did, once: run #281). Tool bytes changed? Raise `scripts/verify/core.ts` ceilings and `scripts/schema-budget.json` in the same commit.
 7. `npm run build && npm run verify && npm run bench:mcp` — paste bench output in the PR.
 
 ## Release process
