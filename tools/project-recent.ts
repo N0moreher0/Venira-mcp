@@ -2,6 +2,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { queryRecentFiles } from "../lib/corehost.js";
 import { recordMetric } from "../lib/metrics.js";
+import { recordRecentFileMeta, removeFromRecentIndex } from "../lib/recent-index.js";
 import { buildEnvelope, errorEnvelope, newRequestId, toolResult } from "../lib/output.js";
 import type { RustResponse, ToolResult } from "../lib/output.js";
 import { toHostPath, WORKSPACE, isProtectedPath } from "../lib/workspace.js";
@@ -151,16 +152,42 @@ export async function runRecentFiles(args: Args, deps: RecentFilesDeps): Promise
     // silently fall back to the scan. Query the workspace and filter here.
     const rootRel = path.relative(WORKSPACE, root).replace(/\\/g, "/");
     const indexAll = queryRecentFiles(maxFiles * 3, false, WORKSPACE);
-    const indexHits = indexAll
+    const candidates = indexAll
       .filter((hit) => !hit.outside_workspace)
       .filter((hit) => !rootRel || hit.relative_path === rootRel || hit.relative_path.startsWith(`${rootRel}/`))
       .filter(
         (hit) =>
           args.include_ignored === true ||
           !IGNORED_DIRS.has((hit.relative_path.split("/")[0] ?? "").toLowerCase()),
-      )
+      );
+    // The index is only written when a Venira tool touches a file, so files
+    // deleted or edited outside Venira (shell, editor) left stale rows: deleted
+    // files were still listed and size/mtime were out of date. Check every
+    // candidate against the disk, drop and prune the missing ones, take the real
+    // size/mtime for the rest and rank by the real mtime.
+    const checked = await Promise.all(
+      candidates.map(async (hit) => {
+        const abs = path.resolve(WORKSPACE, hit.relative_path);
+        try {
+          const stat = await fs.stat(abs);
+          if (!stat.isFile()) return null;
+          if (stat.size !== hit.size || Math.floor(stat.mtimeMs) !== Math.floor(hit.mtime_ms)) {
+            recordRecentFileMeta(abs, { mtimeMs: stat.mtimeMs, size: stat.size });
+          }
+          return { ...hit, size: stat.size, mtime_ms: stat.mtimeMs };
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException)?.code === "ENOENT") removeFromRecentIndex(abs, WORKSPACE);
+          return null;
+        }
+      }),
+    );
+    const indexHits = checked
+      .filter((hit): hit is NonNullable<typeof hit> => hit !== null)
+      .sort((a, b) => b.mtime_ms - a.mtime_ms)
       .slice(0, maxFiles);
-    if (indexHits.length > 0) {
+    // Too few rows survived the disk check: the index cannot answer this request
+    // on its own, so fall through to the filesystem scan below.
+    if (indexHits.length >= maxFiles) {
       const data = {
         relative_path: rootRel,
         source: "index" as const,
