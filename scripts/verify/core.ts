@@ -245,9 +245,11 @@ export async function runCore($h: Harness) {
   // default 50000 -> 53000. Ceilings are explicit so any growth fails verification.
   // Raised deliberately again in phase 3 (six project_git_* tools, ~9250 B measured with JS; expert/default totals re-based to 83661/63851 in scripts/schema-budget.json):
   // default 53000 -> 63000, expert 72000 -> 85000. Ceilings are explicit so any growth fails verification.
+  // Raised deliberately again in Phase 12 (get_file_info missing_ok grew default/expert to 66458/86011 measured JS-off):
+  // default 64000 -> 66458, expert 85000 -> 86011. Ceilings are explicit so any growth fails verification.
   const TOOL_SCHEMA_MAX_BYTES = 5700;
-  const EXPERT_TOOL_LIST_MAX_BYTES = 85000;
-  const DEFAULT_TOOL_LIST_MAX_BYTES = 64000;
+  const EXPERT_TOOL_LIST_MAX_BYTES = 86011;
+  const DEFAULT_TOOL_LIST_MAX_BYTES = 66458;
   const toolSchemaBytes = (tool: {
     name: string;
     description?: string;

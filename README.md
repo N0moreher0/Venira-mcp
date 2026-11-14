@@ -249,7 +249,7 @@ All tools return the standard envelope (`ok`, `kind`, `data`, `hint`, `elapsed_m
 |---|---|
 | `list_files` | List files/dirs, depth 1–3, limit ≤ 200 |
 | `read_file` | Read a file by line range; optional `ranges[]` (up to 16) |
-| `get_file_info` | File/dir metadata (kind, size, mtime) |
+| `get_file_info` | File/dir metadata (kind, size, mtime); `missing_ok=1` answers ok with `exists:false` for missing paths (works in `read_batch`) |
 | `search` | Search by file/dir name, content, regex, or symbol; `hybrid: 1` tags hits with `source`+`confidence`; `queries[]` ranks files by AND/OR/NOT patterns |
 | `recent_files` | Recently modified files (index-first, scan-fallback) |
 | `read_batch` | Up to 8 read-only ops in one call; each item takes the same arguments as its standalone tool (`search` items support `regex`, `case_sensitive`, `hybrid`, ...) |

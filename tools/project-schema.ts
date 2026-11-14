@@ -120,6 +120,7 @@ export const readBatchReadFileArgs = z.looseObject({
 });
 export const readBatchGetFileInfoArgs = z.looseObject({
   relative_path: path_.optional().describe("Required (optional here so one bad item fails only itself)."),
+  missing_ok: flag01.optional().describe("1 = answer ok with exists:false for a missing path instead of not_found (default 0)."),
 });
 export const readBatchSearchArgs = z.looseObject({
   query: z.string().optional().describe("Required; see kind."),

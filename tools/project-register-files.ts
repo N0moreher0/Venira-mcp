@@ -119,7 +119,10 @@ export function registerFileTools(server: McpServer, deps: FileToolsDeps): void 
         },
         { readOnlyHint: true, openWorldHint: false },
       ),
-      inputSchema: { relative_path: path_ },
+      inputSchema: {
+        relative_path: path_,
+        missing_ok: flag01.optional().describe("1 = answer ok with exists:false for a missing path instead of not_found (default 0)."),
+      },
     },
     (args) => runOne("get_file_info", args),
   );

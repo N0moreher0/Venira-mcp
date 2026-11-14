@@ -1,11 +1,11 @@
 {
   "expert": {
     "tool_count": 52,
-    "total_bytes": 85279
+    "total_bytes": 86011
   },
   "default": {
     "tool_count": 39,
-    "total_bytes": 65726
+    "total_bytes": 66458
   },
   "tools": {
     "apply_patch": 1983,
@@ -25,7 +25,7 @@
     "edit_file": 2601,
     "execute_js": 1589,
     "explain_error": 1125,
-    "get_file_info": 560,
+    "get_file_info": 1063,
     "git_branch": 1695,
     "git_commit": 1495,
     "git_diff": 1670,
@@ -46,7 +46,7 @@
     "pr_merge": 1584,
     "pr_reopen": 953,
     "read_audit": 1855,
-    "read_batch": 5435,
+    "read_batch": 5664,
     "read_file": 2054,
     "recent_files": 1107,
     "search": 4259,
@@ -58,7 +58,7 @@
     "snapshot": 3068,
     "switch_workspace": 1203,
     "symbol_references": 1426,
-    "trace_status": 595,
+    "trace_status": 567,
     "write_file": 1667
   }
 }

@@ -34,10 +34,10 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
     out: "text (as preview in compact mode; preview_truncated marks a cut), first_line, last_line, total_bytes, truncated, next_start_line (when truncated). sha256 hashes the whole file and is safe as expected_sha256; text_sha256 covers only the returned text. Missing path gives not_found.",
   },
   get_file_info: {
-    about: "Return kind, size and modification time of a path.",
-    use: "you need to know whether a path exists or how big it is.",
+    about: "Return kind, size and modification time of a path. `missing_ok=1` answers ok with `data.exists:false` for a missing path instead of `not_found` (works inside read_batch items too).",
+    use: "you need to know whether a path exists or how big it is. Use missing_ok=1 to probe existence without failing the call or the batch.",
     avoid: "you need the content (read_file).",
-    out: "kind, size_bytes, modified_unix_seconds. Missing path gives not_found.",
+    out: "kind, size_bytes, modified_unix_seconds, exists when missing_ok=1. Missing path gives not_found (or ok with exists:false and missing_ok=1).",
   },
   search: {
     about: "Search by kind: file_name, directory_name, literal_content (regex=1 for regex) or definition (symbol declarations). `queries` instead ranks matching lines by several weighted patterns (must/weight).",

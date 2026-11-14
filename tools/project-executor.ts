@@ -36,6 +36,24 @@ function isDryRunFlag(value: unknown): boolean {
   return value === true || value === 1 || value === "1" || value === "true";
 }
 
+/** Same 0|1 coercion for get_file_info's `missing_ok`. */
+function isMissingOkFlag(value: unknown): boolean {
+  return value === true || value === 1 || value === "1" || value === "true";
+}
+
+/** The backend labels missing paths as `[not_found] ...`; other codes (sensitive_result, path_escape, ...) stay errors. */
+function isNotFoundError(error: unknown): boolean {
+  return error instanceof Error && error.message.startsWith("[not_found]");
+}
+
+/** Copy of `response` with `exists` set on its data payload (used when `missing_ok=1`). */
+function withExists(response: RustResponse, exists: boolean): RustResponse {
+  const result = response.result;
+  const data = result && typeof result === "object" ? result.data : undefined;
+  if (!result || typeof result !== "object" || !data || typeof data !== "object") return response;
+  return { ...response, result: { ...result, data: { ...(data as Record<string, unknown>), exists } } };
+}
+
 /** Central policy/cache/invalidation wrapper for tool backend operations. */
 export function createCachedExecutor({
   cache,
@@ -95,9 +113,37 @@ export function createCachedExecutor({
           ? { response: await execute(operation, args), cached: false }
           : await cache.readFileCached(args);
       } else if (operation === "get_file_info") {
-        execution = bypassAll
-          ? { response: await execute(operation, args), cached: false }
-          : await cache.fileInfoCached(args);
+        // `missing_ok` is answered here, not in the backend: it is stripped before the
+        // cache/backend call so the cache key does not change, and only `[not_found]` is
+        // swallowed. Other errors (outside workspace, protected path, ...) stay errors.
+        const missingOk = isMissingOkFlag(args.missing_ok);
+        let backendArgs = args;
+        if (missingOk && "missing_ok" in args) {
+          backendArgs = { ...args };
+          delete backendArgs.missing_ok;
+        }
+        try {
+          execution = bypassAll
+            ? { response: await execute(operation, backendArgs), cached: false }
+            : await cache.fileInfoCached(backendArgs);
+          if (missingOk) execution = { ...execution, response: withExists(execution.response, true) };
+        } catch (error) {
+          if (!missingOk || !isNotFoundError(error)) throw error;
+          execution = {
+            response: {
+              status: "completed",
+              result: {
+                kind: "file_info",
+                data: {
+                  relative_path: typeof backendArgs.relative_path === "string" ? backendArgs.relative_path : "",
+                  exists: false,
+                },
+              },
+              hint: "Path does not exist. Create it with write_file if that is intended; do not retry the same path.",
+            },
+            cached: false,
+          };
+        }
       } else if (operation === "list_files") {
         execution = bypassAll || !CACHE_LIST_ONLY_ENABLED
           ? { response: await execute(operation, args), cached: false }
