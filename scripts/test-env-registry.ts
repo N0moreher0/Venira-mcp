@@ -283,7 +283,6 @@ check("flags read through envFlag at runtime are registered as flags", () => {
     "VENIRA_USE_RIPGREP",
     "VENIRA_SHELL_CACHE",
     "VENIRA_SHELL_CACHE_READ_ONLY",
-    "VENIRA_DYNAMIC_WORKSPACE",
     "VENIRA_EDIT_FUZZY",
     "VENIRA_AUDIT_STRICT",
     "VENIRA_PRETTY",

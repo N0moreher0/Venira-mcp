@@ -21,13 +21,12 @@ import path from "node:path";
 import crypto from "node:crypto";
 import type { HostSnapshot } from "./types.js";
 import { loadShellPolicy, redactSecrets, type Decision } from "./shell-policy.js";
-import { WORKSPACE, dynamicWorkspaceEnabled } from "./workspace.js";
+import { WORKSPACE, switchingEnabled } from "./workspace.js";
 import { opSnapshotCreate, opSnapshotDelete, opSnapshotList, opSnapshotRestore, sanitizeReason } from "./snapshots.js";
 import { opSnapshotMirror } from "./snapshot-mirror.js";
 import { opCiControl, opCiLogs, opCiStatus, opCiTrigger, opPrClose, opPrComment, opPrCreate, opPrList, opPrMerge, opPrReopen } from "./git-provider.js";
 import { assertSecretName, deleteSecret, getSecretValueSync, listSecrets, MAX_EXPIRY_DAYS, redactSecretValues, secretsDir, setSecret } from "./secrets.js";
 import { GithubDeviceFlow } from "./github-device-flow.js";
-import { envFlag } from "./env.js";
 import { buildChangeImpact, buildDependencyGraph } from "./dependency-graph.js";
 import { opCiWait } from "./ci-wait.js";
 import { auditDecision, auditDetailInsert, auditFinish, auditStart, closeAuditDb } from "./audit-store.js";
@@ -605,8 +604,8 @@ export class CoreHost {
       }
 
       case "project_tool.workspace.switch": {
-        if (!dynamicWorkspaceEnabled() && !envFlag("VENIRA_UNRESTRICTED", false)) {
-          throw new Error("[workspace_switch_denied] dynamic workspace disabled; unset VENIRA_DYNAMIC_WORKSPACE (on by default) or set it to 1. VENIRA_WORKSPACE_ROOTS may narrow switching to an allowlist.");
+        if (!switchingEnabled()) {
+          throw new Error("[workspace_switch_denied] Workspace switching is limited by VENIRA_SECURITY_PROFILE: strict/balanced switch only inside VENIRA_WORKSPACE_ROOTS (unset = locked to the spawn workspace); trusted/off switch any existing directory. Set VENIRA_WORKSPACE_ROOTS to allow specific directories.");
         }
         return (await opWorkspaceSwitch(p)) as T;
       }

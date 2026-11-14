@@ -185,9 +185,9 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
     out: "One key per report section (see sections); with sections set, also sections_requested and sections_unknown.",
   },
   switch_workspace: {
-    about: "Re-root the workspace to another directory at runtime (on by default; any existing directory unless VENIRA_WORKSPACE_ROOTS is set, then only inside it; VENIRA_DYNAMIC_WORKSPACE=0 opts out).",
+    about: "Re-root the workspace to another directory at runtime. Follows VENIRA_SECURITY_PROFILE: trusted/off (or VENIRA_UNRESTRICTED=1) switch anywhere existing; strict/balanced only inside VENIRA_WORKSPACE_ROOTS (unset = spawn only).",
     use: "the client spawned the server once (e.g. Claude Desktop) and the user changed to a different project folder; switch instead of restarting the client.",
-    avoid: "one-shot tasks in the spawn directory, or when VENIRA_DYNAMIC_WORKSPACE=0 (the call is refused).",
+    avoid: "one-shot tasks in the spawn directory, or under strict/balanced without VENIRA_WORKSPACE_ROOTS (the call is refused).",
     out: "workspace_root (the new root), allowed_roots. All subsequent path guards and caches operate on the new root.",
   },
   cache_clear: {

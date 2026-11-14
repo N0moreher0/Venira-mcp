@@ -6,10 +6,13 @@ import path from "node:path";
 import fs from "node:fs";
 import { envFlag } from "./env.js";
 import { cacheEnabled } from "./cache-mode.js";
+import { resolveSecurityProfile } from "./security-profile.js";
 import { snapshotProtectedRoots } from "./snapshot-paths.js";
 export const PLATFORM = process.platform;
 
-export let WORKSPACE = path.resolve(process.env.VENIRA_WORKSPACE ?? process.cwd());
+/** The workspace the server started in: always allowed as a switch target, even after re-rooting. */
+export const SPAWN_WORKSPACE = path.resolve(process.env.VENIRA_WORKSPACE ?? process.cwd());
+export let WORKSPACE = SPAWN_WORKSPACE;
 
 import os from "node:os";
 export function migrateLegacyDataDirIfNeeded(): void {
@@ -137,18 +140,35 @@ function normalizedProtectedBase(canonicalPath: string): string {
 }
 
 
+/**
+ * Workspace switching follows VENIRA_SECURITY_PROFILE (the former dynamic-workspace env flag was removed):
+ *   trusted / off  -> any existing directory (personal-machine posture, same idea as
+ *                     off carrying VENIRA_UNRESTRICTED=1);
+ *   strict/balanced-> only the spawn workspace plus the entries of VENIRA_WORKSPACE_ROOTS
+ *                     (unset = locked to the spawn workspace).
+ * VENIRA_UNRESTRICTED=1 allows any path on top of any profile (it is the
+ * "no workspace lock at all" posture, and off implies it via the profile env defaults).
+ */
+export function switchingEnabled(): boolean {
+  const profile = resolveSecurityProfile();
+  if (envFlag("VENIRA_UNRESTRICTED", false)) return true;
+  if (profile === "trusted" || profile === "off") return true;
+  return workspaceRootsConfigured();
+}
 
-export function dynamicWorkspaceEnabled(): boolean {
-  // Default ON: stdio MCP clients often spawn the server once and cannot re-root it per
-  // project; the agent re-roots with switch_workspace instead. Set
-  // VENIRA_DYNAMIC_WORKSPACE=0 to keep the server locked to the spawn workspace.
-  return envFlag("VENIRA_DYNAMIC_WORKSPACE", true);
+/** True when VENIRA_SECURITY_PROFILE allows switching to any existing directory. */
+export function profileAllowsAnyPath(): boolean {
+  const profile = resolveSecurityProfile();
+  return envFlag("VENIRA_UNRESTRICTED", false) || profile === "trusted" || profile === "off";
 }
 
 export function allowedWorkspaceRoots(): string[] {
   const roots: string[] = [WORKSPACE];
-  if (dynamicWorkspaceEnabled()) {
-    const raw = process.env.VENIRA_WORKSPACE_ROOTS ?? "";
+  if (!roots.includes(SPAWN_WORKSPACE)) roots.push(SPAWN_WORKSPACE);
+  const raw = process.env.VENIRA_WORKSPACE_ROOTS ?? "";
+  // The allowlist is honored under strict/balanced only; trusted/off (and an explicit
+  // VENIRA_UNRESTRICTED=1) may reach any existing directory, so listing roots there adds nothing.
+  if (!profileAllowsAnyPath()) {
     for (const part of raw.split(/[,;]/)) {
       const value = part.trim();
       if (!value) continue;
@@ -158,7 +178,7 @@ export function allowedWorkspaceRoots(): string[] {
       }
     }
   }
-  if (envFlag("VENIRA_UNRESTRICTED", false)) {
+  if (envFlag("VENIRA_UNRESTRICTED", false) || resolveSecurityProfile() === "off") {
     roots.push("/");
   }
   return roots;
@@ -178,14 +198,12 @@ export function canSwitchWorkspace(target: string): string | null {
   if (!fs.existsSync(abs)) return null;
   // stat file check
   try { if (!fs.statSync(abs).isDirectory()) return null; } catch { return null; }
-  const dynamic = dynamicWorkspaceEnabled();
-  const unrestricted = envFlag("VENIRA_UNRESTRICTED", false);
-  if (!dynamic && !unrestricted) return null;
-  // Dynamic switching without an explicit allowlist: any existing directory may become the
-  // workspace (on by default; VENIRA_DYNAMIC_WORKSPACE=0 keeps the spawn lock). This is what a
-  // stdio MCP client that cannot respawn the server per project (e.g. Claude Desktop) needs;
-  // configure VENIRA_WORKSPACE_ROOTS to narrow it back to an explicit set.
-  if (dynamic && !unrestricted && !workspaceRootsConfigured()) return abs;
+  // trusted/off (or an explicit VENIRA_UNRESTRICTED=1): any existing directory may become the
+  // workspace. This is what a stdio MCP client that cannot respawn the server per project
+  // (e.g. Claude Desktop) needs when the operator opted into the personal-machine posture.
+  if (profileAllowsAnyPath()) return abs;
+  // strict/balanced: the spawn workspace plus the VENIRA_WORKSPACE_ROOTS allowlist;
+  // unset roots mean locked to the spawn workspace.
   const roots = allowedWorkspaceRoots();
   return roots.some((root) => {
     try {
@@ -202,7 +220,7 @@ export function canSwitchWorkspace(target: string): string | null {
 export function switchWorkspaceRoot(target: string): string {
   const next = canSwitchWorkspace(target);
   if (!next) {
-    throw new Error("[workspace_switch_denied] Path is not an existing directory inside VENIRA_WORKSPACE_ROOTS. Unset VENIRA_WORKSPACE_ROOTS to allow any existing directory, or add this path to the allowlist.");
+    throw new Error("[workspace_switch_denied] Workspace switching is limited by VENIRA_SECURITY_PROFILE: strict/balanced switch only inside VENIRA_WORKSPACE_ROOTS (unset = locked to the spawn workspace); trusted/off switch any existing directory. Set VENIRA_WORKSPACE_ROOTS to allow specific directories.");
   }
   WORKSPACE = next;
   return WORKSPACE;

@@ -247,9 +247,11 @@ export async function runCore($h: Harness) {
   // default 53000 -> 63000, expert 72000 -> 85000. Ceilings are explicit so any growth fails verification.
   // Raised deliberately again in Phase 12 (get_file_info missing_ok grew default/expert to 66458/86011 measured JS-off):
   // default 64000 -> 66458, expert 85000 -> 86011. Ceilings are explicit so any growth fails verification.
+  // Raised deliberately again in the profile-driven workspace switching change (switch_workspace description, 66458->66516, 86011->86069):
+  // default 66458 -> 66516, expert 86011 -> 86069. Ceilings are explicit so any growth fails verification.
   const TOOL_SCHEMA_MAX_BYTES = 5700;
-  const EXPERT_TOOL_LIST_MAX_BYTES = 86011;
-  const DEFAULT_TOOL_LIST_MAX_BYTES = 66458;
+  const EXPERT_TOOL_LIST_MAX_BYTES = 86069;
+  const DEFAULT_TOOL_LIST_MAX_BYTES = 66516;
   const toolSchemaBytes = (tool: {
     name: string;
     description?: string;

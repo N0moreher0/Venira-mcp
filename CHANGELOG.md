@@ -2,6 +2,15 @@
 
 Local release notes for venira-mcp. Not published (not listed in `package.json` `files`) and not pushed to git.
 
+## Unreleased
+
+### Breaking - workspace switching now follows `VENIRA_SECURITY_PROFILE`; `VENIRA_DYNAMIC_WORKSPACE` removed
+- `switch_workspace` (and the core op `project_tool.workspace.switch`) is scoped by `VENIRA_SECURITY_PROFILE`: `trusted` and `off` (or an explicit `VENIRA_UNRESTRICTED=1`) switch to **any existing directory**; `strict`/`balanced` switch only inside `VENIRA_WORKSPACE_ROOTS`, which unset locks switching to the spawn workspace.
+- `VENIRA_DYNAMIC_WORKSPACE` is removed from the code, the env registry, the docs and the plugin bundles. Setting it no longer has any effect. `VENIRA_WORKSPACE_ROOTS` keeps working but now narrows `strict`/`balanced` only; it is ignored under `trusted`/`off`.
+- The spawn workspace is always a switch target, even after re-rooting away from it.
+- `health` reports `server.workspace_switching` as `{ enabled, profile, allowed_roots, unrestricted }`.
+- Tests: `npm run test:workspace-switch` covers all four profiles, unrestricted override, links/traversal, and the spawn workspace staying switchable (16 checks).
+
 ## 4.2.0 - 2026-11-14
 
 ### Added - `get_file_info` `missing_ok` flag (Phase 12 of ROADMAP_TOOLS.md)

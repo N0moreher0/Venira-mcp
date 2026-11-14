@@ -167,7 +167,7 @@ Do not write a variable just to restate its default (for example `VENIRA_OUTPUT_
 | `trusted` | `permissive` | Ask-rule and unclassified commands run; hard-deny commands require approval |
 | `off` | `off` | Full trust: shell checks off, no workspace lock, JS exec `auto`, no elicitation, full env passed to shell. Prints a warning and audits shell commands. Replaces setting those variables one by one; any of them you set explicitly still wins |
 
-`VENIRA_SHELL_MODE` is an advanced override and takes precedence over the profile. `VENIRA_JS_EXEC_MODE` separately gates the JavaScript tool: `off` (default) hides it, `ask` registers it with per-call human approval (skipped when `VENIRA_PERMISSION_MODE=allow_all`), `semi-auto` registers it without approval but keeps the containment (workspace-only fs, scrubbed env, no child processes; network is always open), `auto` registers it without approval and without any containment (full fs access, inherited env; personal machines only).
+`VENIRA_SHELL_MODE` is an advanced override and takes precedence over the profile. `VENIRA_JS_EXEC_MODE` separately gates the JavaScript tool: `off` (default) hides it, `ask` registers it with per-call human approval (skipped when `VENIRA_PERMISSION_MODE=allow_all`), `semi-auto` registers it without approval but keeps the containment (workspace-only fs, scrubbed env, no child processes; network is always open), `auto` registers it without approval and without any containment (full fs access, inherited env; personal machines only). `switch_workspace` follows the profile the same way: `trusted`/`off` (and an explicit `VENIRA_UNRESTRICTED=1`) switch to any existing directory; `strict`/`balanced` switch only inside `VENIRA_WORKSPACE_ROOTS`, which unset locks switching to the spawn workspace.
 
 > Choose `trusted` when you want fewer prompts on a personal machine. Choose `off` only when you intentionally accept that shell checks are disabled; JS exec is still gated by `VENIRA_JS_EXEC_MODE` (a human gate for `execute_js` only counts when that mode is `ask` and `VENIRA_PERMISSION_MODE` is not `allow_all`). The `secret_env` gate remains active in every profile. Elicitation hangs off the shell mode: `strict` never prompts (CLI grant only), `balanced` prompts for every unclassified ask-rule command, `permissive` never prompts at all (only the `command_substitution` always-ask rule, hard-deny commands downgraded to `ask.deny.*`, and `secret_env` still prompt), `off` never prompts.
 
@@ -253,8 +253,8 @@ All tools return the standard envelope (`ok`, `kind`, `data`, `hint`, `elapsed_m
 | `search` | Search by file/dir name, content, regex, or symbol; `hybrid: 1` tags hits with `source`+`confidence`; `queries[]` ranks files by AND/OR/NOT patterns |
 | `recent_files` | Recently modified files (index-first, scan-fallback) |
 | `read_batch` | Up to 8 read-only ops in one call; each item takes the same arguments as its standalone tool (`search` items support `regex`, `case_sensitive`, `hybrid`, ...) |
-| `health` | Diagnostics: capability, queue, cache hit-rates, p50/p95, security limits notice, and `server.workspace_switching` (`enabled`, `allowed_roots`) |
-| `switch_workspace` | Re-root the workspace to another directory mid-session — for clients that spawn the server once (e.g. Claude Desktop). Enabled by default |
+| `health` | Diagnostics: capability, queue, cache hit-rates, p50/p95, security limits notice, and `server.workspace_switching` (`enabled`, `profile`, `allowed_roots`) |
+| `switch_workspace` | Re-root the workspace to another directory mid-session — for clients that spawn the server once (e.g. Claude Desktop). Follows `VENIRA_SECURITY_PROFILE`: `trusted`/`off` switch to any existing directory; `strict`/`balanced` only inside `VENIRA_WORKSPACE_ROOTS` (unset = locked to the spawn workspace) |
 | `read_audit` | Read recent audit log rows |
 | `memory` | One handoff note per workspace that outlives the chat: `action=read` at the start of a task, `action=write` (full overwrite, max 6000 bytes) before finishing or running out of context. Plain markdown at `<data dir>/memory/<workspace>-<hash>.md` (readable and editable by hand); not encrypted, so keep secrets out |
 
@@ -424,8 +424,7 @@ Sensible defaults; leave any of these unset unless you know why you set them.
 | `VENIRA_SHELL_CACHE` | `"1"` | Cache read-only shell results |
 | `VENIRA_SHELL_CACHE_READ_ONLY` | `"1"` | Compatibility flag (shell output caching is always read-only — nothing mutating is ever cached) |
 | `VENIRA_CONFIG_FILE` | unset | Explicit path of the JSON config file (git provider settings); never auto-read from a workspace |
-| `VENIRA_DYNAMIC_WORKSPACE` | `"1"` | Allow switching workspace at runtime via `switch_workspace` (on by default). Without `VENIRA_WORKSPACE_ROOTS`, any existing directory may be chosen; set the roots to narrow switching to an allowlist, or `"0"` to lock the server to the spawn workspace |
-| `VENIRA_WORKSPACE_ROOTS` | unset | Allowlist of roots `switch_workspace` may reach (absolute paths, both `,` and `;` separators). Unset = any existing directory while dynamic switching is enabled |
+| `VENIRA_WORKSPACE_ROOTS` | unset | Allowlist of roots `switch_workspace` may reach under `strict`/`balanced` (absolute paths, both `,` and `;` separators). Unset = locked to the spawn workspace. Ignored under `trusted`/`off`/`VENIRA_UNRESTRICTED=1` (those switch to any existing directory) |
 | `VENIRA_CACHE_LIST_ONLY` | unset | Enable only the directory-listing cache |
 | `VENIRA_CACHE_SEARCH_ONLY` | unset | Enable only the search cache |
 | `VENIRA_LIST_CACHE_MS` | `1500` | Directory-listing cache lifetime |

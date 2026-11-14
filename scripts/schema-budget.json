@@ -1,11 +1,11 @@
 {
   "expert": {
     "tool_count": 52,
-    "total_bytes": 86011
+    "total_bytes": 86069
   },
   "default": {
     "tool_count": 39,
-    "total_bytes": 66458
+    "total_bytes": 66516
   },
   "tools": {
     "apply_patch": 1983,
@@ -56,7 +56,7 @@
     "shell_run": 3138,
     "shell_status": 803,
     "snapshot": 3068,
-    "switch_workspace": 1203,
+    "switch_workspace": 1261,
     "symbol_references": 1426,
     "trace_status": 567,
     "write_file": 1667

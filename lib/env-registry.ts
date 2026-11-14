@@ -316,10 +316,7 @@ export const ENV_REGISTRY: readonly EnvVarSpec[] = [
   wsPath("VENIRA_WORKSPACE", "Workspace root; every path resolves against it.", true, { default: "process.cwd()" }),
   wsPath("VENIRA_DATA_DIR", "Directory for the audit DB, approvals and state.", true),
   wsPath("VENIRA_CONFIG_FILE", "Explicit path of the JSON config file (git provider settings).", true, {}),
-  wsFlag("VENIRA_DYNAMIC_WORKSPACE", "Allow switching workspace at runtime via `switch_workspace` (on by default). Without VENIRA_WORKSPACE_ROOTS, any existing directory may be chosen. Set to 0 to lock the server to the spawn workspace.", true, {
-    default: "1",
-  }),
-  wsList("VENIRA_WORKSPACE_ROOTS", "Allowlist of roots `switch_workspace` may reach (absolute paths, both `,` and `;` separators). Unset = any existing directory while dynamic switching is enabled (default).", true, {}),
+  wsList("VENIRA_WORKSPACE_ROOTS", "Allowlist of roots `switch_workspace` may reach under strict/balanced (absolute paths, both `,` and `;` separators). Unset = locked to the spawn workspace. Ignored under trusted/off/`VENIRA_UNRESTRICTED=1` (those switch to any existing directory).", true, {}),
 
   // --- cache ---------------------------------------------------------------
   cacheEnum("VENIRA_CACHE", "Cache preset: `all` every cache, `list` only directory listings, `search` only searches, `off` always fresh.", true, {
