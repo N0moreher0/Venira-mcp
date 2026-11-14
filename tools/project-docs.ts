@@ -203,7 +203,7 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
     out: "enabled, file, buffered, recent[] (newest first, timestamp_ms is epoch milliseconds).",
   },
   memory: {
-    about: "Read or overwrite this workspace's handoff note, kept across AI sessions (action=read|write; write replaces it all, max 6000 bytes).",
+    about: "Read or overwrite this workspace's handoff note at <workspace>/.venira/memory.md (action=read|write; write replaces it all, max 6000 bytes).",
     use: "a task starts or resumes (read, after recent_files); before you finish or run out of context (write: goal, decisions, files touched, next steps).",
     avoid: "lasting docs (write_file) or history (git_log). Plain text on disk: no secrets.",
     out: "read: exists, content, bytes, updated_at_ms. write: replaced, previous_bytes, bytes, updated_at_ms. Over the cap or empty content: invalid_request, old note kept.",

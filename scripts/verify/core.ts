@@ -250,8 +250,8 @@ export async function runCore($h: Harness) {
   // Raised deliberately again in the profile-driven workspace switching change (switch_workspace description, 66458->66516, 86011->86069):
   // default 66458 -> 66516, expert 86011 -> 86069. Ceilings are explicit so any growth fails verification.
   const TOOL_SCHEMA_MAX_BYTES = 5700;
-  const EXPERT_TOOL_LIST_MAX_BYTES = 86069;
-  const DEFAULT_TOOL_LIST_MAX_BYTES = 66516;
+  const EXPERT_TOOL_LIST_MAX_BYTES = 86077;
+  const DEFAULT_TOOL_LIST_MAX_BYTES = 66524;
   const toolSchemaBytes = (tool: {
     name: string;
     description?: string;

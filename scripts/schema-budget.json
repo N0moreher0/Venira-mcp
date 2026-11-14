@@ -1,11 +1,11 @@
 {
   "expert": {
     "tool_count": 52,
-    "total_bytes": 86069
+    "total_bytes": 86077
   },
   "default": {
     "tool_count": 39,
-    "total_bytes": 66516
+    "total_bytes": 66524
   },
   "tools": {
     "apply_patch": 1983,
@@ -35,7 +35,7 @@
     "github_connect": 1339,
     "health": 1237,
     "list_files": 1001,
-    "memory": 1112,
+    "memory": 1120,
     "move_path": 1431,
     "outline_symbol": 1338,
     "plan_read_batch": 1361,

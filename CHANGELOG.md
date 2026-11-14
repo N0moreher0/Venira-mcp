@@ -2,6 +2,15 @@
 
 Local release notes for venira-mcp. Not published (not listed in `package.json` `files`) and not pushed to git.
 
+## Unreleased
+
+### Changed - `memory` note lives in the workspace, not the data dir
+- The handoff note now lives at `<workspace>/.venira/memory.md` instead of `<data dir>/memory/<workspace name>-<hash of path>.md`. The note travels with the project (it follows `switch_workspace` to whatever the live workspace is), and two projects sharing one data dir no longer share a note.
+- Reads fall back to the legacy data-dir note when no workspace note exists (flagged `legacy: true` in the result, with a hint saying the next write moves the note); writes always go to the workspace path and never delete the legacy one.
+- `action=read` and `action=write` now report `path` (where the note actually lives).
+- `.venira/` is git-ignored in this repo; add it to yours if you do not want the note committed.
+- Tests: `npm run test:memory` covers the workspace path, the legacy fallback and the move-on-write (22 checks).
+
 ## 4.3.0 - 2026-11-14
 
 ### Breaking - workspace switching now follows `VENIRA_SECURITY_PROFILE`; `VENIRA_DYNAMIC_WORKSPACE` removed
