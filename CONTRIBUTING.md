@@ -22,7 +22,7 @@ binaries for the supported Node × OS combinations.
 ```bash
 npm run build        # type-check + emit dist/
 npm run smoke        # 30 s: corehost reachable, path lock enforced
-npm run verify       # 60 s: behavioural regression (cache, batch, shell, audit, output modes)
+npm run verify       # a few minutes: behavioural regression (cache, batch, shell, audit, output modes)
 npm run bench:mcp    # numbers for PR descriptions
 ```
 
@@ -34,7 +34,7 @@ compact output mode, and tool annotations.
 
 - **TypeScript strict mode** (`tsconfig.json`). No `any` leaks; `skipLibCheck` is on for SDK types.
 - **ESM** (`"type": "module"`). Imports end in `.js` even for `.ts` sources (standard ESM + TS).
-- **Zod v3** for tool input schemas. Keep schemas declarative and small.
+- **Zod v4** for tool input schemas. Keep schemas declarative and small.
 - **No new runtime dependencies.** The whole point is one `node` + one `zod` + one
   `@modelcontextprotocol/sdk`. A new dep needs a strong justification in the PR.
 - **Cache invariants** (see [README §7](./README.md#7-security-model) and the cache notes in `lib/`):

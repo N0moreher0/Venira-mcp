@@ -197,10 +197,16 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
     out: "cleared entry counts per cache.",
   },
   trace_status: {
-    about: "Show recent traced tool calls and the trace configuration (needs VENIRA_TRACE=1).",
+    about: "Show recent traced tool calls (tracing is always on).",
     use: "you want to see what ran recently without opening the log file.",
     avoid: "tracing is off (the buffer is empty).",
     out: "enabled, file, buffered, recent[] (newest first, timestamp_ms is epoch milliseconds).",
+  },
+  memory: {
+    about: "Read or overwrite this workspace's handoff note, kept across AI sessions (action=read|write; write replaces it all, max 6000 bytes).",
+    use: "a task starts or resumes (read, after recent_files); before you finish or run out of context (write: goal, decisions, files touched, next steps).",
+    avoid: "lasting docs (write_file) or history (git_log). Plain text on disk: no secrets.",
+    out: "read: exists, content, bytes, updated_at_ms. write: replaced, previous_bytes, bytes, updated_at_ms. Over the cap or empty content: invalid_request, old note kept.",
   },
   read_audit: {
     about: "Read recent audit-log rows, newest first: what each job was asked and returned. Filter by session_id, operation, outcome, request_id, since_unix (seconds); verify=1 checks the hash chain.",
@@ -238,7 +244,7 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
     about: "List the files and symbols affected by changing given files or symbols (direction: dependents, dependencies or both). At least one of files/symbols; a symbol seed takes {name, relative_path} (file is an alias).",
     use: "you are about to rename or change something and need which files to read and which tests to run.",
     avoid: "you want the whole graph (dependency_graph).",
-    out: "affected[] {id, distance, path, confidence}, summary {affected_files, affected_symbols, tests_affected}, unresolved[] (the seeds that did not resolve: symbol, reason, next_step), stats.unresolved_imports.",
+    out: "affected[] {id, distance, path, confidence}, summary {affected_files, affected_symbols, tests_affected}, unresolved[] (the seeds that did not resolve: symbol, reason, next_step), stats {unresolved_imports, min_confidence, filtered_possible}. By default only exact/likely edges are traversed; pass min_confidence=\"possible\" to follow name-matching guesses.",
   },
 
   // ---- workflow -----------------------------------------------------------

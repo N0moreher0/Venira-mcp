@@ -12,6 +12,7 @@
  *    must satisfy its invariants (stable ids, monotonic severity, determinism).
  * 5. Source drift: runtime source and registry list exactly the same variables.
  */
+import "./clean-env.js"; // must stay first: inherited VENIRA_* from the agent session would resolve the profile from process.env
 import assert from "node:assert/strict";
 import {
   ENV_FLAG_NAMES,
