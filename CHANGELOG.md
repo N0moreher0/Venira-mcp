@@ -2,7 +2,7 @@
 
 Local release notes for venira-mcp. Not published (not listed in `package.json` `files`) and not pushed to git.
 
-## Unreleased
+## 4.4.0 - 2026-11-14
 
 ### Changed - `memory` note lives in the workspace, not the data dir
 - The handoff note now lives at `<workspace>/.venira/memory.md` instead of `<data dir>/memory/<workspace name>-<hash of path>.md`. The note travels with the project (it follows `switch_workspace` to whatever the live workspace is), and two projects sharing one data dir no longer share a note.
