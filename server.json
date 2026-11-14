@@ -6,13 +6,15 @@
     "url": "https://github.com/N0moreher0/Venira-mcp",
     "source": "github"
   },
-  "version": "3.0.0",
+  "version": "4.0.0",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "venira-mcp",
-      "version": "3.0.0",
-      "transport": { "type": "stdio" },
+      "version": "4.0.0",
+      "transport": {
+        "type": "stdio"
+      },
       "environmentVariables": [
         {
           "name": "VENIRA_WORKSPACE",
