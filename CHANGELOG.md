@@ -2,6 +2,13 @@
 
 Local release notes for venira-mcp. Not published (not listed in `package.json` `files`) and not pushed to git.
 
+## 4.2.0 - 2026-11-14
+
+### Added - `get_file_info` `missing_ok` flag (Phase 12 of ROADMAP_TOOLS.md)
+- New optional `missing_ok` (0/1, default 0) on `get_file_info`. With `missing_ok=1`, a missing path answers `ok` with `data.exists:false` instead of `[not_found]`; an existing path answers as before plus `data.exists:true`. The flag also works inside `read_batch` items (`readBatchGetFileInfoArgs`), so an existence probe no longer turns the whole batch into `batch_partial_failure`.
+- Implemented in the cached executor (`tools/project-executor.ts`): `missing_ok` is stripped before the backend/cache call (cache key unchanged) and only `[not_found]` errors are swallowed; other errors (outside workspace, protected path, ...) stay errors. Default behavior (`missing_ok=0`) is unchanged.
+- Tests: `npm run test:file-info-missing-ok` (also part of `verify`). Schema budget ratcheted for the new flag.
+
 ## 4.1.0 - 2026-11-14
 
 ### Added - `memory` tool (handoff note between AI sessions)
