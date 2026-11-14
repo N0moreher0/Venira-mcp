@@ -5,8 +5,8 @@ import type { Args } from "./project-cache.js";
 import { runDiffFiles, runOutlineSymbol } from "./project-codeintel.js";
 import { config, flag01, path_ } from "./project-schema.js";
 
-// Code-intelligence tool registrations: project_outline_symbol, project_diff_files,
-// project_symbol_references, project_dependency_graph, project_change_impact.
+// Code-intelligence tool registrations: outline_symbol, diff_files,
+// symbol_references, dependency_graph, change_impact.
 // Extracted from registerProjectTools in tools/project.ts (roadmap item 6, step 5m). Schemas, descriptions
 // and registration order are unchanged; handlers that need project.ts state arrive through CodeIntelDeps.
 
@@ -18,7 +18,7 @@ export type CodeIntelDeps = {
 export function registerCodeIntelTools(server: McpServer, deps: CodeIntelDeps): void {
   const { runOne, runSymbolReferences } = deps;
   server.registerTool(
-    "project_outline_symbol",
+    "outline_symbol",
     {
       ...config(
         "Outline symbols",
@@ -40,7 +40,7 @@ export function registerCodeIntelTools(server: McpServer, deps: CodeIntelDeps): 
   );
 
   server.registerTool(
-    "project_diff_files",
+    "diff_files",
     {
       ...config(
         "Diff files",
@@ -61,7 +61,7 @@ export function registerCodeIntelTools(server: McpServer, deps: CodeIntelDeps): 
   );
 
   server.registerTool(
-    "project_symbol_references",
+    "symbol_references",
     {
       ...config(
         "Symbol references",
@@ -83,7 +83,7 @@ export function registerCodeIntelTools(server: McpServer, deps: CodeIntelDeps): 
   );
 
   server.registerTool(
-    "project_dependency_graph",
+    "dependency_graph",
     {
       ...config(
         "Dependency graph",
@@ -110,7 +110,7 @@ export function registerCodeIntelTools(server: McpServer, deps: CodeIntelDeps): 
   );
 
   server.registerTool(
-    "project_change_impact",
+    "change_impact",
     {
       ...config(
         "Change impact",

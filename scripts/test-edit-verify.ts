@@ -7,7 +7,7 @@
  *   3. expected_sha256 is stale      -> refused with stale_content, file untouched.
  *   4. legacy `guard: "sha256"`      -> refused with [unsupported] (removed in phase 5), file untouched.
  *   5. legacy `old_text_fuzzy`       -> ignored, never changes the edit.
- *   6. roadmap item 17: the read -> edit round trip works. project_read_file
+ *   6. roadmap item 17: the read -> edit round trip works. read_file
  *      reports the whole-file hash (never the hash of the returned slice), a
  *      range read reports it too, a BOM file round-trips, sha256_after can be
  *      fed back, and a stale hash is refused with an explicit fresh-read
@@ -96,7 +96,7 @@ try {
   // Roadmap item 17: the read -> edit round trip must not dead-lock.
   //
   // `expected_sha256` is only useful when the agent can get a hash it can
-  // send back. project_read_file used to report the hash of the *returned
+  // send back. read_file used to report the hash of the *returned
   // slice*, so a range read (or a truncated read) produced a hash that never
   // matched the file: every edit came back as stale_content and the agent
   // looped. The hash is now always the whole file.
@@ -182,7 +182,7 @@ try {
       "the message is English, like every other error",
     );
     assert.equal(error?.data?.fresh_read_required, true);
-    assert.equal(error?.data?.next_action, "project_read_file");
+    assert.equal(error?.data?.next_action, "read_file");
     assert.equal(fs.readFileSync(path.join(root, "fresh.txt"), "utf8"), "keep\n", "the file must be untouched");
   });
 

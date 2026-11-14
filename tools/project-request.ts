@@ -6,7 +6,7 @@ import type { Args } from "./project-cache.js";
 
 /**
  * The file-writing tools (the MUTATING set in project-executor.ts plus the
- * `create_directory` op behind project_create). These are the ops that need a
+ * `create_directory` op behind create). These are the ops that need a
  * reason for the audit trail. Everything read-only or external-identifier
  * passes through untouched.
  */

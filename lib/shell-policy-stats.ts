@@ -1,5 +1,5 @@
 /**
- * Shell policy — redact secret + bộ đếm runtime (project_health).
+ * Shell policy — redact secret + bộ đếm runtime (health).
  * Tách khỏi shell-policy.ts (re-export ở đó nên API công khai không đổi).
  */
 import type { Decision } from "./shell-policy.js";
@@ -32,7 +32,7 @@ export function redactSecrets(text: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Runtime counters (surfaced by project_health)
+// Runtime counters (surfaced by health)
 // ---------------------------------------------------------------------------
 
 const stats = {

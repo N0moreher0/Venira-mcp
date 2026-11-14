@@ -4,7 +4,7 @@ import type { RustResponse, ToolResult } from "../lib/output.js";
 import { extractSymbols } from "../lib/symbol-diff.js";
 import { readTextFile } from "./project-codeintel.js";
 
-// project_search hybrid mode. Extracted from tools/project.ts (P1 #6, step 5e); behavior is
+// search hybrid mode. Extracted from tools/project.ts (P1 #6, step 5e); behavior is
 // unchanged. The backend search (with its cache) is owned by project.ts and reached through
 // HybridDeps, so this module never imports project.ts.
 
@@ -19,7 +19,7 @@ export type HybridDeps = {
 };
 
 // ---------------------------------------------------------------------------
-// project_search hybrid mode (opt-in, `hybrid: 1`). One backend walk feeds the
+// search hybrid mode (opt-in, `hybrid: 1`). One backend walk feeds the
 // enrichment — a second ripgrep pass would share the same backend and double
 // the work for no extra information. Every hit is tagged with `source`
 // (symbol_index definition > symbol_reference whole-word > plain content) and
@@ -80,8 +80,8 @@ type HybridHit = Record<string, unknown> & {
 };
 
 /**
- * Core of the hybrid search, shared by `project_search` (hybrid: 1) and by `search` items inside
- * `project_read_batch`. Returns the merged response so each caller builds its own envelope.
+ * Core of the hybrid search, shared by `search` (hybrid: 1) and by `search` items inside
+ * `read_batch`. Returns the merged response so each caller builds its own envelope.
  */
 export async function computeHybridSearch(
   args: Args,
@@ -119,7 +119,7 @@ export async function computeHybridSearch(
   }
 
   // Tag hits. Definition sites are detected per file with the same parser-lite
-  // used by project_outline_symbol, bounded to files that
+  // used by outline_symbol, bounded to files that
   // actually produced hits.
   const definitionLines = new Map<string, Set<number>>();
   if (identifier !== null && hits.length > 0) {

@@ -42,7 +42,7 @@ export async function opWriteFile(
           sha256: current || null,
           expected_sha256: String(expectedSha).toLowerCase(),
           fresh_read_required: true,
-          next_action: "project_read_file",
+          next_action: "read_file",
         },
       );
     }
@@ -64,14 +64,14 @@ export async function opWriteFile(
       if (!parent.isDirectory()) {
         throw new Error(
           `[invalid_request] The parent path is not a directory: ${path.relative(root, parentDir) || "."}. ` +
-            "Hint: pass a file path whose parent is a directory, or create the directory with project_create.",
+            "Hint: pass a file path whose parent is a directory, or create the directory with create.",
         );
       }
     } catch (error) {
       if (error instanceof Error && error.message.startsWith("[invalid_request]")) throw error;
       throw new Error(
         `[invalid_request] The parent directory does not exist: ${path.relative(root, parentDir) || "."}. ` +
-          "Hint: pass create_dirs=1, or create the directory with project_create.",
+          "Hint: pass create_dirs=1, or create the directory with create.",
       );
     }
   }
@@ -204,7 +204,7 @@ export async function opEditFile(
   try {
     fileBytes = await fs.readFile(absPath);
   } catch {
-    throw new Error(`[not_found] File does not exist: ${args.relative_path}. Hint: create it with project_write_file first.`);
+    throw new Error(`[not_found] File does not exist: ${args.relative_path}. Hint: create it with write_file first.`);
   }
   let content: string = fileBytes.toString("utf8");
 
@@ -220,7 +220,7 @@ export async function opEditFile(
   const normalizeEol = (s: string) => s.replace(/\r\n|\r|\n/g, eol);
 
   // Roadmap item 17: the guard hash is the hash of the file's raw bytes, so it
-  // matches project_read_file's `sha256` (whole file) and project_write_file's
+  // matches read_file's `sha256` (whole file) and write_file's
   // check. The BOM is part of the file and therefore part of the hash.
   let sha256Before = "";
   try {
@@ -240,7 +240,7 @@ export async function opEditFile(
           sha256: sha256Before || null,
           expected_sha256: String(expectedSha2).toLowerCase(),
           fresh_read_required: true,
-          next_action: "project_read_file",
+          next_action: "read_file",
           ...(await fs.stat(absPath).then((s) => ({ mtime_ms: s.mtimeMs })).catch(() => ({}))),
         },
       );
@@ -497,7 +497,7 @@ export async function opDeletePath(
     stat = await fs.stat(absPath);
   } catch {
     throw new Error(
-      `[not_found] Path does not exist: ${args.relative_path}. Hint: check with project_list_files.`,
+      `[not_found] Path does not exist: ${args.relative_path}. Hint: check with list_files.`,
     );
   }
 
@@ -635,7 +635,7 @@ async function planTransfer(
   const caseOnly = sameFolded; // distinct strings, same folded path: only possible on win32
   if (caseOnly && verb === "copy") {
     throw new Error(
-      `[invalid_request] from and to differ only by letter case, which is the same file on this file system: ${from} -> ${to}. Hint: use project_move_path to rename it, or pick a different name.`,
+      `[invalid_request] from and to differ only by letter case, which is the same file on this file system: ${from} -> ${to}. Hint: use move_path to rename it, or pick a different name.`,
     );
   }
 
@@ -643,7 +643,7 @@ async function planTransfer(
   try {
     srcStat = await fs.lstat(absFrom);
   } catch {
-    throw new Error(`[not_found] Source does not exist: ${from}. Hint: check it with project_list_files.`);
+    throw new Error(`[not_found] Source does not exist: ${from}. Hint: check it with list_files.`);
   }
   if (srcStat.isDirectory() && !caseOnly && isInsidePath(absFrom, absTo)) {
     throw new Error(`[invalid_request] Cannot ${verb} a directory into itself: ${from} -> ${to}. Hint: choose a target outside ${from}.`);
@@ -659,7 +659,7 @@ async function planTransfer(
       if (dstStat.isDirectory() || srcStat.isDirectory()) {
         throw new Error(
           `[conflict] overwrite=1 only replaces a file with a file; ${to} or ${from} is a directory. ` +
-            "Hint: delete the target with project_delete_path first, or choose another target.",
+            "Hint: delete the target with delete_path first, or choose another target.",
         );
       }
       overwrites = true;
@@ -681,7 +681,7 @@ async function ensureTargetParent(plan: TransferPlan, root: string): Promise<voi
   const stat = await fs.stat(parent).catch(() => null);
   if (!stat || !stat.isDirectory()) {
     throw new Error(
-      `[invalid_request] The target's parent directory does not exist: ${relativeOf(root, parent)}. Hint: pass create_dirs=1 (the default) or create it with project_create.`,
+      `[invalid_request] The target's parent directory does not exist: ${relativeOf(root, parent)}. Hint: pass create_dirs=1 (the default) or create it with create.`,
     );
   }
 }

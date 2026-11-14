@@ -1,6 +1,6 @@
 /**
  * Minimal in-memory metrics: p50/p95/max per operation.
- * A 256-sample ring buffer per op is enough for project_health to
+ * A 256-sample ring buffer per op is enough for health to
  * reflect the current session without keeping unbounded history.
  */
 const MAX_SAMPLES = 256;

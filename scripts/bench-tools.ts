@@ -72,7 +72,7 @@ const ps = (value: string): string => `'${value.replace(/'/g, "''")}'`;
 const specs: Spec[] = [
   {
     id: "read_file",
-    mcp_tool: "project_read_file",
+    mcp_tool: "read_file",
     cache: "read",
     args: { relative_path: "package.json", start_line: 1, end_line: 25 },
     powershell_body: `
@@ -84,7 +84,7 @@ const specs: Spec[] = [
   },
   {
     id: "read_batch_3_files",
-    mcp_tool: "project_read_batch",
+    mcp_tool: "read_batch",
     cache: "read",
     args: {
       max_response_bytes_per_item: 30_000,
@@ -126,7 +126,7 @@ const specs: Spec[] = [
   },
   {
     id: "get_file_info",
-    mcp_tool: "project_get_file_info",
+    mcp_tool: "get_file_info",
     cache: "info",
     args: { relative_path: "lib/corehost.ts" },
     powershell_body: `
@@ -144,7 +144,7 @@ const specs: Spec[] = [
   },
   {
     id: "list_files_lib",
-    mcp_tool: "project_list_files",
+    mcp_tool: "list_files",
     cache: "list",
     args: { relative_path: "lib", depth: 1, limit: 100 },
     powershell_body: `
@@ -162,7 +162,7 @@ const specs: Spec[] = [
   },
   {
     id: "search_literal",
-    mcp_tool: "project_search",
+    mcp_tool: "search",
     cache: "search",
     args: { kind: "literal_content", query: "VENIRA_USE_RIPGREP", relative_path: "lib/corehost.ts", limit: 20 },
     powershell_body: `
@@ -279,7 +279,7 @@ const measureMcpPhase = async (client: Client, spec: Spec, phase: "cache_miss" |
 
   for (let i = 0; i < runs; i++) {
     if (phase === "cache_miss") {
-      const cleared = await client.callTool({ name: "project_cache_clear", arguments: { type: spec.cache } });
+      const cleared = await client.callTool({ name: "cache_clear", arguments: { type: spec.cache } });
       parseEnvelope(cleared);
     }
 

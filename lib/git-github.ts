@@ -152,7 +152,7 @@ export const githubDialect: GitDialect = {
       if (/already exists/i.test(message)) {
         throw new Error(
           `[already_exists] A pull request for ${head} -> ${base} already exists. ` +
-            `Hint: use project_pr_comment with the existing PR number, or project_pr_list to find it.`,
+            `Hint: use pr_comment with the existing PR number, or pr_list to find it.`,
         );
       }
       throw error;
@@ -202,7 +202,7 @@ export const githubDialect: GitDialect = {
     const line = Number(args.line);
     if (!Number.isFinite(line) || line <= 0) {
       throw new Error(
-        "[invalid_request] `line` must be a positive line number when `path` is set. Hint: use project_read_file to confirm the line.",
+        "[invalid_request] `line` must be a positive line number when `path` is set. Hint: use read_file to confirm the line.",
       );
     }
     const side = (text(args, "side") || "RIGHT").toUpperCase();
@@ -275,7 +275,7 @@ export const githubDialect: GitDialect = {
       );
     }
     if (pull.json?.mergeable === false) {
-      throw new Error(`[conflict] PR #${pr} is not mergeable. Hint: resolve conflicts locally, push, then retry project_pr_merge.`);
+      throw new Error(`[conflict] PR #${pr} is not mergeable. Hint: resolve conflicts locally, push, then retry pr_merge.`);
     }
 
     const { json } = await gitJson(ctx, "PUT", `${base}/pulls/${pr}/merge`, {
@@ -439,7 +439,7 @@ export const githubDialect: GitDialect = {
     if (runId > 0) {
       const { json } = await gitJson(ctx, "GET", `${base}/actions/runs/${Math.floor(runId)}`, { allowAnonymous: true });
       // Matrix runs can exceed one page of jobs; the failing job the agent needs
-      // next (project_ci_wait -> log tail) may be on page 2.
+      // next (ci_wait -> log tail) may be on page 2.
       const pagedJobs = await fetchPaged<any>(ctx, `${base}/actions/runs/${Math.floor(runId)}/jobs?per_page=100`, {
         pick: (body) => (Array.isArray(body?.jobs) ? body.jobs : []),
         total: (body) => body?.total_count,
@@ -491,7 +491,7 @@ export const githubDialect: GitDialect = {
         total_count: json?.total_count ?? runs.length,
         runs,
       },
-      { hint: runs.length === 0 ? "No runs matched. Hint: pass branch/workflow, or trigger one with project_ci_trigger." : undefined },
+      { hint: runs.length === 0 ? "No runs matched. Hint: pass branch/workflow, or trigger one with ci_trigger." : undefined },
     );
   },
 
@@ -510,8 +510,8 @@ export const githubDialect: GitDialect = {
       run_id: runId,
       request_submitted: true,
     }, { hint: action === "cancel"
-      ? "Cancellation requested. Check project_ci_status to confirm the run state."
-      : "Retry requested for failed jobs. Check project_ci_status for the new attempt." });
+      ? "Cancellation requested. Check ci_status to confirm the run state."
+      : "Retry requested for failed jobs. Check ci_status for the new attempt." });
   },
 
   async ciTrigger(ctx, args) {
@@ -562,7 +562,7 @@ export const githubDialect: GitDialect = {
         triggered: true,
         dispatched_at: new Date().toISOString(),
       },
-      { hint: "Workflow dispatched. Poll project_ci_status (branch=<ref>, limit=3) for the new run; it usually appears within ~10s." },
+      { hint: "Workflow dispatched. Poll ci_status (branch=<ref>, limit=3) for the new run; it usually appears within ~10s." },
     );
   },
 
@@ -572,7 +572,7 @@ export const githubDialect: GitDialect = {
     const runId = Number(args.run_id ?? 0);
     const jobId = Number(args.job_id ?? 0);
     if (!(runId > 0) && !(jobId > 0)) {
-      throw new Error("[invalid_request] Pass `run_id` (whole run) or `job_id` (one job). Hint: project_ci_status returns both ids.");
+      throw new Error("[invalid_request] Pass `run_id` (whole run) or `job_id` (one job). Hint: ci_status returns both ids.");
     }
     const maxBytes = positiveInt(args.max_bytes, ctx.log_max_bytes, ctx.log_max_bytes);
     const wantLines = positiveInt(args.tail_lines, 500, 5000);

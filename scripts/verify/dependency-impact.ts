@@ -249,7 +249,7 @@ interface KChild2 : KParent
   );
 
   const graph = asEnvelope(
-    await call("project_dependency_graph", {
+    await call("dependency_graph", {
       kind: "both",
       relative_path: dgRoot,
       depth: 5,
@@ -395,7 +395,7 @@ interface KChild2 : KParent
   );
 
   const graphDot = asEnvelope(
-    await call("project_dependency_graph", {
+    await call("dependency_graph", {
       kind: "files",
       relative_path: dgRoot,
       depth: 5,
@@ -412,7 +412,7 @@ interface KChild2 : KParent
     String(graphDot.data?.graph ?? "").slice(0, 120),
   );
   const graphMermaid = asEnvelope(
-    await call("project_dependency_graph", {
+    await call("dependency_graph", {
       kind: "files",
       relative_path: dgRoot,
       depth: 5,
@@ -427,7 +427,7 @@ interface KChild2 : KParent
     String(graphMermaid.data?.graph ?? "").slice(0, 120),
   );
   const graphTruncated = asEnvelope(
-    await call("project_dependency_graph", {
+    await call("dependency_graph", {
       kind: "files",
       relative_path: dgRoot,
       depth: 5,
@@ -448,13 +448,13 @@ interface KChild2 : KParent
   );
 
   // Writing invalidates the 5 s graph index cache: the new file must show up immediately.
-  const lateWrite = await call("project_write_file", {
+  const lateWrite = await call("write_file", {
     relative_path: dgPath("src/late.ts"),
     content: "export const late = 1;\n",
     reason: "verify graph cache invalidation",
   });
   const graphAfterWrite = asEnvelope(
-    await call("project_dependency_graph", {
+    await call("dependency_graph", {
       kind: "files",
       relative_path: dgRoot,
       depth: 5,
@@ -470,7 +470,7 @@ interface KChild2 : KParent
   );
 
   const impact = asEnvelope(
-    await call("project_change_impact", {
+    await call("change_impact", {
       files: [dgPath("src/lib/util.ts")],
       direction: "dependents",
       depth: 5,
@@ -497,7 +497,7 @@ interface KChild2 : KParent
     impact.data?.summary,
   );
   const impactNoTests = asEnvelope(
-    await call("project_change_impact", {
+    await call("change_impact", {
       files: [dgPath("src/lib/util.ts")],
       direction: "dependents",
       depth: 5,
@@ -512,7 +512,7 @@ interface KChild2 : KParent
     impactNoTests.data?.summary,
   );
   const impactAmbiguous = asEnvelope(
-    await call("project_change_impact", {
+    await call("change_impact", {
       symbols: ["dup"],
       direction: "dependents",
       depth: 3,
@@ -534,7 +534,7 @@ interface KChild2 : KParent
     },
   );
   const impactPinned = asEnvelope(
-    await call("project_change_impact", {
+    await call("change_impact", {
       symbols: [{ name: "dup", file: dgPath("src/dup-a.ts") }],
       direction: "dependents",
       depth: 3,
@@ -555,7 +555,7 @@ interface KChild2 : KParent
     },
   );
   const impactMermaid = asEnvelope(
-    await call("project_change_impact", {
+    await call("change_impact", {
       files: [dgPath("src/lib/util.ts")],
       direction: "dependents",
       format: "mermaid",
@@ -568,7 +568,7 @@ interface KChild2 : KParent
     String(impactMermaid.data?.graph ?? "").slice(0, 120),
   );
   const rustImpact = asEnvelope(
-    await call("project_change_impact", {
+    await call("change_impact", {
       files: [dgPath("rust/cli/src/main.rs")],
       direction: "dependencies",
       depth: 5,
@@ -585,7 +585,7 @@ interface KChild2 : KParent
     { affected: rustImpactIds, summary: rustImpact.data?.summary },
   );
   const goImpact = asEnvelope(
-    await call("project_change_impact", {
+    await call("change_impact", {
       files: [dgPath("pkg/tool/tool.go")],
       direction: "dependents",
       depth: 5,
@@ -687,7 +687,7 @@ interface KChild2 : KParent
     graphEdges.filter((edge) => edge.from.includes("com/demo/K")),
   );
   const javaImpact = asEnvelope(
-    await call("project_change_impact", {
+    await call("change_impact", {
       files: [dgPath("src/main/java/com/demo/service/Service.java")],
       direction: "dependents",
       depth: 5,

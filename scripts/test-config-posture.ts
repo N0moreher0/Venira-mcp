@@ -3,7 +3,7 @@
  *
  * The evaluator is pure and table-tested so every risky flag combination keeps
  * a stable finding id and severity. The final checks exercise the thin env
- * adapter used by `project_health`.
+ * adapter used by `health`.
  *
  * Run with: npm run test:config-posture
  */

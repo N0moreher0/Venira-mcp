@@ -4,9 +4,9 @@
  * Pins:
  *   1. Search globs follow rg semantics: `tools/*.ts` matches inside that directory, `*.ts` at any depth.
  *   2. Failure envelopes carry the right recovery: a missing checkpoint or run id never points at
- *      project_list_files, an edit that did not match points at project_read_file, a bad regex says so.
+ *      list_files, an edit that did not match points at read_file, a bad regex says so.
  *   3. A shell command that exits non-zero stays ok=true but carries a "Command failed" hint.
- *   4. project_edit_batch reports a failed batch at the top level (ok=false, kind=edit_batch,
+ *   4. edit_batch reports a failed batch at the top level (ok=false, kind=edit_batch,
  *      error batch_failed) and says honestly whether the rollback happened.
  *
  * Run with: npm run test:tool-envelopes
@@ -95,31 +95,31 @@ try {
 
   await check("checkpoint_not_found_no_list_files", () => {
     const env = fail(
-      "[not_found] Checkpoint 'snap-x' does not exist. Hint: list them with project_snapshot action=list.",
+      "[not_found] Checkpoint 'snap-x' does not exist. Hint: list them with snapshot action=list.",
     );
     assert.equal(env.error.code, "not_found");
     assert.equal(env.next_actions, undefined);
-    assert.match(env.hint, /project_snapshot/);
+    assert.match(env.hint, /snapshot/);
   });
   await check("run_id_not_found_no_list_files", () => {
     const env = fail(
       "[not_found] Unknown run_id: abc. Hint: run ids only exist for the session that started them.",
     );
     assert.equal(env.next_actions, undefined);
-    assert.doesNotMatch(env.hint, /project_list_files/);
+    assert.doesNotMatch(env.hint, /list_files/);
   });
   await check("path_not_found_keeps_list_files", () => {
     const env = fail(
-      "[not_found] Path does not exist: a/b.ts. Hint: check with project_list_files.",
+      "[not_found] Path does not exist: a/b.ts. Hint: check with list_files.",
     );
-    assert.equal(env.next_actions?.[0]?.tool, "project_list_files");
+    assert.equal(env.next_actions?.[0]?.tool, "list_files");
   });
   await check("old_text_not_found_points_to_read_file", () => {
     const env = fail(
       "[old_text_not_found] old_text not found in tools/a.ts. Hint: re-read the file to confirm the exact text.",
     );
     assert.equal(env.error.code, "old_text_not_found");
-    assert.equal(env.next_actions?.[0]?.tool, "project_read_file");
+    assert.equal(env.next_actions?.[0]?.tool, "read_file");
     assert.equal(env.next_actions?.[0]?.arguments?.relative_path, "tools/a.ts");
   });
   await check("old_text_ambiguous_points_to_read_file", () => {
@@ -136,7 +136,7 @@ try {
   });
   await check("venira_error_preserves_code_data_and_actions", () => {
     const action = {
-      tool: "project_health",
+      tool: "health",
       arguments: {},
       why: "inspect the backend",
     };
@@ -499,7 +499,7 @@ try {
     assert.equal(env.data.rollback_succeeded, false);
     assert.match(env.data.rollback_error, /restore failed/);
     assert.match(env.error.message, /rollback FAILED/);
-    assert.match(env.hint, /project_snapshot action=restore id=snap-test/);
+    assert.match(env.hint, /snapshot action=restore id=snap-test/);
   });
   await check(
     "edit_batch_does_not_claim_partial_restore_succeeded",
@@ -652,7 +652,7 @@ try {
     assert.equal(env.data.responses[0].ok, false);
     assert.equal(
       env.data.responses[0].next_actions[0].tool,
-      "project_list_files",
+      "list_files",
     );
     if (modeArg === "compact") {
       assert.equal(env.data.responses[2].trimmed, true);
@@ -682,7 +682,7 @@ try {
     },
   );
 
-  // Phase 5: project_create makes directories only; the file-writing arguments fail closed.
+  // Phase 5: create makes directories only; the file-writing arguments fail closed.
   await check("create_makes_directories_and_refuses_removed_file_arguments", async () => {
     const calls: Array<[string, Record<string, unknown>]> = [];
     const { runCreate } = operations.createOperationRunners({
@@ -714,17 +714,17 @@ try {
     const file = parse(await runCreate({ relative_path: "a.ts", kind: "file", content: "x" }));
     assert.equal(file.ok, false);
     assert.equal(file.error.code, "unsupported", "kind=file must be refused, not silently turned into a directory");
-    assert.match(String(file.hint), /project_write_file/, "the hint must point at project_write_file");
+    assert.match(String(file.hint), /write_file/, "the hint must point at write_file");
 
     const bare = parse(await runCreate({ relative_path: "b.ts", content: "y" }));
     assert.equal(bare.ok, false);
     assert.equal(bare.error.code, "unsupported", "a bare content from an older client must not create an empty directory");
-    assert.match(String(bare.hint), /project_write_file/);
+    assert.match(String(bare.hint), /write_file/);
 
     const withMode = parse(await runCreate({ relative_path: "c.ts", mode: "append" }));
     assert.equal(withMode.ok, false);
     assert.equal(withMode.error.code, "unsupported");
-    assert.match(String(withMode.hint), /project_write_file/);
+    assert.match(String(withMode.hint), /write_file/);
 
     assert.equal(calls.length, 2, "a rejected call must not reach the backend");
   });
@@ -812,14 +812,14 @@ try {
     const samples: Array<[string, RegExp]> = [
       ["[invalid_request] symbol_name is required.", /symbol_name/],
       ["[invalid_request] queries[] is required.", /pattern/],
-      ["[invalid_request] action must be create|list|restore|delete|mirror. Received: \"x\".", /project_snapshot/],
+      ["[invalid_request] action must be create|list|restore|delete|mirror. Received: \"x\".", /snapshot/],
       ["[invalid_request] Invalid checkpoint id. Use the id returned.", /action=list/],
-      ["[invalid_request] harness must be one of: a, b. Got: x", /project_detect_harnesses/],
+      ["[invalid_request] harness must be one of: a, b. Got: x", /detect_harnesses/],
       ["[invalid_request] No edits provided. Pass old_text/new_text or edits[].", /edits\[\]/],
-      ["[invalid_request] Directory requires recursive=1: lib.", /project_snapshot/],
+      ["[invalid_request] Directory requires recursive=1: lib.", /snapshot/],
       ["[invalid_request] `command` must be a non-empty string.", /command/],
-      ["[invalid_request] Missing or incorrect kill_key. Each shell process.", /project_shell_run/],
-      ["[invalid_request] `secret_env` must be an array of secret names.", /project_secret/],
+      ["[invalid_request] Missing or incorrect kill_key. Each shell process.", /shell_run/],
+      ["[invalid_request] `secret_env` must be an array of secret names.", /secret/],
       ["[invalid_request] Pass exactly one selector: run_id, ref, pr or branch. x", /one selector/],
       ["[invalid_request] Pass either expires_in_days or expires_at, not both.", /expires_in_days/],
       ["[invalid_request] `pending_id` is required for action=poll.", /action=start/],
@@ -827,10 +827,10 @@ try {
       ["[invalid_request] `start_line` must be <= `line`.", /start_line/],
       ["[invalid_request] `method` must be merge|squash|rebase (got \"x\").", /squash/],
       ["[invalid_request] `state` must be open|closed|all (got \"x\").", /open, closed or all/],
-      ["[invalid_request] `run_id` must be a numeric pipeline id.", /project_ci_status/],
+      ["[invalid_request] `run_id` must be a numeric pipeline id.", /ci_status/],
       ["[invalid_request] Too many workflow `inputs` (max 10).", /inputs/],
       ['[invalid_request] `kind` must be "files", "symbols" or "both".', /schema/],
-      ["[invalid_request] Seed path is not a file: x.", /project_list_files/],
+      ["[invalid_request] Seed path is not a file: x.", /list_files/],
     ];
     const genericInvalid = fail("[invalid_request] something unmapped").hint;
     for (const [message, expected] of samples) {

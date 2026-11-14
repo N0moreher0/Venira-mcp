@@ -51,7 +51,7 @@ function bindingFor(
 
 function subject(rule: string, binding: string): Subject {
   return {
-    tool: "project_shell_run",
+    tool: "shell_run",
     command,
     shell,
     cwd,
@@ -104,10 +104,10 @@ try {
     const { binding, request: req } = request();
     approvals.writeApprovalGrant(req.approval_id, "cli", "once");
 
-    const first = gate.redeemApproval("shell", SESSION, req.approval_id, binding, "project_shell_run");
+    const first = gate.redeemApproval("shell", SESSION, req.approval_id, binding, "shell_run");
     assert.deepEqual(first, { ok: true, scope: "once" });
 
-    const replay = gate.redeemApproval("shell", SESSION, req.approval_id, binding, "project_shell_run");
+    const replay = gate.redeemApproval("shell", SESSION, req.approval_id, binding, "shell_run");
     assert.equal(replay.ok, false);
     if (!replay.ok) assert.equal(replay.reason, "already_used");
     assert.equal(approvals.consumeApproval(req.approval_id), false);
@@ -122,7 +122,7 @@ try {
     assert.equal(crossSession.ok, false);
     assert.equal(crossSession.reason, "session_mismatch");
 
-    const ownSession = gate.redeemApproval("shell", SESSION, req.approval_id, binding, "project_shell_run");
+    const ownSession = gate.redeemApproval("shell", SESSION, req.approval_id, binding, "shell_run");
     assert.equal(ownSession.ok, true);
   });
 
@@ -142,7 +142,7 @@ try {
       assert.equal(verdict.reason, "binding_mismatch", label);
     }
 
-    assert.equal(gate.redeemApproval("shell", SESSION, req.approval_id, binding, "project_shell_run").ok, true);
+    assert.equal(gate.redeemApproval("shell", SESSION, req.approval_id, binding, "shell_run").ok, true);
   });
 
   check("an expired pending approval cannot be granted or redeemed", () => {
@@ -159,7 +159,7 @@ try {
       secret_env: [],
       rule,
       reason: "expired approval lifecycle test",
-      tool: "project_shell_run",
+      tool: "shell_run",
       binding,
       expires_at: now - 1,
       status: "pending",
@@ -200,7 +200,7 @@ try {
       rule,
     });
     const req = gate.requestApproval("js", SESSION, {
-      tool: "project_execute_js",
+      tool: "execute_js",
       command: jsCommand,
       shell: "node",
       cwd,
@@ -213,7 +213,7 @@ try {
     const pending = approvals.readPendingApproval(req.approval_id);
     assert.equal(pending?.command, jsCommand);
     approvals.writeApprovalGrant(req.approval_id, "cli", "once");
-    assert.equal(gate.redeemApproval("js", SESSION, req.approval_id, jsBinding, "project_execute_js").ok, true);
+    assert.equal(gate.redeemApproval("js", SESSION, req.approval_id, jsBinding, "execute_js").ok, true);
 
     const rendered = gate.formatPendingCommand(pending!);
     assert.ok(rendered.startsWith(code));

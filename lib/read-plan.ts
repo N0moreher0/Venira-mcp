@@ -1,5 +1,5 @@
 /**
- * Deterministic "read planner" for `project_plan_read_batch`.
+ * Deterministic "read planner" for `plan_read_batch`.
  *
  * The agent knows *what* it wants to change; what costs round-trips is finding
  * the right files and turning that into one batch call. This module does the
@@ -82,7 +82,7 @@ export function extractKeywords(task: string, max = MAX_KEYWORDS): string[] {
 /** Large files are cheaper to outline first than to read whole. */
 const OUTLINE_THRESHOLD_BYTES = 256 * 1024;
 
-/** `project_read_batch` accepts at most 8 items per call. */
+/** `read_batch` accepts at most 8 items per call. */
 const BATCH_MAX = 8;
 
 /**
@@ -253,7 +253,7 @@ export function buildReadPlan(params: {
 
   if (candidates.length > 0) {
     steps.push({
-      tool: "project_read_batch",
+      tool: "read_batch",
       arguments: {
         requests: candidates.map((c) => ({
           operation: "read_file",
@@ -269,7 +269,7 @@ export function buildReadPlan(params: {
   const large = candidates.filter((c) => (c.size_bytes ?? 0) > OUTLINE_THRESHOLD_BYTES).slice(0, 2);
   if (large.length > 0) {
     steps.push({
-      tool: "project_outline_symbol",
+      tool: "outline_symbol",
       arguments: { relative_path: large[0].relative_path },
       why: "the file is large; outline it first to find the exact symbol, then read ranges",
     });
@@ -279,7 +279,7 @@ export function buildReadPlan(params: {
   const topKeyword = params.keywords[0];
   if (params.includeSearch && !params.searched && topKeyword) {
     steps.push({
-      tool: "project_search",
+      tool: "search",
       arguments: { query: topKeyword, kind: "literal_content", limit: 30 },
       why: "locate the remaining call sites of the task keyword",
     });
@@ -288,7 +288,7 @@ export function buildReadPlan(params: {
 
   if (candidates.length === 0) {
     steps.push({
-      tool: "project_list_files",
+      tool: "list_files",
       arguments: { depth: 2, limit: 60 },
       why: "no candidates matched; map the tree before searching again",
     });

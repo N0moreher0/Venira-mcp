@@ -4,9 +4,9 @@
  * Notes that leak into the tool surface:
  * - `pr` is the pull-request id; `run_id` is a pipeline UUID (string);
  * - a step UUID is only addressable together with its pipeline, so
- *   `project_ci_logs` accepts `run_id` + `job_id`, or `job_id` as
+ *   `ci_logs` accepts `run_id` + `job_id`, or `job_id` as
  *   `"<pipeline-uuid>:<step-uuid>"`;
- * - Bitbucket has no reopen endpoint: `project_pr_reopen` returns `unsupported`
+ * - Bitbucket has no reopen endpoint: `pr_reopen` returns `unsupported`
  *   with the fix (open a new PR).
  */
 import { gitFetch, gitJson } from "./git-http.js";
@@ -382,7 +382,7 @@ export const bitbucketDialect: GitDialect = {
   async prReopen() {
     throw new Error(
       "[unsupported] Bitbucket Cloud cannot reopen a declined pull request. " +
-        "Hint: open a new PR from the same branch with project_pr_create (the branch is still there).",
+        "Hint: open a new PR from the same branch with pr_create (the branch is still there).",
     );
   },
 
@@ -446,7 +446,7 @@ export const bitbucketDialect: GitDialect = {
         total_count: runs.length,
         runs,
       },
-      { hint: runs.length === 0 ? "No pipelines matched. Hint: pass ref=<branch>, or trigger one with project_ci_trigger." : undefined },
+      { hint: runs.length === 0 ? "No pipelines matched. Hint: pass ref=<branch>, or trigger one with ci_trigger." : undefined },
     );
   },
 
@@ -455,7 +455,7 @@ export const bitbucketDialect: GitDialect = {
     if (action === "retry_failed") {
       throw new Error(
         "[unsupported] Bitbucket Cloud does not expose a retry endpoint for an existing pipeline. " +
-          "Hint: use project_ci_trigger with the same ref and custom pipeline selector to start a new run.",
+          "Hint: use ci_trigger with the same ref and custom pipeline selector to start a new run.",
       );
     }
     const runId = pipelineUuid(rawRunId, "run_id");
@@ -467,7 +467,7 @@ export const bitbucketDialect: GitDialect = {
       action,
       run_id: runId,
       request_submitted: true,
-    }, { hint: "Stop requested. Check project_ci_status to confirm the pipeline state." });
+    }, { hint: "Stop requested. Check ci_status to confirm the pipeline state." });
   },
 
   async ciTrigger(ctx, args) {
@@ -513,7 +513,7 @@ export const bitbucketDialect: GitDialect = {
         pipeline_id: json?.uuid ?? null,
         dispatched_at: new Date().toISOString(),
       },
-      { hint: "Pipeline created. Poll project_ci_status (ref=<ref>) for its status; logs need run_id + step id." },
+      { hint: "Pipeline created. Poll ci_status (ref=<ref>) for its status; logs need run_id + step id." },
     );
   },
 

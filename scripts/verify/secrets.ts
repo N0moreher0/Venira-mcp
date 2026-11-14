@@ -15,7 +15,7 @@ export async function runSecrets(
   const SECRET_NAME = "VERIFY_TOKEN";
   const SECRET_VALUE = "verify-secret-value-9f3a1b2c";
   const secretSet = asEnvelope(
-    await call("project_secret", {
+    await call("secret", {
       action: "set",
       name: SECRET_NAME,
       value: SECRET_VALUE,
@@ -36,7 +36,7 @@ export async function runSecrets(
   );
 
   const secretGet = asEnvelope(
-    await call("project_secret", { action: "get", name: SECRET_NAME }),
+    await call("secret", { action: "get", name: SECRET_NAME }),
   );
   check(
     "secret_get_metadata_only",
@@ -48,7 +48,7 @@ export async function runSecrets(
     secretGet,
   );
   const secretReveal = asEnvelope(
-    await call("project_secret", {
+    await call("secret", {
       action: "get",
       name: SECRET_NAME,
       reveal: 1,
@@ -60,7 +60,7 @@ export async function runSecrets(
     secretReveal,
   );
   const installSelfOff = asEnvelope(
-    await call("project_install_self", { harness: "opencode" }),
+    await call("install_self", { harness: "opencode" }),
   );
   check(
     "install_self_feature_disabled",
@@ -69,7 +69,7 @@ export async function runSecrets(
   );
 
   const secretList = asEnvelope(
-    await call("project_secret", { action: "list" }),
+    await call("secret", { action: "list" }),
   );
   check(
     "secret_list_names_only",
@@ -82,7 +82,7 @@ export async function runSecrets(
   );
 
   const secretDenied = asEnvelope(
-    await call("project_secret", {
+    await call("secret", {
       action: "set",
       name: "NODE_OPTIONS",
       value: "--require=/tmp/evil.js",
@@ -151,7 +151,7 @@ export async function runSecrets(
     .createHash("sha256")
     .update(SECRET_VALUE, "utf8")
     .digest("hex");
-  await call("project_secret", {
+  await call("secret", {
     action: "set",
     name: SECRET_NAME,
     value: SECRET_VALUE,
@@ -237,7 +237,7 @@ export async function runSecrets(
 
   // secret_env injects the value into the child, and every returned tail is scrubbed.
   const secretInjectionAsk = asEnvelope(
-    await call("project_shell_run", {
+    await call("shell_run", {
       command: "echo hi",
       shell: shellFor,
       secret_env: [SECRET_NAME],
@@ -254,7 +254,7 @@ export async function runSecrets(
     `console.log('LEAK:' + process.env.${SECRET_NAME});\n`,
   );
   const injected = asEnvelope(
-    await runWithCliApproval((args) => call("project_shell_run", args), {
+    await runWithCliApproval((args) => call("shell_run", args), {
       command: `node ${dir}/leak-check.js`,
       shell: shellFor,
       secret_env: [SECRET_NAME],
@@ -264,7 +264,7 @@ export async function runSecrets(
   let injectedStatus: Record<string, any> = {};
   for (let i = 0; i < 45; i++) {
     injectedStatus = asEnvelope(
-      await call("project_shell_status", {
+      await call("shell_status", {
         run_id: injectedRunId,
         wait_seconds: 2,
       }),
@@ -281,7 +281,7 @@ export async function runSecrets(
   );
 
   const missingSecret = asEnvelope(
-    await call("project_shell_run", {
+    await call("shell_run", {
       command: "echo hi",
       shell: shellFor,
       secret_env: ["NOT_STORED_XYZ"],
@@ -295,7 +295,7 @@ export async function runSecrets(
 
   // 11c-bis. Rotation metadata: expiry, last use, use count, expired refusal.
   const usedMeta = asEnvelope(
-    await call("project_secret", { action: "get", name: SECRET_NAME }),
+    await call("secret", { action: "get", name: SECRET_NAME }),
   );
   check(
     "secret_use_tracking",
@@ -309,7 +309,7 @@ export async function runSecrets(
   );
 
   const rotated = asEnvelope(
-    await call("project_secret", {
+    await call("secret", {
       action: "set",
       name: SECRET_NAME,
       value: SECRET_VALUE,
@@ -334,7 +334,7 @@ export async function runSecrets(
 
   const EXPIRED_NAME = "VERIFY_EXPIRED";
   const expiredSet = asEnvelope(
-    await call("project_secret", {
+    await call("secret", {
       action: "set",
       name: EXPIRED_NAME,
       value: "expired-secret-value-77aa",
@@ -351,7 +351,7 @@ export async function runSecrets(
     expiredSet.data,
   );
   const expiredInjection = asEnvelope(
-    await call("project_shell_run", {
+    await call("shell_run", {
       command: "echo hi",
       shell: shellFor,
       secret_env: [EXPIRED_NAME],
@@ -363,7 +363,7 @@ export async function runSecrets(
     expiredInjection,
   );
   const expiredGet = asEnvelope(
-    await call("project_secret", { action: "get", name: EXPIRED_NAME }),
+    await call("secret", { action: "get", name: EXPIRED_NAME }),
   );
   check(
     "secret_expired_get_hint",
@@ -371,7 +371,7 @@ export async function runSecrets(
     expiredGet.data,
   );
   const expiryConflict = asEnvelope(
-    await call("project_secret", {
+    await call("secret", {
       action: "set",
       name: EXPIRED_NAME,
       value: "x",
@@ -384,6 +384,6 @@ export async function runSecrets(
     expiryConflict.error?.code === "invalid_request",
     expiryConflict,
   );
-  await call("project_secret", { action: "delete", name: EXPIRED_NAME });
+  await call("secret", { action: "delete", name: EXPIRED_NAME });
   return { target, SECRET_NAME, SECRET_VALUE, source };
 }

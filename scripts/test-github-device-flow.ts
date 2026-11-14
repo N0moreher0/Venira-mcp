@@ -149,9 +149,9 @@ try {
     try {
       await client.connect(transport);
       const tools = await client.listTools();
-      assert.equal(tools.tools.some((tool) => tool.name === "project_github_connect"), true);
+      assert.equal(tools.tools.some((tool) => tool.name === "github_connect"), true);
       const mcpResult = await client.callTool({
-        name: "project_pr_create",
+        name: "pr_create",
         arguments: { title: "MCP Device Flow integration test", head: "mcp-test-branch" },
       });
       assert.equal(mcpResult.isError, undefined);

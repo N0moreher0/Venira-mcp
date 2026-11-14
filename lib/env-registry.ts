@@ -173,7 +173,7 @@ export const ENV_REGISTRY: readonly EnvVarSpec[] = [
   secEnum("VENIRA_SHELL_MODE", "Advanced override of the shell policy mode; wins over the security profile.", true, {
     choices: ["strict", "balanced", "permissive", "off"],
   }),
-  secEnum("VENIRA_JS_EXEC_MODE", "`project_execute_js` gate: `off` hides the tool, `ask` requires per-call approval (unless VENIRA_PERMISSION_MODE=allow_all), `semi-auto` runs without approval but keeps workspace-only fs and scrubbed env (network is always open), `auto` runs without approval and without containment.", true, {
+  secEnum("VENIRA_JS_EXEC_MODE", "`execute_js` gate: `off` hides the tool, `ask` requires per-call approval (unless VENIRA_PERMISSION_MODE=allow_all), `semi-auto` runs without approval but keeps workspace-only fs and scrubbed env (network is always open), `auto` runs without approval and without containment.", true, {
     default: "off",
     choices: ["off", "ask", "semi-auto", "auto"],
     allowEmpty: true,
@@ -197,13 +197,13 @@ export const ENV_REGISTRY: readonly EnvVarSpec[] = [
   secInt("VENIRA_SHELL_APPROVAL_TTL_MS", "Lifetime of a session-wide shell grant.", true, { default: "600000" }),
   secList("VENIRA_SHELL_OVERRIDES", "Named exceptions the operator enables (ALLOW_ENV_READ).", true),
   secPath("VENIRA_SHELL_POLICY_FILE", "JSON file with extra shell allow/ask/deny rules and an optional mode.", true),
-  secFlag("VENIRA_ALLOW_SELF_INSTALL", "Let `project_install_self` write other MCP clients' config files.", true, {
+  secFlag("VENIRA_ALLOW_SELF_INSTALL", "Let `install_self` write other MCP clients' config files.", true, {
     default: "0",
   }),
   secStr("VENIRA_SESSION_ID", "Session id used to bind approvals and tag audit rows.", true),
   secStr(
     "VENIRA_PERMISSION_MODE",
-    "Client-facing permission mode (manual / best_effort / allow_all), set by the native adapter or the client. `allow_all` (the default) also means no per-call approval for project_execute_js in ask mode.",
+    "Client-facing permission mode (manual / best_effort / allow_all), set by the native adapter or the client. `allow_all` (the default) also means no per-call approval for execute_js in ask mode.",
     true,
   ),
   removed(
@@ -245,13 +245,13 @@ export const ENV_REGISTRY: readonly EnvVarSpec[] = [
   removed(
     "VENIRA_SECRET_ALLOW_REVEAL",
     "flag",
-    "Allow `project_secret reveal=1` to print a stored secret (removed; merged into VENIRA_SHELL_MODE).",
+    "Allow `secret reveal=1` to print a stored secret (removed; merged into VENIRA_SHELL_MODE).",
     "nothing to set: secrets may be revealed only in VENIRA_SHELL_MODE=permissive or off; strict and balanced refuse.",
   ),
   removed(
     "VENIRA_AUDIT_FAST",
     "flag",
-    "No effect on audit writes; only reported by project_health (removed).",
+    "No effect on audit writes; only reported by health (removed).",
     "nothing to set: audit_fast is always reported as true.",
   ),
   removed(
@@ -287,11 +287,11 @@ export const ENV_REGISTRY: readonly EnvVarSpec[] = [
     choices: ["full", "compact"],
   }),
   toolFlag("VENIRA_PRETTY", "Pretty-print JSON envelopes.", true, { default: "0" }),
-  toolInt("VENIRA_BATCH_ITEM_BYTES", "Per-item response budget inside project_read_batch.", true, {
+  toolInt("VENIRA_BATCH_ITEM_BYTES", "Per-item response budget inside read_batch.", true, {
     default: "524288",
   }),
-  toolFlag("VENIRA_EDIT_FUZZY", "Allow fuzzy matching as a fallback in project_edit_file. Also decides whether fuzzy_distance, ignore_indentation and case_insensitive are advertised in the edit tool schemas (tools/list changes with this flag).", true, { default: "0" }),
-  toolFlag("VENIRA_SETUP_TOOLS", "Advertise project_detect_harnesses and project_install_self in tools/list (off by default; `npx venira-mcp --install` and `--print-config` do the same from a terminal). tools/list changes with this flag.", true, { default: "0" }),
+  toolFlag("VENIRA_EDIT_FUZZY", "Allow fuzzy matching as a fallback in edit_file. Also decides whether fuzzy_distance, ignore_indentation and case_insensitive are advertised in the edit tool schemas (tools/list changes with this flag).", true, { default: "0" }),
+  toolFlag("VENIRA_SETUP_TOOLS", "Advertise detect_harnesses and install_self in tools/list (off by default; `npx venira-mcp --install` and `--print-config` do the same from a terminal). tools/list changes with this flag.", true, { default: "0" }),
   toolFlag("VENIRA_USE_RIPGREP", "Use ripgrep for literal content search when available.", true, { default: "1" }),
   toolInt("VENIRA_SEARCH_MAX_FILES", "Max files collected by the JS fallback walker (collectFiles) before the walk stops and `complete=false` is returned. Bounds searches rooted at huge trees (e.g. VENIRA_UNRESTRICTED=1 with an absolute path outside the workspace).", true, { default: "50000" }),
 
@@ -316,10 +316,10 @@ export const ENV_REGISTRY: readonly EnvVarSpec[] = [
   wsPath("VENIRA_WORKSPACE", "Workspace root; every path resolves against it.", true, { default: "process.cwd()" }),
   wsPath("VENIRA_DATA_DIR", "Directory for the audit DB, approvals and state.", true),
   wsPath("VENIRA_CONFIG_FILE", "Explicit path of the JSON config file (git provider settings).", true, {}),
-  wsFlag("VENIRA_DYNAMIC_WORKSPACE", "Allow switching workspace at runtime via `project_switch_workspace` (on by default). Without VENIRA_WORKSPACE_ROOTS, any existing directory may be chosen. Set to 0 to lock the server to the spawn workspace.", true, {
+  wsFlag("VENIRA_DYNAMIC_WORKSPACE", "Allow switching workspace at runtime via `switch_workspace` (on by default). Without VENIRA_WORKSPACE_ROOTS, any existing directory may be chosen. Set to 0 to lock the server to the spawn workspace.", true, {
     default: "1",
   }),
-  wsList("VENIRA_WORKSPACE_ROOTS", "Allowlist of roots `project_switch_workspace` may reach (absolute paths, both `,` and `;` separators). Unset = any existing directory while dynamic switching is enabled (default).", true, {}),
+  wsList("VENIRA_WORKSPACE_ROOTS", "Allowlist of roots `switch_workspace` may reach (absolute paths, both `,` and `;` separators). Unset = any existing directory while dynamic switching is enabled (default).", true, {}),
 
   // --- cache ---------------------------------------------------------------
   cacheEnum("VENIRA_CACHE", "Cache preset: `all` every cache, `list` only directory listings, `search` only searches, `off` always fresh.", true, {
@@ -333,7 +333,7 @@ export const ENV_REGISTRY: readonly EnvVarSpec[] = [
   cacheInt("VENIRA_NEGATIVE_CACHE_MS", "Lifetime of cached not-found results.", true, {
     default: "500",
   }),
-  cacheInt("VENIRA_RECENT_CACHE_MS", "project_recent_files cache lifetime.", true, {
+  cacheInt("VENIRA_RECENT_CACHE_MS", "recent_files cache lifetime.", true, {
     default: "2000",
   }),
   cacheInt("VENIRA_SEARCH_CACHE_MS", "Search cache lifetime.", true, { default: "3000" }),
@@ -351,7 +351,7 @@ export const ENV_REGISTRY: readonly EnvVarSpec[] = [
   auditFlag("VENIRA_AUDIT_STRICT", "Fail a tool call when its audit row cannot be written.", true, {
     default: "0",
   }),
-  auditEnum("VENIRA_AUDIT_DETAIL", "How much of each job project_read_audit can show: `summary` keeps one-line args and result, `full` also keeps the redacted, size-capped JSON, `off` keeps neither.", true, {
+  auditEnum("VENIRA_AUDIT_DETAIL", "How much of each job read_audit can show: `summary` keeps one-line args and result, `full` also keeps the redacted, size-capped JSON, `off` keeps neither.", true, {
     default: "summary",
     choices: ["off", "summary", "full"],
   }),
@@ -379,7 +379,7 @@ export const ENV_REGISTRY: readonly EnvVarSpec[] = [
   gitEnum("VENIRA_GIT_PROVIDER", "Force the CI/PR provider instead of detecting it from the remote.", true, {
     choices: ["github", "gitlab", "bitbucket"],
   }),
-  gitStr("VENIRA_GIT_TOKEN", "Provider token (prefer a stored secret via project_secret).", true),
+  gitStr("VENIRA_GIT_TOKEN", "Provider token (prefer a stored secret via secret).", true),
   gitInt("VENIRA_GIT_TIMEOUT_MS", "Provider API request timeout.", true),
   gitInt("VENIRA_GIT_RETRIES", "Retries for transient provider errors.", true),
   gitInt("VENIRA_GIT_LOG_TIMEOUT_MS", "Timeout for CI log downloads.", true),

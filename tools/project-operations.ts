@@ -41,7 +41,7 @@ export function createOperationRunners({ executeCached }: OperationRunnerDeps) {
     const started = performance.now();
     const requestId = newRequestId();
     const elapsed = () => performance.now() - started;
-    // Phase 5 (ROADMAP_TOOL_SCHEMA.md): project_create creates directories only. The file-writing
+    // Phase 5 (ROADMAP_TOOL_SCHEMA.md): create creates directories only. The file-writing
     // arguments are gone, so an older client's call is refused instead of silently creating an empty
     // directory where it wanted a file.
     const removed: string[] = [];
@@ -55,8 +55,8 @@ export function createOperationRunners({ executeCached }: OperationRunnerDeps) {
         errorEnvelope(
           "create",
           new Error(
-            `[unsupported] project_create creates directories only; ${removed.join(", ")} ${removed.length === 1 ? "was" : "were"} removed. ` +
-              "Hint: use project_write_file for file content (mode create|overwrite|append), or project_edit_file for a change to an existing file.",
+            `[unsupported] create creates directories only; ${removed.join(", ")} ${removed.length === 1 ? "was" : "were"} removed. ` +
+              "Hint: use write_file for file content (mode create|overwrite|append), or edit_file for a change to an existing file.",
           ),
           { requestId, elapsedMs: elapsed() },
         ),

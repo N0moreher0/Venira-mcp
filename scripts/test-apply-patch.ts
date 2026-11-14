@@ -1,5 +1,5 @@
 /**
- * Phase 2 of ROADMAP_TOOLS.md: project_apply_patch (corehost op apply_patch).
+ * Phase 2 of ROADMAP_TOOLS.md: apply_patch (corehost op apply_patch).
  *
  * Pins:
  *   1. A hunk applies; the file reports the action and the totals add up.

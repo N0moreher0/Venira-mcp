@@ -14,9 +14,9 @@ import { WORKSPACE } from "../lib/workspace.js";
  *               tools, which are expert-only.
  *   `core`    - the small-model / restricted-context preset: `default` minus the
  *               code-intelligence tools (they cost schema tokens on every
- *               prompt). `project_delete_path` stays available in every mode —
+ *               prompt). `delete_path` stays available in every mode —
  *               shell `rm -rf` / `rd /s` / `Remove-Item -Recurse -Force` are
- *               hard-denied by shell policy in every mode, so `project_delete_path`
+ *               hard-denied by shell policy in every mode, so `delete_path`
  *               is the controlled, auditable deletion path.
  * `VENIRA_DISABLE_TOOLS` layers a comma-separated blocklist on top of the
  * chosen mode. `VENIRA_PROFILE` was removed and folded into `core`.
@@ -26,34 +26,34 @@ export type ToolMode = "default" | "expert" | "core";
 /** Shipping surface (PR/CI) + diagnostics planning kit: default excludes these. */
 const SHIPPING_EXCLUDES = [
   // Shipping surface (PR/CI).
-  "project_ci_status",
-  "project_ci_trigger",
-  "project_ci_logs",
-  "project_ci_wait",
-  "project_ci_control",
-  "project_pr_create",
-  "project_pr_comment",
-  "project_pr_merge",
-  "project_pr_list",
-  "project_pr_close",
-  "project_pr_reopen",
-  // Diagnostics planning kit: project_explain_error and project_plan_read_batch.
+  "ci_status",
+  "ci_trigger",
+  "ci_logs",
+  "ci_wait",
+  "ci_control",
+  "pr_create",
+  "pr_comment",
+  "pr_merge",
+  "pr_list",
+  "pr_close",
+  "pr_reopen",
+  // Diagnostics planning kit: explain_error and plan_read_batch.
   // The envelope already carries hint + next_actions, which is enough for the
   // common case; these two are for agents that want the explicit call. They
   // cost schema tokens in every prompt, so they are expert-only.
-  "project_explain_error",
-  "project_plan_read_batch",
+  "explain_error",
+  "plan_read_batch",
 ];
 
 /** Code-intelligence surface: core excludes these (on top of the shipping set). */
 const CODE_INTEL_EXCLUDES = [
-  "project_execute_js",
-  "project_outline_symbol",
-  "project_diff_files",
-  "project_symbol_references",
-  "project_recent_files",
-  "project_dependency_graph",
-  "project_change_impact",
+  "execute_js",
+  "outline_symbol",
+  "diff_files",
+  "symbol_references",
+  "recent_files",
+  "dependency_graph",
+  "change_impact",
 ];
 
 export const TOOL_MODE_EXCLUDES: Record<ToolMode, string[]> = {

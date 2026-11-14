@@ -4,8 +4,8 @@ import type { ToolResult } from "../lib/output.js";
 import type { Args } from "./project-cache.js";
 import { config, flag01, reason_ } from "./project-schema.js";
 
-// Local git tools: project_git_status, project_git_diff, project_git_log,
-// project_git_branch, project_git_commit, project_git_stash.
+// Local git tools: git_status, git_diff, git_log,
+// git_branch, git_commit, git_stash.
 
 export type GitToolsDeps = {
   runOne: (operation: string, args: Args) => Promise<ToolResult>;
@@ -37,7 +37,7 @@ export function registerGitTools(server: McpServer, deps: GitToolsDeps): void {
   // -------------------------------------------------------------------------
 
   server.registerTool(
-    "project_git_status",
+    "git_status",
     {
       ...config("Git status", {
         speed_profile: "fast; one git status call, output parsed.",
@@ -52,7 +52,7 @@ export function registerGitTools(server: McpServer, deps: GitToolsDeps): void {
   );
 
   server.registerTool(
-    "project_git_diff",
+    "git_diff",
     {
       ...config("Git diff", {
         speed_profile: "scales with the diff; hunk metadata is parsed, patch text is opt-in.",
@@ -71,7 +71,7 @@ export function registerGitTools(server: McpServer, deps: GitToolsDeps): void {
   );
 
   server.registerTool(
-    "project_git_log",
+    "git_log",
     {
       ...config("Git log", {
         speed_profile: "bounded by limit; blame mode scales with file size and max_lines.",
@@ -93,7 +93,7 @@ export function registerGitTools(server: McpServer, deps: GitToolsDeps): void {
   );
 
   server.registerTool(
-    "project_git_branch",
+    "git_branch",
     {
       ...config("Git branch", {
         speed_profile: "fast; one branch call, remote branches optional.",
@@ -112,7 +112,7 @@ export function registerGitTools(server: McpServer, deps: GitToolsDeps): void {
   );
 
   server.registerTool(
-    "project_git_commit",
+    "git_commit",
     {
       ...config("Git commit", {
         speed_profile: "one git add (only when paths given) plus one git commit; output is the new HEAD plus file count.",
@@ -130,7 +130,7 @@ export function registerGitTools(server: McpServer, deps: GitToolsDeps): void {
   );
 
   server.registerTool(
-    "project_git_stash",
+    "git_stash",
     {
       ...config("Git stash", {
         speed_profile: "fast; list is read-only, push/apply/pop/drop touch the worktree.",

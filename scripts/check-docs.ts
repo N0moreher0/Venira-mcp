@@ -26,16 +26,16 @@ if (readme.includes("| `VENIRA_NETWORK` |")) {
   console.error("README documents VENIRA_NETWORK, which has been removed.");
   failed = true;
 }
-for (const tool of ["project_dependency_graph", "project_change_impact", "project_ci_wait"]) {
+for (const tool of ["dependency_graph", "change_impact", "ci_wait"]) {
   if (!readme.includes(tool)) {
     console.error(`README is missing ${tool}.`);
     failed = true;
   }
 }
 // Tool counts: README must state the Default/Expert counts that doctor.ts treats as the contract.
-// Default = Expert minus the 11 PR/CI tools minus project_explain_error and project_plan_read_batch = 43 - 13 = 30.
-// Expert count history: 1.22.0 = 40 expert tools; phase 1 (project_move_path, project_copy_path) = 42; phase 2 (project_apply_patch) = 43; phase 3 (project_git_* x6) = 49.
-// +1 tool with VENIRA_JS_EXEC_MODE=ask|semi-auto|auto (project_execute_js). schema-budget records that set (37/50).
+// Default = Expert minus the 11 PR/CI tools minus explain_error and plan_read_batch = 43 - 13 = 30.
+// Expert count history: 1.22.0 = 40 expert tools; phase 1 (move_path, copy_path) = 42; phase 2 (apply_patch) = 43; phase 3 (project_git_* x6) = 49.
+// +1 tool with VENIRA_JS_EXEC_MODE=ask|semi-auto|auto (execute_js). schema-budget records that set (37/50).
 // Update check-docs.ts, doctor.ts, README and schema-budget.json together.
 const EXPECTED_DEFAULT_TOOLS = 36;
 const EXPECTED_EXPERT_TOOLS = 49;

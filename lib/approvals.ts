@@ -6,7 +6,7 @@ import { readOrCreateHexKey, writeFileAtomicSync } from "./keyfile.js";
 
 /**
  * Human-in-the-loop approvals for `ask`-tier shell commands and for
- * `project_execute_js`.
+ * `execute_js`.
  *
  * Flow: the server stores a pending record (bound to the exact command/script,
  * shell, cwd, secret_env and rule) and returns its approval_id. A human grants
@@ -106,7 +106,7 @@ export interface PendingApproval {
   secret_env: string[];
   rule: string;
   reason: string;
-  /** Tool the human must retry after granting (defaults to project_shell_run). */
+  /** Tool the human must retry after granting (defaults to shell_run). */
   tool?: string;
   /** bindingHash() of the real (unredacted) call this approval covers. */
   binding?: string;

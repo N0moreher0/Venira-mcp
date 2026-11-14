@@ -1,5 +1,5 @@
 /**
- * Phase 1 of ROADMAP_TOOLS.md: project_move_path and project_copy_path (corehost ops move_path / copy_path).
+ * Phase 1 of ROADMAP_TOOLS.md: move_path and copy_path (corehost ops move_path / copy_path).
  *
  * Pins:
  *   1. move: rename, move into a new directory (create_dirs defaults to 1), directories keep their contents.

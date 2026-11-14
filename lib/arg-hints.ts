@@ -3,7 +3,7 @@
 // validate items BEFORE anything runs and tell the caller the exact field to use.
 // Behaviour stays fail-fast: we only suggest, we never silently remap a key.
 
-/** Fields accepted by project_edit_file (one edit_batch item). */
+/** Fields accepted by edit_file (one edit_batch item). */
 export const EDIT_ITEM_KEYS = [
   "relative_path",
   "old_text",

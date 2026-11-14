@@ -462,7 +462,7 @@ export const gitlabDialect: GitDialect = {
         total_count: runs.length,
         runs,
       },
-      { hint: runs.length === 0 ? "No pipelines matched. Hint: pass ref=<branch>, or trigger one with project_ci_trigger." : undefined },
+      { hint: runs.length === 0 ? "No pipelines matched. Hint: pass ref=<branch>, or trigger one with ci_trigger." : undefined },
     );
   },
 
@@ -483,8 +483,8 @@ export const gitlabDialect: GitDialect = {
       ...(json?.id !== undefined ? { pipeline_id: json.id } : {}),
       ...(typeof json?.status === "string" ? { status: pipelineStatus(json.status).status, conclusion: pipelineStatus(json.status).conclusion } : {}),
     }, { hint: action === "cancel"
-      ? "Cancellation requested. Check project_ci_status to confirm the pipeline state."
-      : "Retry requested for failed or canceled jobs. Check project_ci_status for the new pipeline state." });
+      ? "Cancellation requested. Check ci_status to confirm the pipeline state."
+      : "Retry requested for failed or canceled jobs. Check ci_status for the new pipeline state." });
   },
 
   async ciTrigger(ctx, args) {
@@ -524,7 +524,7 @@ export const gitlabDialect: GitDialect = {
         pipeline_id: json?.id ?? null,
         dispatched_at: new Date().toISOString(),
       },
-      { hint: "Pipeline created. Poll project_ci_status (ref=<ref>, limit=3) for its status." },
+      { hint: "Pipeline created. Poll ci_status (ref=<ref>, limit=3) for its status." },
     );
   },
 
@@ -535,7 +535,7 @@ export const gitlabDialect: GitDialect = {
     const jobRaw = args.job_id;
     const jobId = jobRaw === undefined || jobRaw === null || jobRaw === "" ? 0 : Number(jobRaw);
     if (!(runId > 0) && !(jobId > 0)) {
-      throw new Error("[invalid_request] Pass `run_id` (pipeline) or `job_id` (single job). Hint: project_ci_status returns both ids.");
+      throw new Error("[invalid_request] Pass `run_id` (pipeline) or `job_id` (single job). Hint: ci_status returns both ids.");
     }
     const maxBytes = positiveInt(args.max_bytes, ctx.log_max_bytes, ctx.log_max_bytes);
     const wantLines = positiveInt(args.tail_lines, 500, 5000);

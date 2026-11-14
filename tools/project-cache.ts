@@ -58,7 +58,7 @@ type CachedTtl = { at: number; response: RustResponse; bytes: number };
 
 type Counter = { hits: number; misses: number };
 
-/** Cache types that `project_cache_clear` can clear in this module. */
+/** Cache types that `cache_clear` can clear in this module. */
 export type ClearableCache = "read" | "info" | "list" | "search" | "recent" | "negative";
 
 export function stableKey(args: Args): string {
@@ -174,7 +174,7 @@ export function createCacheLayer(deps: CacheDeps) {
           negativeReadCache.delete(key);
           negativeReadCache.set(key, negTs);
           throw new Error(
-            '[not_found] Path does not exist: ' + args.relative_path + '. Hint: Check it with project_list_files; do not retry the same path.',
+            '[not_found] Path does not exist: ' + args.relative_path + '. Hint: Check it with list_files; do not retry the same path.',
           );
         }
         negativeReadCache.delete(key);
@@ -217,12 +217,12 @@ export function createCacheLayer(deps: CacheDeps) {
         }
         negativeReadCache.set(key, Date.now());
         throw new Error(
-          '[not_found] Path does not exist: ' + args.relative_path + '. Hint: Check it with project_list_files; do not retry the same path.',
+          '[not_found] Path does not exist: ' + args.relative_path + '. Hint: Check it with list_files; do not retry the same path.',
         );
       }
       if (!signature.isFile) {
         throw new Error(
-          '[invalid_request] Not a file: ' + args.relative_path + '. Hint: Use project_list_files for folders or project_get_file_info for metadata.',
+          '[invalid_request] Not a file: ' + args.relative_path + '. Hint: Use list_files for folders or get_file_info for metadata.',
         );
       }
       throw error;
@@ -429,7 +429,7 @@ export function createCacheLayer(deps: CacheDeps) {
     invalidateListCaches();
   }
 
-  /** Clears one cache for `project_cache_clear`; returns how many entries were dropped. */
+  /** Clears one cache for `cache_clear`; returns how many entries were dropped. */
   function clear(type: ClearableCache): number {
     switch (type) {
       case "read": {
@@ -527,7 +527,7 @@ export function createCacheLayer(deps: CacheDeps) {
     invalidateAllCaches,
     clear,
     report,
-    /** project_recent_files TTL cache. */
+    /** recent_files TTL cache. */
     recent: {
       lookup: (key: string) => ttlLookup(recentCache, key, RECENT_CACHE_MS, cacheStats.recent),
       store: (key: string, response: RustResponse) => ttlStore(recentCache, key, response),

@@ -1,5 +1,5 @@
 /**
- * Shell command policy for `project_shell_run`.
+ * Shell command policy for `shell_run`.
  *
  * Why this exists
  * ---------------

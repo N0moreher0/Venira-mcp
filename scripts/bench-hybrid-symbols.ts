@@ -1,5 +1,5 @@
 /**
- * Benchmark: cost of symbol extraction in `project_search` hybrid mode, and what the 32-file cap hides.
+ * Benchmark: cost of symbol extraction in `search` hybrid mode, and what the 32-file cap hides.
  *
  * Hybrid search tags a hit `symbol_index` when it sits on a definition line. To find those lines it reads and
  * parses every file that produced a hit, but only the first 32 distinct files in walk order

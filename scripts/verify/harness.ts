@@ -48,7 +48,7 @@ export function verifyEnv(
     VENIRA_SHELL_CACHE: "0",
     VENIRA_AUDIT_STRICT: "0",
     VENIRA_EDIT_FUZZY: "0",
-    VENIRA_SETUP_TOOLS: "1", // verify/secrets.ts still exercises project_install_self; the default-off listing is pinned in test-tool-schema.ts
+    VENIRA_SETUP_TOOLS: "1", // verify/secrets.ts still exercises install_self; the default-off listing is pinned in test-tool-schema.ts
     VENIRA_SHELL_AUTO_APPROVE_TOKEN: "0",
     VENIRA_PRETTY: "0",
     VENIRA_ALLOW_SELF_INSTALL: "0",

@@ -19,7 +19,7 @@ export async function opReadFile(
     canonicalPath = await fs.realpath(absPath);
   } catch {
     throw new Error(
-      `[not_found] Path does not exist: ${args.relative_path}. Hint: check with project_list_files.`,
+      `[not_found] Path does not exist: ${args.relative_path}. Hint: check with list_files.`,
     );
   }
   if (isProtectedPath(canonicalPath)) {
@@ -32,12 +32,12 @@ export async function opReadFile(
     stat = await fs.stat(canonicalPath);
   } catch {
     throw new Error(
-      `[not_found] Path does not exist: ${args.relative_path}. Hint: check with project_list_files.`,
+      `[not_found] Path does not exist: ${args.relative_path}. Hint: check with list_files.`,
     );
   }
   if (!stat.isFile()) {
     throw new Error(
-      `[invalid_request] Not a file: ${args.relative_path}. Hint: use project_list_files for folders.`,
+      `[invalid_request] Not a file: ${args.relative_path}. Hint: use list_files for folders.`,
     );
   }
 
@@ -55,7 +55,7 @@ export async function opReadFile(
   }
   const content = bytes.toString("utf8");
   // Roadmap item 17: `sha256` is the hash of the WHOLE file (raw bytes), so it
-  // can be handed to project_edit_file / project_write_file as expected_sha256
+  // can be handed to edit_file / write_file as expected_sha256
   // even when this call returned only a slice. `text_sha256` hashes the text
   // that was actually returned.
   const fileSha256 = crypto.createHash("sha256").update(bytes).digest("hex");
@@ -221,7 +221,7 @@ export async function opGetFileInfo(
     stat = await fs.stat(absPath);
   } catch {
     throw new Error(
-      `[not_found] Path does not exist: ${args.relative_path}. Hint: check with project_list_files.`,
+      `[not_found] Path does not exist: ${args.relative_path}. Hint: check with list_files.`,
     );
   }
   return {
@@ -262,13 +262,13 @@ export async function opListFiles(
     if (!stat.isDirectory()) {
       throw new Error(
         `[invalid_request] Not a directory: ${args.relative_path}. ` +
-          "Hint: use project_read_file to read a file, or project_list_files on its parent.",
+          "Hint: use read_file to read a file, or list_files on its parent.",
       );
     }
   } catch (error) {
     if (error instanceof Error && error.message.startsWith("[")) throw error;
     throw new Error(
-      `[not_found] Path does not exist: ${args.relative_path}. Hint: check it with project_list_files.`,
+      `[not_found] Path does not exist: ${args.relative_path}. Hint: check it with list_files.`,
     );
   }
   const limit = Math.min(200, (args.limit as number | undefined) ?? 200);

@@ -4,7 +4,7 @@
  *   VENIRA_TRACE_FILE=<path>       also append to this file (rotates at 10 MB)
  *
  * The last MAX_TRACE_BUFFER entries are kept in memory so the
- * `project_trace_status` tool can report them without touching the disk.
+ * `trace_status` tool can report them without touching the disk.
  */
 import { appendFileSync, existsSync, mkdirSync, renameSync, statSync } from "node:fs";
 import path from "node:path";
@@ -71,7 +71,7 @@ export function addTrace(entry: Omit<TraceEntry, "timestamp_ms">): void {
 }
 
 /**
- * Most recent traces, newest first (for project_trace_status).
+ * Most recent traces, newest first (for trace_status).
  *
  * The audit log and the checkpoint list are newest-first; the trace buffer
  * used to be newest-last, so an agent had to reverse it in its head. Now

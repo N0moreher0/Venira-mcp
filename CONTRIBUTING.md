@@ -80,7 +80,7 @@ published artifacts and the public listings honest.
      entry from the same release and re-check the install command.
   3. Record the catalog check in the release notes (`Glama: refreshed <date>`), so the
      next release has a visible baseline.
-- [ ] Post-release: `project_health` and `project_read_audit verify=1` on a fresh
+- [ ] Post-release: `health` and `read_audit verify=1` on a fresh
       install; confirm the shell policy profile and protected paths behave as documented.
 
 Changelog lives in the PR / release notes; there is no separate `CHANGELOG.md` (yet).

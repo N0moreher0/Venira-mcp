@@ -13,7 +13,7 @@ export function envFlagValue(name: string, value: string | undefined, defaultVal
 }
 
 /**
- * `VENIRA_EDIT_FUZZY=1`: project_edit_file may fall back to fuzzy matching. Read at call time so tests can
+ * `VENIRA_EDIT_FUZZY=1`: edit_file may fall back to fuzzy matching. Read at call time so tests can
  * flip it. The tool schemas are built from it when the tools are registered (ROADMAP_TOOL_SCHEMA.md,
  * phase 3): `fuzzy_distance`, `ignore_indentation` and `case_insensitive` are only advertised when it is on.
  */
@@ -22,7 +22,7 @@ export function editFuzzyEnabled(): boolean {
 }
 
 /**
- * `VENIRA_SETUP_TOOLS=1`: advertise the one-time setup tools (`project_detect_harnesses`, `project_install_self`)
+ * `VENIRA_SETUP_TOOLS=1`: advertise the one-time setup tools (`detect_harnesses`, `install_self`)
  * in `tools/list`. Off by default (ROADMAP_TOOL_SCHEMA.md, phase 8 patch 2): they are only used when wiring Venira
  * into a client, and `npx venira-mcp --install` / `--print-config` do the same job from a terminal. Read when the
  * tools are registered, so it changes `tools/list` after a restart.

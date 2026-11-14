@@ -1,6 +1,6 @@
 /**
  * How a shell command is handed to the OS (roadmap item 15, P0: "silently
- * wrong results in project_shell_run").
+ * wrong results in shell_run").
  *
  * Three problems are fixed here:
  *

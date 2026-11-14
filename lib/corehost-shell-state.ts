@@ -1,7 +1,7 @@
 /**
  * corehost shell run state + helpers: tracked runs, output caps, scrubbed env,
  * secret_env validation, process-tree kill, and the policy snapshot used by
- * project_health. Extracted from corehost.ts; behaviour is unchanged.
+ * health. Extracted from corehost.ts; behaviour is unchanged.
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { PLATFORM } from "./workspace.js";
@@ -60,7 +60,7 @@ export const TAIL_LIMIT = (() => {
   const value = Number(process.env.VENIRA_SHELL_TAIL_MAX);
   return Number.isFinite(value) && value >= 256 ? Math.floor(value) : 2000;
 })();
-/** Effective tail length; `project_health` reports this so it cannot drift from the real default. */
+/** Effective tail length; `health` reports this so it cannot drift from the real default. */
 export const SHELL_TAIL_LIMIT = TAIL_LIMIT;
 /** Pollers return immediately when the exit code is already known, without
  * waiting out the full wait_seconds window. (VENIRA_SHELL_EXIT_EARLY removed; always on.) */
@@ -200,7 +200,7 @@ export function killTree(child: ChildProcess | null): void {
   }
 }
 
-/** Snapshot of policy + runtime counters for project_health. */
+/** Snapshot of policy + runtime counters for health. */
 export function shellPolicySnapshot() {
   return {
     policy: describeShellPolicy(),

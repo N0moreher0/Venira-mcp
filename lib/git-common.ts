@@ -25,8 +25,8 @@ export function requireText(args: Record<string, unknown>, key: string, hint: st
 
 /**
  * Number of CI selectors set among run_id / ref / pr / branch (blank values do
- * not count). Shared by `project_ci_status` (0..1 allowed) and
- * `project_ci_wait` (exactly 1) so both tools define "a selector" identically.
+ * not count). Shared by `ci_status` (0..1 allowed) and
+ * `ci_wait` (exactly 1) so both tools define "a selector" identically.
  * `workflow` is not a selector: it only narrows `branch` or the recent-runs list.
  */
 export function selectorCount(args: Record<string, unknown>): number {

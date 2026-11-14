@@ -479,7 +479,7 @@ export const HARD_DENY: HardDenyRule[] = [
       ]);
       const dataDir = activeDataDir().toLowerCase();
       // Checkpoints are the rollback safety net: a shell write/delete of the store would let the
-      // agent destroy the very backups it may need to restore (`project_snapshot`), so the store is
+      // agent destroy the very backups it may need to restore (`snapshot`), so the store is
       // protected from shell side effects exactly like the data dir. File tools already refuse it.
       const foldSeparators = (value: string): string => value.replace(/\\/g, "/").replace(/\/+$/, "");
       const foldCase = (value: string): string => (process.platform === "win32" ? value.toLowerCase() : value);
@@ -689,7 +689,7 @@ export const ASK_RULES: AskRule[] = [
   },
   {
     id: "destructive_delete",
-    reason: "This command performs a destructive recursive/force delete. Use project_delete_path instead for controlled deletion.",
+    reason: "This command performs a destructive recursive/force delete. Use delete_path instead for controlled deletion.",
     test: (parsed) =>
       parsed.segments.some((s) => {
         if (!["rm", "rd", "rmdir", "del", "erase", "remove-item", "ri"].includes(s.command)) return false;

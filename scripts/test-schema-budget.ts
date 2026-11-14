@@ -22,7 +22,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { z } from "zod";
 
-process.env.VENIRA_JS_EXEC_MODE = "ask"; // so project_execute_js registers too (expert=44, default=33)
+process.env.VENIRA_JS_EXEC_MODE = "ask"; // so execute_js registers too (expert=44, default=33)
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const budgetPath = path.join(repoRoot, "scripts", "schema-budget.json");

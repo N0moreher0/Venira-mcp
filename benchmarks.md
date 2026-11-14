@@ -16,9 +16,9 @@ Sections 1–2 and 5 were re-measured on **2026-11-07** with `venira-mcp@1.17.0`
 ## 0. Methodology & caveats
 
 - **Single machine/environment.** Sections 1–2 use one host (Windows 11 / NVMe / Node 24). Latency reflects that disk/CPU; treat deltas vs a new baseline, not absolute targets.
-- **Foreground shell includes process startup.** `project_shell_run` (background=0) spawns a child process and waits for exit, so `shell_foreground_ms` includes shell spawn + stdio handshake. Pure tool latency is better read from the in-process `npm run bench` row or from cached reads.
-- **Warm-up required.** The first 3 `project_read_file` warm-ups attach the session cache; the reported "First call" row is post-warm-up. Cold runs (capability open) take ~100-200ms longer.
-- **Cache state matters.** Cached-read rows only apply after the warm-up calls; reset with `project_cache_clear` or a fresh session before re-benchmarking.
+- **Foreground shell includes process startup.** `shell_run` (background=0) spawns a child process and waits for exit, so `shell_foreground_ms` includes shell spawn + stdio handshake. Pure tool latency is better read from the in-process `npm run bench` row or from cached reads.
+- **Warm-up required.** The first 3 `read_file` warm-ups attach the session cache; the reported "First call" row is post-warm-up. Cold runs (capability open) take ~100-200ms longer.
+- **Cache state matters.** Cached-read rows only apply after the warm-up calls; reset with `cache_clear` or a fresh session before re-benchmarking.
 - **p95 is only shown when n ≥ 30.** With n=3 or n=10 the p95 mostly restates the observed maximum, so it is omitted for those rows. Use `avg`/`max` for small samples instead.
 - Results can be **truncated** (`complete:false` / `truncated:true`) when a limit is hit; check those flags before trusting a number.
 
@@ -29,18 +29,18 @@ Measured 2026-11-07, `venira-mcp@1.17.0` with the section 6 fix, 44 tools listed
 | Scenario | n | avg | p50 | p95 | max |
 |---|---:|---:|---:|---:|---:|
 | **First call** (post warm-up) | 1 | — | **4.6 ms** | — | — |
-| `project_read_file`, same file (cached) | 50 | 1.11 ms | 0.92 ms | 1.57 ms | 6.81 ms |
-| `project_read_file`, distinct files | 8 | 3.39 ms | 3.24 ms | — | 5.40 ms |
-| `project_read_batch` (8 items each) | 3 | **3.79 ms** | 3.37 ms | — | 4.87 ms |
-| `project_get_file_info` | 30 | 0.88 ms | 0.80 ms | 1.38 ms | 2.45 ms |
-| `project_search` (literal content, first 10 incl. cold) | 10 | 5.67 ms | 1.24 ms | — | 45.28 ms |
-| `project_search` (literal content, repeated) | 10 | 1.40 ms | 1.36 ms | — | 2.13 ms |
-| `project_symbol_references` (workspace, first 5 incl. cold) | 5 | 11.07 ms | 0.57 ms | — | 52.96 ms |
-| `project_symbol_references` (workspace, repeated) | 5 | 0.80 ms | 0.70 ms | — | 1.36 ms |
-| `project_read_file` (2 ranges) | 1 | 1.6 ms | — | — | — |
-| `project_recent_files` | 1 | 2.8 ms | — | — | — |
-| `project_health` (no DB query) | 1 | **27.6 ms** | — | — | — |
-| `project_shell_run` foreground (`echo`, includes process spawn) | 1 | 2678.6 ms | — | — | — |
+| `read_file`, same file (cached) | 50 | 1.11 ms | 0.92 ms | 1.57 ms | 6.81 ms |
+| `read_file`, distinct files | 8 | 3.39 ms | 3.24 ms | — | 5.40 ms |
+| `read_batch` (8 items each) | 3 | **3.79 ms** | 3.37 ms | — | 4.87 ms |
+| `get_file_info` | 30 | 0.88 ms | 0.80 ms | 1.38 ms | 2.45 ms |
+| `search` (literal content, first 10 incl. cold) | 10 | 5.67 ms | 1.24 ms | — | 45.28 ms |
+| `search` (literal content, repeated) | 10 | 1.40 ms | 1.36 ms | — | 2.13 ms |
+| `symbol_references` (workspace, first 5 incl. cold) | 5 | 11.07 ms | 0.57 ms | — | 52.96 ms |
+| `symbol_references` (workspace, repeated) | 5 | 0.80 ms | 0.70 ms | — | 1.36 ms |
+| `read_file` (2 ranges) | 1 | 1.6 ms | — | — | — |
+| `recent_files` | 1 | 2.8 ms | — | — | — |
+| `health` (no DB query) | 1 | **27.6 ms** | — | — | — |
+| `shell_run` foreground (`echo`, includes process spawn) | 1 | 2678.6 ms | — | — | — |
 
 For rows with fewer than 30 samples, p95 is omitted; with n=3 or n=10 it would
 mostly restate the observed maximum rather than provide a useful tail estimate.
@@ -48,7 +48,7 @@ mostly restate the observed maximum rather than provide a useful tail estimate.
 **Reading the batch row:** 8 distinct reads cost **~4 ms total** as one batch call
 vs ~8 × 3.4 ms ≈ 27 ms if issued individually (uncached files).
 
-**Caveats for this run:** the `max` of the search/symbol rows is the first (cold) call, and the single-sample `project_health` / shell rows include one-off costs, so do not read them as steady state. Before the section 6 fix, distinct (uncached) reads were about 2× slower than in the 2026-11-03 `v1.13.8` run (7.27 ms vs 3.53 ms avg); with the fix they are back at 3.39 ms.
+**Caveats for this run:** the `max` of the search/symbol rows is the first (cold) call, and the single-sample `health` / shell rows include one-off costs, so do not read them as steady state. Before the section 6 fix, distinct (uncached) reads were about 2× slower than in the 2026-11-03 `v1.13.8` run (7.27 ms vs 3.53 ms avg); with the fix they are back at 3.39 ms.
 
 ## 2. In-process corehost tier (`npm run bench`)
 
@@ -77,7 +77,7 @@ Same machine and test suite within this historical v0.3.0/v1.0.0 migration run:
 | Cached read p50 | 2.57 ms | **1.01 ms** | in-process file I/O |
 | 8-file batch avg | 19.11 ms | **4.18 ms** | no IPC + no audit lock |
 | `get_file_info` p50 | 2.60 ms | **1.02 ms** | |
-| `project_health` | 5.5 ms | **1.8 ms** | |
+| `health` | 5.5 ms | **1.8 ms** | |
 | Dependencies | Rust binary + Node | **Node only** | install surface ↓ |
 
 ### Side-by-side: v1.0.0 (part 3) vs v1.13.8 (2026-11-03 run, replaced in parts 1–2 by the v1.17.0 run)
@@ -90,7 +90,7 @@ These rows measure logically similar operations but come from **different runs, 
 | Cached read p50 | 1.01 ms | **1.00 ms** | Nearly identical |
 | 8-file batch avg | 4.18 ms | **3.14 ms** | v1.13.8 slightly faster |
 | `get_file_info` p50 | 1.02 ms | **0.63 ms** | v1.13.8 faster |
-| `project_health` | 1.8 ms | **5.2 ms** | v1.13.8 reports more diagnostics |
+| `health` | 1.8 ms | **5.2 ms** | v1.13.8 reports more diagnostics |
 | Search p95 (MCP) | **21.8 ms** | **66.64 ms (max)** | Different suites; v1.13.8 max over n=10 |
 
 The 21.8 ms search p95 belongs only to this historical v0.3.0/v1.0.0 test suite; it is not directly comparable to the 66.64 ms v1.13.8 MCP maximum above. Possible reasons v1.13.8 reads higher on some rows: added protected-path filtering, relevance ranking, and a richer envelope; different machine load or antivirus scan on the measurement day. A same-day run of both versions with one harness would be needed to isolate the cause. **Do not read this as a confirmed regression.**
@@ -147,7 +147,7 @@ suite total is shared across all rows because one process loops all scenarios.
 Notes:
 - **PowerShell suite total (10,458.36 ms)** is the whole process looping all scenarios, not per-op. Per-op PowerShell times are much smaller (0.63–3.76 ms p50 for read/info/list, 41 ms for the workspace search).
 - Native PowerShell is still faster for uncached single reads, batch reads and metadata; Venira wins on uncached directory listing and search, and on every warm row. The remaining cache-miss gap is mostly the stdio hop plus the response envelope (about 1–1.5 ms).
-- The `search_literal` row above uses Venira's default backend (`VENIRA_USE_RIPGREP=1` when ripgrep is on PATH). To compare ripgrep vs JS scanner, run `VENIRA_USE_RIPGREP=0` and `VENIRA_USE_RIPGREP=1` separately through `npm run bench:mcp` and record the `project_search` rows in section 1; add an `rg`-only row here once measured. Do not claim an `rg`-specific number without measuring it.
+- The `search_literal` row above uses Venira's default backend (`VENIRA_USE_RIPGREP=1` when ripgrep is on PATH). To compare ripgrep vs JS scanner, run `VENIRA_USE_RIPGREP=0` and `VENIRA_USE_RIPGREP=1` separately through `npm run bench:mcp` and record the `search` rows in section 1; add an `rg`-only row here once measured. Do not claim an `rg`-specific number without measuring it.
 
 ## 6. Same-day A/B: v1.16.2 vs v1.17.0 (`npm run bench:tools -- --runs=100`)
 

@@ -58,7 +58,7 @@ export async function opSnapshotCreate(
     const stat = rootStats[i];
     const rel = normalizeRel(root, roots[i]) || ".";
     if (!stat) {
-      throw new Error(`[not_found] Path does not exist: ${requested[i]}. Hint: check with project_list_files.`);
+      throw new Error(`[not_found] Path does not exist: ${requested[i]}. Hint: check with list_files.`);
     }
     rootKinds.push({ path: rel, kind: stat.isFile ? "file" : "dir" });
     walkRoots.push(roots[i]);

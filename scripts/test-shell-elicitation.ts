@@ -1,5 +1,5 @@
 /**
- * project_shell_run MCP elicitation regressions (elicitation is part of VENIRA_SHELL_MODE).
+ * shell_run MCP elicitation regressions (elicitation is part of VENIRA_SHELL_MODE).
  *
  * The elicitation path lives in tools/project-shell.ts. scripts/verify/harness pins the
  * default `balanced` mode, so this dedicated script covers it with a fake MCP server and a fake
@@ -77,7 +77,7 @@ function makeHarness(rule: string): Harness {
       if (typeof args.approval_id !== "string") {
         pendingBinding = approvals.bindingHash({ command: COMMAND, shell: SHELL, cwd: CWD, secret_env: [], rule });
         const req = gate.requestApproval("shell", SESSION_ID, {
-          tool: "project_shell_run",
+          tool: "shell_run",
           command: COMMAND,
           shell: SHELL,
           cwd: CWD,
@@ -89,7 +89,7 @@ function makeHarness(rule: string): Harness {
         pendingId = req.approval_id;
         return { response: approvalResponse(), cached: false };
       }
-      const verdict = gate.redeemApproval("shell", SESSION_ID, args.approval_id, pendingBinding, "project_shell_run");
+      const verdict = gate.redeemApproval("shell", SESSION_ID, args.approval_id, pendingBinding, "shell_run");
       redeemed.push(verdict);
       if (!verdict.ok) return { response: approvalResponse(), cached: false };
       return {

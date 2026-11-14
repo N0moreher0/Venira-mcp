@@ -24,7 +24,7 @@ convenience; Windows Sandbox for a single disposable session.**
 
 ## Docker
 
-The server and every `project_shell_run` command execute **inside the container**.
+The server and every `shell_run` command execute **inside the container**.
 The host is reachable only through what you mount.
 
 ```bash
@@ -82,7 +82,7 @@ MCP client config (stdio piped into the container):
 **Network**
 
 - `--network none` is the strongest option. Everything still works except
-  `project_shell_run` commands that need the network, git fetch/push, package
+  `shell_run` commands that need the network, git fetch/push, package
   installs, and the Git provider/CI tools.
 - To keep provider/CI tools working, use a user-defined network with egress
   filtering, or an allowlist proxy. Do not use `--network host`.

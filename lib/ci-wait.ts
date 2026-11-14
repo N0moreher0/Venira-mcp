@@ -1,5 +1,5 @@
 /**
- * `project_ci_wait`: one bounded long-poll instead of a polling loop.
+ * `ci_wait`: one bounded long-poll instead of a polling loop.
  *
  * MCP over stdio cannot push a notification that wakes the model, so this is
  * deliberately a *long-poll*: the tool blocks until the run reaches a terminal
@@ -163,7 +163,7 @@ async function failureTail(
   const runId = rawRunId !== undefined && rawRunId !== null && String(rawRunId).trim() !== "" ? rawRunId : undefined;
   if (runId === undefined) {
     return {
-      note: "check-runs do not expose a single log archive. Hint: pass run_id (or job_id to project_ci_logs) to fetch the failing step.",
+      note: "check-runs do not expose a single log archive. Hint: pass run_id (or job_id to ci_logs) to fetch the failing step.",
     };
   }
   const jobId = failingJobId(data);
@@ -204,7 +204,7 @@ export async function opCiWait(args: Record<string, unknown>): Promise<Resp> {
   if (selectors === 0) {
     throw new Error(
       "[invalid_request] Pass exactly one selector: run_id, ref, pr or branch. " +
-        "Hint: project_ci_status uses the same selectors; run_id waits on one run, ref/pr waits on check-runs.",
+        "Hint: ci_status uses the same selectors; run_id waits on one run, ref/pr waits on check-runs.",
     );
   }
   if (selectors > 1) {
@@ -313,7 +313,7 @@ export async function opCiWait(args: Record<string, unknown>): Promise<Resp> {
     ...(jobsTotal !== undefined ? { jobs_total: jobsTotal } : {}),
     ...(Array.isArray(data.check_runs) ? { check_runs_total: data.check_runs_total ?? data.check_runs.length } : {}),
     // The lean status view. The full job list is available from
-    // project_ci_status; embedding it here duplicated the whole list and
+    // ci_status; embedding it here duplicated the whole list and
     // doubled the payload (roadmap item 15, P1).
     ci_status: {
       overall,
@@ -333,17 +333,17 @@ export async function opCiWait(args: Record<string, unknown>): Promise<Resp> {
 
   let hint: string;
   if (terminal && overall === "success") {
-    hint = "CI passed. Hint: merge with project_pr_merge when the review is ready.";
+    hint = "CI passed. Hint: merge with pr_merge when the review is ready.";
   } else if (terminal && overall === "failure") {
     hint = tail
-      ? "CI failed; the failure_tail contains the bounded log tail. Fix the failing step, then push and call project_ci_wait again."
-      : "CI failed. Hint: use project_ci_logs (run_id/job_id) for the failure detail, then fix and push.";
+      ? "CI failed; the failure_tail contains the bounded log tail. Fix the failing step, then push and call ci_wait again."
+      : "CI failed. Hint: use ci_logs (run_id/job_id) for the failure detail, then fix and push.";
   } else if (until === "any_change" && changed) {
-    hint = `CI state changed: ${previous} -> ${overall}. Hint: call project_ci_wait again to wait for the next transition.`;
+    hint = `CI state changed: ${previous} -> ${overall}. Hint: call ci_wait again to wait for the next transition.`;
   } else {
     hint =
       `Still ${overall} after ${Math.round(waitedMs / 1000)}s (${polls} poll${polls === 1 ? "" : "s"}). ` +
-      "Call project_ci_wait again with the same selector; keep timeout_ms below the client's ~60s request timeout when chaining.";
+      "Call ci_wait again with the same selector; keep timeout_ms below the client's ~60s request timeout when chaining.";
   }
 
   return {

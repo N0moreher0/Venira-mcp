@@ -13,9 +13,9 @@ import { runExecuteJs } from "./project-jsexec.js";
 import { config, flag01, path_, reason_ } from "./project-schema.js";
 import { runCancelShellSession, type ShellDeps } from "./project-shell.js";
 
-// Ops/diagnostics tool registrations: project_create, project_health, project_cache_clear,
-// project_execute_js (only when ALLOW_JS_EXEC), project_trace_status, project_read_audit,
-// project_shell_cancel_session. Extracted from registerProjectTools in tools/project.ts (roadmap item 6,
+// Ops/diagnostics tool registrations: create, health, cache_clear,
+// execute_js (only when ALLOW_JS_EXEC), trace_status, read_audit,
+// shell_cancel_session. Extracted from registerProjectTools in tools/project.ts (roadmap item 6,
 // step 5l). They are contiguous in the original list, so schemas, descriptions and registration order are
 // unchanged. Runners/state owned by project.ts arrive through OpsToolsDeps.
 
@@ -32,7 +32,7 @@ export type OpsToolsDeps = {
 export function registerOpsTools(server: McpServer, deps: OpsToolsDeps): void {
   const { runOne, runCreate, healthDeps, auditDbPath, shellDeps, clearCaches } = deps;
   server.registerTool(
-    "project_create",
+    "create",
     {
       ...config(
         "Create directory",
@@ -45,7 +45,7 @@ export function registerOpsTools(server: McpServer, deps: OpsToolsDeps): void {
       // Loose on purpose: `kind=file`, `content`, `mode` and `expected_sha256` are the removed file-writing
       // arguments (ROADMAP_TOOL_SCHEMA.md, phase 5). A plain object would strip them, so a cached client that
       // sent `kind=file` would silently get an empty directory; loose lets the handler refuse it with
-      // `[unsupported]` and point at project_write_file.
+      // `[unsupported]` and point at write_file.
       inputSchema: z.looseObject({
         relative_path: path_,
         create_dirs: flag01
@@ -58,7 +58,7 @@ export function registerOpsTools(server: McpServer, deps: OpsToolsDeps): void {
   );
 
   server.registerTool(
-    "project_health",
+    "health",
     {
       ...config(
         "Health & metrics",
@@ -85,7 +85,7 @@ export function registerOpsTools(server: McpServer, deps: OpsToolsDeps): void {
   );
 
   server.registerTool(
-    "project_cache_clear",
+    "cache_clear",
     {
       ...config(
         "Clear caches",
@@ -104,7 +104,7 @@ export function registerOpsTools(server: McpServer, deps: OpsToolsDeps): void {
 
   if (ALLOW_JS_EXEC) {
     server.registerTool(
-      "project_execute_js",
+      "execute_js",
       {
         ...config(
           "Execute JS",
@@ -121,7 +121,7 @@ export function registerOpsTools(server: McpServer, deps: OpsToolsDeps): void {
           approval_id: z
             .string()
             .optional()
-            .describe("Approval id from a previous project_execute_js approval_required response, granted by running `data.approval.approve_command`."),
+            .describe("Approval id from a previous execute_js approval_required response, granted by running `data.approval.approve_command`."),
           approval_wait_ms: z
             .number()
             .int()
@@ -140,7 +140,7 @@ export function registerOpsTools(server: McpServer, deps: OpsToolsDeps): void {
   // -------------------------------------------------------------------------
 
   server.registerTool(
-    "project_trace_status",
+    "trace_status",
     {
       ...config(
         "Trace status",
@@ -177,7 +177,7 @@ export function registerOpsTools(server: McpServer, deps: OpsToolsDeps): void {
   );
 
   server.registerTool(
-    "project_read_audit",
+    "read_audit",
     {
       ...config(
         "Read audit log",
@@ -201,7 +201,7 @@ export function registerOpsTools(server: McpServer, deps: OpsToolsDeps): void {
   );
 
   server.registerTool(
-    "project_switch_workspace",
+    "switch_workspace",
     {
       ...config(
         "Switch workspace",
@@ -229,7 +229,7 @@ export function registerOpsTools(server: McpServer, deps: OpsToolsDeps): void {
   );
 
   server.registerTool(
-    "project_shell_cancel_session",
+    "shell_cancel_session",
     {
       ...config(
         "Shell cancel session",

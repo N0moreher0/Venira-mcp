@@ -1,6 +1,6 @@
 /**
- * corehost local git ops: project_git_status, project_git_diff, project_git_log,
- * project_git_branch, project_git_commit, project_git_stash.
+ * corehost local git ops: git_status, git_diff, git_log,
+ * git_branch, git_commit, git_stash.
  * See ROADMAP_TOOLS.md, phase 3. Outputs are parsed and locale-independent.
  */
 import { promises as fs, statSync } from "node:fs";
@@ -89,7 +89,7 @@ async function readStagedFiles(root: string): Promise<string[]> {
   const result = await runGit(["diff", "--cached", "--name-only", "-z"], root, { maxBuffer: 16 * 1024 * 1024 });
   if (result.exitCode !== 0) {
     const detail = result.stderr.toString("utf8").trim();
-    throw new Error(`[invalid_request] Could not inspect the staged changes. ${detail || "git diff failed"}. Hint: run project_git_status and fix the repository state.`);
+    throw new Error(`[invalid_request] Could not inspect the staged changes. ${detail || "git diff failed"}. Hint: run git_status and fix the repository state.`);
   }
   return result.stdout.toString("utf8").split("\0").filter(Boolean);
 }
@@ -114,17 +114,17 @@ async function assertPathspecMatches(root: string, paths: string[]): Promise<voi
     if (!known) missing.push(rel);
   }
   if (missing.length > 0) {
-    throw new Error(`[invalid_request] Git could not resolve one or more paths: ${missing.join(", ")}. Hint: pass existing tracked or on-disk files, or use project_write_file to add them first.`);
+    throw new Error(`[invalid_request] Git could not resolve one or more paths: ${missing.join(", ")}. Hint: pass existing tracked or on-disk files, or use write_file to add them first.`);
   }
 }
 
 const FAILURE = (code: string, message: string) => {
-  const withHint = /Hint:/.test(message) ? message : message + " Hint: run project_git_status and fix the input values.";
+  const withHint = /Hint:/.test(message) ? message : message + " Hint: run git_status and fix the input values.";
   throw new Error(`[${code}] ${withHint}`);
 };
 
 // ---------------------------------------------------------------------------
-// project_git_status
+// git_status
 // ---------------------------------------------------------------------------
 
 export async function opGitStatus(args: Args, root: string): Promise<RustResponse> {
@@ -167,7 +167,7 @@ export async function opGitStatus(args: Args, root: string): Promise<RustRespons
 }
 
 // ---------------------------------------------------------------------------
-// project_git_diff
+// git_diff
 // ---------------------------------------------------------------------------
 
 const clampContext = (value: unknown): number => intArg(value, 3, 0, 20);
@@ -217,7 +217,7 @@ export async function opGitDiff(args: Args, root: string): Promise<RustResponse>
 }
 
 // ---------------------------------------------------------------------------
-// project_git_log (and blame mode)
+// git_log (and blame mode)
 // ---------------------------------------------------------------------------
 
 const parseFormatRecord = (token: string): Record<string, string> => {
@@ -363,7 +363,7 @@ export async function opGitLog(args: Args, root: string): Promise<RustResponse> 
 }
 
 // ---------------------------------------------------------------------------
-// project_git_branch
+// git_branch
 // ---------------------------------------------------------------------------
 
 type BranchEntry = {
@@ -486,7 +486,7 @@ export async function opGitBranch(args: Args, root: string): Promise<RustRespons
 }
 
 // ---------------------------------------------------------------------------
-// project_git_commit
+// git_commit
 // ---------------------------------------------------------------------------
 
 export async function opGitCommit(args: Args, root: string): Promise<RustResponse> {
@@ -528,7 +528,7 @@ export async function opGitCommit(args: Args, root: string): Promise<RustRespons
 }
 
 // ---------------------------------------------------------------------------
-// project_git_stash
+// git_stash
 // ---------------------------------------------------------------------------
 
 type StashEntry = { selector: string; commit: string; short_sha: string; author: string; email: string; authored_at: string; subject: string };

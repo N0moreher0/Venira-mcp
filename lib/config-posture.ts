@@ -2,7 +2,7 @@
  * Shared configuration-posture calculation.
  *
  * One deterministic place decides which operator-selected settings deserve a
- * warning, so `project_health`, `doctor` and future surfaces never disagree.
+ * warning, so `health`, `doctor` and future surfaces never disagree.
  * The inputs are data (not env directly) which keeps the evaluator pure and
  * table-testable; `configPostureInput()` is the thin env-reading adapter.
  *
@@ -122,7 +122,7 @@ export function evaluateConfigPosture(input: ConfigPostureInput): ConfigPosture 
     add({
       id: "js.exec_without_approval",
       severity: "warning",
-      summary: "`project_execute_js` runs without per-call approval (mode `semi-auto` or `auto`).",
+      summary: "`execute_js` runs without per-call approval (mode `semi-auto` or `auto`).",
       detail: "Arbitrary JavaScript executes outside the shell policy and protected-path guard with no human step.",
       recommendation: "Set VENIRA_JS_EXEC_MODE=ask unless the server only serves fully trusted automation.",
     });
@@ -163,7 +163,7 @@ export function evaluateConfigPosture(input: ConfigPostureInput): ConfigPosture 
     add({
       id: "self_install.enabled",
       severity: "warning",
-      summary: "`project_install_self` may write other clients' config files.",
+      summary: "`install_self` may write other clients' config files.",
       detail: "The server can modify MCP client configuration outside the workspace (VENIRA_ALLOW_SELF_INSTALL=1).",
       recommendation: "Enable it only for the install run, then unset it.",
     });
@@ -174,7 +174,7 @@ export function evaluateConfigPosture(input: ConfigPostureInput): ConfigPosture 
       id: "secret.reveal_enabled",
       severity: "warning",
       summary: "Secret plaintext reveal is enabled.",
-      detail: "`project_secret reveal=1` can print a stored secret value into the transcript (VENIRA_SHELL_MODE=permissive or off).",
+      detail: "`secret reveal=1` can print a stored secret value into the transcript (VENIRA_SHELL_MODE=permissive or off).",
       recommendation: "Keep reveal off and inject secrets through `secret_env` instead.",
     });
   }

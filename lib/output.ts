@@ -95,7 +95,7 @@ function inferHint(kind: string, data: unknown): string | undefined {
   if (!isObject(data)) return undefined;
   if (kind === "file_read") {
     if (data.truncated === true && data.next_start_line !== undefined) {
-      return `Next chunk: project_read_file({ relative_path: "${data.relative_path}", start_line: ${data.next_start_line} }).`;
+      return `Next chunk: read_file({ relative_path: "${data.relative_path}", start_line: ${data.next_start_line} }).`;
     }
     return undefined;
   }
@@ -117,7 +117,7 @@ function inferHint(kind: string, data: unknown): string | undefined {
   }
   if (kind === "shell_run" && data.running === true) {
     const timeoutNote = data.timed_out === true ? " It exceeded its time budget but is still running." : "";
-    return `Command is still running.${timeoutNote} Poll project_shell_status({ run_id: "${data.run_id}", wait_seconds: 5 }).`;
+    return `Command is still running.${timeoutNote} Poll shell_status({ run_id: "${data.run_id}", wait_seconds: 5 }).`;
   }
   if (kind === "shell_run" && data.cancelled === true) {
     return "Command was cancelled. Check its partial stdout/stderr before deciding whether to rerun.";
@@ -126,10 +126,10 @@ function inferHint(kind: string, data: unknown): string | undefined {
     return `Command timed out${typeof data.exit_code === "number" ? ` (exit_code ${data.exit_code})` : ""}. Read stderr, adjust the timeout or command, then rerun.`;
   }
   if (kind === "shell_run" && typeof data.exit_code === "number" && data.exit_code !== 0) {
-    return `Command failed (exit_code ${data.exit_code}). Read stderr, fix, rerun; project_explain_error can diagnose it.`;
+    return `Command failed (exit_code ${data.exit_code}). Read stderr, fix, rerun; explain_error can diagnose it.`;
   }
   if (kind === "shell_run" && data.running === false && data.exit_code == null) {
-    return "Command stopped without an exit code. Check project_health and the run's stderr before retrying.";
+    return "Command stopped without an exit code. Check health and the run's stderr before retrying.";
   }
   if (kind === "file_read_ranges" && data.truncated === true) {
     return "Some ranges were truncated; continue with next_start_line.";
@@ -293,7 +293,7 @@ export function previewData(kind: string, data: unknown): unknown {
       total_bytes: data.total_bytes,
       truncated: data.truncated === true || cut,
       // The whole-file hash must survive the compact preview: it is what the
-      // agent hands to project_edit_file as expected_sha256 (roadmap item 17).
+      // agent hands to edit_file as expected_sha256 (roadmap item 17).
       ...(typeof data.sha256 === "string" ? { sha256: data.sha256, sha256_scope: "file" } : {}),
       ...(typeof data.text_sha256 === "string" ? { text_sha256: data.text_sha256 } : {}),
       ...(typeof data.mtime_ms === "number" ? { mtime_ms: data.mtime_ms } : {}),
@@ -471,7 +471,7 @@ export function buildEnvelope(
       }
       envelope.hint =
         typeof previewed.next_start_line === "number"
-          ? `Cut by compact mode. Next chunk: project_read_file({ relative_path: "${previewed.relative_path}", start_line: ${previewed.next_start_line} }).`
+          ? `Cut by compact mode. Next chunk: read_file({ relative_path: "${previewed.relative_path}", start_line: ${previewed.next_start_line} }).`
           : `A line exceeds the compact preview. Re-read with VENIRA_OUTPUT_MODE=full or a larger max_bytes to get that line completely.`;
     }
     envelope.trimmed = true;
@@ -512,24 +512,24 @@ export type Failure = {
 const RETRYABLE = new Set(["io_error", "capability_expired", "host_timeout", "host_unavailable"]);
 
 const GENERIC_HINT =
-  "Unknown error code. Read error.message, fix what it names, retry once; else project_explain_error.";
+  "Unknown error code. Read error.message, fix what it names, retry once; else explain_error.";
 
 const DEFAULT_HINTS: Record<string, string> = {
   invalid_request: "Check argument names, types and values against the tool schema; unknown fields are rejected.",
-  not_found: "Check the path with project_list_files or project_search first; do not retry the same path.",
+  not_found: "Check the path with list_files or search first; do not retry the same path.",
   conflict: "The file changed or the edit is ambiguous; re-read it and retry.",
   scope_denied: "Use a path inside the workspace (workspace-relative is safest).",
   path_escape: "Paths must stay inside the workspace. Use a relative path under it, or enable VENIRA_UNRESTRICTED=1.",
-  resource_limit: "Narrow the request: smaller limit/max_bytes, line ranges, or project_read_batch.",
+  resource_limit: "Narrow the request: smaller limit/max_bytes, line ranges, or read_batch.",
   audit_unavailable:
     "The host refused the operation because its audit row could not be written. Tell the user; do not retry in a loop.",
   capability_expired: "The scope is reopened automatically on the next call; retry once.",
   sensitive_result: "Content withheld for safety; do not retry or work around it.",
   unsupported: "The operation is unavailable in the current permission mode or for this file type.",
   io_error: "The file may be locked or the disk busy; retry once.",
-  host_timeout: "The backend did not answer in time; check project_health, then retry once.",
+  host_timeout: "The backend did not answer in time; check health, then retry once.",
   host_unavailable: "The backend is unavailable; it restarts on the next call. Retry once.",
-  internal: "Unexpected error; check project_health and the server stderr log.",
+  internal: "Unexpected error; check health and the server stderr log.",
   feature_disabled:
     "Switched off by the operator; no approval will enable it. Do not retry; tell the user the hint (VENIRA_* flag) or ask them to do it manually.",
   approval_required:
@@ -543,7 +543,7 @@ const DEFAULT_HINTS: Record<string, string> = {
   old_text_ambiguous:
     "old_text matches more than one place. Extend it with surrounding context, or set replace_all=1. The file was not changed.",
   stale_content:
-    "The file changed since you read it. Read it again with project_read_file, rebuild the patch against the current content and send the new sha256 as expected_sha256. Never replay the same edit unchanged.",
+    "The file changed since you read it. Read it again with read_file, rebuild the patch against the current content and send the new sha256 as expected_sha256. Never replay the same edit unchanged.",
   repeated_failure:
     "This exact invocation already failed in this session. Read data.previous.stderr_tail, fix the cause, then change the command or its inputs. Pass retry_failed=1 only for a deliberate rerun of the identical command.",
   batch_failed: "Check data.atomic for rollback state, fix the failed item, resubmit the rest.",
@@ -552,14 +552,14 @@ const DEFAULT_HINTS: Record<string, string> = {
   workspace_switch_denied: "Workspace switching is disabled; stay in the current workspace.",
   override_not_enabled: "Override not enabled by the operator; do not retry, ask the user to run it manually.",
   override_scope_mismatch: "Override does not cover this command; ask the user to run it manually.",
-  checkpoint_failed: "Pre-command snapshot failed, command not run. Create a scoped project_snapshot, then retry.",
+  checkpoint_failed: "Pre-command snapshot failed, command not run. Create a scoped snapshot, then retry.",
   shell_unavailable:
     "The shell binary is not installed or not on PATH; nothing ran. Follow error.message to install it or pick another shell; do not retry unchanged.",
-  snapshot_corrupt: "Snapshot is damaged; pick another id from project_snapshot action=list.",
+  snapshot_corrupt: "Snapshot is damaged; pick another id from snapshot action=list.",
   snapshot_version_unsupported: "Snapshot format not supported by this version; use a newer snapshot or upgrade.",
-  mirror_conflict: "Snapshot mirror differs from primary; change nothing and check project_health.",
-  secret_missing: "No such secret; see project_secret action=list or create it with action=set.",
-  secret_expired: "Secret expired; ask the user for a new one (project_secret action=set).",
+  mirror_conflict: "Snapshot mirror differs from primary; change nothing and check health.",
+  secret_missing: "No such secret; see secret action=list or create it with action=set.",
+  secret_expired: "Secret expired; ask the user for a new one (secret action=set).",
   secret_store_locked: "Secret store locked by another process; retry once.",
   secret_store_corrupt: "Secret store unreadable; do not delete it, tell the user.",
   lock_timeout: "Lock held by another process; retry once, do not loop.",
@@ -567,7 +567,7 @@ const DEFAULT_HINTS: Record<string, string> = {
   secret_output_blocked: "Output contained a secret and was withheld; tell the user.",
   secret_scan_failed: "Secret scan failed, nothing sent; retry once with a smaller body.",
   secret_scan_limit: "Content too large to scan; send a smaller body.",
-  auth_missing: "No credential; run project_github_connect or store a token with project_secret.",
+  auth_missing: "No credential; run github_connect or store a token with secret.",
   auth_failed: "Provider rejected the credential; ask the user to reconnect or replace it.",
   forbidden: "Credential lacks permission for this repo/action; check token scopes with the user.",
   rate_limited: "Rate limited; wait until the reset time before retrying, do not loop.",
@@ -591,16 +591,16 @@ function classify(raw: string): string {
 }
 
 const DEFAULT_NEXT_ACTIONS: Record<string, unknown[]> = {
-  not_found: [{ tool: "project_list_files", arguments: { relative_path: "." }, why: "locate the correct path" }],
-  path_escape: [{ tool: "project_list_files", arguments: { relative_path: "." }, why: "stay inside the workspace" }],
-  snapshot_corrupt: [{ tool: "project_snapshot", arguments: { action: "list" }, why: "pick another checkpoint" }],
-  secret_missing: [{ tool: "project_secret", arguments: { action: "list" }, why: "see stored names" }],
+  not_found: [{ tool: "list_files", arguments: { relative_path: "." }, why: "locate the correct path" }],
+  path_escape: [{ tool: "list_files", arguments: { relative_path: "." }, why: "stay inside the workspace" }],
+  snapshot_corrupt: [{ tool: "snapshot", arguments: { action: "list" }, why: "pick another checkpoint" }],
+  secret_missing: [{ tool: "secret", arguments: { action: "list" }, why: "see stored names" }],
 };
 
 /**
  * Tool-specific recovery (roadmap item 15, P1).
  *
- * One generic `not_found` hint pointed every tool at project_list_files: a
+ * One generic `not_found` hint pointed every tool at list_files: a
  * missing secret name or a pending GitHub device flow has nothing to do with
  * the filesystem, so the agent wasted a round trip on a directory listing.
  * Each entry names the call that can actually recover.
@@ -608,25 +608,25 @@ const DEFAULT_NEXT_ACTIONS: Record<string, unknown[]> = {
 const TOOL_RECOVERY: Record<string, Record<string, { hint?: string; next_actions?: unknown[] }>> = {
   secret: {
     not_found: {
-      hint: "No such secret. List the stored names with project_secret action=list, or store it with action=set.",
-      next_actions: [{ tool: "project_secret", arguments: { action: "list" }, why: "see the stored names" }],
+      hint: "No such secret. List the stored names with secret action=list, or store it with action=set.",
+      next_actions: [{ tool: "secret", arguments: { action: "list" }, why: "see the stored names" }],
     },
   },
   github_connect: {
     not_found: {
-      hint: "No such pending device flow. Start one with project_github_connect action=start, then poll it with its pending_id.",
-      next_actions: [{ tool: "project_github_connect", arguments: { action: "start" }, why: "start the device flow" }],
+      hint: "No such pending device flow. Start one with github_connect action=start, then poll it with its pending_id.",
+      next_actions: [{ tool: "github_connect", arguments: { action: "start" }, why: "start the device flow" }],
     },
   },
   snapshot: {
     not_found: {
-      hint: "No such checkpoint. List the checkpoints with project_snapshot action=list and pick another id.",
-      next_actions: [{ tool: "project_snapshot", arguments: { action: "list" }, why: "pick another checkpoint" }],
+      hint: "No such checkpoint. List the checkpoints with snapshot action=list and pick another id.",
+      next_actions: [{ tool: "snapshot", arguments: { action: "list" }, why: "pick another checkpoint" }],
     },
   },
   shell_status: {
     not_found: {
-      hint: "Unknown run id. Run ids live only in the session that started them; start a new run with project_shell_run.",
+      hint: "Unknown run id. Run ids live only in the session that started them; start a new run with shell_run.",
     },
   },
   shell_cancel: {
@@ -636,47 +636,47 @@ const TOOL_RECOVERY: Record<string, Record<string, { hint?: string; next_actions
   },
   read_audit: {
     not_found: {
-      hint: "The audit database was not found at that path. Check project_health for the audit store location.",
+      hint: "The audit database was not found at that path. Check health for the audit store location.",
     },
   },
   ci_status: {
     not_found: {
-      hint: "No run, job or check-run matched the selector. List the recent runs with project_ci_status without a selector, or use project_ci_logs with a run_id from it.",
+      hint: "No run, job or check-run matched the selector. List the recent runs with ci_status without a selector, or use ci_logs with a run_id from it.",
     },
   },
   ci_logs: {
     not_found: {
-      hint: "No log archive for that run or job. Take run_id/job_id from project_ci_status.",
+      hint: "No log archive for that run or job. Take run_id/job_id from ci_status.",
     },
   },
   read_file: {
     not_found: {
-      hint: "No such file. Check the path with project_list_files or project_search; do not retry the same path.",
+      hint: "No such file. Check the path with list_files or search; do not retry the same path.",
     },
   },
   write_file: {
     not_found: {
-      hint: "No such file. Check the path with project_list_files, or pass create_dirs=1 to create the parent directory.",
+      hint: "No such file. Check the path with list_files, or pass create_dirs=1 to create the parent directory.",
     },
   },
   edit_file: {
     not_found: {
-      hint: "No such file. Check the path with project_list_files, or create it with project_write_file.",
+      hint: "No such file. Check the path with list_files, or create it with write_file.",
     },
   },
   delete_path: {
     not_found: {
-      hint: "No such path. Check it with project_list_files before deleting.",
+      hint: "No such path. Check it with list_files before deleting.",
     },
   },
   get_file_info: {
     not_found: {
-      hint: "No such path. Check it with project_list_files.",
+      hint: "No such path. Check it with list_files.",
     },
   },
   list_files: {
     not_found: {
-      hint: "No such directory. Check the path with project_list_files on its parent.",
+      hint: "No such directory. Check the path with list_files on its parent.",
     },
   },
 };
@@ -696,7 +696,7 @@ function defaultNextActions(failure: Failure, operation?: string): unknown[] | u
       fromData ||
       /^old_text (?:not found|matches \d+ locations) in (.+?)(?:: line \d+|:\s|\.\s|\.$|$)/.exec(failure.message)?.[1];
     return file
-      ? [{ tool: "project_read_file", arguments: { relative_path: file }, why: "copy the exact current text, then retry the edit" }]
+      ? [{ tool: "read_file", arguments: { relative_path: file }, why: "copy the exact current text, then retry the edit" }]
       : undefined;
   }
   return DEFAULT_NEXT_ACTIONS[failure.code];
@@ -711,35 +711,35 @@ function toolSpecificHint(failure: Failure, operation?: string): string | undefi
 const INVALID_REQUEST_HINTS: Array<[RegExp, string]> = [
   [/symbol_name is required/i, "Pass symbol_name (identifier); scope=file with relative_path, or scope=workspace."],
   [/queries\[\] is required/i, "Pass queries: [{ pattern, must?, weight? }]."],
-  [/action must be create\|list\|restore/i, "Use project_snapshot action=create|list|restore|delete|mirror; restore/delete need id."],
-  [/Invalid checkpoint id/i, "Use an id from project_snapshot action=list."],
+  [/action must be create\|list\|restore/i, "Use snapshot action=create|list|restore|delete|mirror; restore/delete need id."],
+  [/Invalid checkpoint id/i, "Use an id from snapshot action=list."],
   [/paths\[\] is limited/i, "Max 64 paths; pass a directory instead."],
-  [/harness must be one of/i, "See project_detect_harnesses for valid names."],
+  [/harness must be one of/i, "See detect_harnesses for valid names."],
   [/No edits provided/i, "Pass old_text+new_text, or edits[] of { old_text, new_text }."],
-  [/old_text must be a non-empty/i, "old_text is the exact text to replace; to replace a whole file use project_write_file."],
-  [/Directory requires recursive=1/i, "Set recursive=1 only after a scoped project_snapshot of it."],
+  [/old_text must be a non-empty/i, "old_text is the exact text to replace; to replace a whole file use write_file."],
+  [/Directory requires recursive=1/i, "Set recursive=1 only after a scoped snapshot of it."],
   [/`command` must be a non-empty/i, "Pass command as the shell command line."],
   [/override must be/i, "override: ALLOW_ENV_READ (operator-enabled), plus reason."],
   [/reason of at most 400/i, "Add reason (one line, max 400 chars)."],
-  [/kill_key/i, "Use the kill_key from the project_shell_run response."],
-  [/secret_env/i, "secret_env: array of up to 16 names from project_secret action=list."],
+  [/kill_key/i, "Use the kill_key from the shell_run response."],
+  [/secret_env/i, "secret_env: array of up to 16 names from secret action=list."],
   [/Pass exactly one|Pass at most one of run_id/i, "Pass only one selector: run_id, ref, pr or branch."],
   [/Pass either expires_in_days or expires_at|expires_at` must be/i, "Use expires_in_days or expires_at (epoch ms/ISO-8601), not both."],
   [/`until` must be/i, 'Set until to "terminal" or "any_change".'],
-  [/pending_id|action must be "start" or "poll"/i, "Call project_github_connect action=start first, then poll with its pending_id."],
+  [/pending_id|action must be "start" or "poll"/i, "Call github_connect action=start first, then poll with its pending_id."],
   [/`value` must be a non-empty|NUL bytes/i, "value must be a non-empty string without NUL; or use value_env."],
   [/`side` must be/i, "side: RIGHT (new code) or LEFT (deleted)."],
   [/start_line|`line`|line\/`start_line`/i, "Inline comments need path + positive line; start_line <= line. Omit both for a general comment."],
   [/`method` must be/i, "method: merge, squash or rebase."],
   [/`state` must be/i, "state: open, closed or all."],
   [/`action` must be "cancel"/i, 'action: "cancel" or "retry_failed".'],
-  [/run_id|job_id|pipeline\/step UUID/i, "Take run_id/job_id from project_ci_status."],
+  [/run_id|job_id|pipeline\/step UUID/i, "Take run_id/job_id from ci_status."],
   [/`inputs`|Variable|Workflow input|Too many/i, "inputs: object of string/number/boolean values with valid names, within the limit."],
   [/`kind` must be "files"|`format` must be|`direction` must be/i, "Use a value listed in the message; see the tool schema."],
-  [/Seed path is not a file|not a regular file or directory/i, "Pass an existing file path (check with project_list_files)."],
+  [/Seed path is not a file|not a regular file or directory/i, "Pass an existing file path (check with list_files)."],
   [/git\.repos|has no host/i, 'Fix git.repos / remote URL (expected "owner/name").'],
   [/root\/relative_path required/i, "Pass relative_path (workspace-relative)."],
-  [/Unknown method/i, "Server/backend mismatch; restart and check project_health."],
+  [/Unknown method/i, "Server/backend mismatch; restart and check health."],
   [/Refusing to delete the workspace root/i, "Delete a path inside the workspace; the root is protected."],
   [/value_env .* is not set/i, "Export that variable in the server environment, or pass value."],
   [/must be a PR number or/i, "Pass pr as a number or a PR/MR URL."],
@@ -747,7 +747,7 @@ const INVALID_REQUEST_HINTS: Array<[RegExp, string]> = [
   [/must be https|is not in the allowed list/i, "Provider host must be https and on the allowed host list in git config."],
   [/must be an integer between/i, "Use an integer within the stated range."],
   [/`ref` must be a branch/i, "ref: branch name or commit sha."],
-  [/safe_edit tool removed/i, "Use project_edit_file with expected_sha256."],
+  [/safe_edit tool removed/i, "Use edit_file with expected_sha256."],
   [/Pass error_text/i, "Pass error_text or log_tail."],
   [/Provider path must start/i, 'Internal: provider paths start with "/"; report a bug.'],
 ];
@@ -775,7 +775,7 @@ export function parseToolError(error: unknown): Failure & { data?: unknown } {
     hint = body.slice(hintAt + " Hint: ".length).trim();
     body = body.slice(0, hintAt).trim();
   }
-  if (!hint && code === "not_found" && /^Unknown run_id/i.test(body)) hint = "Run ids only live for this session; start the command again with project_shell_run.";
+  if (!hint && code === "not_found" && /^Unknown run_id/i.test(body)) hint = "Run ids only live for this session; start the command again with shell_run.";
   if (!hint && code === "invalid_request" && /^Invalid regex/i.test(body)) hint = "Fix the pattern, or set regex=0 to search it as literal text.";
   if (!hint && code === "invalid_request") hint = invalidRequestHint(body);
   if (!hint) hint = DEFAULT_HINTS[code] ?? GENERIC_HINT;

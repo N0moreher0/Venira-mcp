@@ -322,7 +322,7 @@ function tokenFor(
         const at = meta.expires_at === null ? "unknown" : new Date(meta.expires_at).toISOString();
         throw new Error(
           `[secret_expired] Secret "${secretName}" expired at ${at}. ` +
-            `Hint: reconnect with project_github_connect action=start, or project_secret action=set name=${secretName}.`,
+            `Hint: reconnect with github_connect action=start, or secret action=set name=${secretName}.`,
         );
       }
       try {
@@ -491,7 +491,7 @@ export function requireToken(ctx: GitContext): string {
   if (!ctx.token) {
     throw new Error(
       `[auth_missing] No ${ctx.provider} token available (looked for secret "${ctx.secret_name}"). ` +
-        `Hint: GitHub: project_github_connect action=start; else project_secret action=set name=${ctx.secret_name}, or export VENIRA_GIT_TOKEN${ctx.provider === "github" ? " / GITHUB_TOKEN" : ""}.`,
+        `Hint: GitHub: github_connect action=start; else secret action=set name=${ctx.secret_name}, or export VENIRA_GIT_TOKEN${ctx.provider === "github" ? " / GITHUB_TOKEN" : ""}.`,
     );
   }
   return ctx.token;

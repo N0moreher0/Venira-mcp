@@ -27,7 +27,7 @@ export type ApprovalGateName = "shell" | "js";
 export const APPROVAL_PENDING_TTL_MS = 5 * 60 * 1000;
 
 export interface ApprovalSubject {
-  /** Tool the agent retries after the human grants (e.g. `project_shell_run`). */
+  /** Tool the agent retries after the human grants (e.g. `shell_run`). */
   tool: string;
   /** What the human reviews: the command, or the JS source. */
   command: string;
@@ -210,7 +210,7 @@ export function redeemApproval(
  * the human reviewed); decode it back to code plus an optional argv line.
  */
 export function formatPendingCommand(p: approvals.PendingApproval): string {
-  if (p.tool !== "project_execute_js") return p.command;
+  if (p.tool !== "execute_js") return p.command;
   const at = p.command.lastIndexOf("\u0000");
   if (at < 0) return p.command;
   const code = p.command.slice(0, at);

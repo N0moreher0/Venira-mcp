@@ -43,8 +43,8 @@ try {
   console.log(`Shell:   ${p.shell}`);
   console.log(`Cwd:     ${p.cwd}`);
   if (p.secret_env.length > 0) console.log(`Secrets: ${p.secret_env.join(", ")}`);
-  const tool = p.tool ?? "project_shell_run";
-  console.log(`${tool === "project_execute_js" ? "Code:    " : "Command: "}${formatPendingCommand(p)}`);
+  const tool = p.tool ?? "shell_run";
+  console.log(`${tool === "execute_js" ? "Code:    " : "Command: "}${formatPendingCommand(p)}`);
   console.log(`Scope:   ${wantSession ? "session (same command group until it expires)" : "once"}`);
   if (!assumeYes) {
     const answer = (await ask("Approve this call? [y/N] ")).trim().toLowerCase();

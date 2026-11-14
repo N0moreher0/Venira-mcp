@@ -71,7 +71,7 @@ async function readOriginal(abs: string, display: string): Promise<Buffer> {
     return await fs.readFile(abs);
   } catch (error) {
     throw new Error(
-      "[not_found] Cannot read " + display + ". Hint: check the path with project_get_file_info, or create it with project_write_file. " +
+      "[not_found] Cannot read " + display + ". Hint: check the path with get_file_info, or create it with write_file. " +
         (error instanceof Error ? error.message : String(error)),
     );
   }
@@ -186,7 +186,7 @@ async function manualRestore(items: PlannedFile[]): Promise<void> {
         await writeFileAtomic(item.oldAbs, item.originalBytes.toString("utf8"));
       } else {
         // Unreadable original: nothing safe to restore.
-        throw new Error("[io_error] No original bytes were captured for " + item.oldAbs + ". Hint: restore the checkpoint manually with project_snapshot action=restore.");
+        throw new Error("[io_error] No original bytes were captured for " + item.oldAbs + ". Hint: restore the checkpoint manually with snapshot action=restore.");
       }
     }
     if (item.newAbs && (!item.oldExisted || item.newAbs !== item.oldAbs)) {
@@ -221,22 +221,22 @@ export async function opApplyPatch(args: Args, root: string): Promise<RustRespon
     const oldStat = oldAbs ? await lstatOrNull(oldAbs) : null;
     const newStat = newAbs ? await lstatOrNull(newAbs) : null;
     if (oldStat?.isSymbolicLink()) {
-      throw new Error("[unsupported] project_apply_patch does not follow symbolic links: " + oldRel + ". Hint: patch the real file, or replace the symlink first.");
+      throw new Error("[unsupported] apply_patch does not follow symbolic links: " + oldRel + ". Hint: patch the real file, or replace the symlink first.");
     }
     if (newStat?.isSymbolicLink()) {
-      throw new Error("[unsupported] project_apply_patch does not write through symbolic links: " + newRel + ". Hint: remove the symlink first, or patch the real file.");
+      throw new Error("[unsupported] apply_patch does not write through symbolic links: " + newRel + ". Hint: remove the symlink first, or patch the real file.");
     }
     if (oldStat?.isDirectory()) {
-      throw new Error("[invalid_request] project_apply_patch only patches regular files: " + oldRel + " is a directory. Hint: use project_move_path or project_delete_path for directories.");
+      throw new Error("[invalid_request] apply_patch only patches regular files: " + oldRel + " is a directory. Hint: use move_path or delete_path for directories.");
     }
     if (newStat?.isDirectory()) {
       throw new Error("[invalid_request] The patch target is a directory: " + newRel + ". Hint: choose a file path.");
     }
     if (oldRel && !oldStat && op.action !== "added") {
-      throw new Error("[not_found] File does not exist: " + oldRel + ". Hint: create it with project_write_file, or regenerate the patch with a/dev/null for a new file.");
+      throw new Error("[not_found] File does not exist: " + oldRel + ". Hint: create it with write_file, or regenerate the patch with a/dev/null for a new file.");
     }
     if (oldRel && oldStat && !oldStat.isFile()) {
-      throw new Error("[invalid_request] Not a regular file: " + oldRel + ". Hint: project_apply_patch supports text files only.");
+      throw new Error("[invalid_request] Not a regular file: " + oldRel + ". Hint: apply_patch supports text files only.");
     }
     if (newRel && newStat && (op.action === "added" || op.action === "renamed")) {
       throw new Error("[conflict] File already exists: " + newRel + ". Hint: remove it first, or generate the patch against the existing file.");
@@ -251,7 +251,7 @@ export async function opApplyPatch(args: Args, root: string): Promise<RustRespon
         new TextDecoder("utf8", { fatal: true }).decode(originalBytes);
       } catch {
         throw new Error(
-          "[unsupported] " + (oldRel ?? newRel) + " is not valid UTF-8; project_apply_patch supports text files only. " +
+          "[unsupported] " + (oldRel ?? newRel) + " is not valid UTF-8; apply_patch supports text files only. " +
             "Hint: convert or patch the file another way (binary files cannot be safely rewritten from a text diff).",
         );
       }
@@ -262,8 +262,8 @@ export async function opApplyPatch(args: Args, root: string): Promise<RustRespon
       if (sha256Before !== expected.get(oldRel)) {
         throw errorWithData(
           "stale_content",
-          "The file changed since you read it: " + oldRel + ". Hint: re-read it with project_read_file and regenerate the patch.",
-          { relative_path: oldRel, sha256_before: sha256Before, expected_sha256: expected.get(oldRel), fresh_read_required: true, next_action: "project_read_file" },
+          "The file changed since you read it: " + oldRel + ". Hint: re-read it with read_file and regenerate the patch.",
+          { relative_path: oldRel, sha256_before: sha256Before, expected_sha256: expected.get(oldRel), fresh_read_required: true, next_action: "read_file" },
         );
       }
     }

@@ -8,7 +8,7 @@ import { SESSION_ID } from "../lib/session.js";
 import { loadShellPolicy } from "../lib/shell-policy.js";
 import { isHighRiskAskRule } from "../lib/shell-risk.js";
 
-// project_shell_run (approval flow + optional MCP elicitation) and project_shell_cancel_session.
+// shell_run (approval flow + optional MCP elicitation) and shell_cancel_session.
 // Extracted from tools/project.ts (P1 #6, step 5g); behavior is unchanged. The cached backend
 // executor and the corehost call are owned by project.ts and reach this module through ShellDeps,
 // so it never imports project.ts. The shell run registry lives separately in
@@ -73,7 +73,7 @@ function approvalFailure(
       ? data.approval.approve_command
       : approveCommand(approvalId);
   const hint = approvalId
-    ? `Stop and tell the user: run \`${command}\` in an interactive terminal. Do not loop. After they confirm, retry project_shell_run once with approval_id="${approvalId}".`
+    ? `Stop and tell the user: run \`${command}\` in an interactive terminal. Do not loop. After they confirm, retry shell_run once with approval_id="${approvalId}".`
     : undefined;
   return toolResult(
     errorEnvelope(operation, new Error(`[approval_required] ${reason} (rule: ${rule})`), {

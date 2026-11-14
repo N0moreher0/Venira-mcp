@@ -8,7 +8,7 @@ export async function runDiagnosticsReadPlan($h: Harness): Promise<void> {
   // 11d-bis. Diagnostics + read planning (deterministic, no model call).
   console.log("[verify] checking diagnostics + read planning...");
   const explainEconn = asEnvelope(
-    await call("project_explain_error", {
+    await call("explain_error", {
       error_text:
         "Error: connect ECONNREFUSED 127.0.0.1:5432\n    at TCPConnectWrap.afterConnect",
     }),
@@ -22,7 +22,7 @@ export async function runDiagnosticsReadPlan($h: Harness): Promise<void> {
   );
 
   const explainTs = asEnvelope(
-    await call("project_explain_error", {
+    await call("explain_error", {
       error_text:
         "src/git-provider.ts:120 - error TS2322: Type 'string' is not assignable to type 'number'.",
     }),
@@ -33,12 +33,12 @@ export async function runDiagnosticsReadPlan($h: Harness): Promise<void> {
       explainTs.data?.matched === true &&
       explainTs.data?.diagnoses?.[0]?.rule_id === "ts.type_error" &&
       (explainTs.data?.next_actions ?? []).some(
-        (action: { tool?: string }) => action.tool === "project_read_file",
+        (action: { tool?: string }) => action.tool === "read_file",
       ),
     explainTs.data,
   );
   const explainVenira = asEnvelope(
-    await call("project_explain_error", {
+    await call("explain_error", {
       error_text: "[path_escape] Path is outside the workspace: ../secrets.txt",
     }),
   );
@@ -50,7 +50,7 @@ export async function runDiagnosticsReadPlan($h: Harness): Promise<void> {
     explainVenira.data,
   );
   const explainSensitive = asEnvelope(
-    await call("project_explain_error", {
+    await call("explain_error", {
       error_text: "[sensitive_result] Path is protected by policy",
     }),
   );
@@ -62,7 +62,7 @@ export async function runDiagnosticsReadPlan($h: Harness): Promise<void> {
     explainSensitive.data,
   );
   const explainUnknown = asEnvelope(
-    await call("project_explain_error", { error_text: "everything is fine" }),
+    await call("explain_error", { error_text: "everything is fine" }),
   );
   check(
     "explain_error_unknown_is_ok",
@@ -71,7 +71,7 @@ export async function runDiagnosticsReadPlan($h: Harness): Promise<void> {
   );
   // Roadmap item 17: the codes that make an agent loop must be diagnosable.
   const explainRepeat = asEnvelope(
-    await call("project_explain_error", {
+    await call("explain_error", {
       error_text:
         "[repeated_failure] This exact invocation already failed in this session (exit code 1, 1 time(s)). The command was not run again.",
     }),
@@ -85,7 +85,7 @@ export async function runDiagnosticsReadPlan($h: Harness): Promise<void> {
     explainRepeat.data,
   );
   const explainStale = asEnvelope(
-    await call("project_explain_error", {
+    await call("explain_error", {
       error_text:
         "[stale_content] The file changed since you read it (current sha256 aabbccddeeff..., expected 1122334455...).",
     }),
@@ -98,7 +98,7 @@ export async function runDiagnosticsReadPlan($h: Harness): Promise<void> {
     explainStale.data,
   );
   const explainDenied = asEnvelope(
-    await call("project_explain_error", {
+    await call("explain_error", {
       error_text: "[command_denied] Blocked by deny.filesystem_root_delete: refuses to delete a filesystem root.",
     }),
   );
@@ -110,7 +110,7 @@ export async function runDiagnosticsReadPlan($h: Harness): Promise<void> {
     explainDenied.data,
   );
   const explainShellMissing = asEnvelope(
-    await call("project_explain_error", {
+    await call("explain_error", {
       error_text: '[shell_unavailable] Shell "pwsh" (pwsh) was not found, so the command did not run.',
     }),
   );
@@ -122,7 +122,7 @@ export async function runDiagnosticsReadPlan($h: Harness): Promise<void> {
     explainShellMissing.data,
   );
   const explainOldText = asEnvelope(
-    await call("project_explain_error", {
+    await call("explain_error", {
       error_text: "[old_text_not_found] old_text not found in src/app.ts.",
     }),
   );
@@ -134,7 +134,7 @@ export async function runDiagnosticsReadPlan($h: Harness): Promise<void> {
     explainOldText.data,
   );
   const githubEmptyPending = asEnvelope(
-    await call("project_github_connect", { action: "poll", pending_id: "" }),
+    await call("github_connect", { action: "poll", pending_id: "" }),
   );
   check(
     "github_poll_empty_pending_id_is_specific",
@@ -143,7 +143,7 @@ export async function runDiagnosticsReadPlan($h: Harness): Promise<void> {
       /cannot be empty/i.test(String(githubEmptyPending.error?.message ?? "")),
     githubEmptyPending,
   );
-  const explainEmpty = asEnvelope(await call("project_explain_error", {}));
+  const explainEmpty = asEnvelope(await call("explain_error", {}));
   check(
     "explain_error_requires_input",
     explainEmpty.error?.code === "invalid_request",
@@ -151,7 +151,7 @@ export async function runDiagnosticsReadPlan($h: Harness): Promise<void> {
   );
 
   const planTask = asEnvelope(
-    await call("project_plan_read_batch", {
+    await call("plan_read_batch", {
       task_description: "add retry handling to the GitHub client",
     }),
   );
@@ -165,7 +165,7 @@ export async function runDiagnosticsReadPlan($h: Harness): Promise<void> {
         (candidate: { relative_path?: string }) =>
           /^lib[\\/]+git-[^\\/]+\.ts$/i.test(String(candidate.relative_path)),
       ) &&
-      planTask.data?.steps?.[0]?.tool === "project_read_batch",
+      planTask.data?.steps?.[0]?.tool === "read_batch",
     planTask.data,
   );
   const rankedByPath = rankCandidates(
@@ -187,7 +187,7 @@ export async function runDiagnosticsReadPlan($h: Harness): Promise<void> {
     rankedByPath,
   );
   const planHint = asEnvelope(
-    await call("project_plan_read_batch", {
+    await call("plan_read_batch", {
       task_description: "refactor the checkpoint store",
       files_hint: ["lib/snapshots.ts"],
       include_search: 0,
@@ -198,11 +198,11 @@ export async function runDiagnosticsReadPlan($h: Harness): Promise<void> {
     planHint.ok === true &&
       planHint.data?.searched === false &&
       planHint.data?.candidates?.[0]?.relative_path === "lib/snapshots.ts" &&
-      planHint.data?.steps?.[0]?.tool === "project_read_batch",
+      planHint.data?.steps?.[0]?.tool === "read_batch",
     planHint.data,
   );
   const planEmpty = asEnvelope(
-    await call("project_plan_read_batch", { task_description: "   " }),
+    await call("plan_read_batch", { task_description: "   " }),
   );
   check(
     "plan_read_batch_requires_task",
@@ -216,7 +216,7 @@ export async function runDiagnosticsReadPlan($h: Harness): Promise<void> {
   await fs.writeFile(`${dir}/plan-artifact.db`, `noise ${artifactToken}\n`);
   await fs.writeFile(`${dir}/plan-artifact.log`, `${artifactToken}\n`);
   const planArtifact = asEnvelope(
-    await call("project_plan_read_batch", {
+    await call("plan_read_batch", {
       task_description: artifactToken,
       include_search: 1,
     }),
@@ -246,7 +246,7 @@ export async function runDiagnosticsReadPlan($h: Harness): Promise<void> {
     },
   );
   const planSource = asEnvelope(
-    await call("project_plan_read_batch", {
+    await call("plan_read_batch", {
       task_description: "inline review comment git-provider",
     }),
   );
@@ -274,7 +274,7 @@ export async function runDiagnosticsReadPlan($h: Harness): Promise<void> {
     `${nameToken} prose\n`.repeat(25),
   );
   const planName = asEnvelope(
-    await call("project_plan_read_batch", {
+    await call("plan_read_batch", {
       task_description: `update ${nameToken} handling`,
       include_search: 1,
     }),
@@ -301,7 +301,7 @@ export async function runDiagnosticsReadPlan($h: Harness): Promise<void> {
   // Prose must not outrank code for a code task, but must keep its hits when the
   // task is explicitly about documentation.
   const planDocs = asEnvelope(
-    await call("project_plan_read_batch", {
+    await call("plan_read_batch", {
       task_description: "document the retry handling in README",
       max_files: 4,
     }),
@@ -323,7 +323,7 @@ export async function runDiagnosticsReadPlan($h: Harness): Promise<void> {
   await fs.writeFile(`${dir}/deploy.key`, `${secretToken}\n`);
   await fs.writeFile(`${dir}/.env`, `TOKEN=${secretToken}\n`);
   const planSecret = asEnvelope(
-    await call("project_plan_read_batch", {
+    await call("plan_read_batch", {
       task_description: `rotate ${secretToken} token`,
       include_search: 1,
     }),

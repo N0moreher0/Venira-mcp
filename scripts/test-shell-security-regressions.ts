@@ -55,7 +55,7 @@ try {
   await client.connect(transport, RPC_OPTS);
   const shell = process.platform === "win32" ? "powershell" : "bash";
   const callShell = async (command: string) => {
-    const result = await callTool(client, { name: "project_shell_run", arguments: { command, shell, background: 0 } });
+    const result = await callTool(client, { name: "shell_run", arguments: { command, shell, background: 0 } });
     const text = (result as { content?: Array<{ text?: string }> }).content?.[0]?.text ?? "{}";
     return { result, envelope: JSON.parse(text) as { error?: { code?: string }; data?: Record<string, unknown> } };
   };
@@ -63,7 +63,7 @@ try {
   const cacheSecret = "shell-cache-redaction-fixture-9f31";
   await writeFile(path.join(workspaceDir, "cache-redaction-fixture.txt"), `before ${cacheSecret} after\n`);
   const secretSet = await callTool(client, {
-    name: "project_secret",
+    name: "secret",
     arguments: { action: "set", name: "SHELL_CACHE_REDACTION_FIXTURE", value: cacheSecret },
   });
   assert.equal((secretSet as { isError?: boolean }).isError, undefined);
@@ -76,7 +76,7 @@ try {
   assert.equal(JSON.stringify(cachedRead.envelope).includes(cacheSecret), false);
   const dryRunText = (
     (await callTool(client, {
-      name: "project_shell_run",
+      name: "shell_run",
       arguments: { command: "cat cache-redaction-fixture.txt", shell, dry_run: 1 },
     })) as { content?: Array<{ text?: string }> }
   ).content?.[0]?.text ?? "{}";
@@ -114,7 +114,7 @@ try {
   assert.equal(targetedRmRf.envelope.data?.run_id, undefined);
   assert.equal(typeof targetedRmRf.envelope.data?.approval_id, "string");
   const selfEnabledOverride = await callTool(client, {
-    name: "project_shell_run",
+    name: "shell_run",
     arguments: {
       command: "git push origin main",
       shell,
@@ -126,7 +126,7 @@ try {
   assert.equal(JSON.parse(selfEnabledText).error?.code, "override_not_enabled");
 
   const missingReason = await callTool(client, {
-    name: "project_shell_run",
+    name: "shell_run",
     arguments: { command: "cat .env", shell, override: "ALLOW_ENV_READ" },
   });
   const missingReasonText = (missingReason as { content?: Array<{ text?: string }> }).content?.[0]?.text ?? "{}";
@@ -159,7 +159,7 @@ try {
   try {
     await overrideClient.connect(overrideTransport, RPC_OPTS);
     const envReadOverride = await callTool(overrideClient, {
-      name: "project_shell_run",
+      name: "shell_run",
       arguments: {
         command: process.platform === "win32" ? "Get-Content .env" : "cat .env",
         shell,
@@ -183,7 +183,7 @@ try {
       await unlink(envPath);
       await symlink(externalFixture, envPath);
       const symlinkRead = await callTool(overrideClient, {
-        name: "project_shell_run",
+        name: "shell_run",
         arguments: {
           command: process.platform === "win32" ? "Get-Content .env" : "cat .env",
           shell,
@@ -209,7 +209,7 @@ try {
       "cat id_rsa",
     ]) {
       const outOfScope = await callTool(overrideClient, {
-        name: "project_shell_run",
+        name: "shell_run",
         arguments: { command, shell, override: "ALLOW_ENV_READ", reason: "try out-of-scope fixture" },
       });
       const outOfScopeText = (outOfScope as { content?: Array<{ text?: string }> }).content?.[0]?.text ?? "{}";
@@ -232,7 +232,7 @@ try {
 
     // A chained command runs in balanced mode once every step is routine (routine git needs no override).
     const chained = await callTool(overrideClient, {
-      name: "project_shell_run",
+      name: "shell_run",
       arguments: {
         command: "git status; git push --dry-run origin HEAD:main",
         shell,
@@ -252,7 +252,7 @@ try {
       "git push --force origin main",
     ]) {
       const rejected = await callTool(overrideClient, {
-        name: "project_shell_run",
+        name: "shell_run",
         arguments: { command, shell, relative_cwd: "repo" },
       });
       const rejectedText = (rejected as { content?: Array<{ text?: string }> }).content?.[0]?.text ?? "{}";
@@ -260,7 +260,7 @@ try {
     }
 
     const pushDry = await callTool(overrideClient, {
-      name: "project_shell_run",
+      name: "shell_run",
       arguments: {
         command: "git push --dry-run origin HEAD:main",
         shell,
@@ -276,7 +276,7 @@ try {
     assert.equal(pushEnvelope.data?.exit_code, 0, pushEnvelope.data?.stderr);
     // A real push is observable: it creates refs/heads/main in the local bare remote.
     const pushReal = await callTool(overrideClient, {
-      name: "project_shell_run",
+      name: "shell_run",
       arguments: {
         command: "git push origin HEAD:main",
         shell,

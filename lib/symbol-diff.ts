@@ -121,7 +121,7 @@ export function extractSymbols(
 
 /**
  * Build an outline (symbols + rough nesting) for a single file.
- * Used by project_outline_symbol.
+ * Used by outline_symbol.
  */
 export function buildOutline(text: string): { symbols: SymbolInfo[]; total_symbols: number } {
   const symbols = extractSymbols(text);

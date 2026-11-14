@@ -100,7 +100,7 @@ function isScopeValid(capabilityId: string): boolean {
 // CoreHost class (drop-in replacement for the Rust CoreHost)
 // ---------------------------------------------------------------------------
 
-// Secrets (`project_secret`)
+// Secrets (`secret`)
 //
 // Values are never returned by default: `get`/`list` expose only metadata
 // (length + sha256 prefix + update time) so an agent can confirm a key exists
@@ -113,7 +113,7 @@ const MAX_REVEAL_VALUE_CHARS = 16 * 1024;
 const githubDeviceFlow = new GithubDeviceFlow();
 
 /**
- * Expiry arguments for `project_secret action=set`:
+ * Expiry arguments for `secret action=set`:
  * `expires_in_days` (1..3650) or `expires_at` (epoch ms / ISO-8601), not both.
  * Returns undefined when the caller did not set an expiry (keep the previous one).
  */
@@ -164,7 +164,7 @@ async function opSecret(args: Record<string, unknown>): Promise<RustResponse> {
         },
       },
       ...(secrets.length === 0
-        ? { hint: "No secrets stored. Hint: project_secret action=set name=GITHUB_TOKEN value=<token>." }
+        ? { hint: "No secrets stored. Hint: secret action=set name=GITHUB_TOKEN value=<token>." }
         : {}),
     };
   }
@@ -181,7 +181,7 @@ async function opSecret(args: Record<string, unknown>): Promise<RustResponse> {
       const meta = listSecrets().find((entry) => entry.name === name);
       if (!meta) {
         throw new Error(
-          `[not_found] Secret "${name}" is not stored. Hint: run project_secret action=list to see available names.`,
+          `[not_found] Secret "${name}" is not stored. Hint: run secret action=list to see available names.`,
         );
       }
       const reveal = args.reveal === true;
@@ -214,7 +214,7 @@ async function opSecret(args: Record<string, unknown>): Promise<RustResponse> {
           status: "completed",
           result: { kind: "secret", data: base },
           hint:
-            "Metadata only (the value stays out of the transcript). Hint: inject it with project_shell_run secret_env=[\"" +
+            "Metadata only (the value stays out of the transcript). Hint: inject it with shell_run secret_env=[\"" +
             name +
             '"], or set VENIRA_SHELL_MODE=permissive or off and pass reveal=1.',
         };
@@ -222,7 +222,7 @@ async function opSecret(args: Record<string, unknown>): Promise<RustResponse> {
       if (!(loadShellPolicy().mode === "off" || loadShellPolicy().mode === "permissive")) {
         throw new Error(
           "[feature_disabled] Plaintext reveal is disabled on this host (VENIRA_SHELL_MODE must be permissive or off; not a per-call approval). " +
-            "Hint: use project_shell_run secret_env; set VENIRA_SHELL_MODE=permissive or off only if the user wants it printed.",
+            "Hint: use shell_run secret_env; set VENIRA_SHELL_MODE=permissive or off only if the user wants it printed.",
         );
       }
       const value = getSecretValueSync(name);
@@ -278,7 +278,7 @@ async function opSecret(args: Record<string, unknown>): Promise<RustResponse> {
           data: { action: "set", ...result },
         },
         hint: result.created
-          ? `Stored "${name}" (encrypted).${expiryNote} Hint: use project_shell_run secret_env=["${name}"] to inject it.`
+          ? `Stored "${name}" (encrypted).${expiryNote} Hint: use shell_run secret_env=["${name}"] to inject it.`
           : `Rotated "${name}" (encrypted).${expiryNote} The previous value is overwritten and the use counter is reset.`,
       };
     }
@@ -308,7 +308,7 @@ async function opGithubConnect(args: Record<string, unknown>): Promise<RustRespo
       result: { kind: "github_connect", data },
       hint:
         `Open ${data.verification_uri}, sign in to GitHub, and enter code ${data.user_code}. ` +
-        `After approving, call project_github_connect action=poll with pending_id; wait at least ${data.poll_interval_seconds}s between polls. ` +
+        `After approving, call github_connect action=poll with pending_id; wait at least ${data.poll_interval_seconds}s between polls. ` +
         "Never ask the user to paste a token into chat.",
     };
   }

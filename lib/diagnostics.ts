@@ -1,5 +1,5 @@
 /**
- * Deterministic error diagnosis for `project_explain_error`.
+ * Deterministic error diagnosis for `explain_error`.
  *
  * Why rules instead of a model?
  * ----------------------------
@@ -76,7 +76,7 @@ function readFailingFrame(ctx: RuleContext, why = "read the failing frame with c
   const start = Math.max(1, ctx.line - 8);
   return [
     {
-      tool: "project_read_file",
+      tool: "read_file",
       arguments: { relative_path: ctx.file, ranges: [{ start_line: start, end_line: ctx.line + 20 }] },
       why,
     },
@@ -86,7 +86,7 @@ function readFailingFrame(ctx: RuleContext, why = "read the failing frame with c
 function searchTerm(ctx: RuleContext, term: string, why: string): NextAction[] {
   const value = term.trim().slice(0, 80);
   if (!value) return [];
-  return [{ tool: "project_search", arguments: { query: value, kind: "literal_content", limit: 20 }, why }];
+  return [{ tool: "search", arguments: { query: value, kind: "literal_content", limit: 20 }, why }];
 }
 
 const RULES: Rule[] = [
@@ -97,8 +97,8 @@ const RULES: Rule[] = [
     pattern: /\[secret_expired\]/,
     cause: "The secret's `expires_at` is in the past; injection and provider tokens are refused until it is rotated.",
     fix: [
-      "Rotate it: project_secret action=set name=<NAME> value=<new value> expires_in_days=<days>.",
-      "Check what is due with project_secret action=list (each entry reports expires_at / days_left).",
+      "Rotate it: secret action=set name=<NAME> value=<new value> expires_in_days=<days>.",
+      "Check what is due with secret action=list (each entry reports expires_at / days_left).",
     ],
     retry: "Retry the original call after rotating.",
   },
@@ -109,8 +109,8 @@ const RULES: Rule[] = [
     pattern: /\[secret_missing\]|\[rogue_secret\]/,
     cause: "`secret_env` / provider auth named a secret that was never stored (or was deleted).",
     fix: [
-      "List names: project_secret action=list.",
-      "Store it once: project_secret action=set name=<NAME> value_env=<HOST_ENV_VAR> keeps the value out of the transcript.",
+      "List names: secret action=list.",
+      "Store it once: secret action=set name=<NAME> value_env=<HOST_ENV_VAR> keeps the value out of the transcript.",
     ],
   },
   {
@@ -132,7 +132,7 @@ const RULES: Rule[] = [
     pattern: /\[path_escape\]|\[scope_denied\]/i,
     cause: "Venira refused a path that escapes the configured workspace or capability scope.",
     fix: [
-      "Use a workspace-relative path and confirm it with project_list_files.",
+      "Use a workspace-relative path and confirm it with list_files.",
       "For a deliberate external path, configure an explicit project grant or enable the documented unrestricted mode only when appropriate.",
     ],
   },
@@ -144,7 +144,7 @@ const RULES: Rule[] = [
     cause: "Venira blocked access to a protected secret, credential, or internal data path.",
     fix: [
       "Choose a non-sensitive workspace file; do not try to read secret stores through project tools.",
-      "Use the dedicated project_secret tool for managed credentials; it does not return stored values by default.",
+      "Use the dedicated secret tool for managed credentials; it does not return stored values by default.",
     ],
   },
   {
@@ -154,8 +154,8 @@ const RULES: Rule[] = [
     pattern: /\[audit_unavailable\]|audit.{0,30}(unavailable|failed)/i,
     cause: "Venira could not persist or read the audit trail, so operations that require audit evidence may fail closed.",
     fix: [
-      "Check project_health for the audit store status and inspect the reported data directory permissions/free space.",
-      "After restoring the store, retry the original operation once and verify it appears in project_read_audit.",
+      "Check health for the audit store status and inspect the reported data directory permissions/free space.",
+      "After restoring the store, retry the original operation once and verify it appears in read_audit.",
     ],
   },
   {
@@ -192,7 +192,7 @@ const RULES: Rule[] = [
     cause:
       "The expected_sha256 guard refused the write because the file changed since the read. The file was left untouched.",
     fix: [
-      "Read the file again with project_read_file; its sha256 is the whole-file hash and is safe to send back as expected_sha256.",
+      "Read the file again with read_file; its sha256 is the whole-file hash and is safe to send back as expected_sha256.",
       "Rebuild the patch against the current content - never replay the same edit unchanged.",
       "Drop expected_sha256 only when you deliberately want to edit whatever is on disk right now.",
     ],
@@ -217,7 +217,7 @@ const RULES: Rule[] = [
     cause: "The requested shell (powershell, pwsh, cmd, bash) could not be started, so the command never ran.",
     fix: [
       "Install the shell the response names (the error carries the install hint) and restart the MCP client so it is on the server's PATH.",
-      "Or pick another shell: project_shell_run accepts shell=powershell|pwsh|cmd|bash.",
+      "Or pick another shell: shell_run accepts shell=powershell|pwsh|cmd|bash.",
     ],
     retry: "Do not retry unchanged: the binary is still missing.",
   },
@@ -240,7 +240,7 @@ const RULES: Rule[] = [
     pattern: /ENOENT|no such file or directory/i,
     cause: "The path does not exist in the current workspace/cwd — often a stale guess, a wrong root, or a filename typo.",
     fix: [
-      "Locate it first: project_search (literal_content) or project_list_files; then pass the exact workspace-relative path.",
+      "Locate it first: search (literal_content) or list_files; then pass the exact workspace-relative path.",
       "Paths are workspace-relative; absolute paths outside the workspace are rejected unless VENIRA_UNRESTRICTED=1.",
     ],
     actions: (ctx) => searchTerm(ctx, basename(ctx.file ?? ""), "find the real path of the missing file"),
@@ -264,8 +264,8 @@ const RULES: Rule[] = [
     pattern: /EADDRINUSE|address already in use/i,
     cause: "Another process (often a dev server started earlier) already listens on that port.",
     fix: [
-      "Inspect running shells: project_shell_status for your run_id, or project_health for the queue.",
-      "Stop the previous run (project_shell_cancel / project_shell_cancel_session) or start on another port.",
+      "Inspect running shells: shell_status for your run_id, or health for the queue.",
+      "Stop the previous run (shell_cancel / shell_cancel_session) or start on another port.",
     ],
   },
   {
@@ -275,7 +275,7 @@ const RULES: Rule[] = [
     pattern: /ECONNREFUSED|connection refused/i,
     cause: "Nothing is listening on the target host:port — the service was not started, or it crashed.",
     fix: [
-      "Start the dependency (database/dev server) in the background, then poll it with project_shell_status.",
+      "Start the dependency (database/dev server) in the background, then poll it with shell_status.",
       "Confirm the port matches the config (often .env vs docker-compose).",
     ],
   },
@@ -286,8 +286,8 @@ const RULES: Rule[] = [
     pattern: /ETIMEDOUT|timed out|timeout of \d+ms exceeded|TimeoutError/i,
     cause: "The operation exceeded its budget: slow dependency, blocked network, or a command that needs longer.",
     fix: [
-      "Raise the budget where it is supported (project_shell_run timeout_ms, or the tool's own timeout).",
-      "Poll instead of blocking: project_shell_run returns a run_id; project_shell_status(wait_seconds=5..30) observes it.",
+      "Raise the budget where it is supported (shell_run timeout_ms, or the tool's own timeout).",
+      "Poll instead of blocking: shell_run returns a run_id; shell_status(wait_seconds=5..30) observes it.",
       "Commands are killed at their timeout; raise VENIRA_SHELL_MAX_TIMEOUT_MS for long builds.",
     ],
   },
@@ -298,7 +298,7 @@ const RULES: Rule[] = [
     pattern: /ENOMEM|JavaScript heap out of memory|heap limit Allocation failed|MemoryError/i,
     cause: "The process needed more memory than the runtime allows (large file, big test matrix, unbounded loop).",
     fix: [
-      "Process in chunks (project_read_file with ranges, batch reads) instead of loading everything at once. For safe edits, use project_edit_file with expected_sha256 to refuse stale content and verify the write.",
+      "Process in chunks (read_file with ranges, batch reads) instead of loading everything at once. For safe edits, use edit_file with expected_sha256 to refuse stale content and verify the write.",
       "For Node builds/tests, raise the heap via the command env, e.g. NODE_OPTIONS=--max-old-space-size=4096.",
       "Keep checkpoint/restore scope narrow (paths[]) to avoid hashing huge trees.",
     ],
@@ -333,7 +333,7 @@ const RULES: Rule[] = [
     pattern: /ModuleNotFoundError: No module named|ImportError: cannot import name/i,
     cause: "The package is not installed in the active interpreter, or the import path is wrong.",
     fix: [
-      "Confirm the interpreter: `python -c \"import sys; print(sys.executable)\"` via project_shell_run.",
+      "Confirm the interpreter: `python -c \"import sys; print(sys.executable)\"` via shell_run.",
       "Install it (pip install <pkg>) or point PYTHONPATH at the source directory.",
       "Prefer running tests through the project's own entry point (pytest, tox, poetry run).",
     ],
@@ -358,7 +358,7 @@ const RULES: Rule[] = [
     cause: "Mixed tabs/spaces or a broken block after an edit.",
     fix: [
       "Open the reported file around the line: indentation must be uniform (4 spaces typical).",
-      "Use project_edit_file instead of retyping whole blocks; keep the surrounding indentation when pasting.",
+      "Use edit_file instead of retyping whole blocks; keep the surrounding indentation when pasting.",
     ],
     actions: (ctx) => readFailingFrame(ctx, "inspect the indentation around the reported line"),
   },
@@ -370,7 +370,7 @@ const RULES: Rule[] = [
     cause: "The compiler rejected a type. Fix the type at the source, not with `as any`.",
     fix: [
       "Read the reported file:line; the error often comes from a widened/narrowed type one call away.",
-      "Check the symbol's declaration with project_outline_symbol or project_symbol_references.",
+      "Check the symbol's declaration with outline_symbol or symbol_references.",
       "Re-run the project's type-check (npm run build / tsc --noEmit) after the fix.",
     ],
     actions: (ctx) => [
@@ -413,8 +413,8 @@ const RULES: Rule[] = [
     pattern: /fatal: not a git repository/i,
     cause: "The command ran in a directory that has no .git (wrong cwd, or a nested folder).",
     fix: [
-      "Run git from the workspace root (project_shell_run relative_cwd=\".\").",
-      "Check the layout with project_list_files depth=1 before assuming the repo root.",
+      "Run git from the workspace root (shell_run relative_cwd=\".\").",
+      "Check the layout with list_files depth=1 before assuming the repo root.",
     ],
   },
   {
@@ -424,8 +424,8 @@ const RULES: Rule[] = [
     pattern: /CONFLICT \(content\)|Automatic merge failed|fix conflicts and then commit|both modified/i,
     cause: "Two branches changed the same lines; git stopped and left conflict markers.",
     fix: [
-      "List conflicted files: `git status --short` via project_shell_run.",
-      "Resolve each file with project_read_file + project_edit_file (remove <<<<<<< / ======= / >>>>>>> markers).",
+      "List conflicted files: `git status --short` via shell_run.",
+      "Resolve each file with read_file + edit_file (remove <<<<<<< / ======= / >>>>>>> markers).",
       "Then `git add <file>` and continue the merge/rebase; run the tests before committing.",
     ],
   },
@@ -449,7 +449,7 @@ const RULES: Rule[] = [
     fix: [
       "For HTTPS remotes, make sure the credential helper has a token (or use the GitHub tools with a stored token).",
       "For SSH, verify the key is loaded (ssh -T git@github.com).",
-      "Do not paste tokens into a shell command: store them with project_secret and inject via secret_env.",
+      "Do not paste tokens into a shell command: store them with secret and inject via secret_env.",
     ],
   },
   {
@@ -470,8 +470,8 @@ const RULES: Rule[] = [
     pattern: /Bad credentials|Requires authentication|\b401\b|\[auth_missing\]/,
     cause: "No token, or the token is invalid/expired/revoked.",
     fix: [
-      "Check the stored token metadata: project_secret action=get name=GITHUB_TOKEN (never prints the value).",
-      "Rotate it: project_secret action=set name=GITHUB_TOKEN value=<new PAT>.",
+      "Check the stored token metadata: secret action=get name=GITHUB_TOKEN (never prints the value).",
+      "Rotate it: secret action=set name=GITHUB_TOKEN value=<new PAT>.",
     ],
   },
   {
@@ -504,7 +504,7 @@ const RULES: Rule[] = [
     cause: "The binary is not on PATH for the shell the server uses (often a different shell than the user's terminal).",
     fix: [
       "Use the project's own runner (npm run <script>, npx <bin>, python -m <module>) instead of a global binary.",
-      "Check the shell in use (project_health -> shell section) and the PATH it inherits.",
+      "Check the shell in use (health -> shell section) and the PATH it inherits.",
     ],
   },
   {
@@ -514,7 +514,7 @@ const RULES: Rule[] = [
     pattern: /database is locked|SQLITE_BUSY|deadlock detected/i,
     cause: "Another connection holds the write lock (a dev server, a test run, or a second MCP session).",
     fix: [
-      "Stop the competing process (project_shell_cancel_session) or point the tool at a scratch DB.",
+      "Stop the competing process (shell_cancel_session) or point the tool at a scratch DB.",
       "Write in WAL mode where the project allows it; retry with a short backoff.",
     ],
   },

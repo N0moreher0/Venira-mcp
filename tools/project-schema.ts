@@ -19,7 +19,7 @@ export const flag01 = z
   .transform((value) => value === true || value === 1)
   .meta({ type: "integer", minimum: 0, maximum: 1 });
 /**
- * `project_shell_run.background` is advertised as the integer 0|1 like every other flag (ROADMAP_TOOL_SCHEMA.md,
+ * `shell_run.background` is advertised as the integer 0|1 like every other flag (ROADMAP_TOOL_SCHEMA.md,
  * phase 4), but the value is still normalised from the older shapes a cached client may send: `true`/`false`,
  * `"1"`/`"0"`, `"true"`/`"False"`. `.meta()` overrides only the JSON Schema, so `tools/list` stays integer
  * while `safeParse` keeps a permissive input; never advertise a union here again.
@@ -34,7 +34,7 @@ export const backgroundFlag = z
   );
 /**
  * `reason` rule (item 16): optional on every tool, audit-logged when provided.
- * The only required `reason` is on `project_ci_control` (remote CI effect).
+ * The only required `reason` is on `ci_control` (remote CI effect).
  * Note: audit rows currently store the reason text; see roadmap item 15.
  */
 export const reason_ = z
@@ -58,8 +58,8 @@ export const editOp = z.object({
 });
 
 /**
- * Fuzzy-match options of `project_edit_file` and of every `project_edit_batch` item. They are only part of
- * the published schema when `VENIRA_EDIT_FUZZY=1` (ROADMAP_TOOL_SCHEMA.md, phase 3), like `project_execute_js`
+ * Fuzzy-match options of `edit_file` and of every `edit_batch` item. They are only part of
+ * the published schema when `VENIRA_EDIT_FUZZY=1` (ROADMAP_TOOL_SCHEMA.md, phase 3), like `execute_js`
  * and `VENIRA_JS_EXEC_MODE`; with the variable off the shape is empty and `lib/corehost-filewrite.ts` rejects
  * a caller that still sends them. Since they are only visible when fuzzy is on, the descriptions do not repeat
  * the variable name. Keys must match `EDIT_ITEM_FUZZY_KEYS` in `lib/arg-hints.ts`.
@@ -74,7 +74,7 @@ export function editFuzzyShape(enabled: boolean) {
 }
 
 /**
- * One `project_edit_batch` item: the full `project_edit_file` shape.
+ * One `edit_batch` item: the full `edit_file` shape.
  * Deliberately loose (unknown keys pass through): the runtime validator in
  * `lib/arg-hints.ts` (`EDIT_ITEM_KEYS`) rejects a misspelled key with a
  * did-you-mean message, so the schema must not strip or reject it first.
@@ -85,8 +85,8 @@ export function editFuzzyShape(enabled: boolean) {
 export function editBatchItemFor(fuzzy: boolean) {
   return z.looseObject({
     relative_path: path_.describe("File to edit (required per item)."),
-    old_text: z.string().min(1).optional().describe("Exact text to replace (see project_edit_file)."),
-    new_text: z.string().optional().describe("Replacement text (see project_edit_file)."),
+    old_text: z.string().min(1).optional().describe("Exact text to replace (see edit_file)."),
+    new_text: z.string().optional().describe("Replacement text (see edit_file)."),
     replace_all: flag01.optional().describe("1 replaces every match; 0 (default) requires exactly one match."),
     edits: z.array(editOp).max(64).optional().describe("Several replacements in this file; wins over old_text/new_text."),
     expected_sha256: z.string().optional().describe("Hex SHA-256 of the current full content; edit refused if it differs; when given, the result also reports verified."),
@@ -96,7 +96,7 @@ export function editBatchItemFor(fuzzy: boolean) {
 }
 
 /**
- * `project_read_batch` arguments, keyed by `operation`: each variant is a loose
+ * `read_batch` arguments, keyed by `operation`: each variant is a loose
  * object holding exactly that standalone tool's parameters (with integer 0|1
  * flags left as numbers — the batch runner normalizes them, see
  * `tools/project-batch.ts` `normalizeBatchArgs`). Fields are optional here so a

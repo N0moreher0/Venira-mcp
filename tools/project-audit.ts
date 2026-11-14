@@ -7,7 +7,7 @@ import { OUTPUT_MODE, buildEnvelope, errorEnvelope, newRequestId, toolResult } f
 import type { RustResponse, ToolResult } from "../lib/output.js";
 import { SESSION_ID } from "../lib/session.js";
 
-// project_read_audit handler and the audit-DB health probe used by project_health. The caller resolves the audit DB path (it depends on
+// read_audit handler and the audit-DB health probe used by health. The caller resolves the audit DB path (it depends on
 // the corehost data dir), so this module only needs the path. Extracted verbatim
 // from tools/project.ts (P1 #6, step 5b); behavior is unchanged.
 

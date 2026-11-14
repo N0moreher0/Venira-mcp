@@ -32,7 +32,7 @@ import {
 } from "../lib/workspace.js";
 import { auditHealth } from "./project-audit.js";
 
-// project_health handler. Extracted from tools/project.ts (P1 #6, step 5d); the report
+// health handler. Extracted from tools/project.ts (P1 #6, step 5d); the report
 // shape is unchanged. State owned by project.ts is read through HealthDeps.
 
 type Args = Record<string, unknown>;

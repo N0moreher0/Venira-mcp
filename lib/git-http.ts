@@ -290,7 +290,7 @@ export function apiError(ctx: GitContext, status: number, body: string, headers:
   if (status === 401) {
     return new Error(
       `[auth_failed] ${provider} rejected the token (401)${suffix}. Hint: the token is invalid or expired; ` +
-        `run project_secret action=set name=${ctx.secret_name} value=<new token>.`,
+        `run secret action=set name=${ctx.secret_name} value=<new token>.`,
     );
   }
   if (status === 403 || status === 429) {
@@ -357,7 +357,7 @@ export async function gitFetch(ctx: GitContext, apiPath: string, opts: FetchOpts
   if (!token && !opts.allowAnonymous) {
     throw new Error(
       `[auth_missing] No ${ctx.provider} token available (looked for secret "${ctx.secret_name}"). ` +
-        `Hint: GitHub: project_github_connect action=start; else project_secret action=set name=${ctx.secret_name}.`,
+        `Hint: GitHub: github_connect action=start; else secret action=set name=${ctx.secret_name}.`,
     );
   }
 

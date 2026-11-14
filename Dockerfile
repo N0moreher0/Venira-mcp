@@ -50,7 +50,7 @@ RUN npm rebuild better-sqlite3
 # ---------------------------------------------------------------------------
 FROM node:22-slim AS runtime
 
-# bash (default shell for project_shell_run), git (future diff tooling),
+# bash (default shell for shell_run), git (future diff tooling),
 # curl + ca-certificates (prebuild downloads / TLS).
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \

@@ -31,7 +31,7 @@ const isGitWorktreeMutation = (operation: string, args: Args): boolean => {
   return false;
 };
 
-/** 0|1 integer or boolean dry_run shapes (project_apply_patch). */
+/** 0|1 integer or boolean dry_run shapes (apply_patch). */
 function isDryRunFlag(value: unknown): boolean {
   return value === true || value === 1 || value === "1" || value === "true";
 }
@@ -85,7 +85,7 @@ export function createCachedExecutor({
       }
 
       if (operation === "safe_edit") {
-        throw new Error("[invalid_request] safe_edit tool removed. Use project_edit_file with expected_sha256 instead.");
+        throw new Error("[invalid_request] safe_edit tool removed. Use edit_file with expected_sha256 instead.");
       }
 
       const bypassAll = !CACHE_ALL_ENABLED && ["read_file", "get_file_info", "list_files", "search"].includes(operation);

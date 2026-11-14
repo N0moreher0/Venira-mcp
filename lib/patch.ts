@@ -1,5 +1,5 @@
 /**
- * Pure unified-diff parsing and application helpers for project_apply_patch.
+ * Pure unified-diff parsing and application helpers for apply_patch.
  * No filesystem access lives here; lib/corehost-patch.ts owns I/O, snapshots and audit.
  */
 import crypto from "node:crypto";

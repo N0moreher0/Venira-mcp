@@ -59,7 +59,7 @@ export async function runProvidersConfig(
   await authClient.connect(authTransport);
   const noAuth = asEnvelope(
     await authClient.callTool({
-      name: "project_ci_trigger",
+      name: "ci_trigger",
       arguments: { workflow: "ci.yml" },
     }),
   );
@@ -260,7 +260,7 @@ export async function runProvidersConfig(
   await fs.rm(cfgPath, { force: true });
 
   const healthProvider = asEnvelope(
-    await call("project_health", { include_audit: 0 }),
+    await call("health", { include_audit: 0 }),
   );
   check(
     "health_secrets_and_network",
@@ -281,7 +281,7 @@ export async function runProvidersConfig(
   );
 
   const secretDelete = asEnvelope(
-    await call("project_secret", { action: "delete", name: SECRET_NAME }),
+    await call("secret", { action: "delete", name: SECRET_NAME }),
   );
   check(
     "secret_delete",

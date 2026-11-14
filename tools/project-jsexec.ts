@@ -14,7 +14,7 @@ import { SESSION_ID } from "../lib/session.js";
 import { redactSecrets } from "../lib/shell-policy.js";
 import { ALLOW_JS_EXEC, JS_EXEC_APPROVAL, JS_EXEC_CONTAINED, WORKSPACE } from "../lib/workspace.js";
 
-// project_execute_js handler and its per-call approval binding. Extracted verbatim
+// execute_js handler and its per-call approval binding. Extracted verbatim
 // from tools/project.ts (P1 #6, step 5b); behavior is unchanged.
 
 type Args = Record<string, unknown>;
@@ -51,7 +51,7 @@ export async function runExecuteJs(args: Args): Promise<ToolResult> {
   if (!ALLOW_JS_EXEC) {
     const elapsedMs = performance.now() - started;
     return toolResult(
-      errorEnvelope("execute_js", new Error("[unsupported] project_execute_js is disabled. Set VENIRA_JS_EXEC_MODE=ask, semi-auto or auto to enable."), { requestId, elapsedMs }),
+      errorEnvelope("execute_js", new Error("[unsupported] execute_js is disabled. Set VENIRA_JS_EXEC_MODE=ask, semi-auto or auto to enable."), { requestId, elapsedMs }),
       true,
     );
   }
@@ -69,9 +69,9 @@ export async function runExecuteJs(args: Args): Promise<ToolResult> {
     const approvalId = typeof args.approval_id === "string" ? args.approval_id.trim() : "";
     if (!approvalId) {
       const reason =
-        "project_execute_js runs arbitrary JavaScript outside shell policy and the protected-path guard.";
+        "execute_js runs arbitrary JavaScript outside shell policy and the protected-path guard.";
       const pending = requestApproval("js", SESSION_ID, {
-        tool: "project_execute_js",
+        tool: "execute_js",
         // The approver must see exactly what they are approving, so the code is
         // stored as written (the data dir is per-user, 0700). Redaction belongs
         // in the tool response/transcript, not in the human's review copy.
@@ -108,7 +108,7 @@ export async function runExecuteJs(args: Args): Promise<ToolResult> {
             approval: buildApprovalPayload(
               "js",
               pending,
-              { tool: "project_execute_js", rule: JS_EXEC_RULE, reason },
+              { tool: "execute_js", rule: JS_EXEC_RULE, reason },
               redactSecrets(code),
               {
                 code,
@@ -122,12 +122,12 @@ export async function runExecuteJs(args: Args): Promise<ToolResult> {
             // ambiguous which one was canonical (roadmap item 15, P1).
             note: `A human must run: ${pending.approve_command} (then retry with approval_id).`,
           },
-          hint: `Ask the user to run \`${pending.approve_command}\` in an interactive terminal, then retry project_execute_js with approval_id="${pendingId}".`,
+          hint: `Ask the user to run \`${pending.approve_command}\` in an interactive terminal, then retry execute_js with approval_id="${pendingId}".`,
         }),
         true,
       );
     }
-    const verdict = redeemApproval("js", SESSION_ID, approvalId, binding, "project_execute_js");
+    const verdict = redeemApproval("js", SESSION_ID, approvalId, binding, "execute_js");
     if (!verdict.ok) {
       const elapsedMs = performance.now() - started;
       return toolResult(

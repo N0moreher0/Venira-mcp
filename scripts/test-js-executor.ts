@@ -1,4 +1,4 @@
-// Tests for `project_execute_js` containment and the VENIRA_JS_EXEC_MODE resolution table.
+// Tests for `execute_js` containment and the VENIRA_JS_EXEC_MODE resolution table.
 //   semi-auto: no approval, contained (workspace-only fs, scrubbed env, no child processes; network always open)
 //   auto:      no approval, nothing contained
 import { spawnSync } from "node:child_process";

@@ -2,7 +2,7 @@
  * Runtime workspace switching: root validation (`lib/workspace.ts`).
  *
  * The gated core op `project_tool.workspace.switch` is not exposed directly; the tool is
- * `project_switch_workspace`. These checks pin the validation so a wider switch cannot happen
+ * `switch_workspace`. These checks pin the validation so a wider switch cannot happen
  * by accident:
  *
  *   - switching is ON by default (VENIRA_DYNAMIC_WORKSPACE unset) and refused with

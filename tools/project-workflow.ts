@@ -59,7 +59,7 @@ export function createWorkflowRunners({ runOne }: WorkflowRunnerDeps) {
           "explain_error",
           new Error(
             "[invalid_request] Pass error_text (the error block) or log_tail (the last lines of output). " +
-              "Hint: project_ci_logs and project_shell_status already return a tail.",
+              "Hint: ci_logs and shell_status already return a tail.",
           ),
           { requestId, elapsedMs },
         ),
@@ -76,7 +76,7 @@ export function createWorkflowRunners({ runOne }: WorkflowRunnerDeps) {
         ? {}
         : {
             hint:
-              "No known signature matched. Hint: read the failing file:line with project_read_file, then narrow the loop " +
+              "No known signature matched. Hint: read the failing file:line with read_file, then narrow the loop " +
               "(one test / one command) before changing code.",
           }),
     };

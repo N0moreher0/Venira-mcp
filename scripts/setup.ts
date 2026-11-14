@@ -150,7 +150,7 @@ async function runInstall(): Promise<number> {
   }
 
   if (changed > 0) {
-    console.log("\nRestart the client you just configured, then ask the agent to call `project_health`.");
+    console.log("\nRestart the client you just configured, then ask the agent to call `health`.");
     console.log("The agent cannot verify the connection before that restart.");
   } else {
     console.log("\nNothing to change: Venira is already present in the detected config(s).");

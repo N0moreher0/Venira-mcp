@@ -27,7 +27,7 @@ export async function runCheckpointsErrors(
   } = $prior;
   // 11. list write invalidation (cache)
   await new Promise((resolve) => setTimeout(resolve, 1600)); // list cache 1.5s
-  const list1 = await call("project_list_files", {
+  const list1 = await call("list_files", {
     relative_path: dir,
     depth: 1,
   });
@@ -35,12 +35,12 @@ export async function runCheckpointsErrors(
     (list1 as { content?: { text?: string }[] })?.content?.[0]?.text ?? "{}",
   );
   const list1Count = list1Data.data?.entries?.length ?? 0;
-  await call("project_write_file", {
+  await call("write_file", {
     relative_path: `${dir}/list-invalidate.txt`,
     content: "new\n",
   });
   await new Promise((resolve) => setTimeout(resolve, 200));
-  const list2 = await call("project_list_files", {
+  const list2 = await call("list_files", {
     relative_path: dir,
     depth: 1,
   });
@@ -56,7 +56,7 @@ export async function runCheckpointsErrors(
   // 11b. Checkpoints + edit reason: snapshot -> tamper -> restore -> delete.
   await fs.writeFile(`${dir}/snap-target.txt`, "snapshot original content\n");
   const snapCreate = asEnvelope(
-    await call("project_snapshot", {
+    await call("snapshot", {
       action: "create",
       paths: [dir],
       label: "verify checkpoint",
@@ -71,7 +71,7 @@ export async function runCheckpointsErrors(
     snapCreate,
   );
   const removedScopeSnapshot = asEnvelope(
-    await call("project_snapshot", {
+    await call("snapshot", {
       action: "create",
       scope: [".verify-definitely-missing-snapshot-scope"],
       label: "removed scope must fail closed",
@@ -85,7 +85,7 @@ export async function runCheckpointsErrors(
     removedScopeSnapshot,
   );
   const outlineDirectory = asEnvelope(
-    await call("project_outline_symbol", { relative_path: ".", max_symbols: 5 }),
+    await call("outline_symbol", { relative_path: ".", max_symbols: 5 }),
   );
   check(
     "outline_symbol_directory_has_actionable_error",
@@ -95,7 +95,7 @@ export async function runCheckpointsErrors(
     outlineDirectory,
   );
   const sameFileDiff = asEnvelope(
-    await call("project_diff_files", {
+    await call("diff_files", {
       relative_path_a: `${dir}/snap-target.txt`,
       relative_path_b: `${dir}/snap-target.txt`,
       context_lines: 3,
@@ -112,7 +112,7 @@ export async function runCheckpointsErrors(
   await fs.mkdir(`${dir}/target/debug`, { recursive: true });
   await fs.writeFile(`${dir}/target/debug/build-artifact`, "binary-bytes\n");
   const snapCreateRust = asEnvelope(
-    await call("project_snapshot", {
+    await call("snapshot", {
       action: "create",
       paths: [dir],
       label: "verify checkpoint rust excludes",
@@ -132,20 +132,20 @@ export async function runCheckpointsErrors(
   // run left one behind and ate a VENIRA_SNAPSHOT_KEEP slot.
   const rustSnapshotId = String(snapCreateRust.data?.id ?? "");
   if (rustSnapshotId) {
-    await call("project_snapshot", {
+    await call("snapshot", {
       action: "delete",
       id: rustSnapshotId,
       reason: "VERIFY_REASON_CLEANUP_RUST_SNAPSHOT",
     });
   }
   const snapId = String(snapCreate.data?.id ?? "");
-  await call("project_write_file", {
+  await call("write_file", {
     relative_path: `${dir}/snap-target.txt`,
     content: "tampered by verify\n",
     reason: "VERIFY_REASON_EDIT",
   });
   const snapDryRun = asEnvelope(
-    await call("project_snapshot", {
+    await call("snapshot", {
       action: "restore",
       id: snapId,
       dry_run: 1,
@@ -174,7 +174,7 @@ export async function runCheckpointsErrors(
   await fs.mkdir(sameSizeDir, { recursive: true });
   await fs.writeFile(`${sameSizeDir}/target.txt`, "AAAAAA");
   const sameSizeSnapshot = asEnvelope(
-    await call("project_snapshot", {
+    await call("snapshot", {
       action: "create",
       paths: [sameSizeDir],
       label: "same-size dry-run fixture",
@@ -184,7 +184,7 @@ export async function runCheckpointsErrors(
   const sameSizeSnapshotId = String(sameSizeSnapshot.data?.id ?? "");
   await fs.writeFile(`${sameSizeDir}/target.txt`, "BBBBBB");
   const snapDryRunSameSize = asEnvelope(
-    await call("project_snapshot", {
+    await call("snapshot", {
       action: "restore",
       id: sameSizeSnapshotId,
       dry_run: 1,
@@ -215,7 +215,7 @@ export async function runCheckpointsErrors(
     },
   );
   const sameSizeRestore = asEnvelope(
-    await call("project_snapshot", {
+    await call("snapshot", {
       action: "restore",
       id: sameSizeSnapshotId,
       verify: 1,
@@ -232,13 +232,13 @@ export async function runCheckpointsErrors(
     sameSizeRestore.ok === true && sameSizeRestored === "AAAAAA",
     sameSizeRestore,
   );
-  await call("project_snapshot", {
+  await call("snapshot", {
     action: "delete",
     id: sameSizeSnapshotId,
     reason: "VERIFY_REASON_SAME_SIZE_CLEANUP",
   });
   const snapRestore = asEnvelope(
-    await call("project_snapshot", {
+    await call("snapshot", {
       action: "restore",
       id: snapId,
       verify: 1,
@@ -254,7 +254,7 @@ export async function runCheckpointsErrors(
     snapRestore,
   );
   const targetRestored = textOf(
-    await call("project_read_file", {
+    await call("read_file", {
       relative_path: `${dir}/snap-target.txt`,
     }),
   );
@@ -264,7 +264,7 @@ export async function runCheckpointsErrors(
     targetRestored.slice(0, 80),
   );
   const snapList = asEnvelope(
-    await call("project_snapshot", { action: "list" }),
+    await call("snapshot", { action: "list" }),
   );
   check(
     "snapshot_list",
@@ -272,7 +272,7 @@ export async function runCheckpointsErrors(
     snapList.data?.total,
   );
   const snapDelete = asEnvelope(
-    await call("project_snapshot", { action: "delete", id: snapId }),
+    await call("snapshot", { action: "delete", id: snapId }),
   );
   check(
     "snapshot_delete",
@@ -282,26 +282,26 @@ export async function runCheckpointsErrors(
 
   // 12. Compact JSON: text must be a single line
   results.compact_single_line = !textOf(
-    await call("project_read_file", { relative_path: "package.json" }),
+    await call("read_file", { relative_path: "package.json" }),
   ).includes("\n  ");
 
   // 13. search: a cached HIT after a mutation must reflect the NEW content (proof that
   // invalidateListCaches actually clears the search cache, not just waiting for TTL to expire).
-  await call("project_search", {
+  await call("search", {
     query: token,
     kind: "literal_content",
     relative_path: dir,
     glob: "*.txt",
   });
-  await call("project_write_file", {
+  await call("write_file", {
     relative_path: `${dir}/search-token.txt`,
     content: "NEW_TOKEN\n",
   });
-  await call("project_write_file", {
+  await call("write_file", {
     relative_path: `${dir}/cache-proof.txt`,
     content: "CACHE_PROOF_TOKEN_XYZ\n",
   });
-  const search4 = (await call("project_search", {
+  const search4 = (await call("search", {
     query: "CACHE_PROOF_TOKEN_XYZ",
     kind: "literal_content",
     relative_path: dir,
@@ -314,8 +314,8 @@ export async function runCheckpointsErrors(
     diagnostics: search4Data.data?.diagnostics,
   });
 
-  // 13. Read ranges (via project_read_file with ranges)
-  const ranges = await call("project_read_file", {
+  // 13. Read ranges (via read_file with ranges)
+  const ranges = await call("read_file", {
     relative_path: "server.ts",
     ranges: [
       { start_line: 1, end_line: 3 },
@@ -330,11 +330,11 @@ export async function runCheckpointsErrors(
   check("read_ranges_have_text", rS[0]?.text && rS[1]?.text, rS);
 
   // 14. Recent files: recently written file included in results
-  await call("project_write_file", {
+  await call("write_file", {
     relative_path: `${dir}/recent-test.txt`,
     content: "recent\n",
   });
-  const recent = await call("project_recent_files", {
+  const recent = await call("recent_files", {
     relative_path: dir,
     limit: 10,
   });
@@ -352,31 +352,31 @@ export async function runCheckpointsErrors(
   );
 
   // 15. Health: ok, corehost.exe, capability, caches, metrics
-  await call("project_read_file", {
+  await call("read_file", {
     relative_path: `${dir}/loop-metric-missing.txt`,
   });
   // The negative cache (500 ms) would answer the second read without a backend call, so no
   // second failed audit row would exist. Clear it so the repeat is really audited.
-  await call("project_cache_clear", { type: "negative" });
-  await call("project_read_file", {
+  await call("cache_clear", { type: "negative" });
+  await call("read_file", {
     relative_path: `${dir}/loop-metric-missing.txt`,
   });
-  await call("project_read_file", {
+  await call("read_file", {
     relative_path: "server.ts",
     start_line: 1,
     end_line: 2,
   });
-  await call("project_read_file", {
+  await call("read_file", {
     relative_path: "server.ts",
     start_line: 3,
     end_line: 4,
   });
-  await call("project_read_file", {
+  await call("read_file", {
     relative_path: "server.ts",
     start_line: 5,
     end_line: 6,
   });
-  const health = await call("project_health", { include_audit: 0 });
+  const health = await call("health", { include_audit: 0 });
   const healthData = JSON.parse(
     (health as { content: { text: string }[] })?.content[0].text ?? "{}",
   );
@@ -399,7 +399,7 @@ export async function runCheckpointsErrors(
   );
 
   // 16. Health audit (full)
-  const healthFull = await call("project_health", { include_audit: 1 });
+  const healthFull = await call("health", { include_audit: 1 });
   const healthFullData = JSON.parse(
     (healthFull as { content: { text: string }[] })?.content[0].text ?? "{}",
   );
@@ -453,7 +453,7 @@ export async function runCheckpointsErrors(
       return false;
     }
   };
-  const missingRes = (await call("project_read_file", {
+  const missingRes = (await call("read_file", {
     relative_path: `${dir}/missing.txt`,
   })) as { content?: { text?: string }[] };
   check(
@@ -466,12 +466,12 @@ export async function runCheckpointsErrors(
   );
 
   // 17a. Structured recovery data is bounded and never exposes protected content.
-  await call("project_write_file", {
+  await call("write_file", {
     relative_path: `${dir}/structured-errors.txt`,
     content: "same line\nsame line\n",
   });
   const ambiguousEdit = asEnvelope(
-    await call("project_edit_file", {
+    await call("edit_file", {
       relative_path: `${dir}/structured-errors.txt`,
       old_text: "same line",
       new_text: "changed",
@@ -502,7 +502,7 @@ export async function runCheckpointsErrors(
   );
 
   const missingEdit = asEnvelope(
-    await call("project_edit_file", {
+    await call("edit_file", {
       relative_path: `${dir}/structured-errors.txt`,
       old_text: "not present",
       new_text: "changed",
@@ -517,7 +517,7 @@ export async function runCheckpointsErrors(
   );
 
   const staleEdit = asEnvelope(
-    await call("project_edit_file", {
+    await call("edit_file", {
       relative_path: `${dir}/structured-errors.txt`,
       old_text: "same line",
       new_text: "changed",
@@ -537,7 +537,7 @@ export async function runCheckpointsErrors(
   const sensitiveMarker = "verify-sensitive-marker-should-never-leak";
   await fs.writeFile(`${dir}/.env.local`, `TOKEN=${sensitiveMarker}\n`);
   const sensitiveRead = asEnvelope(
-    await call("project_read_file", { relative_path: `${dir}/.env.local` }),
+    await call("read_file", { relative_path: `${dir}/.env.local` }),
   );
   check(
     "error_data_sensitive_path_excluded",
@@ -560,7 +560,7 @@ export async function runCheckpointsErrors(
       process.platform === "win32" ? "junction" : "dir",
     );
     const protectedAliasRead = asEnvelope(
-      await call("project_read_file", {
+      await call("read_file", {
         relative_path: `${protectedAliasDir}/.env.local`,
       }),
     );
@@ -577,7 +577,7 @@ export async function runCheckpointsErrors(
   // 17b. Protected files stay protected through the code-intelligence readers and
   // through NTFS alternate-data-stream spellings. Both used to return plaintext.
   const symbolLeak = asEnvelope(
-    await call("project_symbol_references", {
+    await call("symbol_references", {
       symbol_name: "TOKEN",
       scope: "file",
       relative_path: `${dir}/.env.local`,
@@ -590,7 +590,7 @@ export async function runCheckpointsErrors(
     symbolLeak,
   );
   const multiQueryLeak = asEnvelope(
-    await call("project_search", {
+    await call("search", {
       queries: [{ pattern: "TOKEN" }],
       files_hint: [`${dir}/.env.local`],
     }),
@@ -603,7 +603,7 @@ export async function runCheckpointsErrors(
   );
   await fs.writeFile(`${dir}/.env::$DATA`, `TOKEN=${sensitiveMarker}\n`);
   const adsLeak = asEnvelope(
-    await call("project_symbol_references", {
+    await call("symbol_references", {
       symbol_name: "TOKEN",
       scope: "file",
       relative_path: `${dir}/.env::$DATA`,
@@ -641,7 +641,7 @@ export async function runCheckpointsErrors(
   await rootGuardClient.connect(rootGuardTransport);
   const rootDelete = asEnvelope(
     await rootGuardClient.callTool({
-      name: "project_delete_path",
+      name: "delete_path",
       arguments: { relative_path: ".", recursive: 1 },
     }),
   );
@@ -677,7 +677,7 @@ export async function runCheckpointsErrors(
   await jsClient.connect(jsTransport);
   const jsLeak = asEnvelope(
     await jsClient.callTool({
-      name: "project_execute_js",
+      name: "execute_js",
       arguments: {
         code: 'console.log("TOP_SECRET=abc123"); console.log("fetch:" + typeof fetch);',
       },
@@ -713,7 +713,7 @@ export async function runCheckpointsErrors(
   await jsOpenClient.connect(jsOpenTransport);
   const jsOpen = asEnvelope(
     await jsOpenClient.callTool({
-      name: "project_execute_js",
+      name: "execute_js",
       arguments: {
         code: 'console.log("TOP_SECRET=abc123"); console.log("fetch:" + typeof fetch);',
       },
@@ -752,7 +752,7 @@ export async function runCheckpointsErrors(
   const jsApprovedCode = 'console.log("approval-ok");';
   const jsAsk = asEnvelope(
     await jsApprovalClient.callTool({
-      name: "project_execute_js",
+      name: "execute_js",
       arguments: { code: jsApprovedCode },
     }),
   );
@@ -774,14 +774,14 @@ export async function runCheckpointsErrors(
       jsPayload.gate === "js" &&
       jsPayload.rule === "ask.js_exec" &&
       String(jsPayload.approve_command ?? "").includes(jsApprovalId) &&
-      jsPayload.retry_with?.tool === "project_execute_js" &&
+      jsPayload.retry_with?.tool === "execute_js" &&
       jsPayload.retry_with?.arguments?.approval_id === jsApprovalId,
     jsPayload,
   );
   writeApprovalGrant(jsApprovalId);
   const jsWrongCode = asEnvelope(
     await jsApprovalClient.callTool({
-      name: "project_execute_js",
+      name: "execute_js",
       arguments: {
         code: `${jsApprovedCode} console.log("different");`,
         approval_id: jsApprovalId,
@@ -795,7 +795,7 @@ export async function runCheckpointsErrors(
   );
   const jsApprovedRun = asEnvelope(
     await jsApprovalClient.callTool({
-      name: "project_execute_js",
+      name: "execute_js",
       arguments: { code: jsApprovedCode, approval_id: jsApprovalId },
     }),
   );
@@ -807,7 +807,7 @@ export async function runCheckpointsErrors(
   );
   const jsApprovalReuse = asEnvelope(
     await jsApprovalClient.callTool({
-      name: "project_execute_js",
+      name: "execute_js",
       arguments: { code: jsApprovedCode, approval_id: jsApprovalId },
     }),
   );
@@ -819,7 +819,7 @@ export async function runCheckpointsErrors(
   await jsApprovalClient.close();
 
   // 18. batch per-item budget
-  const batchBudget = await call("project_read_batch", {
+  const batchBudget = await call("read_batch", {
     requests: [
       { operation: "read_file", arguments: { relative_path: "server.ts" } },
     ],

@@ -76,7 +76,7 @@ const rejects = async (fn: () => Promise<unknown>): Promise<Error> => {
 await check("search in a missing path is not_found", async () => {
   const error = await rejects(() => search.opSearch({ query: "x", relative_path: "no-such-dir" }, workspace));
   assert.match(error.message, /^\[not_found\]/);
-  assert.match(error.message, /project_list_files/);
+  assert.match(error.message, /list_files/);
 });
 
 await check("listing a missing directory is not_found", async () => {

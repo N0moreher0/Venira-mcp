@@ -30,7 +30,7 @@ export async function runGithubCi(
   // 11d. GitHub provider + CI against the local mock (no network, fixed token).
   console.log("[verify] checking git/ci provider...");
   const prCreate = asEnvelope(
-    await call("project_pr_create", {
+    await call("pr_create", {
       title: "Add provider tools",
       head: "verify-branch",
       draft: 1,
@@ -59,7 +59,7 @@ export async function runGithubCi(
   );
 
   const prComment = asEnvelope(
-    await call("project_pr_comment", { pr: 7, body: "LGTM from verify" }),
+    await call("pr_comment", { pr: 7, body: "LGTM from verify" }),
   );
   check(
     "pr_comment",
@@ -69,7 +69,7 @@ export async function runGithubCi(
     prComment,
   );
   const prCommentUrl = asEnvelope(
-    await call("project_pr_comment", {
+    await call("pr_comment", {
       pr: "https://github.com/acme/demo/pull/7",
       body: "URL form",
     }),
@@ -82,7 +82,7 @@ export async function runGithubCi(
 
   // Inline review comment: path+line switches to the pull review-comment API.
   const prInline = asEnvelope(
-    await call("project_pr_comment", {
+    await call("pr_comment", {
       pr: 7,
       body: "This branch can be simplified",
       path: "src/app.ts",
@@ -117,7 +117,7 @@ export async function runGithubCi(
 
   // An explicit commit_id must be honoured (anchoring to an older revision).
   const prInlineCommit = asEnvelope(
-    await call("project_pr_comment", {
+    await call("pr_comment", {
       pr: 7,
       body: "explicit anchor",
       path: "src/app.ts",
@@ -136,7 +136,7 @@ export async function runGithubCi(
     { data: prInlineCommit.data, lastInline: githubMock.state.lastInline },
   );
   const prInlineNoLine = asEnvelope(
-    await call("project_pr_comment", {
+    await call("pr_comment", {
       pr: 7,
       body: "no anchor",
       path: "src/app.ts",
@@ -148,7 +148,7 @@ export async function runGithubCi(
     prInlineNoLine,
   );
   const prLineNoPath = asEnvelope(
-    await call("project_pr_comment", { pr: 7, body: "no file", line: 42 }),
+    await call("pr_comment", { pr: 7, body: "no file", line: 42 }),
   );
   check(
     "pr_comment_line_requires_path",
@@ -157,7 +157,7 @@ export async function runGithubCi(
   );
 
   const prMerge = asEnvelope(
-    await call("project_pr_merge", {
+    await call("pr_merge", {
       pr: 7,
       method: "squash",
       delete_branch: 1,
@@ -181,11 +181,11 @@ export async function runGithubCi(
     },
   );
 
-  const prMissing = asEnvelope(await call("project_pr_merge", { pr: 999 }));
+  const prMissing = asEnvelope(await call("pr_merge", { pr: 999 }));
   check("pr_merge_not_found", prMissing.error?.code === "not_found", prMissing);
 
   const prList = asEnvelope(
-    await call("project_pr_list", { state: "open", limit: 5 }),
+    await call("pr_list", { state: "open", limit: 5 }),
   );
   check(
     "pr_list",
@@ -200,7 +200,7 @@ export async function runGithubCi(
   let prListBadState: { error?: { code?: string } };
   try {
     prListBadState = asEnvelope(
-      await call("project_pr_list", { state: "bogus" }),
+      await call("pr_list", { state: "bogus" }),
     );
   } catch (e) {
     prListBadState = { error: { code: "invalid_request" } };
@@ -211,7 +211,7 @@ export async function runGithubCi(
     prListBadState,
   );
 
-  const prClose = asEnvelope(await call("project_pr_close", { pr: 7 }));
+  const prClose = asEnvelope(await call("pr_close", { pr: 7 }));
   check(
     "pr_close",
     prClose.ok === true &&
@@ -220,7 +220,7 @@ export async function runGithubCi(
       githubMock.state.closes === 1,
     prClose,
   );
-  const prReopen = asEnvelope(await call("project_pr_reopen", { pr: 7 }));
+  const prReopen = asEnvelope(await call("pr_reopen", { pr: 7 }));
   check(
     "pr_reopen",
     prReopen.ok === true &&
@@ -230,7 +230,7 @@ export async function runGithubCi(
     prReopen,
   );
 
-  const ciList = asEnvelope(await call("project_ci_status", { limit: 3 }));
+  const ciList = asEnvelope(await call("ci_status", { limit: 3 }));
   check(
     "ci_status_list",
     ciList.ok === true &&
@@ -238,7 +238,7 @@ export async function runGithubCi(
       ciList.data?.overall === "failure",
     ciList.data,
   );
-  const ciRun = asEnvelope(await call("project_ci_status", { run_id: 99 }));
+  const ciRun = asEnvelope(await call("ci_status", { run_id: 99 }));
   check(
     "ci_status_run_with_jobs",
     ciRun.ok === true &&
@@ -250,7 +250,7 @@ export async function runGithubCi(
 
   // Branch-protection check-runs (ref → check-runs API; pr → head sha first).
   const ciChecks = asEnvelope(
-    await call("project_ci_status", { ref: "verify-branch", limit: 2 }),
+    await call("ci_status", { ref: "verify-branch", limit: 2 }),
   );
   check(
     "ci_status_check_runs",
@@ -261,7 +261,7 @@ export async function runGithubCi(
       ciChecks.data?.overall === "failure",
     ciChecks.data,
   );
-  const ciChecksPr = asEnvelope(await call("project_ci_status", { pr: 7 }));
+  const ciChecksPr = asEnvelope(await call("ci_status", { pr: 7 }));
   check(
     "ci_status_check_runs_for_pr",
     ciChecksPr.ok === true &&
@@ -271,7 +271,7 @@ export async function runGithubCi(
     ciChecksPr.data,
   );
   const ciChecksBadRef = asEnvelope(
-    await call("project_ci_status", { ref: "../etc/passwd" }),
+    await call("ci_status", { ref: "../etc/passwd" }),
   );
   check(
     "ci_status_ref_validated",
@@ -279,7 +279,7 @@ export async function runGithubCi(
     ciChecksBadRef,
   );
   const ciTrigger = asEnvelope(
-    await call("project_ci_trigger", {
+    await call("ci_trigger", {
       workflow: "ci.yml",
       ref: "main",
       inputs: { suite: "full", retries: 1 },
@@ -296,7 +296,7 @@ export async function runGithubCi(
 
   console.log("[verify] checking CI control...");
   const ciCancel = asEnvelope(
-    await call("project_ci_control", {
+    await call("ci_control", {
       action: "cancel",
       run_id: 99,
       reason: "stop stale test run",
@@ -313,7 +313,7 @@ export async function runGithubCi(
     ciCancel,
   );
   const ciRetryFailed = asEnvelope(
-    await call("project_ci_control", {
+    await call("ci_control", {
       action: "retry_failed",
       run_id: "99",
       reason: "retry transient test failure",
@@ -333,7 +333,7 @@ export async function runGithubCi(
     args: Record<string, unknown>,
   ): Promise<boolean> {
     try {
-      const raw = (await call("project_ci_control", args)) as {
+      const raw = (await call("ci_control", args)) as {
         isError?: boolean;
       };
       const envelope = asEnvelope(raw);
@@ -365,14 +365,14 @@ export async function runGithubCi(
     reason: "   ",
   });
   const ciPathRun = asEnvelope(
-    await call("project_ci_control", {
+    await call("ci_control", {
       action: "cancel",
       run_id: "../99/cancel",
       reason: "reject path-like run id",
     }),
   );
   const ciUnsafeRun = asEnvelope(
-    await call("project_ci_control", {
+    await call("ci_control", {
       action: "cancel",
       run_id: String(Number.MAX_SAFE_INTEGER + 1),
       reason: "reject unsafe numeric run id",
@@ -408,7 +408,7 @@ export async function runGithubCi(
   );
 
   const ciPostFailure = asEnvelope(
-    await call("project_ci_control", {
+    await call("ci_control", {
       action: "cancel",
       run_id: 500,
       reason: "verify failed POST is not replayed",
@@ -426,7 +426,7 @@ export async function runGithubCi(
     { error: ciPostFailure.error, requests: githubMock.state.ciPostFailures },
   );
 
-  const ciLogs = asEnvelope(await call("project_ci_logs", { run_id: 99 }));
+  const ciLogs = asEnvelope(await call("ci_logs", { run_id: 99 }));
   check(
     "ci_logs_run_zip",
     ciLogs.ok === true &&
@@ -436,7 +436,7 @@ export async function runGithubCi(
     { entries: ciLogs.data?.entries, truncated: ciLogs.data?.truncated },
   );
   const ciLogsTail = asEnvelope(
-    await call("project_ci_logs", { run_id: 99, tail_lines: 1 }),
+    await call("ci_logs", { run_id: 99, tail_lines: 1 }),
   );
   check(
     "ci_logs_tail_lines",
@@ -445,7 +445,7 @@ export async function runGithubCi(
     { text: ciLogsTail.data?.text, truncated: ciLogsTail.data?.truncated },
   );
   const ciJobLogs = asEnvelope(
-    await call("project_ci_logs", { job_id: 1, tail_lines: 3 }),
+    await call("ci_logs", { job_id: 1, tail_lines: 3 }),
   );
   check(
     "ci_logs_job",
@@ -460,10 +460,10 @@ export async function runGithubCi(
     githubMock.blobAuth,
   );
 
-  // 11d-bis. project_ci_wait: terminal, transition, timeout, selector validation.
+  // 11d-bis. ci_wait: terminal, transition, timeout, selector validation.
   console.log("[verify] checking ci_wait...");
   const ciWaitTerminal = asEnvelope(
-    await call("project_ci_wait", { run_id: 99 }),
+    await call("ci_wait", { run_id: 99 }),
   );
   check(
     "ci_wait_terminal_failure_tail",
@@ -481,7 +481,7 @@ export async function runGithubCi(
     },
   );
   const ciWaitTransition = asEnvelope(
-    await call("project_ci_wait", {
+    await call("ci_wait", {
       run_id: 100,
       timeout_ms: 10000,
       interval_ms: 2000,
@@ -501,7 +501,7 @@ export async function runGithubCi(
     },
   );
   const ciWaitTimeout = asEnvelope(
-    await call("project_ci_wait", {
+    await call("ci_wait", {
       run_id: 101,
       timeout_ms: 2500,
       interval_ms: 2000,
@@ -520,14 +520,14 @@ export async function runGithubCi(
       polls: ciWaitTimeout.data?.polls,
     },
   );
-  const ciWaitNoSelector = asEnvelope(await call("project_ci_wait", {}));
+  const ciWaitNoSelector = asEnvelope(await call("ci_wait", {}));
   check(
     "ci_wait_requires_selector",
     ciWaitNoSelector.error?.code === "invalid_request",
     ciWaitNoSelector,
   );
   const ciWaitTwoSelectors = asEnvelope(
-    await call("project_ci_wait", { run_id: 99, branch: "main" }),
+    await call("ci_wait", { run_id: 99, branch: "main" }),
   );
   check(
     "ci_wait_rejects_two_selectors",
@@ -541,19 +541,19 @@ export async function runGithubCi(
     ["ref_pr", { ref: "main", pr: 1 }],
     ["pr_branch", { pr: 1, branch: "main" }],
   ] as const) {
-    const ambiguous = asEnvelope(await call("project_ci_status", { ...selectors }));
+    const ambiguous = asEnvelope(await call("ci_status", { ...selectors }));
     check(
       `ci_status_rejects_two_selectors_${label}`,
       ambiguous.error?.code === "invalid_request",
       ambiguous,
     );
   }
-  const ciStatusNone = asEnvelope(await call("project_ci_status", {}));
+  const ciStatusNone = asEnvelope(await call("ci_status", {}));
   check("ci_status_accepts_no_selector", ciStatusNone.ok === true, ciStatusNone);
-  const ciStatusOne = asEnvelope(await call("project_ci_status", { run_id: 99 }));
+  const ciStatusOne = asEnvelope(await call("ci_status", { run_id: 99 }));
   check("ci_status_accepts_one_selector", ciStatusOne.ok === true, ciStatusOne);
   const waitAudit = asEnvelope(
-    await call("project_read_audit", { operation: "ci_wait", limit: 50 }),
+    await call("read_audit", { operation: "ci_wait", limit: 50 }),
   );
   const completedWaits = (waitAudit.data?.rows ?? []).filter(
     (row: Record<string, unknown>) => row.outcome === "succeeded",

@@ -186,7 +186,7 @@ export async function opSearch(
     if (error instanceof Error && error.message.startsWith("[")) throw error;
     throw new Error(
       `[not_found] Path does not exist: ${String(args.relative_path ?? ".")}. ` +
-        "Hint: check it with project_list_files.",
+        "Hint: check it with list_files.",
     );
   }
   // Hidden files are searched by default (parity with the JS walker; agents
@@ -265,7 +265,7 @@ export async function opSearch(
    */
   const searchHint = (): string | undefined => {
     if (!complete && hits.length === 0) {
-      return `The search was cut before any hit was found (file cap ${scanCap ?? maxScanFiles()}). Narrow relative_path/glob, or raise VENIRA_SEARCH_MAX_FILES. For an executable on PATH run \`where <name>\` via project_shell_run.`;
+      return `The search was cut before any hit was found (file cap ${scanCap ?? maxScanFiles()}). Narrow relative_path/glob, or raise VENIRA_SEARCH_MAX_FILES. For an executable on PATH run \`where <name>\` via shell_run.`;
     }
     if (hits.length === 0) {
       return "No matches. Broaden the search: drop glob/relative_path, set regex=0, or use kind=file_name.";

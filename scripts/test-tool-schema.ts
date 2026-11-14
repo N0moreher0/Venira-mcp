@@ -9,12 +9,12 @@
  *      scope and guard entirely, so the handlers refuse them instead of silently widening the
  *      operation; the loose objects keep them reachable so the refusal can name the replacement.
  *   3. Every registered tool has a TOOL_DOCS entry (the model-facing wording).
- *   4. project_edit_batch's typed item shape stays in sync with the runtime
+ *   4. edit_batch's typed item shape stays in sync with the runtime
  *      EDIT_ITEM_KEYS validator.
  *   5. (ROADMAP_TOOL_SCHEMA.md, phase 3) The fuzzy edit options are advertised, and mentioned in the
  *      model-facing text, only when VENIRA_EDIT_FUZZY=1; with it off they are still let through to the
  *      handler (which refuses them with a clear error) instead of being stripped.
- *   6. (phase 4) project_create advertises directory-only arguments; shell_run.background is advertised
+ *   6. (phase 4) create advertises directory-only arguments; shell_run.background is advertised
  *      as the integer 0|1 while its handler keeps accepting booleans and strings. (phase 5) the removed
  *      file arguments still reach the handler, which refuses them with `[unsupported]`.
  *
@@ -26,7 +26,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { z } from "zod";
 
-process.env.VENIRA_JS_EXEC_MODE = "ask"; // so project_execute_js registers too
+process.env.VENIRA_JS_EXEC_MODE = "ask"; // so execute_js registers too
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const load = (rel: string) => import(pathToFileURL(path.join(repoRoot, rel)).href);
@@ -126,7 +126,7 @@ function defOf(node: unknown): Record<string, unknown> | undefined {
   return z?.def;
 }
 /**
- * The parameter map of a registered tool: a raw shape, or a zod object (project_edit_file is registered as
+ * The parameter map of a registered tool: a raw shape, or a zod object (edit_file is registered as
  * a loose object so the handler sees fuzzy options even when they are not advertised).
  */
 function shapeOf(input: unknown): Record<string, unknown> {
@@ -196,13 +196,13 @@ check("every parameter has a description", () => {
 });
 
 check("deprecated parameters are gone from the schema", () => {
-  const shellKeys = Object.keys(registered.get("project_shell_run")!.inputSchema!);
+  const shellKeys = Object.keys(registered.get("shell_run")!.inputSchema!);
   assert.ok(!shellKeys.includes("approval_token"), `shell_run still advertises approval_token: ${shellKeys.join(",")}`);
   assert.ok(!shellKeys.includes("approval_scope"), `shell_run still advertises approval_scope: ${shellKeys.join(",")}`);
-  const snapshotKeys = Object.keys(shapeOf(registered.get("project_snapshot")!.inputSchema));
+  const snapshotKeys = Object.keys(shapeOf(registered.get("snapshot")!.inputSchema));
   assert.ok(!snapshotKeys.includes("scope"), `snapshot still advertises the removed scope alias: ${snapshotKeys.join(",")}`);
   assert.ok(snapshotKeys.includes("paths"), "snapshot must advertise paths (the replacement for scope)");
-  const editKeys = Object.keys(shapeOf(registered.get("project_edit_file")!.inputSchema));
+  const editKeys = Object.keys(shapeOf(registered.get("edit_file")!.inputSchema));
   assert.ok(!editKeys.includes("guard"), `edit_file still advertises the removed guard flag: ${editKeys.join(",")}`);
   assert.ok(editKeys.includes("expected_sha256"), "edit_file must advertise expected_sha256 (the replacement for guard)");
 });
@@ -211,12 +211,12 @@ check("removed scope and guard still reach the handlers (loose objects, not stri
   // A cached client sends the old names; stripping them would silently widen the checkpoint to the
   // whole workspace (scope) or silently skip verification (guard). Loose objects let the handlers
   // refuse them with `[unsupported]` and name the replacement.
-  const snapshotInput = registered.get("project_snapshot")!.inputSchema as unknown as z.ZodType;
+  const snapshotInput = registered.get("snapshot")!.inputSchema as unknown as z.ZodType;
   const snap = snapshotInput.safeParse({ action: "create", scope: ["lib"] });
   assert.ok(snap.success, "a cached client's scope call must reach the handler, not be stripped");
   assert.deepEqual((snap.data as Record<string, unknown>).scope, ["lib"]);
 
-  const editInput = registered.get("project_edit_file")!.inputSchema as unknown as z.ZodType;
+  const editInput = registered.get("edit_file")!.inputSchema as unknown as z.ZodType;
   const edit = editInput.safeParse({ relative_path: "a.ts", old_text: "x", new_text: "y", guard: "sha256" });
   assert.ok(edit.success, "a cached client's guard call must reach the handler, not be stripped");
   assert.equal((edit.data as Record<string, unknown>).guard, "sha256");
@@ -249,7 +249,7 @@ check("editBatchItem keys match EDIT_ITEM_KEYS (minus legacy keys; fuzzy keys on
 check("legacy edit keys stay accepted at runtime but are not advertised", () => {
   for (const legacy of argHints.EDIT_ITEM_LEGACY_KEYS) {
     assert.ok(argHints.EDIT_ITEM_KEYS.includes(legacy), `${legacy} must stay in EDIT_ITEM_KEYS`);
-    for (const tool of ["project_edit_file"]) {
+    for (const tool of ["edit_file"]) {
       assert.ok(
         !(legacy in shapeOf(registered.get(tool)!.inputSchema)),
         `${tool} still advertises legacy key ${legacy}`,
@@ -260,20 +260,20 @@ check("legacy edit keys stay accepted at runtime but are not advertised", () => 
   }
 });
 
-// ---- Phase 4: project_create advertises directory-only arguments ----
-check("project_create advertises directory-only arguments", () => {
-  const createInput = registered.get("project_create")!.inputSchema as unknown as z.ZodType;
+// ---- Phase 4: create advertises directory-only arguments ----
+check("create advertises directory-only arguments", () => {
+  const createInput = registered.get("create")!.inputSchema as unknown as z.ZodType;
   const keys = Object.keys(shapeOf(createInput));
   for (const legacy of ["kind", "content", "mode", "expected_sha256"]) {
-    assert.ok(!keys.includes(legacy), `project_create still advertises the removed file argument ${legacy}`);
+    assert.ok(!keys.includes(legacy), `create still advertises the removed file argument ${legacy}`);
   }
-  assert.ok(keys.includes("relative_path"), "project_create must still require relative_path");
+  assert.ok(keys.includes("relative_path"), "create must still require relative_path");
 });
 
 // Phase 5: the removed file arguments still reach the handler, which refuses them with `[unsupported]`
 // instead of creating an empty directory where the caller wanted a file.
-check("project_create still lets the removed file arguments through to the handler", () => {
-  const createInput = registered.get("project_create")!.inputSchema as unknown as z.ZodType;
+check("create still lets the removed file arguments through to the handler", () => {
+  const createInput = registered.get("create")!.inputSchema as unknown as z.ZodType;
   const parsed = createInput.safeParse({
     relative_path: "a.txt",
     kind: "file",
@@ -315,7 +315,7 @@ function registerFilesWithFuzzy(value: "0" | "1"): Registered {
 const fuzzyOff = registerFilesWithFuzzy("0");
 const fuzzyOn = registerFilesWithFuzzy("1");
 // ---- Phase 8 patch 2: the setup tools are advertised only when VENIRA_SETUP_TOOLS=1 ----
-const SETUP_TOOLS = ["project_detect_harnesses", "project_install_self"];
+const SETUP_TOOLS = ["detect_harnesses", "install_self"];
 
 /** Register the workflow tools with VENIRA_SETUP_TOOLS = `value` (undefined = unset) and return the names. */
 function workflowToolNames(value: "0" | "1" | undefined): string[] {
@@ -343,19 +343,19 @@ check("setup tools: not advertised by default (unset or 0), the other workflow t
   for (const value of [undefined, "0"] as const) {
     const names = workflowToolNames(value);
     assert.deepEqual(names.filter((n) => SETUP_TOOLS.includes(n)), []);
-    assert.deepEqual(names.sort(), ["project_explain_error", "project_plan_read_batch", "project_snapshot"]);
+    assert.deepEqual(names.sort(), ["explain_error", "plan_read_batch", "snapshot"]);
   }
 });
 
-check("setup tools: VENIRA_SETUP_TOOLS=1 advertises project_detect_harnesses and project_install_self", () => {
+check("setup tools: VENIRA_SETUP_TOOLS=1 advertises detect_harnesses and install_self", () => {
   assert.deepEqual(workflowToolNames("1").filter((n) => SETUP_TOOLS.includes(n)).sort(), [...SETUP_TOOLS].sort());
 });
 
 const fuzzyIn = (keys: string[]) => keys.filter((k) => FUZZY.includes(k)).sort();
-const editFileKeys = (tools: Registered) => Object.keys(shapeOf(tools.get("project_edit_file")!.inputSchema));
-/** The zod schema of one project_edit_batch item (`edits` is an array of loose objects). */
+const editFileKeys = (tools: Registered) => Object.keys(shapeOf(tools.get("edit_file")!.inputSchema));
+/** The zod schema of one edit_batch item (`edits` is an array of loose objects). */
 const batchItemSchema = (tools: Registered) =>
-  defOf(shapeOf(tools.get("project_edit_batch")!.inputSchema).edits)!.element as z.ZodType;
+  defOf(shapeOf(tools.get("edit_batch")!.inputSchema).edits)!.element as z.ZodType;
 const batchItemKeys = (tools: Registered) => Object.keys(defOf(batchItemSchema(tools))!.shape as Record<string, unknown>);
 /** JSON Schema of one tool's input, as tools/list would carry it. */
 function jsonOf(input: unknown): string {
@@ -374,7 +374,7 @@ check("fuzzy on: edit_file and edit_batch items advertise all three fuzzy option
 });
 
 check("fuzzy off: nothing about fuzzy matching in the edit tools' text or schema", () => {
-  for (const tool of ["project_edit_file", "project_edit_batch"]) {
+  for (const tool of ["edit_file", "edit_batch"]) {
     const cfg = fuzzyOff.get(tool)!;
     assert.ok(!/fuzzy/i.test(cfg.description ?? ""), `${tool} description still mentions fuzzy matching`);
     assert.ok(!/fuzzy/i.test(jsonOf(cfg.inputSchema)), `${tool} schema still mentions fuzzy matching`);
@@ -382,7 +382,7 @@ check("fuzzy off: nothing about fuzzy matching in the edit tools' text or schema
 });
 
 check("fuzzy on: the edit_file text explains the fuzzy fallback", () => {
-  const cfg = fuzzyOn.get("project_edit_file")!;
+  const cfg = fuzzyOn.get("edit_file")!;
   assert.match(cfg.description ?? "", /fuzzy_distance/);
   const oldText = shapeOf(cfg.inputSchema).old_text;
   assert.match(effectiveDescription(oldText) ?? "", /near-match/);
@@ -390,7 +390,7 @@ check("fuzzy on: the edit_file text explains the fuzzy fallback", () => {
 
 check("fuzzy off: edit_file and edit_batch items still let fuzzy options through to the handler", () => {
   const input = { relative_path: "a.txt", old_text: "x", new_text: "y", case_insensitive: 1, fuzzy_distance: 2 };
-  const editFile = fuzzyOff.get("project_edit_file")!.inputSchema as z.ZodType;
+  const editFile = fuzzyOff.get("edit_file")!.inputSchema as z.ZodType;
   const one = editFile.safeParse(input);
   assert.ok(one.success, "edit_file rejected a fuzzy option while fuzzy is off");
   assert.equal((one.data as Record<string, unknown>).case_insensitive, 1, "edit_file stripped case_insensitive");
@@ -401,7 +401,7 @@ check("fuzzy off: edit_file and edit_batch items still let fuzzy options through
 });
 
 check("fuzzy on: the options are typed (flag becomes boolean, distance is capped at 10)", () => {
-  const editFile = fuzzyOn.get("project_edit_file")!.inputSchema as z.ZodType;
+  const editFile = fuzzyOn.get("edit_file")!.inputSchema as z.ZodType;
   const base = { relative_path: "a.txt", old_text: "x", new_text: "y" };
   const ok = editFile.safeParse({ ...base, case_insensitive: 1, fuzzy_distance: 2 });
   assert.ok(ok.success);
@@ -425,7 +425,7 @@ const batchModule = (await load("tools/project-batch.ts")) as typeof import("../
 const propsOf = (input: unknown): Record<string, any> => JSON.parse(jsonOf(input)).properties ?? {};
 
 check("read_file advertises start_line with minimum 1 (also in ranges[]) but still parses 0", () => {
-  const input = registered.get("project_read_file")!.inputSchema;
+  const input = registered.get("read_file")!.inputSchema;
   const props = propsOf(input);
   assert.equal(props.start_line.minimum, 1, "start_line must advertise minimum 1");
   assert.equal(props.ranges.items.properties.start_line.minimum, 1, "ranges[].start_line must advertise minimum 1");
@@ -435,8 +435,8 @@ check("read_file advertises start_line with minimum 1 (also in ranges[]) but sti
 
 check("max_response_bytes_per_item is not advertised on the batch tools but still reaches the handler", () => {
   for (const [tool, payload] of [
-    ["project_read_batch", { requests: [{ operation: "list_files", arguments: {} }], max_response_bytes_per_item: 2048 }],
-    ["project_edit_batch", { edits: [{ relative_path: "a.txt", old_text: "x", new_text: "y" }], max_response_bytes_per_item: 512 }],
+    ["read_batch", { requests: [{ operation: "list_files", arguments: {} }], max_response_bytes_per_item: 2048 }],
+    ["edit_batch", { edits: [{ relative_path: "a.txt", old_text: "x", new_text: "y" }], max_response_bytes_per_item: 512 }],
   ] as const) {
     const input = registered.get(tool)!.inputSchema;
     assert.ok(!("max_response_bytes_per_item" in propsOf(input)), `${tool} still advertises max_response_bytes_per_item`);
@@ -477,9 +477,9 @@ check("config() carries only machine metadata; the description comes from TOOL_D
   } as never;
   docs.applyToolDocs(server);
   files.registerFileTools(server, fileToolDeps);
-  const read = tools.get("project_read_file")!;
+  const read = tools.get("read_file")!;
   assert.match(read.description ?? "", /Use when:/);
-  assert.equal(read._meta?.venira?.use_when, docs.TOOL_DOCS.project_read_file.use);
+  assert.equal(read._meta?.venira?.use_when, docs.TOOL_DOCS.read_file.use);
   assert.equal(read._meta?.venira?.batch_safe, true, "speed/batch metadata must survive applyToolDocs");
 });
 

@@ -6,13 +6,13 @@ import { buildEnvelope, errorEnvelope, newRequestId, toolResult } from "../lib/o
 import type { RustResponse, ToolResult } from "../lib/output.js";
 import { toHostPath, WORKSPACE, isProtectedPath } from "../lib/workspace.js";
 
-// project_recent_files: SQLite index first, bounded filesystem scan as fallback.
+// recent_files: SQLite index first, bounded filesystem scan as fallback.
 // Extracted from tools/project.ts (P1 #6, step 5c); behavior is unchanged.
 
 type Args = Record<string, unknown>;
 
 // ---------------------------------------------------------------------------
-// project_recent_files: bounded filesystem scan (no external backend).
+// recent_files: bounded filesystem scan (no external backend).
 // ---------------------------------------------------------------------------
 const IGNORED_DIRS = new Set([
   ".git",

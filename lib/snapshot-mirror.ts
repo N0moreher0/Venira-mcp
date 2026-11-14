@@ -22,7 +22,7 @@
  *     inside the workspace (checkpoints would capture it).
  *
  * Health: `mirrorHealth()` reports whether a mirror is configured and the outcome of the last run in this process
- * (after `snapshot_create` or `action=mirror`); `project_health` surfaces it under `snapshots.mirror`.
+ * (after `snapshot_create` or `action=mirror`); `health` surfaces it under `snapshots.mirror`.
  *
  * Not in scope: restore-from-mirror automation, mirror-side retention.
  */
@@ -61,7 +61,7 @@ export type MirrorResult = {
   error?: string;
 };
 
-/** Outcome of the most recent mirror run in this process, as `project_health` reports it. */
+/** Outcome of the most recent mirror run in this process, as `health` reports it. */
 export type MirrorLastRun = {
   at: string;
   source: "create" | "manual";
@@ -102,7 +102,7 @@ export function resetMirrorHealthForTests(): void {
 }
 
 /**
- * Mirror state for `project_health`: no I/O and never throws, so health stays fast. A malformed
+ * Mirror state for `health`: no I/O and never throws, so health stays fast. A malformed
  * `VENIRA_SNAPSHOT_MIRROR_DIR` still reads as configured (dir null) with the error of the last run.
  */
 export function mirrorHealth(): MirrorHealth {
@@ -116,10 +116,10 @@ export function mirrorHealth(): MirrorHealth {
   const state = lastRun ? lastRun.status : "never_run";
   const hint =
     state === "never_run"
-      ? "No mirror run in this session yet: it syncs after the next snapshot_create, or run project_snapshot action=mirror."
+      ? "No mirror run in this session yet: it syncs after the next snapshot_create, or run snapshot action=mirror."
       : state === "ok"
         ? undefined
-        : "Last mirror run was not clean: run project_snapshot action=mirror (it resumes) and read failed[] / error.";
+        : "Last mirror run was not clean: run snapshot action=mirror (it resumes) and read failed[] / error.";
   return { configured: true, dir, state, last_run: lastRun ?? null, ...(hint ? { hint } : {}) };
 }
 
@@ -458,7 +458,7 @@ export async function runMirrorAfterCreate(root: string): Promise<MirrorResult |
   return result;
 }
 
-/** `project_snapshot action=mirror`: the same sync on demand; configuration problems are errors, not results. */
+/** `snapshot action=mirror`: the same sync on demand; configuration problems are errors, not results. */
 export async function opSnapshotMirror(args: Record<string, unknown>, root: string): Promise<RustResponse> {
   const started = Date.now();
   let data: MirrorResult;

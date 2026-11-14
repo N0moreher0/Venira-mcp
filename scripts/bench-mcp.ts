@@ -41,14 +41,14 @@ const tools = await client.listTools();
 out.tool_count = tools.tools.length;
 
 // Warmup a few times to attach the cache to a session
-for (let i = 0; i < 3; i++) await client.callTool({ name: "project_read_file", arguments: { relative_path: "package.json" } });
+for (let i = 0; i < 3; i++) await client.callTool({ name: "read_file", arguments: { relative_path: "package.json" } });
 
-const first = await call("project_read_file", { relative_path: "server.ts" });
+const first = await call("read_file", { relative_path: "server.ts" });
 out.first_call_ms = +first.ms.toFixed(1);
 out.first_bytes = text(first.result).length;
 out.first_ok = !(first.result as { isError?: boolean }).isError;
 
-const foreground = await call("project_shell_run", {
+const foreground = await call("shell_run", {
   command: "echo bench-foreground",
   background: 0,
 });
@@ -65,53 +65,53 @@ out.shell_foreground_ok =
   String(foregroundData.data?.stdout ?? "").includes("bench-foreground");
 
 const reads: number[] = [];
-for (let i = 0; i < 50; i++) reads.push((await call("project_read_file", { relative_path: "server.ts", max_bytes: 8192 })).ms);
+for (let i = 0; i < 50; i++) reads.push((await call("read_file", { relative_path: "server.ts", max_bytes: 8192 })).ms);
 out.read_same_file_50 = stats(reads);
 
 const files = ["server.ts", "package.json", "tsconfig.json", "opencode.example.json", "lib/workspace.ts", "lib/corehost.ts", "tools/project.ts", "scripts/smoke.ts"];
 const distinct: number[] = [];
-for (const file of files) distinct.push((await call("project_read_file", { relative_path: file, max_bytes: 8192 })).ms);
+for (const file of files) distinct.push((await call("read_file", { relative_path: file, max_bytes: 8192 })).ms);
 out.read_distinct_8 = stats(distinct);
 
 const batch: number[] = [];
 for (let i = 0; i < 3; i++) {
-  batch.push((await call("project_read_batch", { requests: files.map((file) => ({ operation: "read_file", arguments: { relative_path: file, max_bytes: 8192 } })) })).ms);
+  batch.push((await call("read_batch", { requests: files.map((file) => ({ operation: "read_file", arguments: { relative_path: file, max_bytes: 8192 } })) })).ms);
 }
 out.read_batch_8_of_8 = stats(batch);
 
 const infos: number[] = [];
-for (let i = 0; i < 30; i++) infos.push((await call("project_get_file_info", { relative_path: "server.ts" })).ms);
+for (let i = 0; i < 30; i++) infos.push((await call("get_file_info", { relative_path: "server.ts" })).ms);
 out.get_file_info_30 = stats(infos);
 
 const searches: number[] = [];
-for (let i = 0; i < 10; i++) searches.push((await call("project_search", { query: "project_read_file", kind: "literal_content" })).ms);
+for (let i = 0; i < 10; i++) searches.push((await call("search", { query: "read_file", kind: "literal_content" })).ms);
 out.search_10 = stats(searches);
 
 const searchWarm: number[] = [];
-for (let i = 0; i < 10; i++) searchWarm.push((await call("project_search", { query: "project_read_file", kind: "literal_content" })).ms);
+for (let i = 0; i < 10; i++) searchWarm.push((await call("search", { query: "read_file", kind: "literal_content" })).ms);
 out.search_warm_10 = stats(searchWarm);
 
 const symRef: number[] = [];
 for (let i = 0; i < 5; i++) {
-  const sr = await call("project_symbol_references", { symbol_name: "project_read_file", scope: "workspace", limit: 10 });
+  const sr = await call("symbol_references", { symbol_name: "read_file", scope: "workspace", limit: 10 });
   symRef.push(sr.ms);
 }
 out.symbol_references_workspace_5 = stats(symRef);
 
 const symRefWarm: number[] = [];
 for (let i = 0; i < 5; i++) {
-  const sr = await call("project_symbol_references", { symbol_name: "project_read_file", scope: "workspace", limit: 10 });
+  const sr = await call("symbol_references", { symbol_name: "read_file", scope: "workspace", limit: 10 });
   symRefWarm.push(sr.ms);
 }
 out.symbol_references_workspace_warm_5 = stats(symRefWarm);
 
-const listRun = await call("project_list_files", { depth: 2, limit: 50 });
+const listRun = await call("list_files", { depth: 2, limit: 50 });
 out.list_ok = !(JSON.parse(String((listRun.result as { content?: { text?: string }[] })?.content?.[0]?.text ?? "{}")).error?.code);
 out.list_bytes = String(
   (listRun.result as { content?: { text?: string }[] })?.content?.[0]?.text ?? "{}",
 ).length;
 
-const health = await call("project_health", { include_audit: 0 });
+const health = await call("health", { include_audit: 0 });
 out.health = health.ms.toFixed(1);
 out.health_bytes = String(
   (health.result as { content?: { text?: string }[] })?.content?.[0]?.text ?? "{}",
@@ -129,7 +129,7 @@ const resultOk = (result: unknown): boolean => {
   }
 };
 
-const ranges = await call("project_read_file", {
+const ranges = await call("read_file", {
   relative_path: "server.ts",
   ranges: [{ start_line: 1, end_line: 10 }, { start_line: 20, end_line: 30 }],
 });
@@ -137,7 +137,7 @@ out.read_ranges_ms = ranges.ms.toFixed(1);
 out.read_ranges_bytes = text(ranges.result).length;
 out.read_ranges_ok = resultOk(ranges.result);
 
-const recent = await call("project_recent_files", { relative_path: ".", limit: 20 });
+const recent = await call("recent_files", { relative_path: ".", limit: 20 });
 out.recent_files_ms = recent.ms.toFixed(1);
 out.recent_files_bytes = text(recent.result).length;
 out.recent_files_ok = resultOk(recent.result);

@@ -33,7 +33,7 @@ export async function runOutlineSymbol(args: Args): Promise<ToolResult> {
   if (!rel.trim() || rel === ".") {
     const elapsedMs = performance.now() - started;
     return toolResult(
-      errorEnvelope("outline_symbol", new Error("[invalid_request] project_outline_symbol requires a file path; directories are not supported. Hint: use project_list_files to choose a source file."), { requestId, elapsedMs }),
+      errorEnvelope("outline_symbol", new Error("[invalid_request] outline_symbol requires a file path; directories are not supported. Hint: use list_files to choose a source file."), { requestId, elapsedMs }),
       true,
     );
   }
@@ -45,7 +45,7 @@ export async function runOutlineSymbol(args: Args): Promise<ToolResult> {
   if (text === null) {
     const elapsedMs = performance.now() - started;
     return toolResult(
-      errorEnvelope("outline_symbol", new Error(`[not_found] No such file: ${rel}. Hint: use project_list_files to locate it.`), { requestId, elapsedMs }),
+      errorEnvelope("outline_symbol", new Error(`[not_found] No such file: ${rel}. Hint: use list_files to locate it.`), { requestId, elapsedMs }),
       true,
     );
   }
@@ -73,7 +73,7 @@ export async function runOutlineSymbol(args: Args): Promise<ToolResult> {
       ? {
           hint:
             "No symbols found. The extractor understands C-like source (functions, classes, types, interfaces). " +
-            "If the file is not source code, use project_search instead.",
+            "If the file is not source code, use search instead.",
         }
       : {}),
   };
@@ -101,7 +101,7 @@ export async function runFileSymbols(args: Args): Promise<ToolResult> {
   if (text === null) {
     const elapsedMs = performance.now() - started;
     return toolResult(
-      errorEnvelope("file_symbols", new Error(`[not_found] No such file: ${rel}. Hint: use project_list_files to locate it.`), { requestId, elapsedMs }),
+      errorEnvelope("file_symbols", new Error(`[not_found] No such file: ${rel}. Hint: use list_files to locate it.`), { requestId, elapsedMs }),
       true,
     );
   }

@@ -41,7 +41,7 @@ export async function runProviderDialects($h: Harness): Promise<void> {
     VENIRA_GIT_TOKEN: "verify-gitlab-token",
     VENIRA_GIT_RETRIES: "0",
   });
-  const glCreate = await providerCall(gl, "project_pr_create", {
+  const glCreate = await providerCall(gl, "pr_create", {
     title: "Add GitLab dialect",
     head: "verify-branch",
     body: "MR body",
@@ -54,7 +54,7 @@ export async function runProviderDialects($h: Harness): Promise<void> {
       glCreate.data?.base === "main",
     glCreate,
   );
-  const glComment = await providerCall(gl, "project_pr_comment", {
+  const glComment = await providerCall(gl, "pr_comment", {
     pr: 11,
     body: "LGTM from verify",
   });
@@ -65,7 +65,7 @@ export async function runProviderDialects($h: Harness): Promise<void> {
       gitlabMock.state.comments === 1,
     glComment,
   );
-  const glInline = await providerCall(gl, "project_pr_comment", {
+  const glInline = await providerCall(gl, "pr_comment", {
     pr: 11,
     body: "inline note",
     path: "src/app.ts",
@@ -80,7 +80,7 @@ export async function runProviderDialects($h: Harness): Promise<void> {
       gitlabMock.state.lastInline?.position?.position_type === "text",
     { data: glInline.data, position: gitlabMock.state.lastInline?.position },
   );
-  const glList = await providerCall(gl, "project_pr_list", { state: "open" });
+  const glList = await providerCall(gl, "pr_list", { state: "open" });
   check(
     "gitlab_pr_list",
     glList.ok === true &&
@@ -88,7 +88,7 @@ export async function runProviderDialects($h: Harness): Promise<void> {
       glList.data?.prs?.length === 1,
     glList,
   );
-  const glClose = await providerCall(gl, "project_pr_close", { pr: 11 });
+  const glClose = await providerCall(gl, "pr_close", { pr: 11 });
   check(
     "gitlab_pr_close",
     glClose.ok === true &&
@@ -96,7 +96,7 @@ export async function runProviderDialects($h: Harness): Promise<void> {
       gitlabMock.state.closes === 1,
     glClose,
   );
-  const glReopen = await providerCall(gl, "project_pr_reopen", { pr: 11 });
+  const glReopen = await providerCall(gl, "pr_reopen", { pr: 11 });
   check(
     "gitlab_pr_reopen",
     glReopen.ok === true &&
@@ -104,7 +104,7 @@ export async function runProviderDialects($h: Harness): Promise<void> {
       gitlabMock.state.reopens === 1,
     glReopen,
   );
-  const glMerge = await providerCall(gl, "project_pr_merge", {
+  const glMerge = await providerCall(gl, "pr_merge", {
     pr: 11,
     method: "squash",
     delete_branch: 1,
@@ -116,7 +116,7 @@ export async function runProviderDialects($h: Harness): Promise<void> {
       glMerge.data?.sha === "gl-merge-sha",
     glMerge,
   );
-  const glCi = await providerCall(gl, "project_ci_status", {
+  const glCi = await providerCall(gl, "ci_status", {
     ref: "verify-branch",
   });
   check(
@@ -130,7 +130,7 @@ export async function runProviderDialects($h: Harness): Promise<void> {
       gitlabMock.requests.some((request) => request.path.includes("page=2")),
     glCi,
   );
-  const glRun = await providerCall(gl, "project_ci_status", { run_id: 77 });
+  const glRun = await providerCall(gl, "ci_status", { run_id: 77 });
   check(
     "gitlab_ci_run",
     glRun.ok === true &&
@@ -139,7 +139,7 @@ export async function runProviderDialects($h: Harness): Promise<void> {
       glRun.data?.overall === "failure",
     glRun,
   );
-  const glTrigger = await providerCall(gl, "project_ci_trigger", {
+  const glTrigger = await providerCall(gl, "ci_trigger", {
     ref: "main",
     inputs: { suite: "full" },
   });
@@ -150,7 +150,7 @@ export async function runProviderDialects($h: Harness): Promise<void> {
       glTrigger.data?.pipeline_id === 78,
     glTrigger,
   );
-  const glCancel = await providerCall(gl, "project_ci_control", {
+  const glCancel = await providerCall(gl, "ci_control", {
     action: "cancel",
     run_id: "77",
     reason: "stop stale GitLab pipeline",
@@ -165,7 +165,7 @@ export async function runProviderDialects($h: Harness): Promise<void> {
       gitlabMock.state.ciCancels === 1,
     glCancel,
   );
-  const glRetry = await providerCall(gl, "project_ci_control", {
+  const glRetry = await providerCall(gl, "ci_control", {
     action: "retry_failed",
     run_id: 77,
     reason: "retry transient GitLab jobs",
@@ -179,7 +179,7 @@ export async function runProviderDialects($h: Harness): Promise<void> {
       gitlabMock.state.ciRetries === 1,
     glRetry,
   );
-  const glBadRun = await providerCall(gl, "project_ci_control", {
+  const glBadRun = await providerCall(gl, "ci_control", {
     action: "cancel",
     run_id: "77/../88",
     reason: "reject malformed GitLab id",
@@ -195,14 +195,14 @@ export async function runProviderDialects($h: Harness): Promise<void> {
       ),
     glBadRun,
   );
-  const glJobLogs = await providerCall(gl, "project_ci_logs", { job_id: 7 });
+  const glJobLogs = await providerCall(gl, "ci_logs", { job_id: 7 });
   check(
     "gitlab_ci_logs_job",
     glJobLogs.ok === true &&
       String(glJobLogs.data?.text ?? "").includes("FAIL src/demo.test.ts:42"),
     glJobLogs.data?.text,
   );
-  const glRunLogs = await providerCall(gl, "project_ci_logs", {
+  const glRunLogs = await providerCall(gl, "ci_logs", {
     run_id: 77,
     tail_lines: 2,
   });
@@ -249,7 +249,7 @@ export async function runProviderDialects($h: Harness): Promise<void> {
       remaining: 1,
     };
     const hitsBefore = glPipelineHits();
-    const faulted = await providerCall(gl, "project_ci_status", {
+    const faulted = await providerCall(gl, "ci_status", {
       ref: `fault-${faultCase.label}`,
     });
     check(
@@ -269,7 +269,7 @@ export async function runProviderDialects($h: Harness): Promise<void> {
     }
   }
   gitlabMock.state.fault = null;
-  const glRecovered = await providerCall(gl, "project_ci_status", {
+  const glRecovered = await providerCall(gl, "ci_status", {
     ref: "fault-recovered",
   });
   check(
@@ -286,7 +286,7 @@ export async function runProviderDialects($h: Harness): Promise<void> {
     method: "GET",
   };
   const bbSeenBeforeRedirect = bitbucketMock.requests.length;
-  const glRedirected = await providerCall(gl, "project_ci_status", {
+  const glRedirected = await providerCall(gl, "ci_status", {
     ref: "fault-redirect",
   });
   const redirectHit = bitbucketMock.requests
@@ -310,7 +310,7 @@ export async function runProviderDialects($h: Harness): Promise<void> {
     VENIRA_GIT_RETRIES: "2",
   });
   gitlabMock.state.fault = { status: 503, remaining: 1, method: "GET" };
-  const glRetriedRead = await providerCall(glRetrying, "project_ci_status", {
+  const glRetriedRead = await providerCall(glRetrying, "ci_status", {
     ref: "fault-retry-read",
   });
   check(
@@ -325,7 +325,7 @@ export async function runProviderDialects($h: Harness): Promise<void> {
         request.method === "POST" && request.path.includes("/cancel"),
     ).length;
   const glCancelPostsBefore = glCancelPosts();
-  const glFailedCancel = await providerCall(glRetrying, "project_ci_control", {
+  const glFailedCancel = await providerCall(glRetrying, "ci_control", {
     action: "cancel",
     run_id: 77,
     reason: "verify POST is never replayed",
@@ -349,7 +349,7 @@ export async function runProviderDialects($h: Harness): Promise<void> {
     VENIRA_GIT_USERNAME: "bot",
     VENIRA_GIT_RETRIES: "0",
   });
-  const bbCreate = await providerCall(bb, "project_pr_create", {
+  const bbCreate = await providerCall(bb, "pr_create", {
     title: "Add Bitbucket dialect",
     head: "verify-branch",
   });
@@ -361,7 +361,7 @@ export async function runProviderDialects($h: Harness): Promise<void> {
       bbCreate.data?.base === "main",
     bbCreate,
   );
-  const bbComment = await providerCall(bb, "project_pr_comment", {
+  const bbComment = await providerCall(bb, "pr_comment", {
     pr: 21,
     body: "LGTM from verify",
   });
@@ -370,7 +370,7 @@ export async function runProviderDialects($h: Harness): Promise<void> {
     bbComment.ok === true && bbComment.data?.comment_id === 701,
     bbComment,
   );
-  const bbInline = await providerCall(bb, "project_pr_comment", {
+  const bbInline = await providerCall(bb, "pr_comment", {
     pr: 21,
     body: "inline",
     path: "src/app.ts",
@@ -384,7 +384,7 @@ export async function runProviderDialects($h: Harness): Promise<void> {
       bitbucketMock.state.lastInline?.path === "src/app.ts",
     { data: bbInline.data, inline: bitbucketMock.state.lastInline },
   );
-  const bbList = await providerCall(bb, "project_pr_list", { state: "open" });
+  const bbList = await providerCall(bb, "pr_list", { state: "open" });
   check(
     "bitbucket_pr_list",
     bbList.ok === true &&
@@ -392,7 +392,7 @@ export async function runProviderDialects($h: Harness): Promise<void> {
       bbList.data?.provider === "bitbucket",
     bbList,
   );
-  const bbClose = await providerCall(bb, "project_pr_close", { pr: 21 });
+  const bbClose = await providerCall(bb, "pr_close", { pr: 21 });
   check(
     "bitbucket_pr_close",
     bbClose.ok === true &&
@@ -400,13 +400,13 @@ export async function runProviderDialects($h: Harness): Promise<void> {
       bitbucketMock.state.declines === 1,
     bbClose,
   );
-  const bbReopen = await providerCall(bb, "project_pr_reopen", { pr: 21 });
+  const bbReopen = await providerCall(bb, "pr_reopen", { pr: 21 });
   check(
     "bitbucket_pr_reopen_unsupported",
     bbReopen.ok === false && bbReopen.error?.code === "unsupported",
     bbReopen,
   );
-  const bbMerge = await providerCall(bb, "project_pr_merge", {
+  const bbMerge = await providerCall(bb, "pr_merge", {
     pr: 21,
     method: "squash",
     delete_branch: 1,
@@ -418,7 +418,7 @@ export async function runProviderDialects($h: Harness): Promise<void> {
       bbMerge.data?.sha === "bb-merge-sha",
     bbMerge,
   );
-  const bbCi = await providerCall(bb, "project_ci_status", {
+  const bbCi = await providerCall(bb, "ci_status", {
     ref: "verify-branch",
   });
   check(
@@ -429,7 +429,7 @@ export async function runProviderDialects($h: Harness): Promise<void> {
       bbCi.data?.runs?.[0]?.id === "{pipeline-1}",
     bbCi,
   );
-  const bbRun = await providerCall(bb, "project_ci_status", {
+  const bbRun = await providerCall(bb, "ci_status", {
     run_id: "{pipeline-1}",
   });
   check(
@@ -439,7 +439,7 @@ export async function runProviderDialects($h: Harness): Promise<void> {
       bbRun.data?.overall === "failure",
     bbRun,
   );
-  const bbTrigger = await providerCall(bb, "project_ci_trigger", {
+  const bbTrigger = await providerCall(bb, "ci_trigger", {
     ref: "main",
   });
   check(
@@ -449,7 +449,7 @@ export async function runProviderDialects($h: Harness): Promise<void> {
       bbTrigger.data?.workflow === "default",
     bbTrigger,
   );
-  const bbCancel = await providerCall(bb, "project_ci_control", {
+  const bbCancel = await providerCall(bb, "ci_control", {
     action: "cancel",
     run_id: "{pipeline-1}",
     reason: "stop stale Bitbucket pipeline",
@@ -464,7 +464,7 @@ export async function runProviderDialects($h: Harness): Promise<void> {
     bbCancel,
   );
   const bbRequestsBeforeUnsupportedRetry = bitbucketMock.requests.length;
-  const bbRetryUnsupported = await providerCall(bb, "project_ci_control", {
+  const bbRetryUnsupported = await providerCall(bb, "ci_control", {
     action: "retry_failed",
     run_id: "{pipeline-1}",
     reason: "retry failed step",
@@ -476,7 +476,7 @@ export async function runProviderDialects($h: Harness): Promise<void> {
       bitbucketMock.requests.length === bbRequestsBeforeUnsupportedRetry,
     bbRetryUnsupported,
   );
-  const bbBadUuid = await providerCall(bb, "project_ci_control", {
+  const bbBadUuid = await providerCall(bb, "ci_control", {
     action: "cancel",
     run_id: "{x}",
     reason: "reject malformed Bitbucket UUID",
@@ -491,7 +491,7 @@ export async function runProviderDialects($h: Harness): Promise<void> {
   const bbStepId = String(
     (bbRun.data?.jobs?.[0] as { id?: unknown } | undefined)?.id ?? "{step-1}",
   );
-  const bbLogs = await providerCall(bb, "project_ci_logs", {
+  const bbLogs = await providerCall(bb, "ci_logs", {
     run_id: "{pipeline-1}",
     job_id: bbStepId,
   });
@@ -539,7 +539,7 @@ export async function runProviderDialects($h: Harness): Promise<void> {
       remaining: 1,
     };
     const hitsBefore = bbPipelineHits();
-    const faulted = await providerCall(bb, "project_ci_status", {
+    const faulted = await providerCall(bb, "ci_status", {
       ref: `fault-${faultCase.label}`,
     });
     check(
@@ -559,7 +559,7 @@ export async function runProviderDialects($h: Harness): Promise<void> {
     }
   }
   bitbucketMock.state.fault = null;
-  const bbRecovered = await providerCall(bb, "project_ci_status", {
+  const bbRecovered = await providerCall(bb, "ci_status", {
     ref: "fault-recovered",
   });
   check(
@@ -573,7 +573,7 @@ export async function runProviderDialects($h: Harness): Promise<void> {
   console.log(
     "[verify] checking E.3 bitbucket pagination + failing-step logs...",
   );
-  const bbPagedRun = await providerCall(bb, "project_ci_status", {
+  const bbPagedRun = await providerCall(bb, "ci_status", {
     run_id: "{pipeline-paged}",
   });
   check(
@@ -593,7 +593,7 @@ export async function runProviderDialects($h: Harness): Promise<void> {
       bbPagedRun.data?.jobs?.[0]?.conclusion === "success",
     bbPagedRun.data,
   );
-  const bbPagedLogs = await providerCall(bb, "project_ci_logs", {
+  const bbPagedLogs = await providerCall(bb, "ci_logs", {
     run_id: "{pipeline-paged}",
   });
   check(
@@ -617,7 +617,7 @@ export async function runProviderDialects($h: Harness): Promise<void> {
 
   // E.4: ci_wait gives one concise summary + next step, and reads the failing Bitbucket step (UUID job id).
   console.log("[verify] checking E.4 ci_wait summary + failing-step tail...");
-  const bbWait = await providerCall(bb, "project_ci_wait", {
+  const bbWait = await providerCall(bb, "ci_wait", {
     run_id: "{pipeline-paged}",
     timeout_ms: 5000,
   });
@@ -677,7 +677,7 @@ export async function runProviderDialects($h: Harness): Promise<void> {
     VENIRA_GIT_LOG_ENTRY_BYTES: "2048",
     VENIRA_GIT_LOG_TIMEOUT_MS: "5000",
   });
-  const ghPaged = await providerCall(gh, "project_ci_status", {
+  const ghPaged = await providerCall(gh, "ci_status", {
     ref: "paged-checks",
   });
   check(
@@ -690,7 +690,7 @@ export async function runProviderDialects($h: Harness): Promise<void> {
       ghPaged.data?.partial === undefined,
     ghPaged,
   );
-  const ghJobs = await providerCall(gh, "project_ci_status", { run_id: 300 });
+  const ghJobs = await providerCall(gh, "ci_status", { run_id: 300 });
   check(
     "github_ci_jobs_paginated_failure_on_page2",
     ghJobs.ok === true &&
@@ -706,7 +706,7 @@ export async function runProviderDialects($h: Harness): Promise<void> {
       request.path.includes("/commits/endless-checks/check-runs"),
     ).length;
   const endlessBefore = endlessHits();
-  const ghEndless = await providerCall(gh, "project_ci_status", {
+  const ghEndless = await providerCall(gh, "ci_status", {
     ref: "endless-checks",
   });
   check(
@@ -722,7 +722,7 @@ export async function runProviderDialects($h: Harness): Promise<void> {
     },
   );
   const blobHitsBefore = githubMock.blobAuth.length;
-  const ghForeign = await providerCall(gh, "project_ci_status", {
+  const ghForeign = await providerCall(gh, "ci_status", {
     ref: "foreign-next",
   });
   check(
@@ -736,7 +736,7 @@ export async function runProviderDialects($h: Harness): Promise<void> {
     },
   );
   const hugeStart = Date.now();
-  const ghHugeDeclared = await providerCall(gh, "project_ci_logs", {
+  const ghHugeDeclared = await providerCall(gh, "ci_logs", {
     run_id: 302,
   });
   check(
@@ -748,7 +748,7 @@ export async function runProviderDialects($h: Harness): Promise<void> {
     { ms: Date.now() - hugeStart, response: ghHugeDeclared },
   );
   const chunkedStart = Date.now();
-  const ghHugeChunked = await providerCall(gh, "project_ci_logs", {
+  const ghHugeChunked = await providerCall(gh, "ci_logs", {
     run_id: 303,
   });
   check(
@@ -758,7 +758,7 @@ export async function runProviderDialects($h: Harness): Promise<void> {
       Date.now() - chunkedStart < 4000,
     { ms: Date.now() - chunkedStart, response: ghHugeChunked },
   );
-  const ghSkipped = await providerCall(gh, "project_ci_logs", { run_id: 304 });
+  const ghSkipped = await providerCall(gh, "ci_logs", { run_id: 304 });
   check(
     "github_ci_logs_skipped_entries_are_reported",
     ghSkipped.ok === true &&

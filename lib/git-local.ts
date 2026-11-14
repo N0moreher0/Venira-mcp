@@ -116,7 +116,7 @@ export async function runGitChecked(
   const result = await runGit(args, root, options);
   if (result.exitCode !== 0) {
     const detail = result.stderr.toString("utf8").trim();
-    throw new Error(`[invalid_request] ${options.what} failed. ${detail || "git exited with " + result.exitCode}. Hint: run project_git_status to inspect the repository, or fix the input arguments.`);
+    throw new Error(`[invalid_request] ${options.what} failed. ${detail || "git exited with " + result.exitCode}. Hint: run git_status to inspect the repository, or fix the input arguments.`);
   }
   return result;
 }

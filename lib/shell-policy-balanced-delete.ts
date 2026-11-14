@@ -15,7 +15,7 @@
  *
  * Unlike the other balanced tiers this one is only unattended because `opShellRun` stores a checkpoint
  * of the files first (`deleteTargets` in restore-checkpoint.ts) and refuses to run when it cannot:
- * the deletion is recoverable with `project_snapshot` restore.
+ * the deletion is recoverable with `snapshot` restore.
  *
  * Recursive deletes (`rm -rf dist`, `Remove-Item -Recurse`, `rmdir /s`) keep asking.
  */

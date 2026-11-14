@@ -268,14 +268,14 @@ export async function opShellRun(
     if (legacyToken && !approvalId) {
       throw new Error(
         `[approval_invalid] approval_token was removed in v1.15 (rule: ${decision.rule}). ` +
-          `Hint: call project_shell_run again without it; a human grants the new approval_id, then retry once with it.`,
+          `Hint: call shell_run again without it; a human grants the new approval_id, then retry once with it.`,
       );
     }
     if (hasSessionApproval(sessionId, decision, approvalKey)) {
       approver = "user:session";
       recordApproval("approved");
     } else if (approvalId) {
-      const v = redeemApproval("shell", sessionId, approvalId, approvalBinding, "project_shell_run");
+      const v = redeemApproval("shell", sessionId, approvalId, approvalBinding, "shell_run");
       if (!v.ok) {
         throw new Error(`[approval_invalid] Approval ${approvalId} ${v.reason}. Hint: ${v.hint}`);
       }
@@ -287,7 +287,7 @@ export async function opShellRun(
       }
     } else {
       const shellSubject = {
-        tool: "project_shell_run",
+        tool: "shell_run",
         command: redactSecrets(command),
         shell,
         cwd,
@@ -308,7 +308,7 @@ export async function opShellRun(
       const waitMs = parseApprovalWaitMs(args.approval_wait_ms);
       const granted = waitMs > 0 && (await awaitApprovalGrant(sessionId, pendingId, approvalBinding, waitMs));
       if (granted) {
-        const v = redeemApproval("shell", sessionId, pendingId, approvalBinding, "project_shell_run");
+        const v = redeemApproval("shell", sessionId, pendingId, approvalBinding, "shell_run");
         if (!v.ok) {
           throw new Error(`[approval_invalid] Approval ${pendingId} ${v.reason}. Hint: ${v.hint}`);
         }
@@ -361,7 +361,7 @@ export async function opShellRun(
     throw new Error(
       `[checkpoint_failed] the command was not run because its safety checkpoint could not be completed ` +
         `(${checkpointError ?? "checkpoint truncated by snapshot limits"}). ` +
-        `Hint: create a narrower project_snapshot of the files yourself, or ask the user to approve the command.`,
+        `Hint: create a narrower snapshot of the files yourself, or ask the user to approve the command.`,
     );
   }
   // Roadmap item 15: the invocation carries the OS-specific fix-ups (cmd
@@ -383,7 +383,7 @@ export async function opShellRun(
     if (value === undefined) {
       throw new Error(
         `[secret_missing] secret_env refers to "${name}" but it is not in the secret store. ` +
-          `Hint: run project_secret action=list, or action=set name=${name}.`,
+          `Hint: run secret action=list, or action=set name=${name}.`,
       );
     }
     secretEnvValues[name] = value;
@@ -705,7 +705,7 @@ export async function opShellRun(
                 id: checkpoint.id,
                 paths: checkpoint.paths,
                 reused: checkpoint.reused,
-                restore_with: `project_snapshot action=restore id=${checkpoint.id}`,
+                restore_with: `snapshot action=restore id=${checkpoint.id}`,
               },
             }
           : {}),
@@ -723,7 +723,7 @@ export async function opShellStatus(
   const waitSeconds = Math.min(30, Math.max(0, Number(args.wait_seconds ?? 0)));
   const run = shellRuns.get(runId);
   if (!run) {
-    throw new Error(`[not_found] Unknown run_id: ${runId}. Hint: run ids live only in the session that started them; start a new run with project_shell_run.`);
+    throw new Error(`[not_found] Unknown run_id: ${runId}. Hint: run ids live only in the session that started them; start a new run with shell_run.`);
   }
 
   if (waitSeconds > 0 && run.running) {
@@ -773,7 +773,7 @@ export function opShellCancel(args: Record<string, unknown>): RustResponse {
   const killKey = args.kill_key as string | undefined;
   const run = shellRuns.get(runId);
   if (!run) {
-    throw new Error(`[not_found] Unknown run_id: ${runId}. Hint: run ids live only in the session that started them; start a new run with project_shell_run.`);
+    throw new Error(`[not_found] Unknown run_id: ${runId}. Hint: run ids live only in the session that started them; start a new run with shell_run.`);
   }
   if (!killKey || killKey !== run.kill_key) {
     throw new Error(`[invalid_request] Missing or incorrect kill_key. Each shell process has a unique kill_key returned in the shell_run response. Provide kill_key to authorize cancellation.`);

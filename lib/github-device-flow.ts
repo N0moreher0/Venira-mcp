@@ -265,7 +265,7 @@ export async function refreshGithubAccessTokenIfNeeded(fetcher: typeof fetch = f
     });
     const body = await responseJson(response);
     if (!response.ok || typeof body.error === "string") {
-      throw new Error("[secret_expired] GitHub credential could not be refreshed. Reconnect GitHub with project_github_connect.");
+      throw new Error("[secret_expired] GitHub credential could not be refreshed. Reconnect GitHub with github_connect.");
     }
     const accessToken = requiredString(body.access_token, "access_token", 16 * 1024);
     const nextRefresh =

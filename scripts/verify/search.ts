@@ -41,10 +41,10 @@ export async function runSearch(
     glob: "*.txt",
     limit: 50,
   };
-  const rgParity = asEnvelope(await call("project_search", parityArgs));
+  const rgParity = asEnvelope(await call("search", parityArgs));
   const jsParity = asEnvelope(
     await searchJsClient.callTool({
-      name: "project_search",
+      name: "search",
       arguments: parityArgs,
     }),
   );
@@ -87,7 +87,7 @@ export async function runSearch(
     `const y = compute_stats_helper();\n`,
   );
   const relRank = asEnvelope(
-    await call("project_search", {
+    await call("search", {
       query: "compute_stats",
       kind: "literal_content",
       relative_path: relRankDir,
@@ -127,7 +127,7 @@ export async function runSearch(
     "alpha line\nbeta CTX_MARKER_TOKEN line\ngamma line\ndelta line\n",
   );
   const ctxSearch = asEnvelope(
-    await call("project_search", {
+    await call("search", {
       query: "CTX_MARKER_TOKEN",
       kind: "literal_content",
       relative_path: ctxDir,
@@ -151,7 +151,7 @@ export async function runSearch(
   // regex=1 with an invalid pattern must surface [invalid_request] instead of
   // silently returning zero hits from the ripgrep fast path.
   const metaSearch = asEnvelope(
-    await call("project_search", {
+    await call("search", {
       query: "compute_stats(",
       kind: "literal_content",
       relative_path: relRankDir,
@@ -166,7 +166,7 @@ export async function runSearch(
     metaSearch,
   );
   const invalidRegex = asEnvelope(
-    await call("project_search", {
+    await call("search", {
       query: "[",
       kind: "literal_content",
       relative_path: dir,
@@ -187,7 +187,7 @@ export async function runSearch(
     "const parseThing = 1;\nconst parse = 2;\nconst reparse = 3;\n",
   );
   const ww = asEnvelope(
-    await call("project_search", {
+    await call("search", {
       query: "parse",
       kind: "literal_content",
       relative_path: wwDir,
@@ -210,7 +210,7 @@ export async function runSearch(
     "const HIDDEN_TOKEN_MARK = 1;\n",
   );
   const hidDefault = asEnvelope(
-    await call("project_search", {
+    await call("search", {
       query: "HIDDEN_TOKEN_MARK",
       kind: "literal_content",
       relative_path: hidDir,
@@ -226,7 +226,7 @@ export async function runSearch(
     hidDefault.data?.hits,
   );
   const hidOff = asEnvelope(
-    await call("project_search", {
+    await call("search", {
       query: "HIDDEN_TOKEN_MARK",
       kind: "literal_content",
       relative_path: hidDir,
@@ -240,12 +240,12 @@ export async function runSearch(
     hidOffHits.length === 0,
     hidOff.data?.hits,
   );
-  await call("project_write_file", {
+  await call("write_file", {
     relative_path: `${dir}/search-token.txt`,
     content: "NEW_TOKEN\n",
   });
   await new Promise((resolve) => setTimeout(resolve, 3200));
-  const search3 = await call("project_search", {
+  const search3 = await call("search", {
     query: token,
     kind: "literal_content",
     relative_path: dir,
@@ -260,7 +260,7 @@ export async function runSearch(
     search3Data.data?.hits?.length,
   );
   const unsafeRegex = asEnvelope(
-    await call("project_search", {
+    await call("search", {
       query: "(a+)+$",
       regex: 1,
       kind: "literal_content",
@@ -273,7 +273,7 @@ export async function runSearch(
     unsafeRegex.error,
   );
   const longGlob = asEnvelope(
-    await call("project_search", {
+    await call("search", {
       query: "x",
       kind: "literal_content",
       relative_path: dir,
@@ -291,7 +291,7 @@ export async function runSearch(
   await fs.writeFile(`${dir}/cache-probe.txt`, `${probe}\n`);
   await new Promise((resolve) => setTimeout(resolve, 3200)); // search TTL is 3 s
   const probe1 = asEnvelope(
-    await call("project_search", {
+    await call("search", {
       query: probe,
       kind: "literal_content",
       relative_path: dir,
@@ -299,7 +299,7 @@ export async function runSearch(
     }),
   );
   const probe2 = asEnvelope(
-    await call("project_search", {
+    await call("search", {
       query: probe,
       kind: "literal_content",
       relative_path: dir,
@@ -311,7 +311,7 @@ export async function runSearch(
     second: probe2.cached,
   });
   const sym1 = asEnvelope(
-    await call("project_symbol_references", {
+    await call("symbol_references", {
       symbol_name: probe,
       scope: "workspace",
       relative_path: dir,
@@ -319,7 +319,7 @@ export async function runSearch(
     }),
   );
   const sym2 = asEnvelope(
-    await call("project_symbol_references", {
+    await call("symbol_references", {
       symbol_name: probe,
       scope: "workspace",
       relative_path: dir,
@@ -331,12 +331,12 @@ export async function runSearch(
     sym2.cached === true && sym1.cached !== true,
     { first: sym1.cached, second: sym2.cached },
   );
-  await call("project_write_file", {
+  await call("write_file", {
     relative_path: `${dir}/cache-probe.txt`,
     content: `${probe} again\n`,
   });
   const sym3 = asEnvelope(
-    await call("project_symbol_references", {
+    await call("symbol_references", {
       symbol_name: probe,
       scope: "workspace",
       relative_path: dir,
@@ -346,11 +346,11 @@ export async function runSearch(
   check("symbol_references_cache_invalidated_on_write", sym3.cached !== true, {
     cached: sym3.cached,
   });
-  await call("project_read_file", {
+  await call("read_file", {
     relative_path: `${dir}/phase-b-missing.txt`,
   }); // negative cache entry
   const healthCache = asEnvelope(
-    await call("project_health", { include_audit: 0 }),
+    await call("health", { include_audit: 0 }),
   );
   check(
     "health_negative_cache_reported",
@@ -363,7 +363,7 @@ export async function runSearch(
 
   // 10c. Hybrid search mode (Phase C)
   const hyb = asEnvelope(
-    await call("project_search", {
+    await call("search", {
       query: "CoreHost",
       kind: "literal_content",
       relative_path: ".",
@@ -388,7 +388,7 @@ export async function runSearch(
   // Item 14 regression: ranking happens before `limit`, so even limit=1 must surface the definition
   // (whichever raw-hit position it has in file-walk order) and agree with the larger-limit result.
   const hybOne = asEnvelope(
-    await call("project_search", {
+    await call("search", {
       query: "CoreHost",
       kind: "literal_content",
       relative_path: ".",
@@ -409,7 +409,7 @@ export async function runSearch(
     { one: hybOne.data?.hits, eight: hyb.data?.hits?.slice(0, 2) },
   );
   const scopedMiss = asEnvelope(
-    await call("project_search", {
+    await call("search", {
       query: "McpServer",
       kind: "literal_content",
       relative_path: dir,
@@ -424,7 +424,7 @@ export async function runSearch(
   );
 
   const patternBatchSearch = asEnvelope(
-    await call("project_read_batch", {
+    await call("read_batch", {
       requests: [{ operation: "search", arguments: { pattern: "function ", scope: "workspace", limit: 10 } }],
     }),
   );
@@ -438,7 +438,7 @@ export async function runSearch(
   );
 
   const missingBatchQuery = asEnvelope(
-    await call("project_read_batch", {
+    await call("read_batch", {
       requests: [{ operation: "search", arguments: { scope: "workspace" } }],
     }),
   );
@@ -451,9 +451,9 @@ export async function runSearch(
     missingBatchQueryItem,
   );
 
-  // 10c-2. Hybrid search inside project_read_batch (same routing rule as the standalone tool).
+  // 10c-2. Hybrid search inside read_batch (same routing rule as the standalone tool).
   const hybBatch = asEnvelope(
-    await call("project_read_batch", {
+    await call("read_batch", {
       requests: [
         {
           operation: "search",
@@ -547,7 +547,7 @@ export async function runSearch(
     trimmed_to_item_budget?: boolean;
   };
   const hybSharedBatch = asEnvelope(
-    await call("project_read_batch", {
+    await call("read_batch", {
       requests: [
         {
           operation: "search",
@@ -599,7 +599,7 @@ export async function runSearch(
     },
   );
   const hybTrimBatch = asEnvelope(
-    await call("project_read_batch", {
+    await call("read_batch", {
       max_response_bytes_per_item: 4096,
       requests: [
         {
@@ -677,7 +677,7 @@ export async function runSearch(
   }
   for (const fixture of hybridFixture) {
     const matrixRes = asEnvelope(
-      await call("project_search", {
+      await call("search", {
         query: fixture.query,
         kind: "literal_content",
         relative_path: dir,

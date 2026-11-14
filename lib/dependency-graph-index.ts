@@ -596,7 +596,7 @@ export async function discover(
   try {
     startStat = await fs.stat(startAbs);
   } catch {
-    throw new Error(`[not_found] Path does not exist: ${relStart}. Hint: check it with project_list_files.`);
+    throw new Error(`[not_found] Path does not exist: ${relStart}. Hint: check it with list_files.`);
   }
   if (startStat.isFile()) {
     await considerFile(startAbs, relStart);

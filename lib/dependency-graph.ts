@@ -606,7 +606,7 @@ export async function buildChangeImpact(
       throw new Error(`[path_escape] Seed file is outside the workspace: ${raw}.`);
     }
     if (!existsSync(abs)) {
-      throw new Error(`[not_found] Seed file does not exist: ${raw}. Hint: check it with project_list_files.`);
+      throw new Error(`[not_found] Seed file does not exist: ${raw}. Hint: check it with list_files.`);
     }
     let stat;
     try {
@@ -647,7 +647,7 @@ export async function buildChangeImpact(
         seedUnresolved.push({
           symbol: seed.name,
           reason: "the symbol is not declared in the file you pinned",
-          next_step: "drop the file, or pin the file that declares it (check it with project_outline_symbol)",
+          next_step: "drop the file, or pin the file that declares it (check it with outline_symbol)",
         });
         continue;
       }
@@ -656,7 +656,7 @@ export async function buildChangeImpact(
       seedUnresolved.push({
         symbol: seed.name,
         reason: "the symbol is not declared anywhere in the workspace (it may be external)",
-        next_step: "check the spelling with project_search, or pass files=[] with the file that uses it",
+        next_step: "check the spelling with search, or pass files=[] with the file that uses it",
       });
       continue;
     }

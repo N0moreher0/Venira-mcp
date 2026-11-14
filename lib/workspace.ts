@@ -61,7 +61,7 @@ export function defaultDataDir(): string {
 export const UNRESTRICTED = envFlag("VENIRA_UNRESTRICTED", false);
 
 /**
- * `project_execute_js` mode — the single gate for the tool:
+ * `execute_js` mode — the single gate for the tool:
  *   - `off`  (default): the tool is not registered at all.
  *   - `ask`: registered; each call needs a human approval bound to the code — unless
  *     `VENIRA_PERMISSION_MODE=allow_all` (the prompt is folded into the permission mode).
@@ -140,7 +140,7 @@ function normalizedProtectedBase(canonicalPath: string): string {
 
 export function dynamicWorkspaceEnabled(): boolean {
   // Default ON: stdio MCP clients often spawn the server once and cannot re-root it per
-  // project; the agent re-roots with project_switch_workspace instead. Set
+  // project; the agent re-roots with switch_workspace instead. Set
   // VENIRA_DYNAMIC_WORKSPACE=0 to keep the server locked to the spawn workspace.
   return envFlag("VENIRA_DYNAMIC_WORKSPACE", true);
 }

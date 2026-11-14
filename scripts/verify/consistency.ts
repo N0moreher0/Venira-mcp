@@ -14,7 +14,7 @@
  *      in the field name, and every "recent list" reads newest-first.
  *   4. `shell_run`: `status: "completed"` next to `command_status: "running"`
  *      was a contradiction. Now `status` names what happened to the command.
- *   5. `project_health`: `capability.project_id: "chat-terminal"` was the
+ *   5. `health`: `capability.project_id: "chat-terminal"` was the
  *      fallback id and did not say so.
  *   6. `snapshot`: a failed `edit_batch` left its internal checkpoint behind
  *      and ate a VENIRA_SNAPSHOT_KEEP slot per attempt.
@@ -41,7 +41,7 @@ export async function runConsistency(
   // the dependency-graph cache may hold a pre-fixture index: the server does
   // not know .verify-tmp/impact/alpha.ts exists yet, and a shared 5 s cache
   // entry built moments earlier hides it. Flush it before seeding.
-  await call("project_cache_clear", { type: "graph" });
+  await call("cache_clear", { type: "graph" });
 
   // -------------------------------------------------------------------------
   // 1. change_impact: the seeds' problems, not the graph's noise
@@ -56,7 +56,7 @@ export async function runConsistency(
     'import { alphaSymbol } from "./missing-module";\nexport const beta = alphaSymbol;\n',
   );
   const impactOk = asEnvelope(
-    await call("project_change_impact", {
+    await call("change_impact", {
       symbols: ["alphaSymbol"],
       direction: "dependents",
     }),
@@ -73,7 +73,7 @@ export async function runConsistency(
     { unresolved: impactUnresolved, stats: impactOk.data?.stats },
   );
   const impactGhost = asEnvelope(
-    await call("project_change_impact", { symbols: ["ghostSymbolNobodyDeclared"] }),
+    await call("change_impact", { symbols: ["ghostSymbolNobodyDeclared"] }),
   );
   const ghostUnresolved = (impactGhost.data?.unresolved ?? []) as Array<
     Record<string, unknown>
@@ -100,7 +100,7 @@ export async function runConsistency(
     ),
   );
   const manyGraph = asEnvelope(
-    await call("project_dependency_graph", {
+    await call("dependency_graph", {
       kind: "files",
       relative_path: `${dir}/many-externals`,
       depth: 3,
@@ -138,7 +138,7 @@ export async function runConsistency(
     Array.from({ length: 5 }, (_, i) => `alphaSymbol ${i}`).join("\n") + "\n",
   );
   const refsCapped = asEnvelope(
-    await call("project_symbol_references", {
+    await call("symbol_references", {
       symbol_name: "alphaSymbol",
       scope: "file",
       relative_path: `${dir}/refs.txt`,
@@ -157,7 +157,7 @@ export async function runConsistency(
     refsCapped.data,
   );
   const refsScan = asEnvelope(
-    await call("project_symbol_references", {
+    await call("symbol_references", {
       symbol_name: "alphaSymbol",
       scope: "workspace",
       limit: 1,
@@ -170,7 +170,7 @@ export async function runConsistency(
     refsScan.data,
   );
   const refsDefaultScan = asEnvelope(
-    await call("project_symbol_references", {
+    await call("symbol_references", {
       symbol_name: "alphaSymbol",
       scope: "workspace",
       max_references: 7,
@@ -188,7 +188,7 @@ export async function runConsistency(
   // -------------------------------------------------------------------------
   await fs.writeFile(path.join(dir, "recovery.txt"), "alpha\n");
   const recoveryEdit = asEnvelope(
-    await call("project_edit_file", {
+    await call("edit_file", {
       relative_path: `${dir}/recovery.txt`,
       old_text: "not in the file",
       new_text: "X",
@@ -207,7 +207,7 @@ export async function runConsistency(
       recoveryFile === `${dir}/recovery.txt` &&
       recoveryAction.some(
         (action) =>
-          action.tool === "project_read_file" &&
+          action.tool === "read_file" &&
           action.arguments?.relative_path === `${dir}/recovery.txt`,
       ),
     {
@@ -221,9 +221,9 @@ export async function runConsistency(
   // 2c. The read cache must not confuse two shapes of the same file
   // -------------------------------------------------------------------------
   await fs.writeFile(path.join(dir, "shapes.txt"), "one\ntwo\nthree\n");
-  const plain = asEnvelope(await call("project_read_file", { relative_path: `${dir}/shapes.txt` }));
+  const plain = asEnvelope(await call("read_file", { relative_path: `${dir}/shapes.txt` }));
   const ranged = asEnvelope(
-    await call("project_read_file", {
+    await call("read_file", {
       relative_path: `${dir}/shapes.txt`,
       ranges: [{ start_line: 1, end_line: 2 }],
     }),
@@ -237,10 +237,10 @@ export async function runConsistency(
     { plain_text: plain.data?.text, ranged_keys: Object.keys(ranged.data ?? {}) },
   );
   const numbered = asEnvelope(
-    await call("project_read_file", { relative_path: `${dir}/shapes.txt`, line_numbers: 1 }),
+    await call("read_file", { relative_path: `${dir}/shapes.txt`, line_numbers: 1 }),
   );
   const numberedAgain = asEnvelope(
-    await call("project_read_file", { relative_path: `${dir}/shapes.txt`, line_numbers: 1 }),
+    await call("read_file", { relative_path: `${dir}/shapes.txt`, line_numbers: 1 }),
   );
   check(
     "a numbered read numbers once (the cache must not re-number)",
@@ -253,14 +253,14 @@ export async function runConsistency(
   // -------------------------------------------------------------------------
   // 2d. recent_files: a workspace-relative root, and the index serves a subtree
   // -------------------------------------------------------------------------
-  const recentRoot = asEnvelope(await call("project_recent_files", { relative_path: ".", limit: 5 }));
+  const recentRoot = asEnvelope(await call("recent_files", { relative_path: ".", limit: 5 }));
   check(
     "recent_files reports a workspace-relative root",
     recentRoot.ok === true && recentRoot.data?.relative_path === "",
     { relative_path: recentRoot.data?.relative_path },
   );
   const recentSub = asEnvelope(
-    await call("project_recent_files", { relative_path: dir, limit: 10 }),
+    await call("recent_files", { relative_path: dir, limit: 10 }),
   );
   const subEntries = (recentSub.data?.entries ?? []) as Array<{
     relative_path?: string;
@@ -277,7 +277,7 @@ export async function runConsistency(
   // -------------------------------------------------------------------------
   // 3. Timestamps: epoch milliseconds, everywhere, newest first
   // -------------------------------------------------------------------------
-  const auditRows = asEnvelope(await call("project_read_audit", { limit: 5 }));
+  const auditRows = asEnvelope(await call("read_audit", { limit: 5 }));
   const firstRow = (auditRows.data?.rows ?? [])[0] as
     | Record<string, unknown>
     | undefined;
@@ -291,14 +291,14 @@ export async function runConsistency(
     { row: firstRow },
   );
   const snapForTime = asEnvelope(
-    await call("project_snapshot", {
+    await call("snapshot", {
       action: "create",
       paths: [dir],
       label: "consistency timestamps",
       reason: "VERIFY_REASON_TIMESTAMP_SNAPSHOT",
     }),
   );
-  const snapList = asEnvelope(await call("project_snapshot", { action: "list" }));
+  const snapList = asEnvelope(await call("snapshot", { action: "list" }));
   const newestCheckpoint = (snapList.data?.checkpoints ?? [])[0] as
     | Record<string, unknown>
     | undefined;
@@ -312,7 +312,7 @@ export async function runConsistency(
     { created_at_ms: snapForTime.data?.created_at_ms, newest: newestCheckpoint },
   );
   if (snapForTime.data?.id) {
-    await call("project_snapshot", {
+    await call("snapshot", {
       action: "delete",
       id: String(snapForTime.data.id),
       reason: "VERIFY_REASON_TIMESTAMP_CLEANUP",
@@ -333,13 +333,13 @@ export async function runConsistency(
   await traceClient.connect(traceTransport);
   // The buffer only fills with calls that went through the executor.
   await traceClient.callTool({
-    name: "project_read_file",
+    name: "read_file",
     arguments: { relative_path: "package.json", start_line: 1, end_line: 2 },
   });
   const traceStatus = JSON.parse(
     (
       (await traceClient.callTool({
-        name: "project_trace_status",
+        name: "trace_status",
         arguments: {},
       })) as { content?: { text?: string }[] }
     ).content?.[0]?.text ?? "{}",
@@ -363,7 +363,7 @@ export async function runConsistency(
   // 4. shell_run: `status` names what happened to the command
   // -------------------------------------------------------------------------
   const failing = asEnvelope(
-    await call("project_shell_run", {
+    await call("shell_run", {
       // A file no other section touches: the repeat-guard refuses the second
       // run of the *same* command (roadmap item 17), and this section needs
       // a real non-zero exit code.
@@ -384,7 +384,7 @@ export async function runConsistency(
     { status: failing.status, command_status: failing.command_status },
   );
   const passing = asEnvelope(
-    await call("project_shell_run", {
+    await call("shell_run", {
       command: shellFor === "powershell" ? "Get-Content package.json" : "cat package.json",
       shell: shellFor,
       background: 0,
@@ -401,7 +401,7 @@ export async function runConsistency(
   );
   const running = asEnvelope(
     await runWithCliApproval(
-      (args) => call("project_shell_run", args),
+      (args) => call("shell_run", args),
       {
         command: `node ${dir}/consistency-loop.js`,
         shell: shellFor,
@@ -417,13 +417,13 @@ export async function runConsistency(
   );
   const runningRunId = String(running.data?.run_id ?? "");
   if (runningRunId) {
-    await call("project_shell_cancel", { run_id: runningRunId });
+    await call("shell_cancel", { run_id: runningRunId });
   }
 
   // -------------------------------------------------------------------------
-  // 5. project_health: the fallback project id says so
+  // 5. health: the fallback project id says so
   // -------------------------------------------------------------------------
-  const health = asEnvelope(await call("project_health", { include_audit: 0 }));
+  const health = asEnvelope(await call("health", { include_audit: 0 }));
   check(
     "health_names_the_fallback_project_id",
     health.ok === true &&
@@ -437,10 +437,10 @@ export async function runConsistency(
   // -------------------------------------------------------------------------
   await fs.writeFile(path.join(dir, "batch-a.txt"), "alpha\n");
   await fs.writeFile(path.join(dir, "batch-b.txt"), "beta\n");
-  const beforeList = asEnvelope(await call("project_snapshot", { action: "list" }));
+  const beforeList = asEnvelope(await call("snapshot", { action: "list" }));
   const beforeCount = Number(beforeList.data?.total ?? 0);
   const batch = asEnvelope(
-    await call("project_edit_batch", {
+    await call("edit_batch", {
       edits: [
         {
           relative_path: `${dir}/batch-a.txt`,
@@ -456,7 +456,7 @@ export async function runConsistency(
       reason: "VERIFY_REASON_EDIT_BATCH_ROLLBACK",
     }),
   );
-  const afterList = asEnvelope(await call("project_snapshot", { action: "list" }));
+  const afterList = asEnvelope(await call("snapshot", { action: "list" }));
   const afterCount = Number(afterList.data?.total ?? 0);
   const batchA = await fs.readFile(path.join(dir, "batch-a.txt"), "utf8");
   check(

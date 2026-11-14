@@ -13,7 +13,7 @@ import { ensureAuditDb } from "./audit-store.js";
 // ---------------------------------------------------------------------------
 
 /** Record a file edit in the project_file_index (SQLite) so that
- *  project_recent_files can use an indexed query instead of a bounded scan.
+ *  recent_files can use an indexed query instead of a bounded scan.
  *  Best-effort: errors are logged, never thrown.
  */
 export function recordRecentFile(absPath: string, root: string): void {

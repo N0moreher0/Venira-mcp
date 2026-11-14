@@ -43,7 +43,7 @@ export async function runCore($h: Harness) {
       instructions.includes("dry_run=1") &&
       instructions.includes("same-size content changes") &&
       instructions.includes("delete_extra=0") &&
-      instructions.includes("every project_delete_path call"),
+      instructions.includes("every delete_path call"),
     {
       includes: [
         "Snapshot discipline",
@@ -55,16 +55,16 @@ export async function runCore($h: Harness) {
   );
   check(
     "instructions_teach_recent_files_habit",
-    instructions.includes("project_recent_files") &&
+    instructions.includes("recent_files") &&
       instructions.includes("at the start of a task") &&
       instructions.includes("session_edits") &&
-      instructions.includes("after project_shell_run"),
+      instructions.includes("after shell_run"),
     {
       includes: [
-        "project_recent_files",
+        "recent_files",
         "at the start of a task",
         "session_edits",
-        "after project_shell_run",
+        "after shell_run",
       ].map((text) => instructions.includes(text)),
     },
   );
@@ -87,7 +87,7 @@ export async function runCore($h: Harness) {
     expected: expectedCount,
   });
   const recentFilesTool = tools.tools.find(
-    (tool) => tool.name === "project_recent_files",
+    (tool) => tool.name === "recent_files",
   );
   check(
     "recent_files_description_teaches_when_to_use",
@@ -106,7 +106,7 @@ export async function runCore($h: Harness) {
     directBooleanToolInputs,
   );
   const shellToolSchema = tools.tools.find(
-    (tool) => tool.name === "project_shell_run",
+    (tool) => tool.name === "shell_run",
   );
   const shellProperties = shellToolSchema?.inputSchema?.properties as
     | Record<
@@ -132,7 +132,7 @@ export async function runCore($h: Harness) {
       shellProperties?.background?.anyOf === undefined,
     shellProperties?.background,
   );
-  const snapshotTool = tools.tools.find((t) => t.name === "project_snapshot");
+  const snapshotTool = tools.tools.find((t) => t.name === "snapshot");
   check(
     "tool_snapshot_present",
     !!snapshotTool,
@@ -150,7 +150,7 @@ export async function runCore($h: Harness) {
     snapshotDescription,
   );
   const deletePathTool = tools.tools.find(
-    (t) => t.name === "project_delete_path",
+    (t) => t.name === "delete_path",
   );
   const deletePathDescription = deletePathTool?.description ?? "";
   const deleteRecursiveDescription = String(
@@ -161,7 +161,7 @@ export async function runCore($h: Harness) {
   );
   check(
     "delete_path_teaches_snapshot_first",
-    deletePathDescription.includes("project_snapshot") &&
+    deletePathDescription.includes("snapshot") &&
       deletePathDescription.includes("Not undoable") &&
       deletePathDescription.includes("snapshot first") &&
       deleteRecursiveDescription.includes("snapshot") &&
@@ -172,22 +172,22 @@ export async function runCore($h: Harness) {
     },
   );
   const expectedNewTools = [
-    "project_pr_create",
-    "project_pr_comment",
-    "project_pr_merge",
-    "project_pr_list",
-    "project_pr_close",
-    "project_pr_reopen",
-    "project_ci_status",
-    "project_ci_trigger",
-    "project_ci_logs",
-    "project_ci_wait",
-    "project_ci_control",
-    "project_dependency_graph",
-    "project_change_impact",
-    "project_secret",
-    "project_explain_error",
-    "project_plan_read_batch",
+    "pr_create",
+    "pr_comment",
+    "pr_merge",
+    "pr_list",
+    "pr_close",
+    "pr_reopen",
+    "ci_status",
+    "ci_trigger",
+    "ci_logs",
+    "ci_wait",
+    "ci_control",
+    "dependency_graph",
+    "change_impact",
+    "secret",
+    "explain_error",
+    "plan_read_batch",
   ];
   check(
     "tool_new_surface_present",
@@ -201,13 +201,13 @@ export async function runCore($h: Harness) {
   );
   check(
     "tool_edit_reason_param",
-    !!tools.tools.find((t) => t.name === "project_edit_file")?.inputSchema
+    !!tools.tools.find((t) => t.name === "edit_file")?.inputSchema
       ?.properties?.reason,
     undefined,
   );
 
-  const pair = tools.tools.find((t) => t.name === "project_read_file");
-  const readBatch = tools.tools.find((t) => t.name === "project_read_batch");
+  const pair = tools.tools.find((t) => t.name === "read_file");
+  const readBatch = tools.tools.find((t) => t.name === "read_batch");
   check("instrumentation_read", !!pair?._meta?.venira, { meta: pair?._meta });
   check("instrumentation_batch", !!readBatch?._meta?.venira, {
     meta: readBatch?._meta,
@@ -235,10 +235,10 @@ export async function runCore($h: Harness) {
   // fails verification instead of silently inflating the tool list. Both the
   // default and expert tool profiles are measured (expert is the worst case).
   // Measured 2026-11 (tool schema phase 4): expert=63803 B, default=47277 B,
-  // worst per tool=5071 B (project_read_batch, the typed batch schema kept by phase 4).
+  // worst per tool=5071 B (read_batch, the typed batch schema kept by phase 4).
   // Raised deliberately in the same change that advertised boolean acceptance on every
   // flag (flag01 = integer 0|1 in tools/list, parse accepts true/false): the anyOf grew
-  // every flag's schema, and project_read_batch (which enumerates four operations' args)
+  // every flag's schema, and read_batch (which enumerates four operations' args)
   // crossed the old 5100 ceiling at 5647 bytes. Totals are unchanged: expert 68624 (limit 72000),
   // default 49457 (limit 50000) both still fit.
   // Raised deliberately again in ROADMAP_TOOLS phase 1+2 (move/copy/apply_patch grew the default list to ~52950 B, measured JS-off; expert ~71900 B, limit 72000):
@@ -318,7 +318,7 @@ export async function runCore($h: Harness) {
   // 2. First batch (cold)
   console.log("[verify] checking cold batch...");
   let started = performance.now();
-  const firstBatch = await call("project_read_batch", {
+  const firstBatch = await call("read_batch", {
     requests: names.map((relative_path) => ({
       operation: "read_file",
       arguments: { relative_path },
@@ -356,7 +356,7 @@ export async function runCore($h: Harness) {
 
   // 3. Second batch (cached)
   started = performance.now();
-  await call("project_read_batch", {
+  await call("read_batch", {
     requests: names.map((relative_path) => ({
       operation: "read_file",
       arguments: { relative_path },
@@ -364,7 +364,7 @@ export async function runCore($h: Harness) {
   });
   results.batch_cached_ms = +(performance.now() - started).toFixed(1);
 
-  // 3b. Regression: numeric 0/1 flags must work inside project_read_batch (they used to be
+  // 3b. Regression: numeric 0/1 flags must work inside read_batch (they used to be
   // passed through as raw numbers and ignored, so regex alternation returned no matches).
   console.log("[verify] checking batch flag coercion...");
   await fs.writeFile(
@@ -373,7 +373,7 @@ export async function runCore($h: Harness) {
   );
   const flagBatch = JSON.parse(
     textOf(
-      await call("project_read_batch", {
+      await call("read_batch", {
         requests: [
           {
             operation: "search",
@@ -442,7 +442,7 @@ export async function runCore($h: Harness) {
   // 4. Cache invalidation external write
   console.log("[verify] checking cache invalidation external...");
   async function runRead(p: string) {
-    const r = (await call("project_read_file", { relative_path: p })) as {
+    const r = (await call("read_file", { relative_path: p })) as {
       content: { text: string }[];
       isError?: boolean;
     };
@@ -467,7 +467,7 @@ export async function runCore($h: Harness) {
     .digest("hex");
   const guardedWrite = JSON.parse(
     textOf(
-      await call("project_write_file", {
+      await call("write_file", {
         relative_path: guardedPath,
         content: guardedContent,
         expected_sha256: "0".repeat(64),
@@ -481,7 +481,7 @@ export async function runCore($h: Harness) {
   );
   const guardedWriteOk = JSON.parse(
     textOf(
-      await call("project_write_file", {
+      await call("write_file", {
         relative_path: guardedPath,
         content: guardedContent,
       }),
@@ -494,7 +494,7 @@ export async function runCore($h: Harness) {
   );
   const guardedRewrite = JSON.parse(
     textOf(
-      await call("project_write_file", {
+      await call("write_file", {
         relative_path: guardedPath,
         content: `${guardedContent}updated\n`,
         expected_sha256: guardedSha,
@@ -514,7 +514,7 @@ export async function runCore($h: Harness) {
   );
   const bomCrLfEdit = JSON.parse(
     textOf(
-      await call("project_edit_file", {
+      await call("edit_file", {
         relative_path: bomCrLfPath,
         old_text: "second",
         new_text: "changed",
@@ -533,12 +533,12 @@ export async function runCore($h: Harness) {
   );
 
   // 5. Write via tool then edit invalidation
-  await call("project_write_file", {
+  await call("write_file", {
     relative_path: `${dir}/written.txt`,
     content: "ban dau\n",
   });
   const beforeEdit = await runRead(`${dir}/written.txt`);
-  await call("project_edit_file", {
+  await call("edit_file", {
     relative_path: `${dir}/written.txt`,
     old_text: "ban dau",
     new_text: "da sua",
@@ -551,14 +551,14 @@ export async function runCore($h: Harness) {
   );
 
   // 6. get_file_info cache + refresh
-  const info1 = (await call("project_get_file_info", {
+  const info1 = (await call("get_file_info", {
     relative_path: `${dir}/f0.txt`,
   })) as { content?: { text?: string }[] };
   await fs.writeFile(
     `${dir}/f0.txt`,
     "size khac han ban truoc rat rat dai\n".repeat(30),
   );
-  const info2 = (await call("project_get_file_info", {
+  const info2 = (await call("get_file_info", {
     relative_path: `${dir}/f0.txt`,
   })) as { content?: { text?: string }[] };
   const infoData1 = JSON.parse(info1.content?.[0]?.text ?? "{}");
@@ -570,7 +570,7 @@ export async function runCore($h: Harness) {
   );
 
   // 7. Read the range + max_bytes
-  const ranged = (await call("project_read_file", {
+  const ranged = (await call("read_file", {
     relative_path: "server.ts",
     start_line: 1,
     end_line: 3,
@@ -584,7 +584,7 @@ export async function runCore($h: Harness) {
   );
 
   // 8. Missing file error / path_escape
-  const missing = await call("project_read_file", {
+  const missing = await call("read_file", {
     relative_path: `${dir}/khong-ton-tai.txt`,
   });
   check(
@@ -594,7 +594,7 @@ export async function runCore($h: Harness) {
   );
 
   // 9. Shell run + status
-  const run = (await call("project_shell_run", {
+  const run = (await call("shell_run", {
     command: "git status",
     shell: isWin ? "powershell" : "bash",
   })) as { content?: { text?: string }[] };
@@ -607,7 +607,7 @@ export async function runCore($h: Harness) {
   const runId = runData?.data?.run_id;
   let status: Record<string, any> = {};
   for (let i = 0; i < 12; i++) {
-    const statusCall = await call("project_shell_status", {
+    const statusCall = await call("shell_status", {
       run_id: runId as string,
       wait_seconds: 5,
     });
@@ -635,7 +635,7 @@ export async function runCore($h: Harness) {
     const startedAt = Date.now();
     const foreground = JSON.parse(
       textOf(
-        await call("project_shell_run", {
+        await call("shell_run", {
           command: sleepCommand(delay),
           shell: isWin ? "powershell" : "bash",
           background,

@@ -25,7 +25,7 @@ All gated shell and JavaScript calls use the same approval core:
 
 There is no agent-redeemable `approval_token` or `VENIRA_SHELL_AUTO_APPROVE_TOKEN`; the legacy environment variable is warned about and ignored. Responses include a shared `data.approval` payload with a ready-to-use retry shape. `approval_wait_ms` can keep a call open for up to 45 seconds while the human grants it.
 
-`project_shell_run.dry_run=1` reports the policy result without running the command or creating an approval. Hard-deny behavior is: `strict` and `balanced` deny; `trusted` asks; `off` bypasses shell policy. Deny always wins over ask rules except in the explicitly permissive `trusted` posture, where a hard-deny match requires a grant.
+`shell_run.dry_run=1` reports the policy result without running the command or creating an approval. Hard-deny behavior is: `strict` and `balanced` deny; `trusted` asks; `off` bypasses shell policy. Deny always wins over ask rules except in the explicitly permissive `trusted` posture, where a hard-deny match requires a grant.
 
 ## Implementation milestones
 

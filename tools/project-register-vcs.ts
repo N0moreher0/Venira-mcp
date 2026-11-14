@@ -33,7 +33,7 @@ export function registerVcsTools(server: McpServer, deps: VcsDeps): void {
     .describe("Default: configured, else from git origin.");
 
   server.registerTool(
-    "project_pr_create",
+    "pr_create",
     {
       ...config(
         "Create pull request",
@@ -58,7 +58,7 @@ export function registerVcsTools(server: McpServer, deps: VcsDeps): void {
   );
 
   server.registerTool(
-    "project_pr_comment",
+    "pr_comment",
     {
       ...config(
         "Comment on PR",
@@ -89,7 +89,7 @@ export function registerVcsTools(server: McpServer, deps: VcsDeps): void {
   );
 
   server.registerTool(
-    "project_pr_merge",
+    "pr_merge",
     {
       ...config(
         "Merge pull request",
@@ -114,7 +114,7 @@ export function registerVcsTools(server: McpServer, deps: VcsDeps): void {
   );
 
   server.registerTool(
-    "project_pr_list",
+    "pr_list",
     {
       ...config(
         "List pull requests",
@@ -137,7 +137,7 @@ export function registerVcsTools(server: McpServer, deps: VcsDeps): void {
   );
 
   server.registerTool(
-    "project_pr_close",
+    "pr_close",
     {
       ...config(
         "Close pull request",
@@ -158,7 +158,7 @@ export function registerVcsTools(server: McpServer, deps: VcsDeps): void {
   );
 
   server.registerTool(
-    "project_pr_reopen",
+    "pr_reopen",
     {
       ...config(
         "Reopen pull request",
@@ -183,7 +183,7 @@ export function registerVcsTools(server: McpServer, deps: VcsDeps): void {
   // -------------------------------------------------------------------------
 
   server.registerTool(
-    "project_ci_status",
+    "ci_status",
     {
       ...config(
         "CI status",
@@ -218,7 +218,7 @@ export function registerVcsTools(server: McpServer, deps: VcsDeps): void {
   );
 
   server.registerTool(
-    "project_ci_control",
+    "ci_control",
     {
       ...config(
         "Control CI run",
@@ -232,7 +232,7 @@ export function registerVcsTools(server: McpServer, deps: VcsDeps): void {
         action: z.enum(["cancel", "retry_failed"]).describe("Cancel the selected run, or retry only failed/canceled jobs if supported."),
         run_id: z
           .union([z.number().int().positive(), z.string().trim().min(1).max(80)])
-          .describe("Exact provider run ID from project_ci_status; Bitbucket uses a pipeline UUID."),
+          .describe("Exact provider run ID from ci_status; Bitbucket uses a pipeline UUID."),
         repo: repoArg,
         provider: providerArg,
         reason: z.string().trim().min(1).max(400).describe("Why this CI action is needed; recorded in the audit trail, secrets redacted."),
@@ -242,12 +242,12 @@ export function registerVcsTools(server: McpServer, deps: VcsDeps): void {
   );
 
   server.registerTool(
-    "project_ci_trigger",
+    "ci_trigger",
     {
       ...config(
         "Trigger CI workflow",
         {
-          speed_profile: "one API call; the new run appears in project_ci_status within ~10s.",
+          speed_profile: "one API call; the new run appears in ci_status within ~10s.",
           batch_safe: false,
         },
         { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
@@ -270,7 +270,7 @@ export function registerVcsTools(server: McpServer, deps: VcsDeps): void {
   );
 
   server.registerTool(
-    "project_ci_logs",
+    "ci_logs",
     {
       ...config(
         "CI logs",
@@ -299,7 +299,7 @@ export function registerVcsTools(server: McpServer, deps: VcsDeps): void {
   );
 
   server.registerTool(
-    "project_ci_wait",
+    "ci_wait",
     {
       ...config(
         "Wait for CI",
@@ -336,7 +336,7 @@ export function registerVcsTools(server: McpServer, deps: VcsDeps): void {
   // -------------------------------------------------------------------------
 
   server.registerTool(
-    "project_github_connect",
+    "github_connect",
     {
       ...config(
         "Connect GitHub",
@@ -363,7 +363,7 @@ export function registerVcsTools(server: McpServer, deps: VcsDeps): void {
   );
 
   server.registerTool(
-    "project_secret",
+    "secret",
     {
       ...config(
         "Manage secrets",

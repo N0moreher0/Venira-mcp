@@ -98,7 +98,7 @@ export const warmUp = createProjectWarmUp({
   workspace: WORKSPACE,
 });
 
-// Files written/edited in this session (project_recent_files returns session_edits).
+// Files written/edited in this session (recent_files returns session_edits).
 const recentEdits = new Set<string>();
 function rememberEdit(absolutePath: string): void {
   recentEdits.delete(absolutePath);
@@ -111,7 +111,7 @@ function rememberEdit(absolutePath: string): void {
 }
 
 // The mutable shell-run map is private to this registry; execution records
-// transitions while project_health receives a read-only snapshot.
+// transitions while health receives a read-only snapshot.
 const shellRegistry = createShellRunRegistry();
 
 const executeCached = createCachedExecutor({
@@ -126,24 +126,24 @@ const executeCached = createCachedExecutor({
 // ---------------------------------------------------------------------------
 const { runOne, runCreate } = createOperationRunners({ executeCached });
 
-// project_search hybrid mode lives in ./project-hybrid.ts; it reaches the backend search through
+// search hybrid mode lives in ./project-hybrid.ts; it reaches the backend search through
 // the shared response cache owned by this module.
 const hybridDeps: HybridDeps = {
   execute: (operation, args) => executeCached(operation, args),
 };
 
-// project_read_batch / project_edit_batch live in ./project-batch.ts; same cached executor plus the
+// read_batch / edit_batch live in ./project-batch.ts; same cached executor plus the
 // batch response budget (also used by this module's caches).
 const batchDeps: BatchDeps = { ...hybridDeps, maxBatchResponseBytes: MAX_BATCH_RESPONSE_BYTES };
 
-// project_shell_run (approval flow + elicitation) and project_shell_cancel_session live in
+// shell_run (approval flow + elicitation) and shell_cancel_session live in
 // ./project-shell.ts. Shell registry state is private in ./project-shell-registry.ts.
 const shellDeps: ShellDeps = {
   execute: (operation, args) => executeCached(operation, args),
   callHost: (method, params, timeoutMs) => host.call(method, params, timeoutMs),
 };
 
-// project_recent_files lives in ./project-recent.ts; wire it to the shared TTL
+// recent_files lives in ./project-recent.ts; wire it to the shared TTL
 // cache and to the session edit log (recentEdits), which this module owns.
 // ---------------------------------------------------------------------------
 const recentFilesDeps: RecentFilesDeps = {
@@ -152,7 +152,7 @@ const recentFilesDeps: RecentFilesDeps = {
   recentEdits,
 };
 
-// project_health lives in ./project-health.ts. The providers below expose the state
+// health lives in ./project-health.ts. The providers below expose the state
 // owned here plus the shell registry's read-only snapshot.
 // ---------------------------------------------------------------------------
 const healthDeps: HealthDeps = {
@@ -192,7 +192,7 @@ const auditDbPath = (): string => path.join(dataDirFor(host.snapshot().exe), "ve
 async function runSecret(args: Args): Promise<ToolResult> {
   // One tool, four verbs: the transport-level `action` maps to the single
   // `secret` host operation so the audit trail stays grouped and consistent
-  // with `project_snapshot`.
+  // with `snapshot`.
   const action = typeof args.action === "string" ? args.action.trim().toLowerCase() : "";
   if (!["get", "set", "list", "delete"].includes(action)) {
     const requestId = newRequestId();

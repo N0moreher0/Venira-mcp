@@ -36,10 +36,10 @@ deploying:
   so an external edit or delete can never silently serve stale content.
 - **Audit integrity.** Every operation is written to a SQLite WAL table with a
   keyed hash chain (`prev_hash`/`row_hash`, HMAC-SHA256 with `audit.key` in the
-  data dir). `project_read_audit verify=1` recomputes the digest of the fields
+  data dir). `read_audit verify=1` recomputes the digest of the fields
   that are immutable after insert, so in-place edits or a rewritten chain fail
   verification unless the attacker also has the key file. Legacy databases with
-  a required `created_at` column are supported in place; `project_health`
+  a required `created_at` column are supported in place; `health`
   surfaces orphan `running` rows as a post-mortem signal.
 - **Secret store integrity.** Secret values are encrypted with AES-256-GCM and
   the secret name is bound in as AAD (swapping ciphertext between two names
@@ -84,7 +84,7 @@ directly affected:
   post-hoc record.
 - **Agent / sandbox escape (e.g. "harness"-style escapes)** — agents that
   can write files or run shell can, in an over-permissive sandbox,
-  escalate. Treat `project_shell_run` as the highest-risk tool. Choose
+  escalate. Treat `shell_run` as the highest-risk tool. Choose
   `VENIRA_SECURITY_PROFILE=strict` or `balanced` for a more restrictive
   approval posture, or run the whole server in a container (see `DOCKER.md`).
 - **npm supply-chain (install-time code execution)** — malicious or
@@ -103,7 +103,7 @@ directly affected:
 3. **Keep shell overrides off by default.** If one is necessary, enable only the named
    exception and review its per-call reason and `policy_rule` in the audit trail.
 4. **Review the audit trail.** Periodically query `project_tool_audit`
-   (or run `project_health` with `include_audit=1`) to confirm what the
+   (or run `health` with `include_audit=1`) to confirm what the
    agent actually did.
 5. **Least-privilege user.** Run the MCP client (and thus this server)
    as a regular user, not root.
@@ -119,7 +119,7 @@ Shell and JavaScript approval requests return a common `data.approval` payload, 
 
 ## Configuration posture
 
-`project_health` (and `doctor`) report a shared `posture` object with a `level` (`ok` / `info` / `warning` / `critical`), deterministic findings carrying stable ids such as `workspace.unrestricted`, `profile.off`, `shell.mode_off`, `shell.mode_permissive`, `js.exec_without_approval`, `combo.unrestricted_open_shell`, `combo.unrestricted_unapproved_js`, `approval.session_grant_risky_rule`, `self_install.enabled`, `secret.reveal_enabled` and `git.plain_http_allowed`. Findings are warnings only (`fail_closed: false`): an invalid profile/mode/boolean already fails closed at startup, while the combinations above are valid operator choices. Making them refusals would break existing trusted/off deployments; revisit only with measured demand for an acknowledgement gate.
+`health` (and `doctor`) report a shared `posture` object with a `level` (`ok` / `info` / `warning` / `critical`), deterministic findings carrying stable ids such as `workspace.unrestricted`, `profile.off`, `shell.mode_off`, `shell.mode_permissive`, `js.exec_without_approval`, `combo.unrestricted_open_shell`, `combo.unrestricted_unapproved_js`, `approval.session_grant_risky_rule`, `self_install.enabled`, `secret.reveal_enabled` and `git.plain_http_allowed`. Findings are warnings only (`fail_closed: false`): an invalid profile/mode/boolean already fails closed at startup, while the combinations above are valid operator choices. Making them refusals would break existing trusted/off deployments; revisit only with measured demand for an acknowledgement gate.
 
 ## Security-related environment variables
 
@@ -128,7 +128,7 @@ Shell and JavaScript approval requests return a common `data.approval` payload, 
 | `VENIRA_UNRESTRICTED` | `"0"` | `"1"` removes the workspace lock. Highest-risk setting. |
 | `VENIRA_SECURITY_PROFILE` | `balanced` | `strict` is most restrictive; `balanced` is recommended; `trusted` lets ask-rule and unclassified commands run and turns hard-deny into approval; `off` disables shell checks and per-call JS approval. |
 | `VENIRA_SHELL_MODE` | Profile mapping | Advanced override: `strict`, `balanced`, `permissive`, or `off`. |
-| `VENIRA_JS_EXEC_MODE` | `"off"` | `project_execute_js` gate: `off` hides it, `ask` per-call approval (contained), `semi-auto` no approval (contained: network blocked, workspace-only fs, scrubbed env), `auto` no approval and no containment. |
+| `VENIRA_JS_EXEC_MODE` | `"off"` | `execute_js` gate: `off` hides it, `ask` per-call approval (contained), `semi-auto` no approval (contained: network blocked, workspace-only fs, scrubbed env), `auto` no approval and no containment. |
 | `VENIRA_SHELL_OVERRIDES` | unset | Operator allowlist for specific named shell exceptions. Each tool call must pass the exact name and a reason; the reason is redacted and audited, but is not proof of human identity. |
 | `VENIRA_DATA_DIR` | Per-user OS data directory | Contains the audit DB, encrypted secrets, approval key and pending approvals. Keep it private and don't point it at a shared directory. |
 | `VENIRA_SESSION_GRANT_RULES` | `cd_outside_workspace` | Additional rules eligible for human-approved session grants. Do not include network or history-rewrite rules unless the environment is disposable. |

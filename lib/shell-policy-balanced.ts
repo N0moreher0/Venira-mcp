@@ -288,7 +288,7 @@ function stashOk(rest: string[]): boolean {
 
 /**
  * `git restore <file>...` (worktree): overwrites uncommitted edits of explicit files with the committed
- * version. Deliberately accepted at this tier because the project's checkpoints (`project_snapshot`)
+ * version. Deliberately accepted at this tier because the project's checkpoints (`snapshot`)
  * make the overwrite recoverable. Still asks for: directories, `.`, globs/pathspec magic, `--source`,
  * `--staged --worktree`, `-p`, the `--` separator, and build/config/hook/protected files.
  */

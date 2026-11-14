@@ -8,7 +8,7 @@
  *   3. ripgrep availability + workspace scale (warn-only: a missing `rg` on a
  *      multi-thousand-file workspace forces the JS line scanner)
  *   4. MCP server starts and exposes the expected tool count
- *   5. project_health is OK
+ *   5. health is OK
  *   6. shell smoke
  *   7. audit/trace reachability
  *   8. version
@@ -153,7 +153,7 @@ async function main() {
       const expectedTools = 49; // expert mode exposes 49 tools (setup tools need VENIRA_SETUP_TOOLS=1); JS exec remains approval-gated
       results.push(await check("tools_count", tools.tools.length === expectedTools, { actual: tools.tools.length, expected: expectedTools }));
 
-      const healthRes = await client.callTool({ name: "project_health", arguments: { include_audit: 0 } });
+      const healthRes = await client.callTool({ name: "health", arguments: { include_audit: 0 } });
       const healthData = JSON.parse(
         ((healthRes as { content?: { text?: string }[] })?.content?.[0]?.text ?? "{}"),
       );
@@ -190,7 +190,7 @@ async function main() {
     await new Promise((r) => setTimeout(r, 300));
     const shellName = process.platform === "win32" ? "powershell" : "bash";
     const shellOk = await client2
-      .callTool({ name: "project_shell_run", arguments: { command: "git status", shell: shellName } })
+      .callTool({ name: "shell_run", arguments: { command: "git status", shell: shellName } })
       .then((res) => {
         const data = JSON.parse(((res as { content?: { text?: string }[] })?.content?.[0]?.text ?? "{}"));
         return data.ok === true && typeof data.data?.run_id === "string";
@@ -218,7 +218,7 @@ async function main() {
     await client3.connect(transport3);
     await new Promise((r) => setTimeout(r, 300));
 
-    const healthRes3 = await client3.callTool({ name: "project_health", arguments: { include_audit: 0 } });
+    const healthRes3 = await client3.callTool({ name: "health", arguments: { include_audit: 0 } });
     const hData = JSON.parse(((healthRes3 as { content?: { text?: string }[] })?.content?.[0]?.text ?? "{}"));
     results.push(await check("config_cache_reported", hData.data?.cache !== undefined, hData.data?.cache));
     results.push(await check("config_trace_reported", hData.data?.trace !== undefined, hData.data?.trace));
@@ -246,14 +246,14 @@ async function main() {
     }
 
     // P1: read_audit tool reachable and returns an envelope (audit_unavailable is acceptable)
-    const auditRes = await client3.callTool({ name: "project_read_audit", arguments: { limit: 1 } });
+    const auditRes = await client3.callTool({ name: "read_audit", arguments: { limit: 1 } });
     const auditData = JSON.parse(((auditRes as { content?: { text?: string }[] })?.content?.[0]?.text ?? "{}"));
     const auditOk =
       auditData.ok === true ||
       auditData.error?.code === "audit_unavailable";
     results.push(await check("read_audit_reachable", auditOk, auditData));
 
-    const traceRes = await client3.callTool({ name: "project_trace_status", arguments: {} });
+    const traceRes = await client3.callTool({ name: "trace_status", arguments: {} });
     const traceData = JSON.parse(((traceRes as { content?: { text?: string }[] })?.content?.[0]?.text ?? "{}"));
     results.push(await check("trace_status_reachable", traceData.ok === true, traceData));
 

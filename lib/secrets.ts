@@ -1,12 +1,12 @@
 /**
- * Workspace secret store for `project_secret` + `project_shell_run secret_env`.
+ * Workspace secret store for `secret` + `shell_run secret_env`.
  *
  * Design goals
  * ------------
- * - **Values never reach a log.** `project_secret get` returns metadata by
+ * - **Values never reach a log.** `secret get` returns metadata by
  *   default (length + sha256 fingerprint), `list` returns names only, and every
  *   shell output/audit row is scrubbed for stored values before it is returned.
- * - **Values are never passed on a command line.** `project_shell_run
+ * - **Values are never passed on a command line.** `shell_run
  *   secret_env: ["GITHUB_TOKEN"]` injects the decrypted value into the child
  *   process environment, so the command string (which *is* audited) never
  *   contains it.
@@ -398,14 +398,14 @@ export function assertSecretUsable(name: string): void {
   if (!meta) {
     throw new Error(
       `[secret_missing] secret_env refers to "${name}" but it is not in the secret store. ` +
-        `Hint: run project_secret action=list, or action=set name=${name}.`,
+        `Hint: run secret action=list, or action=set name=${name}.`,
     );
   }
   if (meta.expired) {
     const at = meta.expires_at === null ? "unknown" : new Date(meta.expires_at).toISOString();
     throw new Error(
       `[secret_expired] Secret "${name}" expired at ${at}. ` +
-        `Hint: rotate with project_secret action=set name=${name} (add expires_in_days to track expiry).`,
+        `Hint: rotate with secret action=set name=${name} (add expires_in_days to track expiry).`,
     );
   }
 }
@@ -616,7 +616,7 @@ export async function deleteSecret(name: string): Promise<{ name: string; delete
       // stored; `delete` used to answer "deleted: false". Both now say the
       // same thing.
       throw new Error(
-        `[not_found] Secret "${cleanName}" is not stored. Hint: run project_secret action=list to see available names.`,
+        `[not_found] Secret "${cleanName}" is not stored. Hint: run secret action=list to see available names.`,
       );
     }
     delete store.secrets[cleanName];

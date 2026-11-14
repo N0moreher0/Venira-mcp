@@ -85,7 +85,7 @@ export async function opPrReopen(args: Record<string, unknown>): Promise<Resp> {
 
 export async function opCiStatus(args: Record<string, unknown>): Promise<Resp> {
   // 0 selectors = recent runs; 1 = that run/ref/PR/branch. 2+ used to be resolved
-  // silently by a hidden precedence, so reject it like project_ci_wait does.
+  // silently by a hidden precedence, so reject it like ci_wait does.
   if (selectorCount(args) > 1) {
     throw new Error(
       "[invalid_request] Pass at most one of run_id / ref / pr / branch (they select different CI surfaces). " +

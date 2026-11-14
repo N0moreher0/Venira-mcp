@@ -29,7 +29,7 @@ export function registerWorkflowTools(server: McpServer, deps: WorkflowToolsDeps
   // Only advertised with VENIRA_SETUP_TOOLS=1: setup-time tools, and `venira-mcp --install` covers them.
   if (setupToolsEnabled()) {
   server.registerTool(
-    "project_detect_harnesses",
+    "detect_harnesses",
     {
       ...config(
         "Detect MCP harnesses",
@@ -45,7 +45,7 @@ export function registerWorkflowTools(server: McpServer, deps: WorkflowToolsDeps
   );
 
   server.registerTool(
-    "project_install_self",
+    "install_self",
     {
       ...config(
         "Self-install venira MCP",
@@ -64,7 +64,7 @@ export function registerWorkflowTools(server: McpServer, deps: WorkflowToolsDeps
           "kimi",
           "deepseek",
           "antigravity",
-        ]).describe("Which client's config to update (see project_detect_harnesses)."),
+        ]).describe("Which client's config to update (see detect_harnesses)."),
         workspace: z.string().optional().describe("VENIRA_WORKSPACE value to write (default: process.cwd())."),
         data_dir: z.string().optional().describe("VENIRA_DATA_DIR value to write (default: the per-user Venira data directory)."),
         dry_run: flag01.optional().describe("1 reports what would happen without writing; 0 performs the action."),
@@ -79,7 +79,7 @@ export function registerWorkflowTools(server: McpServer, deps: WorkflowToolsDeps
   // -------------------------------------------------------------------------
 
   server.registerTool(
-    "project_explain_error",
+    "explain_error",
     {
       ...config(
         "Explain an error",
@@ -99,7 +99,7 @@ export function registerWorkflowTools(server: McpServer, deps: WorkflowToolsDeps
           .string()
           .max(32 * 1024)
           .optional()
-          .describe("Tail of the failing output (e.g. project_ci_logs / project_shell_status text). One of error_text/log_tail is required."),
+          .describe("Tail of the failing output (e.g. ci_logs / shell_status text). One of error_text/log_tail is required."),
 
         language: z
           .string()
@@ -112,7 +112,7 @@ export function registerWorkflowTools(server: McpServer, deps: WorkflowToolsDeps
   );
 
   server.registerTool(
-    "project_plan_read_batch",
+    "plan_read_batch",
     {
       ...config(
         "Plan reads from a task",
@@ -147,7 +147,7 @@ export function registerWorkflowTools(server: McpServer, deps: WorkflowToolsDeps
   // -------------------------------------------------------------------------
 
   server.registerTool(
-    "project_snapshot",
+    "snapshot",
     {
       ...config(
         "Workspace checkpoint",

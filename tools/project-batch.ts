@@ -18,7 +18,7 @@ import {
   type HybridSymbolCache,
 } from "./project-hybrid.js";
 
-// project_read_batch and project_edit_batch handlers. Extracted from tools/project.ts
+// read_batch and edit_batch handlers. Extracted from tools/project.ts
 // (P1 #6, step 5f); behavior is unchanged. The cached backend executor and the batch
 // response budget are owned by project.ts and reach this module through BatchDeps, so
 // it never imports project.ts.
@@ -85,7 +85,7 @@ export type BatchDeps = HybridDeps & {
 
 /**
  * Numeric 0/1 flags accepted by the batchable read ops. The standalone tools coerce these
- * through the `flag01` zod transform (1 -> true), but `project_read_batch` takes
+ * through the `flag01` zod transform (1 -> true), but `read_batch` takes
  * `arguments` as an untyped record, so without this step the host receives the raw number
  * and silently ignores it (e.g. `regex: 1` searched for the pattern as plain text and
  * `"A|B"` returned no matches).
@@ -111,7 +111,7 @@ function normalizeBatchArgs(operation: string, args: Args): Args {
     else if (value === "0" || value === "false") out[key] = false;
   }
   // Search clients commonly call the text field `pattern`; the standalone
-  // project_search contract calls it `query`. Accept the alias in batches so
+  // search contract calls it `query`. Accept the alias in batches so
   // a valid search is not forwarded with query=undefined to the backend.
   if (operation === "search" && typeof out.query !== "string" && typeof out.pattern === "string") {
     out.query = out.pattern;
@@ -151,7 +151,7 @@ export async function runReadBatch(
       const keyError = checkReadItemKeys(request.operation, request.arguments as Args);
       if (keyError) throw new VeniraError("invalid_request", keyError);
       const itemArgs = normalizeBatchArgs(request.operation, request.arguments as Args);
-      // Same routing rule as the standalone project_search tool: hybrid only applies to literal_content.
+      // Same routing rule as the standalone search tool: hybrid only applies to literal_content.
       const useHybrid = request.operation === "search" && itemArgs.hybrid === true && itemArgs.kind === "literal_content";
       const execution = useHybrid
         ? await computeHybridSearch(itemArgs, deps, symbolCache)
@@ -417,7 +417,7 @@ export async function runEditBatch(args: Args, deps: BatchDeps): Promise<ToolRes
     : rollbackSucceeded
       ? { ...base, message: `edits[${failedIndex}] failed; every file was restored from snapshot ${snapshotId}. Nothing changed.`, hint: `Fix edits[${failedIndex}] (see data.responses) and resend the whole batch.` }
       : rollbackAttempted
-        ? { ...base, message: `edits[${failedIndex}] failed and the rollback FAILED; files may be partly edited.`, hint: `Run project_snapshot action=restore id=${snapshotId} verify=1 now, then re-read the files.` }
+        ? { ...base, message: `edits[${failedIndex}] failed and the rollback FAILED; files may be partly edited.`, hint: `Run snapshot action=restore id=${snapshotId} verify=1 now, then re-read the files.` }
         : { ...base, message: `edits[${failedIndex}] failed and rollback was not verified; files may still contain edits from data.executed or the failing item.`, hint: snapshotId ? "Inspect data.rollback_error and data.snapshot_error, then restore the checkpoint or re-read and repair the touched files." : "Re-read the touched files; finish or undo the applied edits by hand." };
   return toolResult(
     batchEnvelope(requestId, responses, elapsedMs, batchExtra, failure ? { kind: "edit_batch", failure } : { kind: "edit_batch" }),

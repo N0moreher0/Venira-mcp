@@ -90,7 +90,7 @@ export function evaluateParsedShellCommand(
 
   const deleteHint =
     parsed.segments.some((s) => ["rm", "rd", "rmdir", "del", "erase", "remove-item", "ri"].includes(s.command))
-      ? "Use project_delete_path instead for controlled, auditable file deletion."
+      ? "Use delete_path instead for controlled, auditable file deletion."
       : undefined;
 
   for (const rule of hardDeny) {

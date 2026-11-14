@@ -36,7 +36,7 @@ export function createProjectWarmUp({
           }
         }),
       ).catch(() => {});
-      void searchCached({ query: "project_read_file", kind: "literal_content", limit: 50 }).catch(() => {});
+      void searchCached({ query: "read_file", kind: "literal_content", limit: 50 }).catch(() => {});
     } catch (error) {
       console.error(
         "[venira-coding] warmup failed:",

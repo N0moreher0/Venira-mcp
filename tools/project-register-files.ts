@@ -41,17 +41,17 @@ export type FileToolsDeps = {
   recentFilesDeps: RecentFilesDeps;
   batchDeps: BatchDeps;
   maxBatchItemBytes: number;
-  /** Multi-query AND/NOT/weighted search behind project_search's `queries` param. */
+  /** Multi-query AND/NOT/weighted search behind search's `queries` param. */
   runSearchSelective: (args: Args) => Promise<ToolResult>;
 };
 
 export function registerFileTools(server: McpServer, deps: FileToolsDeps): void {
   const { runOne, hybridDeps, recentFilesDeps, batchDeps, maxBatchItemBytes, runSearchSelective } = deps;
   // VENIRA_EDIT_FUZZY decides whether the fuzzy options are advertised (ROADMAP_TOOL_SCHEMA.md, phase 3).
-  // Read once per registration, like VENIRA_JS_EXEC_MODE for project_execute_js.
+  // Read once per registration, like VENIRA_JS_EXEC_MODE for execute_js.
   const fuzzy = editFuzzyEnabled();
   server.registerTool(
-    "project_list_files",
+    "list_files",
     {
       ...config(
         "List files",
@@ -72,7 +72,7 @@ export function registerFileTools(server: McpServer, deps: FileToolsDeps): void 
   );
 
   server.registerTool(
-    "project_read_file",
+    "read_file",
     {
       ...config(
         "Read file",
@@ -109,7 +109,7 @@ export function registerFileTools(server: McpServer, deps: FileToolsDeps): void 
   );
 
   server.registerTool(
-    "project_get_file_info",
+    "get_file_info",
     {
       ...config(
         "Get file info",
@@ -125,7 +125,7 @@ export function registerFileTools(server: McpServer, deps: FileToolsDeps): void 
   );
 
   server.registerTool(
-    "project_search",
+    "search",
     {
       ...config(
         "Search workspace",
@@ -179,7 +179,7 @@ export function registerFileTools(server: McpServer, deps: FileToolsDeps): void 
   );
 
   server.registerTool(
-    "project_recent_files",
+    "recent_files",
     {
       ...config(
         "Recent files",
@@ -200,7 +200,7 @@ export function registerFileTools(server: McpServer, deps: FileToolsDeps): void 
   );
 
   server.registerTool(
-    "project_read_batch",
+    "read_batch",
     {
       ...config(
         "Batch read",
@@ -217,20 +217,20 @@ export function registerFileTools(server: McpServer, deps: FileToolsDeps): void 
           .array(
             z.union([
               z.object({
-                operation: z.literal("list_files").describe("Short op name for project_list_files."),
-                arguments: readBatchListFilesArgs.describe("Same as project_list_files."),
+                operation: z.literal("list_files").describe("Short op name for list_files."),
+                arguments: readBatchListFilesArgs.describe("Same as list_files."),
               }),
               z.object({
-                operation: z.literal("read_file").describe("Short op name for project_read_file."),
-                arguments: readBatchReadFileArgs.describe("Same as project_read_file."),
+                operation: z.literal("read_file").describe("Short op name for read_file."),
+                arguments: readBatchReadFileArgs.describe("Same as read_file."),
               }),
               z.object({
-                operation: z.literal("get_file_info").describe("Short op name for project_get_file_info."),
-                arguments: readBatchGetFileInfoArgs.describe("Same as project_get_file_info."),
+                operation: z.literal("get_file_info").describe("Short op name for get_file_info."),
+                arguments: readBatchGetFileInfoArgs.describe("Same as get_file_info."),
               }),
               z.object({
-                operation: z.literal("search").describe("Short op name for project_search."),
-                arguments: readBatchSearchArgs.describe("Same as project_search."),
+                operation: z.literal("search").describe("Short op name for search."),
+                arguments: readBatchSearchArgs.describe("Same as search."),
               }),
             ]),
           )
@@ -248,7 +248,7 @@ export function registerFileTools(server: McpServer, deps: FileToolsDeps): void 
   );
 
   server.registerTool(
-    "project_write_file",
+    "write_file",
     {
       ...config(
         "Write file",
@@ -271,7 +271,7 @@ export function registerFileTools(server: McpServer, deps: FileToolsDeps): void 
   );
 
   server.registerTool(
-    "project_edit_file",
+    "edit_file",
     {
       ...config(
         "Edit file",
@@ -307,7 +307,7 @@ export function registerFileTools(server: McpServer, deps: FileToolsDeps): void 
     (args) => runOne("edit_file", args),
   );
   server.registerTool(
-    "project_edit_batch",
+    "edit_batch",
     {
       ...config(
         "Edit batch",
@@ -317,16 +317,16 @@ export function registerFileTools(server: McpServer, deps: FileToolsDeps): void 
         },
         { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
       ),
-      // Loose for the same reason as project_read_batch: `max_response_bytes_per_item` is not advertised.
+      // Loose for the same reason as read_batch: `max_response_bytes_per_item` is not advertised.
       inputSchema: z.looseObject({
-        edits: z.array(editBatchItemFor(fuzzy)).min(1).max(64).describe("edit_file argument objects (typed like project_edit_file). Unknown fields are rejected with a did-you-mean hint and nothing is applied."),
+        edits: z.array(editBatchItemFor(fuzzy)).min(1).max(64).describe("edit_file argument objects (typed like edit_file). Unknown fields are rejected with a did-you-mean hint and nothing is applied."),
       }),
     },
     (args) => runEditBatch(args as Args, batchDeps),
   );
 
   server.registerTool(
-    "project_delete_path",
+    "delete_path",
     {
       ...config("Delete path", {
         speed_profile: "fast; clears the read/list/search cache.",
@@ -342,7 +342,7 @@ export function registerFileTools(server: McpServer, deps: FileToolsDeps): void 
   );
 
   server.registerTool(
-    "project_move_path",
+    "move_path",
     {
       ...config("Move path", {
         speed_profile: "fast; clears the read/list/search cache for both paths.",
@@ -360,7 +360,7 @@ export function registerFileTools(server: McpServer, deps: FileToolsDeps): void 
   );
 
   server.registerTool(
-    "project_copy_path",
+    "copy_path",
     {
       ...config("Copy path", {
         speed_profile: "fast for files; directory copies scale with size. Clears the read/list/search cache.",
@@ -379,7 +379,7 @@ export function registerFileTools(server: McpServer, deps: FileToolsDeps): void 
   );
 
   server.registerTool(
-    "project_apply_patch",
+    "apply_patch",
     {
       ...config("Apply patch", {
         speed_profile: "scales with patch size; validates every file before writing and rolls back the whole patch on failure.",

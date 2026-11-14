@@ -2,8 +2,8 @@
  * Roadmap item 15 (P1): the payload and the guidance must be usable.
  *
  *   1. A `not_found` about a secret or a pending device flow pointed every
- *      tool at project_list_files - a round trip that could not help.
- *   2. `project_health` in compact mode was sliced into `preview_text`, a JSON
+ *      tool at list_files - a round trip that could not help.
+ *   2. `health` in compact mode was sliced into `preview_text`, a JSON
  *      string cut mid-word: every section was unreachable.
  *   3. A read batch with one failed item came back as ok:false, so a client
  *      that maps ok:false to isError could hide the successful reads.
@@ -52,22 +52,22 @@ const envelopeOf = (result: unknown) => result as {
 // ---------------------------------------------------------------------------
 // 1. Tool-specific recovery
 // ---------------------------------------------------------------------------
-await check("a missing secret points at project_secret, not at the file tree", () => {
+await check("a missing secret points at secret, not at the file tree", () => {
   const env = envelopeOf(
     output.errorEnvelope("secret", new Error("[not_found] No such secret: TOKEN"), { requestId: "r1" }),
   );
   assert.equal(env.ok, false);
-  assert.match(env.hint ?? "", /project_secret action=list/);
-  assert.equal(env.next_actions?.[0]?.tool, "project_secret");
+  assert.match(env.hint ?? "", /secret action=list/);
+  assert.equal(env.next_actions?.[0]?.tool, "secret");
   assert.deepEqual(env.next_actions?.[0]?.arguments, { action: "list" });
 });
 
-await check("a missing device flow points at project_github_connect action=start", () => {
+await check("a missing device flow points at github_connect action=start", () => {
   const env = envelopeOf(
     output.errorEnvelope("github_connect", new Error("[not_found] Unknown pending_id: abc"), { requestId: "r2" }),
   );
   assert.match(env.hint ?? "", /action=start/);
-  assert.equal(env.next_actions?.[0]?.tool, "project_github_connect");
+  assert.equal(env.next_actions?.[0]?.tool, "github_connect");
   assert.deepEqual(env.next_actions?.[0]?.arguments, { action: "start" });
 });
 
@@ -75,8 +75,8 @@ await check("a missing file still points at the file tree", () => {
   const env = envelopeOf(
     output.errorEnvelope("read_file", new Error("[not_found] Path does not exist: x.txt"), { requestId: "r3" }),
   );
-  assert.match(env.hint ?? "", /project_list_files/);
-  assert.equal(env.next_actions?.[0]?.tool, "project_list_files");
+  assert.match(env.hint ?? "", /list_files/);
+  assert.equal(env.next_actions?.[0]?.tool, "list_files");
 });
 
 await check("an explicit hint still wins over the tool-specific one", () => {
@@ -90,7 +90,7 @@ await check("an explicit hint still wins over the tool-specific one", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 2. project_health in compact mode drops whole sections
+// 2. health in compact mode drops whole sections
 // ---------------------------------------------------------------------------
 await check("the compact health preview keeps whole sections and names the dropped ones", () => {
   const data = {

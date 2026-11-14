@@ -54,7 +54,7 @@ support; most use the "command" form that pipes stdio into the container):
 - The image runs as root by default (Node + better-sqlite3). To run unprivileged,
   use `--user 1000:1000` and make sure the mounted volume is readable/writable
   by that UID.
-- Shell commands (`project_shell_run`) execute *inside the container*. To
+- Shell commands (`shell_run`) execute *inside the container*. To
   reach the host shell, mount the host binary and set `VENIRA_DEFAULT_SHELL`.
 - The audit DB is written to `/workspace/data/venira.db` (or `VENIRA_DATA_DIR`).
   If the volume is read-only, set `VENIRA_DATA_DIR` to a writable path.

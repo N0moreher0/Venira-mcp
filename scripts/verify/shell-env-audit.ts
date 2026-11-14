@@ -47,7 +47,7 @@ export async function runShellEnvAudit(
   );
   const scrubRun = await runWithCliApproval(
     (args) =>
-      scrubClient.callTool({ name: "project_shell_run", arguments: args }),
+      scrubClient.callTool({ name: "shell_run", arguments: args }),
     { command: `node ${dir}/scrub-check.js`, shell: shellFor },
   );
   const scrubRunId = String(asEnvelope(scrubRun).data?.run_id ?? "");
@@ -55,7 +55,7 @@ export async function runShellEnvAudit(
   for (let i = 0; i < 20; i++) {
     scrubStatus = asEnvelope(
       await scrubClient.callTool({
-        name: "project_shell_status",
+        name: "shell_status",
         arguments: { run_id: scrubRunId, wait_seconds: 1 },
       }),
     );
@@ -95,7 +95,7 @@ export async function runShellEnvAudit(
 
   // 13. Health exposes the policy snapshot and counters.
   const healthPolicy = asEnvelope(
-    await call("project_health", { include_audit: 0 }),
+    await call("health", { include_audit: 0 }),
   );
   check(
     "health_shell_policy",
@@ -113,7 +113,7 @@ export async function runShellEnvAudit(
     env: verifyEnv(
       {
         VENIRA_SESSION_ID: `${SESSION_ID}-disabled`,
-        VENIRA_DISABLE_TOOLS: "project_shell_run",
+        VENIRA_DISABLE_TOOLS: "shell_run",
       },
       "full",
     ),
@@ -131,7 +131,7 @@ export async function runShellEnvAudit(
   // got added or removed.
   check(
     "disable_tools_hidden",
-    !disabledList.tools.some((t) => t.name === "project_shell_run") &&
+    !disabledList.tools.some((t) => t.name === "shell_run") &&
       disabledList.tools.length === tools.tools.length - 1,
     {
       disabledCount: disabledList.tools.length,
@@ -142,7 +142,7 @@ export async function runShellEnvAudit(
   await disabledClient.close();
 
   // 14b. Tool modes: `VENIRA_TOOL_MODE=expert` keeps the full set; `default` is
-  // the coding-focused lean set (no CI/CD shipping; shell + JS exec + `project_delete_path` included).
+  // the coding-focused lean set (no CI/CD shipping; shell + JS exec + `delete_path` included).
   const expertTransport = new StdioClientTransport({
     command: "node",
     args: ["dist/server.js"],
@@ -165,11 +165,11 @@ export async function runShellEnvAudit(
   check(
     "tool_mode_expert_full",
     expertList.tools.length === tools.tools.length + 1 &&
-      expertList.tools.some((t) => t.name === "project_ci_wait") &&
-      expertList.tools.some((t) => t.name === "project_ci_control") &&
-      expertList.tools.some((t) => t.name === "project_shell_run") &&
-      expertList.tools.some((t) => t.name === "project_execute_js") &&
-      expertList.tools.some((t) => t.name === "project_dependency_graph"),
+      expertList.tools.some((t) => t.name === "ci_wait") &&
+      expertList.tools.some((t) => t.name === "ci_control") &&
+      expertList.tools.some((t) => t.name === "shell_run") &&
+      expertList.tools.some((t) => t.name === "execute_js") &&
+      expertList.tools.some((t) => t.name === "dependency_graph"),
     {
       expertCount: expertList.tools.length,
       fullCount: tools.tools.length,
@@ -200,20 +200,20 @@ export async function runShellEnvAudit(
   const defaultList = await defaultClient.listTools();
   check(
     "tool_mode_default_coding_focused",
-    !defaultList.tools.some((t) => t.name === "project_ci_wait") &&
-      !defaultList.tools.some((t) => t.name === "project_ci_control") &&
-      !defaultList.tools.some((t) => t.name === "project_pr_create") &&
+    !defaultList.tools.some((t) => t.name === "ci_wait") &&
+      !defaultList.tools.some((t) => t.name === "ci_control") &&
+      !defaultList.tools.some((t) => t.name === "pr_create") &&
       // Diagnostics planning kit is expert-only (the envelope already carries hint + next_actions).
-      !defaultList.tools.some((t) => t.name === "project_explain_error") &&
-      !defaultList.tools.some((t) => t.name === "project_plan_read_batch") &&
-      defaultList.tools.some((t) => t.name === "project_delete_path") &&
-      defaultList.tools.some((t) => t.name === "project_shell_run") &&
-      defaultList.tools.some((t) => t.name === "project_execute_js") &&
-      defaultList.tools.some((t) => t.name === "project_read_file") &&
-      defaultList.tools.some((t) => t.name === "project_write_file") &&
-      defaultList.tools.some((t) => t.name === "project_dependency_graph") &&
-      defaultList.tools.some((t) => t.name === "project_change_impact") &&
-      defaultList.tools.some((t) => t.name === "project_snapshot"),
+      !defaultList.tools.some((t) => t.name === "explain_error") &&
+      !defaultList.tools.some((t) => t.name === "plan_read_batch") &&
+      defaultList.tools.some((t) => t.name === "delete_path") &&
+      defaultList.tools.some((t) => t.name === "shell_run") &&
+      defaultList.tools.some((t) => t.name === "execute_js") &&
+      defaultList.tools.some((t) => t.name === "read_file") &&
+      defaultList.tools.some((t) => t.name === "write_file") &&
+      defaultList.tools.some((t) => t.name === "dependency_graph") &&
+      defaultList.tools.some((t) => t.name === "change_impact") &&
+      defaultList.tools.some((t) => t.name === "snapshot"),
     {
       defaultCount: defaultList.tools.length,
       fullCount: tools.tools.length,
@@ -241,7 +241,7 @@ export async function runShellEnvAudit(
 
   const token = `VERIFY_SEARCH_TOKEN_${Date.now()}`;
   await fs.writeFile(`${dir}/search-token.txt`, `${token}\n`);
-  const search1 = await call("project_search", {
+  const search1 = await call("search", {
     query: token,
     kind: "literal_content",
     relative_path: dir,
@@ -255,12 +255,12 @@ export async function runShellEnvAudit(
     Array.isArray(search1Data.data?.hits),
     Object.keys(search1Data.data ?? {}),
   );
-  await call("project_write_file", {
+  await call("write_file", {
     relative_path: `${dir}/search-token.txt`,
     content: `${token}\n`,
   });
   await new Promise((resolve) => setTimeout(resolve, 3200)); // wait for search cache TTL to expire
-  const search2 = await call("project_search", {
+  const search2 = await call("search", {
     query: token,
     kind: "literal_content",
     relative_path: dir,

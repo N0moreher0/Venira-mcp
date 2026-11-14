@@ -223,7 +223,7 @@ export function validId(value: unknown): string {
   const id = typeof value === "string" ? value.trim() : "";
   if (!ID_RE.test(id)) {
     throw new Error(
-      "[invalid_request] Invalid checkpoint id. Use the id returned by project_snapshot (action=create|list).",
+      "[invalid_request] Invalid checkpoint id. Use the id returned by snapshot (action=create|list).",
     );
   }
 
@@ -291,7 +291,7 @@ export async function readManifest(id: string): Promise<SnapshotManifest> {
     raw = await fs.readFile(file);
   } catch {
     throw new Error(
-      `[not_found] Checkpoint '${id}' does not exist. Hint: list them with project_snapshot action=list.`,
+      `[not_found] Checkpoint '${id}' does not exist. Hint: list them with snapshot action=list.`,
     );
   }
   try {

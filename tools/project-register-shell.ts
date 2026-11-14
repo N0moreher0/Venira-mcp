@@ -7,10 +7,10 @@ import type { Args } from "./project-cache.js";
 import { runShell, type ShellDeps } from "./project-shell.js";
 import { backgroundFlag, config } from "./project-schema.js";
 
-// Shell tool registrations: project_shell_run, project_shell_status, project_shell_cancel.
+// Shell tool registrations: shell_run, shell_status, shell_cancel.
 // Extracted from registerProjectTools in tools/project.ts (roadmap item 6, step 5k). Schemas, descriptions
-// and registration order are unchanged. project_shell_cancel_session is registered later in the list
-// (after project_read_audit), so it moves with the ops/diagnostics group to keep the order identical.
+// and registration order are unchanged. shell_cancel_session is registered later in the list
+// (after read_audit), so it moves with the ops/diagnostics group to keep the order identical.
 // The shell run registry (shellRuns/trackShell) stays in project.ts and reaches runShell via ShellDeps.
 
 export type ShellToolsDeps = {
@@ -21,7 +21,7 @@ export type ShellToolsDeps = {
 export function registerShellTools(server: McpServer, deps: ShellToolsDeps): void {
   const { runOne, shellDeps } = deps;
   server.registerTool(
-    "project_shell_run",
+    "shell_run",
     {
       ...config(
         "Shell run",
@@ -43,7 +43,7 @@ export function registerShellTools(server: McpServer, deps: ShellToolsDeps): voi
           .max(16)
           .optional()
           .describe(
-            "Stored secret names (project_secret) injected as env vars, e.g. [\"GITHUB_TOKEN\"]. Values never appear in the command, audit log or output.",
+            "Stored secret names (secret) injected as env vars, e.g. [\"GITHUB_TOKEN\"]. Values never appear in the command, audit log or output.",
           ),
         timeout_ms: z
           .number()
@@ -97,7 +97,7 @@ export function registerShellTools(server: McpServer, deps: ShellToolsDeps): voi
   );
 
   server.registerTool(
-    "project_shell_status",
+    "shell_status",
     {
       ...config(
         "Shell status",
@@ -108,7 +108,7 @@ export function registerShellTools(server: McpServer, deps: ShellToolsDeps): voi
         { readOnlyHint: true, openWorldHint: false },
       ),
       inputSchema: {
-        run_id: z.string().describe("Run id from project_shell_run."),
+        run_id: z.string().describe("Run id from shell_run."),
         wait_seconds: z.number().int().min(0).max(30).optional().describe("Wait up to this many seconds for the run to finish (default 0, max 30). Observation window only, not a timeout."),
       },
     },
@@ -116,13 +116,13 @@ export function registerShellTools(server: McpServer, deps: ShellToolsDeps): voi
   );
 
   server.registerTool(
-    "project_shell_cancel",
+    "shell_cancel",
     {
       ...config("Shell cancel", {
         speed_profile: "fast; kills the whole process tree so grandchildren do not keep running.",
         batch_safe: false,
       }, { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false }),
-      inputSchema: { run_id: z.string().describe("Run id from project_shell_run."), kill_key: z.string().describe("Kill key from project_shell_run; proves this caller started the run.") },
+      inputSchema: { run_id: z.string().describe("Run id from shell_run."), kill_key: z.string().describe("Kill key from shell_run; proves this caller started the run.") },
     },
     (args) => runOne("cancel", args),
   );

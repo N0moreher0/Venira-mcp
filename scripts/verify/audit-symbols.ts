@@ -50,7 +50,7 @@ export async function runAuditSymbols(
   });
   await clientCompact.connect(compactTransport);
   const compactTool = await clientCompact.callTool({
-    name: "project_read_file",
+    name: "read_file",
     arguments: { relative_path: compactFixture },
   });
   const compactData = JSON.parse(textOf(compactTool));
@@ -232,9 +232,9 @@ export async function runAuditSymbols(
     );
   }
 
-  // 16. project_read_audit surfaces `reason` to the agent (not just SQLite).
+  // 16. read_audit surfaces `reason` to the agent (not just SQLite).
   const auditRead = asEnvelope(
-    await call("project_read_audit", {
+    await call("read_audit", {
       session_id: SESSION_ID,
       operation: "write_file",
       limit: 20,
@@ -250,7 +250,7 @@ export async function runAuditSymbols(
   // Roadmap item 15 (P1): the rows also say *which* call they belong to -
   // the argument hash and the (redacted) command.
   const auditShellRead = asEnvelope(
-    await call("project_read_audit", {
+    await call("read_audit", {
       session_id: SESSION_ID,
       operation: "shell_run",
       limit: 20,
@@ -287,7 +287,7 @@ export async function runAuditSymbols(
     auditShellRows.map((r) => r.args_summary),
   );
   const oneJobId = auditShellRows.find((r) => typeof r.request_id === "string")?.request_id;
-  const oneJob = asEnvelope(await call("project_read_audit", { request_id: oneJobId ?? "missing", limit: 5 }));
+  const oneJob = asEnvelope(await call("read_audit", { request_id: oneJobId ?? "missing", limit: 5 }));
   check(
     "audit_lookup_by_request_id",
     (oneJob.data?.rows ?? []).length === 1 && (oneJob.data?.rows?.[0] as { request_id?: string })?.request_id === oneJobId,
@@ -295,13 +295,13 @@ export async function runAuditSymbols(
   );
   check(
     "audit_outcome_accepts_documented_words",
-    asEnvelope(await call("project_read_audit", { outcome: "success", limit: 3 })).data?.rows?.length > 0,
+    asEnvelope(await call("read_audit", { outcome: "success", limit: 3 })).data?.rows?.length > 0,
     null,
   );
 
   // 16-bis. Audit hash chain: keyed, actually recomputed, and tamper-evident.
   const auditVerify = asEnvelope(
-    await call("project_read_audit", { limit: 5, verify: 1 }),
+    await call("read_audit", { limit: 5, verify: 1 }),
   );
   const auditVerifyDetail = (auditVerify.data?.verify_detail ?? {}) as {
     ok?: boolean;
@@ -339,7 +339,7 @@ export async function runAuditSymbols(
     .run("VERIFY_TAMPERED", tamperTarget?.id ?? -1);
   tamperDb.close();
   const tamperedAudit = asEnvelope(
-    await call("project_read_audit", { limit: 1, verify: 1 }),
+    await call("read_audit", { limit: 1, verify: 1 }),
   );
   check(
     "audit_tamper_detected",
@@ -354,7 +354,7 @@ export async function runAuditSymbols(
     .run(tamperTarget?.reason ?? null, tamperTarget?.id ?? -1);
   restoreDb.close();
   const restoredAudit = asEnvelope(
-    await call("project_read_audit", { limit: 1, verify: 1 }),
+    await call("read_audit", { limit: 1, verify: 1 }),
   );
   check(
     "audit_chain_recovers_after_restore",
