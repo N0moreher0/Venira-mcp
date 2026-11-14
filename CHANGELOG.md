@@ -2,7 +2,7 @@
 
 Local release notes for venira-mcp. Not published (not listed in `package.json` `files`) and not pushed to git.
 
-## Unreleased
+## 2.0.0 — 2026-11-14
 
 ### Breaking — all tool names dropped the `project_` prefix
 - **Every `project_*` tool is renamed to the bare name**: `read_file`, `write_file`, `edit_file`, `search`, `list_files`, `git_status`, `pr_create`, `ci_status`, `shell_run`, `snapshot`, `switch_workspace`, ... (53 tools).
