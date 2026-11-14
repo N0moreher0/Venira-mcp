@@ -94,22 +94,65 @@ export function extractSymbols(
 ): SymbolInfo[] {
   const lines = text.split("\n");
   const symbols: SymbolInfo[] = [];
+  const noise = { block: false, tpl: false };
   let braceDepth = 0;
+  // Kind of the most recent top-level symbol, so members of a class / impl /
+  // trait can be listed while locals inside plain functions are not.
+  let enclosing: SymbolInfo["kind"] | null = null;
+  // Python-style files have no braces: members share one indentation level.
+  let memberIndent: number | null = null;
 
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const trimmed = line.trim();
-    // Track braces for a cheap "top-level" heuristic
-    for (const ch of trimmed) {
-      if (ch === "{") braceDepth++;
-      else if (ch === "}") braceDepth--;
+    const raw = lines[i].replace(/\r$/, "");
+    let startDepth = braceDepth;
+    const continuesNoise = noise.block || noise.tpl;
+    // Count braces outside strings, comments and regex literals only.
+    let delta = 0;
+    for (const ch of stripNoise(raw, noise)) {
+      if (ch === "{") delta++;
+      else if (ch === "}") delta--;
     }
-    // Only record a symbol when we are at (or near) the top level
-    if (braceDepth > 0 && trimmed.startsWith("  ") === false) {
-      // could be a nested definition; keep but mark lower-priority
-    }
+    braceDepth = Math.max(0, braceDepth + delta);
+    // Continuation of a block comment / template literal: never a declaration.
+    if (continuesNoise) continue;
+    const trimmed = raw.trim();
+    if (!trimmed) continue;
+    const indent = raw.length - raw.trimStart().length;
+
     const sym = findSymbolOnLine(trimmed);
-    if (!sym) continue;
+    // Drift guard: this is a cheap lexer, so an exotic literal can leave the
+    // depth too high. A declaration in column 0 is top-level by convention,
+    // so trust the indentation and resynchronise from this line.
+    if (sym && indent === 0 && startDepth > 0) {
+      startDepth = 0;
+      braceDepth = Math.max(0, delta);
+    }
+    if (!sym) {
+      // A plain top-level statement ends the previous class scope
+      // (comments, closing brackets and decorators do not).
+      if (indent === 0 && startDepth === 0 && !/^(?:[})\]@#*]|\/[/*])/.test(trimmed)) {
+        enclosing = null;
+        memberIndent = null;
+      }
+      continue;
+    }
+
+    const topLevel = startDepth === 0 && indent === 0;
+    let accept = topLevel;
+    if (!accept && (enclosing === "class" || enclosing === "interface")) {
+      if (startDepth === 1) {
+        accept = true; // C-like: members sit exactly one brace deep
+      } else if (startDepth === 0 && indent > 0) {
+        if (memberIndent === null) memberIndent = indent; // Python-like
+        accept = indent === memberIndent;
+      }
+    }
+    if (!accept) continue;
+    if (topLevel) {
+      enclosing = sym.kind;
+      memberIndent = null;
+    }
+
     if (!includeFunctions && sym.kind === "function") continue;
     if (!includeClasses && (sym.kind === "class" || sym.kind === "type" || sym.kind === "interface")) continue;
     sym.line = i + 1;
@@ -117,6 +160,76 @@ export function extractSymbols(
   }
   void language;
   return symbols;
+}
+
+/**
+ * Remove string literals and comments from one line so that braces inside
+ * them do not skew the depth count. `noise` carries multi-line state
+ * (block comments, template literals) from line to line.
+ */
+function stripNoise(line: string, noise: { block: boolean; tpl: boolean }): string {
+  let out = "";
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (noise.block) {
+      if (ch === "*" && line[i + 1] === "/") {
+        noise.block = false;
+        i++;
+      }
+      continue;
+    }
+    if (noise.tpl) {
+      if (ch === "\\") i++;
+      else if (ch === "`") noise.tpl = false;
+      continue;
+    }
+    if (ch === "/" && line[i + 1] === "*") {
+      noise.block = true;
+      i++;
+      continue;
+    }
+    if (ch === "/" && line[i + 1] === "/") break;
+    if (ch === "`") {
+      noise.tpl = true;
+      continue;
+    }
+    // Regex literal: `/` where an expression (not a division) may start.
+    // Needed because patterns like /[^{=]+\{/ hold unbalanced braces.
+    if (ch === "/" && (/(?:^|[(,=:[!&|?{};]|\breturn)\s*$/.test(out))) {
+      let j = i + 1;
+      let inClass = false;
+      while (j < line.length) {
+        const c = line[j];
+        if (c === "\\") {
+          j += 2;
+          continue;
+        }
+        if (c === "[") inClass = true;
+        else if (c === "]") inClass = false;
+        else if (c === "/" && !inClass) break;
+        j++;
+      }
+      if (j < line.length) {
+        i = j; // skip the whole literal (flags are harmless to keep)
+        continue;
+      }
+      // No closing slash on this line: it was a division, keep scanning.
+    }
+    if (ch === '"' || ch === "'") {
+      let j = i + 1;
+      while (j < line.length && line[j] !== ch) {
+        if (line[j] === "\\") j++;
+        j++;
+      }
+      if (j < line.length) {
+        i = j; // skip the whole literal
+        continue;
+      }
+      // Unmatched quote (e.g. a Rust lifetime like `'a`): keep scanning normally.
+    }
+    out += ch;
+  }
+  return out;
 }
 
 /**
