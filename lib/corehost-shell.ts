@@ -9,7 +9,7 @@ import crypto from "node:crypto";
 import { commandKey, enabledShellOverrides, evaluateShellCommand, grantSessionApproval, hasSessionApproval, loadShellPolicy, parseShellCommand, recordApproval, recordDecision, redactSecrets, shellOverrideMatches, isShellOverride, type Decision, type ShellOverride } from "./shell-policy.js";
 import { getShellCache, setShellCache } from "./shell-cache.js";
 import * as approvals from "./approvals.js";
-import { awaitApprovalGrant, buildApprovalPayload, parseApprovalWaitMs, redeemApproval, requestApproval } from "./approval-gate.js";
+import { awaitApprovalGrant, buildApprovalPayload, parseApprovalWaitSeconds, redeemApproval, requestApproval } from "./approval-gate.js";
 import { PLATFORM } from "./workspace.js";
 import { checkpointBeforeRestore, type RestoreCheckpoint } from "./restore-checkpoint.js";
 import { assertSecretUsable, getSecretValueSync, markSecretUsed, redactSecretValues } from "./secrets.js";
@@ -37,10 +37,11 @@ function defaultShellForPlatform(): string {
   return hostDefaultShell();
 }
 
+// Value is seconds (fractional ok); 0/unset = 10 min default; the cap stays VENIRA_SHELL_MAX_TIMEOUT_MS.
 function clampTimeout(value: unknown): number {
-  const raw = value === undefined || value === null || value === "" ? 600_000 : Number(value);
+  const raw = value === undefined || value === null || value === "" ? 600 : Number(value);
   if (!Number.isFinite(raw) || raw <= 0) return 600_000;
-  return Math.min(Math.floor(raw), SHELL_MAX_TIMEOUT_MS);
+  return Math.min(Math.floor(raw * 1000), SHELL_MAX_TIMEOUT_MS);
 }
 
 export async function opShellRun(
@@ -58,7 +59,7 @@ export async function opShellRun(
   const runId = crypto.randomUUID().slice(0, 12);
   const killKey = crypto.randomBytes(16).toString("hex");
   const secretNames = normalizeSecretEnv(args.secret_env);
-  const timeoutMs = clampTimeout(args.timeout_ms);
+  const timeoutMs = clampTimeout(args.timeout_s);
   const foreground = !parseBackgroundFlag(args.background);
   // Roadmap item 17: the fingerprint of this invocation. It carries the
   // normalized command, the shell, the resolved cwd and the non-secret
@@ -305,7 +306,7 @@ export async function opShellRun(
         ...(secretNames.length > 0 ? { secret_env: secretNames } : {}),
       };
       // Optional: wait for the human inside this call (saves a round-trip).
-      const waitMs = parseApprovalWaitMs(args.approval_wait_ms);
+      const waitMs = parseApprovalWaitSeconds(args.approval_wait_s);
       const granted = waitMs > 0 && (await awaitApprovalGrant(sessionId, pendingId, approvalBinding, waitMs));
       if (granted) {
         const v = redeemApproval("shell", sessionId, pendingId, approvalBinding, "shell_run");
@@ -720,7 +721,7 @@ export async function opShellStatus(
   args: Record<string, unknown>,
 ): Promise<RustResponse> {
   const runId = args.run_id as string;
-  const waitSeconds = Math.min(30, Math.max(0, Number(args.wait_seconds ?? 0)));
+  const waitSeconds = Math.min(300, Math.max(0, Number(args.wait_seconds ?? 0)));
   const run = shellRuns.get(runId);
   if (!run) {
     throw new Error(`[not_found] Unknown run_id: ${runId}. Hint: run ids live only in the session that started them; start a new run with shell_run.`);

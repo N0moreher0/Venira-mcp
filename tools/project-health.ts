@@ -1,5 +1,5 @@
 import path from "node:path";
-import { APPROVAL_PENDING_TTL_MS, APPROVAL_WAIT_MAX_MS } from "../lib/approval-gate.js";
+import { APPROVAL_PENDING_TTL_MS, APPROVAL_WAIT_MAX_S } from "../lib/approval-gate.js";
 import * as approvals from "../lib/approvals.js";
 import { computeConfigPosture } from "../lib/config-posture.js";
 import { SHELL_TAIL_LIMIT, shellPolicySnapshot } from "../lib/corehost.js";
@@ -69,7 +69,7 @@ function approvalsHealth(shellElicit: boolean): {
       elicitation: shellElicit,
       session_grant_rules: sessionGrantRules,
       pending_ttl_ms: APPROVAL_PENDING_TTL_MS,
-      max_wait_ms: APPROVAL_WAIT_MAX_MS,
+      max_wait_ms: APPROVAL_WAIT_MAX_S * 1000,
     },
     // Kept for clients that already read the flat list; posture carries the
     // same findings with stable ids and severities.

@@ -619,7 +619,7 @@ export async function runProviderDialects($h: Harness): Promise<void> {
   console.log("[verify] checking E.4 ci_wait summary + failing-step tail...");
   const bbWait = await providerCall(bb, "ci_wait", {
     run_id: "{pipeline-paged}",
-    timeout_ms: 5000,
+    timeout_s: 5,
   });
   check(
     "ci_wait_summary_and_next_step_on_failure",

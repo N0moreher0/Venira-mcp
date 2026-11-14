@@ -2,6 +2,16 @@
 
 Local release notes for venira-mcp. Not published (not listed in `package.json` `files`) and not pushed to git.
 
+## Unreleased
+
+### Breaking — tool time parameters now use seconds
+- Time inputs are unified to **seconds** (fractional ok), matching wait_seconds. Env vars (VENIRA_SHELL_MAX_TIMEOUT_MS, VENIRA_GIT_*) and internal/envelope fields keep their ms units.
+- shell_status: wait_seconds now accepts up to **300** (was 30).
+- shell_run: timeout_ms -> timeout_s (0/unset = 10 min, capped by VENIRA_SHELL_MAX_TIMEOUT_MS); approval_wait_ms -> approval_wait_s (max 45).
+- execute_js: timeout_ms -> timeout_s (default 30, max 600); approval_wait_ms -> approval_wait_s (max 45).
+- ci_wait: timeout_ms -> timeout_s (default 45, max 110); interval_ms -> interval_s (default 5, min 2, max 15).
+- MCP clients sending the ms parameter names must switch to the _s names; no aliases.
+
 ## 2.0.0 — 2026-11-14
 
 ### Breaking — all tool names dropped the `project_` prefix

@@ -2,7 +2,7 @@ import * as approvals from "../lib/approvals.js";
 import {
   awaitApprovalGrant,
   buildApprovalPayload,
-  parseApprovalWaitMs,
+  parseApprovalWaitSeconds,
   redeemApproval,
   requestApproval,
 } from "../lib/approval-gate.js";
@@ -56,8 +56,8 @@ export async function runExecuteJs(args: Args): Promise<ToolResult> {
     );
   }
   const code = typeof args.code === "string" ? args.code : "";
-  const timeoutMs = typeof args.timeout_ms === "number" && Number.isFinite(args.timeout_ms) && args.timeout_ms > 0
-    ? Math.min(Math.floor(args.timeout_ms), 600_000)
+  const timeoutMs = typeof args.timeout_s === "number" && Number.isFinite(args.timeout_s) && args.timeout_s > 0
+    ? Math.min(Math.floor(args.timeout_s * 1000), 600_000)
     : 30_000;
   const cliArgs = Array.isArray(args.argv) ? (args.argv as string[]).map(String) : undefined;
 
@@ -86,10 +86,10 @@ export async function runExecuteJs(args: Args): Promise<ToolResult> {
         binding,
       });
       const pendingId = pending.approval_id;
-      const waitMs = parseApprovalWaitMs(args.approval_wait_ms);
+      const waitMs = parseApprovalWaitSeconds(args.approval_wait_s);
       if (waitMs > 0 && (await awaitApprovalGrant(SESSION_ID, pendingId, binding, waitMs))) {
         // Granted by a human while waiting: redeem through the normal path (single use).
-        return runExecuteJs({ ...args, approval_id: pendingId, approval_wait_ms: 0 });
+        return runExecuteJs({ ...args, approval_id: pendingId, approval_wait_s: 0 });
       }
       const expiresAt = pending.expires_at;
       const elapsedMs = performance.now() - started;
@@ -113,7 +113,7 @@ export async function runExecuteJs(args: Args): Promise<ToolResult> {
               {
                 code,
                 ...(cliArgs ? { argv: cliArgs } : {}),
-                ...(typeof args.timeout_ms === "number" ? { timeout_ms: args.timeout_ms } : {}),
+                ...(typeof args.timeout_s === "number" ? { timeout_s: args.timeout_s } : {}),
               },
             ),
             expires_at: expiresAt,

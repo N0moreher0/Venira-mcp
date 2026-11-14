@@ -47,15 +47,15 @@ export interface ApprovalRequest {
   approve_command: string;
 }
 
-/** Upper bound for `approval_wait_ms`; stays under typical MCP client call timeouts. */
-export const APPROVAL_WAIT_MAX_MS = 45_000;
+/** Upper bound for `approval_wait_s` (seconds); stays under typical MCP client call timeouts. */
+export const APPROVAL_WAIT_MAX_S = 45;
 const APPROVAL_POLL_MS = 500;
 
-/** Clamp the agent-supplied wait to [0, APPROVAL_WAIT_MAX_MS]; junk means no wait. */
-export function parseApprovalWaitMs(raw: unknown): number {
+/** Clamp the agent-supplied wait (seconds, fractional ok) to [0, APPROVAL_WAIT_MAX_S]; junk means no wait. Returns ms. */
+export function parseApprovalWaitSeconds(raw: unknown): number {
   const n = typeof raw === "string" ? Number(raw) : raw;
   if (typeof n !== "number" || !Number.isFinite(n) || n <= 0) return 0;
-  return Math.min(Math.floor(n), APPROVAL_WAIT_MAX_MS);
+  return Math.min(Math.floor(n * 1000), APPROVAL_WAIT_MAX_S * 1000);
 }
 
 function quoteCliArg(value: string): string {
@@ -236,7 +236,7 @@ export async function awaitApprovalGrant(
   binding: string,
   waitMs: number,
 ): Promise<boolean> {
-  const deadline = Date.now() + Math.min(Math.max(waitMs, 0), APPROVAL_WAIT_MAX_MS);
+  const deadline = Date.now() + Math.min(Math.max(waitMs, 0), APPROVAL_WAIT_MAX_S * 1000);
   for (;;) {
     const verdict = approvals.verifyApprovalGrant(approvalId, sessionId, binding);
     if (verdict.ok) return true;

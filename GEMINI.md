@@ -113,7 +113,7 @@ Before changing a shared symbol, signature or file name, run `change_impact` (pa
 | `expected_sha256` refused | File changed since you read it | Re-read, re-apply the change. Never force it |
 | `conflict` | Target already exists | Choose another path, or snapshot then `overwrite` if intended |
 | `batch_failed` | Everything was rolled back (`rollback_succeeded`) | Fix the item named in `data.executed` and `data.skipped`, rerun the batch |
-| `approval_required` | A human must approve | Tell the user, give `data.approval.approve_command` or use `approval_wait_ms`, retry once with `approval_id`. Do not work around it |
+| `approval_required` | A human must approve | Tell the user, give `data.approval.approve_command` or use `approval_wait_s`, retry once with `approval_id`. Do not work around it |
 | `repeated_failure` | The identical command already failed | Read `data.previous.stderr_tail` and change the command. `retry_failed=1` only for flaky or environmental failures |
 | `truncated: true` | Output was cut | Continue with `start_line=next_start_line`, or narrow `relative_path`, `limit` or `depth` |
 | Odd or stale results | Cache out of sync after external changes | `cache_clear`, then `health` (sections `warnings`, `posture`) |

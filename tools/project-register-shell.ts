@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { APPROVAL_WAIT_MAX_MS } from "../lib/approval-gate.js";
+import { APPROVAL_WAIT_MAX_S } from "../lib/approval-gate.js";
 import type { ToolResult } from "../lib/output.js";
 import { WORKSPACE } from "../lib/workspace.js";
 import type { Args } from "./project-cache.js";
@@ -28,7 +28,7 @@ export function registerShellTools(server: McpServer, deps: ShellToolsDeps): voi
         {
           speed_profile:
             "background=1 returns in ~5 ms, run time is up to the command; " +
-            "background=0 blocks for the whole run (bounded by timeout_ms, default 10 min).",
+            "background=0 blocks for the whole run (bounded by timeout_s, default 10 min).",
           batch_safe: false,
         },
         { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
@@ -45,25 +45,23 @@ export function registerShellTools(server: McpServer, deps: ShellToolsDeps): voi
           .describe(
             "Stored secret names (secret) injected as env vars, e.g. [\"GITHUB_TOKEN\"]. Values never appear in the command, audit log or output.",
           ),
-        timeout_ms: z
+        timeout_s: z
           .number()
-          .int()
           .min(0)
           .optional()
-          .describe("Kill the process tree after this many ms (0/unset = 10 min; capped by VENIRA_SHELL_MAX_TIMEOUT_MS)."),
+          .describe("Kill the process tree after this many seconds (0/unset = 10 min; fractional ok; capped by VENIRA_SHELL_MAX_TIMEOUT_MS)."),
         // Removed from the schema in item 16 (approval_token: "Removed", approval_scope:
         // "Ignored"). Handlers still tolerate both when an older client sends them.
         approval_id: z
           .string()
           .optional()
           .describe("Id from approval_required, granted by a human (`data.approval.approve_command` or client elicitation). Retry once."),
-        approval_wait_ms: z
+        approval_wait_s: z
           .number()
-          .int()
           .min(0)
-          .max(APPROVAL_WAIT_MAX_MS)
+          .max(APPROVAL_WAIT_MAX_S)
           .optional()
-          .describe("If approval is needed, wait up to this many ms (max 45000) for the human, then run in the same call."),
+          .describe("If approval is needed, wait up to this many seconds (max 45; fractional ok) for the human, then run in the same call."),
         dry_run: z
           .number()
           .int()
@@ -109,7 +107,7 @@ export function registerShellTools(server: McpServer, deps: ShellToolsDeps): voi
       ),
       inputSchema: {
         run_id: z.string().describe("Run id from shell_run."),
-        wait_seconds: z.number().int().min(0).max(30).optional().describe("Wait up to this many seconds for the run to finish (default 0, max 30). Observation window only, not a timeout."),
+        wait_seconds: z.number().int().min(0).max(300).optional().describe("Wait up to this many seconds for the run to finish (default 0, max 300). Observation window only, not a timeout."),
       },
     },
     (args) => runOne("shell_status", args),

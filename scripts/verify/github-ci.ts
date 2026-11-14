@@ -483,8 +483,8 @@ export async function runGithubCi(
   const ciWaitTransition = asEnvelope(
     await call("ci_wait", {
       run_id: 100,
-      timeout_ms: 10000,
-      interval_ms: 2000,
+      timeout_s: 10,
+      interval_s: 2,
     }),
   );
   check(
@@ -503,8 +503,8 @@ export async function runGithubCi(
   const ciWaitTimeout = asEnvelope(
     await call("ci_wait", {
       run_id: 101,
-      timeout_ms: 2500,
-      interval_ms: 2000,
+      timeout_s: 2.5,
+      interval_s: 2,
     }),
   );
   check(

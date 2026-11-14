@@ -111,14 +111,14 @@ function isForegroundShell(args: Args): boolean {
 export function requestTimeout(operation: string, args: Args): number {
   if (operation === "shell_status") {
     const wait = Number(args.wait_seconds ?? 0);
-    return Math.min(30, Math.max(0, Number.isFinite(wait) ? wait : 0)) * 1000 + 15_000;
+    return Math.min(300, Math.max(0, Number.isFinite(wait) ? wait : 0)) * 1000 + 15_000;
   }
   // A foreground shell_run blocks until the command exits, so the host-call
   // budget must cover the shell timeout (not the 30 s default).
   if (operation === "shell_run") {
     if (isForegroundShell(args)) {
-      const raw = Number(args.timeout_ms ?? 0);
-      const requested = Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 600_000;
+      const raw = Number(args.timeout_s ?? 0);
+      const requested = Number.isFinite(raw) && raw > 0 ? Math.floor(raw * 1000) : 600_000;
       return Math.min(requested, SHELL_MAX_TIMEOUT_MS) + 15_000;
     }
     return 30_000;
@@ -126,7 +126,7 @@ export function requestTimeout(operation: string, args: Args): number {
   if (operation === "snapshot_create" || operation === "snapshot_restore" || operation === "snapshot_mirror") return 120_000;
   if (operation === "ci_logs") return 90_000;
   if (operation === "ci_wait") {
-    const wait = Number(args.timeout_ms ?? 45_000);
+    const wait = Number(args.timeout_s ?? 45) * 1000;
     const bounded = Math.min(110_000, Math.max(1_000, Number.isFinite(wait) ? wait : 45_000));
     return bounded + 10_000;
   }

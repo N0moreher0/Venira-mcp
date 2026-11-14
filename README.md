@@ -379,7 +379,7 @@ Full reference: the source reads 80+ distinct supported `VENIRA_*` names; this t
 | `VENIRA_DEFAULT_SHELL` | `cmd` on Windows, `$SHELL` / `bash` elsewhere | Shell used when a call does not name one: `powershell` (5.1), `pwsh` (7+), `cmd`, `bash` |
 | `VENIRA_SHELL_TAIL_MAX` | `2000` | Characters kept in a shell run's stdout/stderr **tail** (minimum `256`); the head of huge output is dropped so the exit code and last lines survive |
 | `VENIRA_SHELL_MAX_OUTPUT_BYTES` | `262144` | Per-stream cap (stdout and stderr each) that a shell run records |
-| `VENIRA_SHELL_MAX_TIMEOUT_MS` | `1800000` | Upper bound for a caller-supplied shell timeout (`timeout_ms`); larger values are clamped to this |
+| `VENIRA_SHELL_MAX_TIMEOUT_MS` | `1800000` | Upper bound for a caller-supplied shell timeout (`timeout_s`); larger values are clamped to this |
 | `VENIRA_JS_EXEC_MODE` | `"off"` | `"off"` hides `execute_js` · `"ask"` registers it with per-call approval (skipped when `VENIRA_PERMISSION_MODE=allow_all`) · `"semi-auto"` registers it without approval, contained (workspace-only fs, scrubbed env, no child processes; network always open) · `"auto"` registers it without approval and without containment |
 | `VENIRA_USE_RIPGREP` | `"1"` | `"1"` uses ripgrep if installed (faster on big repos) |
 | `VENIRA_SEARCH_MAX_FILES` | `"50000"` | Max files collected by the JS fallback walker before it stops and reports `complete: false`. Bounds searches rooted at huge trees (e.g. with `VENIRA_UNRESTRICTED=1` and an absolute path outside the workspace) |
@@ -500,7 +500,7 @@ Granting a shell or JS approval:
 
 Agent helpers:
 - `shell_run` with `dry_run: 1` returns the tier, rule and `would_run` / `requires_approval` without running anything or creating an approval, so an agent knows beforehand which command will be asked.
-- `approval_wait_ms` (max 45000) on `shell_run` / `execute_js` keeps the call open while the human approves; a grant that arrives in time runs the command in the same call, otherwise you get the normal `[approval_required]` (the pending `approval_id` stays valid). Keep it below the client's request timeout.
+- `approval_wait_s` (max 45) on `shell_run` / `execute_js` keeps the call open while the human approves; a grant that arrives in time runs the command in the same call, otherwise you get the normal `[approval_required]` (the pending `approval_id` stays valid). Keep it below the client's request timeout.
 - `health` reports `approvals` (mode, JS gate, elicitation, session rules, TTL, max wait), the shared `posture` report (`level`, stable finding ids such as `workspace.unrestricted`, `profile.off`, `combo.unrestricted_open_shell`, `js.exec_without_approval`) and the flat `warnings` list. Posture findings are warnings only; invalid values already fail closed at startup. `doctor` surfaces the same report.
 
 Alternative (in `balanced` mode, `shell_run` only): ask-rule commands the policy cannot statically clear prompt through a confirmation dialog in MCP clients that support elicitation, and accepting it records the grant for you. In `permissive` the prompt is reserved for the always-ask `command_substitution`, hard-deny commands (which arrive as `ask.deny.*`) and `secret_env`; ordinary ask-rule commands run without a prompt. `strict` never prompts; `off` never prompts.
@@ -616,7 +616,7 @@ npm run bench:mcp   # end-to-end numbers
 |---|---|
 | `not_found` on a path that looks fine | Run `npm run doctor`; confirm `VENIRA_WORKSPACE` points where you think |
 | `path_escape` | Path resolves outside workspace; use a workspace-relative path |
-| Shell command not finishing | `shell_status` with `wait_seconds: 30`; check `health` → `shells.active` |
+| Shell command not finishing | `shell_status` with `wait_seconds: 300`; check `health` → `shells.active` |
 | `better-sqlite3` build failure | Unusual platform; run `npm rebuild better-sqlite3` with build tools, or use the Docker image |
 | SQLite binding unavailable | The server still starts. Audit writes are skipped in the default best-effort mode; set `VENIRA_AUDIT_STRICT=1` to fail operations that cannot be recorded. Install/rebuild `better-sqlite3` to restore the audit trail. |
 | `venira.db` won't open | Another process has the WAL locked; make sure only one server writes to the same data dir |

@@ -305,7 +305,7 @@ export function registerVcsTools(server: McpServer, deps: VcsDeps): void {
         "Wait for CI",
         {
           speed_profile:
-            "blocks up to timeout_ms (default 45 s, max 110 s) with 2–15 s backoff polling; unqueued, so other tools keep working.",
+            "blocks up to timeout_s (default 45 s, max 110 s) with 2–15 s backoff polling; unqueued, so other tools keep working.",
           batch_safe: false,
         },
         { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
@@ -320,8 +320,8 @@ export function registerVcsTools(server: McpServer, deps: VcsDeps): void {
         branch: z.string().max(200).optional().describe("Wait on the newest run/pipeline for this branch (optionally narrow with workflow). Used only when no run_id/ref/pr is given."),
         workflow: z.string().max(200).optional().describe("Workflow file name (ci.yml) or numeric id; narrows a branch selector."),
         until: z.enum(["terminal", "any_change"]).optional().describe("Stop at a terminal state (default) or on the first state change."),
-        timeout_ms: z.number().int().min(1000).max(110_000).optional().describe("Max wait in ms (default 45_000, max 110_000). Values > ~55 s need a client request timeout > 60 s."),
-        interval_ms: z.number().int().min(2000).max(15_000).optional().describe("Poll interval in ms (default 5000; min 2000, max 15000)."),
+        timeout_s: z.number().min(1).max(110).optional().describe("Max wait in seconds (default 45, max 110; fractional ok). Values > ~55 s need a client request timeout > 60 s."),
+        interval_s: z.number().min(2).max(15).optional().describe("Poll interval in seconds (default 5; min 2, max 15; fractional ok)."),
         include_failure_tail: flag01.optional().describe("1 fetches the failing job/run log tail on failure (default); 0 skips it."),
         tail_lines: z.number().int().min(1).max(1000).optional().describe("Failure tail lines (default 80)."),
         repo: repoArg,

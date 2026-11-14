@@ -147,13 +147,13 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
 
   // ---- shell & JS ---------------------------------------------------------
   shell_run: {
-    about: "Run a shell command in the workspace (shell, relative_cwd, timeout_ms). Default is background: returns run_id, poll shell_status. background=0 blocks until exit and returns stdout/stderr.",
+    about: "Run a shell command in the workspace (shell, relative_cwd, timeout_s). Default is background: returns run_id, poll shell_status. background=0 blocks until exit and returns stdout/stderr.",
     use: "you build, test, run git or install packages. background=0 for short commands you need now.",
     avoid: "you read or edit files (file tools) or run a tiny JS calculation (execute_js).",
     out: "run_id, kill_key, running, exit_code, timed_out, stdout/stderr (background=0) or stdout_tail/stderr_tail. ok=true only means the call ran; status (completed|failed|running|cancelled) and command_status describe the command. shell_path/shell_kind name the binary that ran it (on Windows bash may be the WSL launcher). approval_required: ask the user to approve, then retry once with approval_id. repeated_failure: the identical invocation already failed; read data.previous.stderr_tail, then change the command or pass retry_failed=1.",
   },
   shell_status: {
-    about: "Return the state and output tail of a shell run. wait_seconds (0-30) waits up to that long for it to finish.",
+    about: "Return the state and output tail of a shell run. wait_seconds (0-300) waits up to that long for it to finish.",
     use: "after a background shell_run: poll until running=false, then read exit_code.",
     avoid: "you have no run_id yet.",
     out: "running, exit_code, stdout_tail, stderr_tail. Unknown run_id gives not_found (run ids only live for this session).",

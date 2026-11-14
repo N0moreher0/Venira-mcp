@@ -62,7 +62,7 @@ function stripGuardEcho(stderr: string, prefixLength: number): string {
 /** The message a failed snippet gets: a plain reason, not a raw spawn error. */
 function snippetError(error: string, stderr: string, timedOut: boolean, timeout: number): string {
   if (timedOut || /ETIMEDOUT/.test(error)) {
-    return `The snippet did not finish within ${timeout} ms and was stopped. Hint: raise timeout_ms (max 600000) or make the snippet faster.`;
+    return `The snippet did not finish within ${timeout} ms and was stopped. Hint: raise timeout_s (max 600) or make the snippet faster.`;
   }
   const haystack = `${stderr}\n${error}`;
   if (/Illegal return statement|Return statement is not allowed here/i.test(haystack)) {

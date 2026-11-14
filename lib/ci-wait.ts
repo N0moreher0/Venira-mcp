@@ -3,7 +3,7 @@
  *
  * MCP over stdio cannot push a notification that wakes the model, so this is
  * deliberately a *long-poll*: the tool blocks until the run reaches a terminal
- * state, the state changes (`until: "any_change"`), or `timeout_ms` elapses.
+ * state, the state changes (`until: "any_change"`), or `timeout_s` elapses.
  * No background timer, no standing network traffic.
  */
 import { opCiLogs, opCiStatus } from "./git-provider.js";
@@ -214,8 +214,8 @@ export async function opCiWait(args: Record<string, unknown>): Promise<Resp> {
     );
   }
 
-  const timeoutMs = clampInt(args.timeout_ms, DEFAULT_TIMEOUT_MS, 1_000, MAX_TIMEOUT_MS);
-  const intervalMs = clampInt(args.interval_ms, DEFAULT_INTERVAL_MS, MIN_INTERVAL_MS, MAX_INTERVAL_MS);
+  const timeoutMs = clampInt(args.timeout_s === undefined ? Number.NaN : Number(args.timeout_s) * 1000, DEFAULT_TIMEOUT_MS, 1_000, MAX_TIMEOUT_MS);
+  const intervalMs = clampInt(args.interval_s === undefined ? Number.NaN : Number(args.interval_s) * 1000, DEFAULT_INTERVAL_MS, MIN_INTERVAL_MS, MAX_INTERVAL_MS);
   const tailLines = clampInt(args.tail_lines, DEFAULT_TAIL_LINES, 1, 1_000);
   const includeTail = !(args.include_failure_tail === false || args.include_failure_tail === 0);
 
@@ -343,7 +343,7 @@ export async function opCiWait(args: Record<string, unknown>): Promise<Resp> {
   } else {
     hint =
       `Still ${overall} after ${Math.round(waitedMs / 1000)}s (${polls} poll${polls === 1 ? "" : "s"}). ` +
-      "Call ci_wait again with the same selector; keep timeout_ms below the client's ~60s request timeout when chaining.";
+      "Call ci_wait again with the same selector; keep timeout_s below the client's ~60s request timeout when chaining.";
   }
 
   return {

@@ -770,24 +770,24 @@ export async function runShellPolicy(
     { before: approvalFilesBeforeDry },
   );
 
-  // Phase 3 (b): approval_wait_ms. A human grant that lands during the wait runs in the same call.
+  // Phase 3 (b): approval_wait_s. A human grant that lands during the wait runs in the same call.
   {
-    const { parseApprovalWaitMs, APPROVAL_WAIT_MAX_MS } =
+    const { parseApprovalWaitSeconds, APPROVAL_WAIT_MAX_S } =
       await import("../../lib/approval-gate.js");
     check(
-      "approval_wait_ms_clamped",
-      parseApprovalWaitMs(1e9) === APPROVAL_WAIT_MAX_MS &&
-        parseApprovalWaitMs(-5) === 0 &&
-        parseApprovalWaitMs("abc") === 0 &&
-        parseApprovalWaitMs(undefined) === 0 &&
-        parseApprovalWaitMs(1200) === 1200,
+      "approval_wait_s_clamped",
+      parseApprovalWaitSeconds(1e9) === APPROVAL_WAIT_MAX_S * 1000 &&
+        parseApprovalWaitSeconds(-5) === 0 &&
+        parseApprovalWaitSeconds("abc") === 0 &&
+        parseApprovalWaitSeconds(undefined) === 0 &&
+        parseApprovalWaitSeconds(1.2) === 1200,
       null,
     );
     const filesBeforeWait = new Set(await fs.readdir(approvalsDirPath));
     const waitCall = call("shell_run", {
       command: "cd ../..",
       shell: shellFor,
-      approval_wait_ms: 10000,
+      approval_wait_s: 10,
       background: 0,
     });
     let waitId = "";
@@ -823,7 +823,7 @@ export async function runShellPolicy(
       await call("shell_run", {
         command: "curl https://example.invalid/wait",
         shell: shellFor,
-        approval_wait_ms: 700,
+        approval_wait_s: 0.7,
       }),
     );
     const waitedMs = Date.now() - tWait;
@@ -959,7 +959,7 @@ export async function runShellPolicy(
     {
       command: `node ${dir}/timeout-loop.js`,
       shell: shellFor,
-      timeout_ms: 400,
+      timeout_s: 0.4,
     },
   );
   const timedRunId = String(asEnvelope(timed).data?.run_id ?? "");

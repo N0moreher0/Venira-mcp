@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { APPROVAL_WAIT_MAX_MS } from "../lib/approval-gate.js";
+import { APPROVAL_WAIT_MAX_S } from "../lib/approval-gate.js";
 import { recordMetric } from "../lib/metrics.js";
 import { buildEnvelope, newRequestId, toolResult } from "../lib/output.js";
 import type { RustResponse, ToolResult } from "../lib/output.js";
@@ -116,19 +116,18 @@ export function registerOpsTools(server: McpServer, deps: OpsToolsDeps): void {
         ),
         inputSchema: {
           code: z.string().min(1).describe("JavaScript to evaluate."),
-          timeout_ms: z.number().int().min(1).max(600_000).optional().describe("Kill the node process after this many ms (default 30,000, max 600,000)."),
+          timeout_s: z.number().min(1).max(600).optional().describe("Kill the node process after this many seconds (default 30, max 600; fractional ok)."),
           argv: z.array(z.string()).optional().describe("Extra string arguments exposed to the script as process.argv values; part of what the human approves."),
           approval_id: z
             .string()
             .optional()
             .describe("Approval id from a previous execute_js approval_required response, granted by running `data.approval.approve_command`."),
-          approval_wait_ms: z
+          approval_wait_s: z
             .number()
-            .int()
             .min(0)
-            .max(APPROVAL_WAIT_MAX_MS)
+            .max(APPROVAL_WAIT_MAX_S)
             .optional()
-            .describe("Wait up to this many ms (max 45000) for the human to grant the approval and run in the same call."),
+            .describe("Wait up to this many seconds (max 45; fractional ok) for the human to grant the approval and run in the same call."),
         },
       },
       (args) => runExecuteJs(args as Args),

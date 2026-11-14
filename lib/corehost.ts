@@ -461,7 +461,7 @@ function describeExternalOp(operation: string, args: Record<string, unknown>): s
             : args.pr !== undefined
               ? `pr=${String(args.pr)}`
               : `branch=${str("branch")}`;
-      summary = `WAIT ci repo=${repo} ${selector} until=${str("until") || "terminal"} timeout=${String(args.timeout_ms ?? 45000)}`;
+      summary = `WAIT ci repo=${repo} ${selector} until=${str("until") || "terminal"} timeout=${String(args.timeout_s ?? 45)}`;
       break;
     }
     case "secret": {

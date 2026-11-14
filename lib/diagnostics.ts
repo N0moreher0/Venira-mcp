@@ -286,8 +286,8 @@ const RULES: Rule[] = [
     pattern: /ETIMEDOUT|timed out|timeout of \d+ms exceeded|TimeoutError/i,
     cause: "The operation exceeded its budget: slow dependency, blocked network, or a command that needs longer.",
     fix: [
-      "Raise the budget where it is supported (shell_run timeout_ms, or the tool's own timeout).",
-      "Poll instead of blocking: shell_run returns a run_id; shell_status(wait_seconds=5..30) observes it.",
+      "Raise the budget where it is supported (shell_run timeout_s, or the tool's own timeout).",
+      "Poll instead of blocking: shell_run returns a run_id; shell_status(wait_seconds=5..300) observes it.",
       "Commands are killed at their timeout; raise VENIRA_SHELL_MAX_TIMEOUT_MS for long builds.",
     ],
   },

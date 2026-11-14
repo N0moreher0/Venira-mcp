@@ -405,7 +405,7 @@ export async function runConsistency(
       {
         command: `node ${dir}/consistency-loop.js`,
         shell: shellFor,
-        timeout_ms: 5000,
+        timeout_s: 5,
         background: 1,
       },
     ),
