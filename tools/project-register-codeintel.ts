@@ -141,6 +141,7 @@ export function registerCodeIntelTools(server: McpServer, deps: CodeIntelDeps): 
         depth: z.number().int().min(1).max(10).optional().describe("Max hops from the seeds (default 5)."),
         include_tests: flag01.optional().describe("1 includes test files (default) and counts them in tests_affected."),
         max_nodes: z.number().int().min(1).max(2000).optional().describe("Max affected files (default 300)."),
+        min_confidence: z.enum(["exact", "likely", "possible"]).optional().describe('Only traverse edges at or above this confidence (default "likely"). "exact" = import/declared-in-one-file ties; "likely" = unique name match; "possible" = name matched several declarations (noisy at distance >= 2). Skipped edges are counted in stats.filtered_possible.'),
         format: z.enum(["json", "mermaid"]).optional().describe("Output format (default json)."),
       },
     },

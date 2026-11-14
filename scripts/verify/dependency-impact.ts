@@ -516,6 +516,7 @@ interface KChild2 : KParent
       symbols: ["dup"],
       direction: "dependents",
       depth: 3,
+      min_confidence: "possible",
     }),
   );
   check(

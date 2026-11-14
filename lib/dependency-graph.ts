@@ -577,6 +577,16 @@ export async function buildChangeImpact(
   if (fileSeeds.length === 0 && symbolSeeds.length === 0) {
     throw new Error("[invalid_request] Pass at least one of `files` or `symbols`. Hint: files=[\"src/lib/util.ts\"] or symbols=[\"parseConfig\"].");
   }
+  // Roadmap item 15 (P2): reference/extends edges are matched by symbol
+  // NAME, so at distance >= 2 they pull in unrelated files (frontend, docker,
+  // ...) with confidence "possible". Only "exact" and "likely" edges are
+  // traversable by default; "possible" requires min_confidence="possible".
+  const minConfidenceRaw = String(args.min_confidence ?? "likely").toLowerCase();
+  if (!["exact", "likely", "possible"].includes(minConfidenceRaw)) {
+    throw new Error('[invalid_request] `min_confidence` must be "exact", "likely" or "possible". Hint: pass exact (imports only), likely (default, adds unique name matches) or possible (adds noisy multi-declaration name matches).');
+  }
+  const minConfidence = minConfidenceRaw as EdgeConfidence;
+  const minConfidenceRank = CONFIDENCE_RANK[minConfidence];
   const directionRaw = String(args.direction ?? "dependents").toLowerCase();
   if (!["dependents", "dependencies", "both"].includes(directionRaw)) {
     throw new Error('[invalid_request] `direction` must be "dependents", "dependencies" or "both".');
@@ -680,6 +690,25 @@ export async function buildChangeImpact(
   // nothing about the seeds. Count them, do not list them.
   const unresolvedImports = built.unresolved.length;
 
+  // A pinned symbol seed ({name, file}) says "the declaration I mean is in
+  // this file": references pointing at that file are exact, not
+  // name-matching guesses. Upgrade them before the filter below applies.
+  const pinnedSymbols = new Map<string, string>();
+  for (const seed of symbolSeeds) {
+    if (!seed.file) continue;
+    const abs = path.isAbsolute(seed.file) ? seed.file : path.resolve(rootAbs, seed.file);
+    pinnedSymbols.set(seed.name, relFromRoot(rootAbs, abs));
+  }
+  if (pinnedSymbols.size > 0) {
+    for (const edge of built.edges) {
+      const sp = edge.via.indexOf(" ");
+      if (sp === -1) continue;
+      if (pinnedSymbols.get(edge.via.slice(sp + 1)) === edge.to) {
+        if (edge.confidence !== "exact") edge.confidence = "exact";
+      }
+    }
+  }
+
   if (seedFiles.size === 0) {
     return {
       data: {
@@ -689,7 +718,7 @@ export async function buildChangeImpact(
         affected: [],
         unresolved: seedUnresolved,
         summary: { affected_files: 0, affected_symbols: 0, max_distance: 0, tests_affected: 0 },
-        stats: { unresolved_imports: unresolvedImports },
+        stats: { unresolved_imports: unresolvedImports, min_confidence: minConfidence, filtered_possible: 0 },
         truncated: false,
       },
       truncated: false,
@@ -726,6 +755,7 @@ export async function buildChangeImpact(
   }
   const affectedSymbols = new Set<string>();
   const impactEdges: Array<{ from: string; to: string; type: EdgeType; confidence: EdgeConfidence }> = [];
+  let filteredPossible = 0;
 
   while (queue.length > 0) {
     const current = queue.shift()!;
@@ -738,6 +768,10 @@ export async function buildChangeImpact(
       for (const edge of forward.get(current.file) ?? []) next.push(edge);
     }
     for (const edge of next) {
+      if (CONFIDENCE_RANK[edge.confidence] > minConfidenceRank) {
+        filteredPossible += 1;
+        continue;
+      }
       const isReverse = direction === "dependents" || (direction === "both" && reverse.get(current.file)?.includes(edge));
       const target = isReverse ? edge.from : edge.to;
       if (seedFiles.has(target)) continue;
@@ -820,6 +854,7 @@ export async function buildChangeImpact(
         summary,
         unresolved: seedUnresolved,
         truncated,
+        stats: { unresolved_imports: unresolvedImports, min_confidence: minConfidence, filtered_possible: filteredPossible },
       },
       truncated,
       hint: truncated ? "Impact list truncated at max_nodes. Hint: narrow the seeds or raise max_nodes." : undefined,
@@ -833,6 +868,9 @@ export async function buildChangeImpact(
   if (seedUnresolved.length > 0) {
     impactHints.push(`Seed did not resolve: ${seedUnresolved[0].symbol} - ${seedUnresolved[0].next_step}`);
   }
+  if (filteredPossible > 0) {
+    impactHints.push(`Skipped ${filteredPossible} edge(s) below min_confidence=${minConfidence} (usually name-matching "possible" guesses). Pass min_confidence="possible" to include them.`);
+  }
 
   return {
     data: {
@@ -842,7 +880,7 @@ export async function buildChangeImpact(
       affected,
       unresolved: seedUnresolved,
       summary,
-      stats: { unresolved_imports: unresolvedImports },
+      stats: { unresolved_imports: unresolvedImports, min_confidence: minConfidence, filtered_possible: filteredPossible },
       truncated,
       cache,
       duration_ms: Date.now() - started,
