@@ -43,6 +43,7 @@ export function ensureAuditDb(): Database.Database | null {
     auditDb = new Database(dbPath);
     auditDb.pragma("journal_mode = WAL");
     auditDb.pragma("synchronous = NORMAL");
+    auditDb.pragma("busy_timeout = 5000");
     auditDb.exec(`
       CREATE TABLE IF NOT EXISTS project_tool_audit (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
