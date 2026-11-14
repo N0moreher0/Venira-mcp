@@ -38,6 +38,7 @@ Decision tree
 14. Debug latency/errors or check host/audit DB -> health.
 15. Unsure which tool exists -> use the Code Mode tool-discovery helper (findTools; named search in older builds), not a Venira tool.
 16. Switching project mid-session -> switch_workspace with the absolute path of the new project folder (any existing directory; VENIRA_WORKSPACE_ROOTS narrows it to an allowlist, VENIRA_DYNAMIC_WORKSPACE=0 opts out). All path guards and caches follow the new root; the client does not need to respawn the server.
+17. Context that must outlive this chat -> memory. action=read at the start of a task (after recent_files) to pick up what the previous AI left; action=write before you finish or when context runs long. Write replaces the whole note, so keep it short and current: goal, decisions, files touched, next steps. No secrets.
 
 Rules
 - Make recent_files a reflex, not a last resort: call it (limit 10..20) at the start of a task, when resuming or after context loss, before editing a file the user may have changed, and after shell_run / a build / a formatter / git to see what really changed. Its session_edits field lists what you already wrote this session. Then feed the top paths straight into read_batch. Use it instead of listing a whole tree or re-searching. It is off in VENIRA_TOOL_MODE=core.

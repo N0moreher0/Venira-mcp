@@ -2,6 +2,29 @@
 
 Local release notes for venira-mcp. Not published (not listed in `package.json` `files`) and not pushed to git.
 
+## Unreleased - 2026-11-14
+
+### Added - `memory` tool (handoff note between AI sessions)
+- New tool `memory` (default, core and expert modes; 32/39/52 tools). `action=read` returns the saved note; `action=write` replaces it entirely (overwrite, never append; max 6000 bytes so a read always comes back whole, even in compact output mode).
+- One note per workspace, stored as plain markdown at `<data dir>/memory/<workspace name>-<hash of path>.md`; it follows `switch_workspace`. Written atomically (temp file + rename); a refused write (empty or over the cap) keeps the old note.
+- Not encrypted and not audit-logged: documented as "no secrets". Server instructions (decision tree item 17) tell the AI to read it after `recent_files` at the start of a task and to write it before finishing.
+- Tests: `npm run test:memory` (also part of `verify`). Schema budget ratcheted for the new tool (1112 B).
+
+### Added - `change_impact` `min_confidence` traversal filter
+- `min_confidence` (`exact` | `likely` | `possible`, default `likely`) prunes impact edges below the chosen confidence; edges skipped for being name-matching guesses at or above `possible` are counted in `stats.filtered_possible` instead of silently widening the result.
+
+### Changed - `search` reports why it stopped early
+- Search results carry `limited_by` (`file_cap` | `match_cap` | `limit`) instead of a bare `complete=false`, and the count-only mode no longer claims `complete=true` when the file-cap truncation applied.
+
+### Changed - `outline_symbol` ignores comments, strings and regex literals
+- Symbols are now extracted after stripping comments, strings, template literals, regex literals and Rust lifetimes; brace-noise no longer skews symbol nesting or hides declarations. Depth drift at column-0 declarations is repaired by the next top-level scan, so a malformed earlier symbol cannot shift everything below it. `scripts/test-symbol-extract.ts` (12 checks) locks the Python/Rust/JS/TS rules in place.
+
+### Fixed - `recent_files` index is checked against the disk
+- The recent-files index only knows what Venira tools touched, so deleted or externally-edited files lingered with stale size/mtime. Every index candidate is now stat'ed against disk: missing rows are pruned from the index, surviving rows get the real size/mtime and are ranked by it, and the index only answers the request when at least `limit` rows survive the disk check (otherwise it falls through to the filesystem scan).
+
+### Fixed - audit connection no longer fails on a concurrent writer
+- The `better-sqlite3` connection used by the audit store now opens with `busy_timeout = 5000`, so a writer holding the lock can no longer make an audit insert fail immediately with `SQLITE_BUSY`.
+
 ## 4.0.0 - 2026-11-14
 
 ### Breaking - leaner tool envelopes (fewer tokens per call)

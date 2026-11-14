@@ -33,12 +33,12 @@ for (const tool of ["dependency_graph", "change_impact", "ci_wait"]) {
   }
 }
 // Tool counts: README must state the Default/Expert counts that doctor.ts treats as the contract.
-// Expert = 51 tools (49 through v1.x tool phases + github_connect + secret); default = 51 minus the
-// 11 PR/CI tools minus explain_error and plan_read_batch = 38; core = default minus the 7
-// code-intelligence tools = 31. scripts/schema-budget.json records the same numbers.
+// Expert = 52 tools (51 + memory); default = 52 minus the
+// 11 PR/CI tools minus explain_error and plan_read_batch = 39; core = default minus the 7
+// code-intelligence tools = 32. scripts/schema-budget.json records the same numbers.
 // Update check-docs.ts, doctor.ts, README and schema-budget.json together.
-const EXPECTED_DEFAULT_TOOLS = 38;
-const EXPECTED_EXPERT_TOOLS = 51;
+const EXPECTED_DEFAULT_TOOLS = 39;
+const EXPECTED_EXPERT_TOOLS = 52;
 for (const phrase of [
   `${EXPECTED_DEFAULT_TOOLS} coding tools`,
   `${EXPECTED_EXPERT_TOOLS} tools`,

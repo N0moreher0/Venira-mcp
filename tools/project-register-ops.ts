@@ -10,11 +10,12 @@ import { runReadAudit } from "./project-audit.js";
 import type { Args } from "./project-cache.js";
 import { runHealth, type HealthDeps } from "./project-health.js";
 import { runExecuteJs } from "./project-jsexec.js";
+import { runMemory } from "./project-memory.js";
 import { config, flag01, path_, reason_ } from "./project-schema.js";
 import { runCancelShellSession, type ShellDeps } from "./project-shell.js";
 
 // Ops/diagnostics tool registrations: create, health, cache_clear,
-// execute_js (only when ALLOW_JS_EXEC), trace_status, read_audit,
+// execute_js (only when ALLOW_JS_EXEC), trace_status, memory, read_audit,
 // shell_cancel_session. Extracted from registerProjectTools in tools/project.ts (roadmap item 6,
 // step 5l). They are contiguous in the original list, so schemas, descriptions and registration order are
 // unchanged. Runners/state owned by project.ts arrive through OpsToolsDeps.
@@ -173,6 +174,25 @@ export function registerOpsTools(server: McpServer, deps: OpsToolsDeps): void {
       recordMetric("trace_status", elapsedMs, true);
       return toolResult(buildEnvelope("trace_status", response, { requestId, elapsedMs, cached: false }));
     },
+  );
+
+  server.registerTool(
+    "memory",
+    {
+      ...config(
+        "Memory",
+        {
+          speed_profile: "instant; one small file read or atomic write in the data dir.",
+          batch_safe: false,
+        },
+        { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+      ),
+      inputSchema: {
+        action: z.enum(["read", "write"]).describe("read: return the saved note (exists=false + hint when none). write: replace it entirely with `content`."),
+        content: z.string().optional().describe("write only: the full new note (markdown, max 6000 bytes). Replaces the previous one; empty/missing content is refused."),
+      },
+    },
+    (args) => runMemory(args as Args),
   );
 
   server.registerTool(
