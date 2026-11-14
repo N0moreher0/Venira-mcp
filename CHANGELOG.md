@@ -2,9 +2,9 @@
 
 Local release notes for venira-mcp. Not published (not listed in `package.json` `files`) and not pushed to git.
 
-## Unreleased
+## 4.0.0 - 2026-11-14
 
-### Changed - leaner tool envelopes (fewer tokens per call)
+### Breaking - leaner tool envelopes (fewer tokens per call)
 - Every envelope dropped elapsed_ms.
 - shell_run / shell_status dropped: shell_id (duplicate of run_id), shell, background, foreground, timeout_ms, policy (status only). run_elapsed_ms stayed on shell_status (its only duration is what the P2 contract needs).
 - Approval envelopes no longer echo the model's arguments: retry_with.arguments carries only approval_id.
@@ -12,7 +12,7 @@ Local release notes for venira-mcp. Not published (not listed in `package.json` 
 - shell_status keeps: run_id, running, exit_code, cancelled, tails, truncated, dropped_bytes, timed_out, run_elapsed_ms.
 - Kept deliberately: request_id (needed for read_audit correlation), sha256/text_sha256/sha256_scope (needed for edit_file), shell_kind, policy (14 contract tests).
 
-### Changed - leaner health output (easier for agents to read)
+### Breaking - leaner health output (easier for agents to read)
 - health dropped the notice safety paragraph entirely.
 - posture findings now carry only id + severity (+ level, summary, fail_closed). The per-finding summary text is gone; warnings stays as a flat list.
 - metrics.operations[op] now reports only { count, errors, p95 } (was p50, p95, max, avg, last_ms).
