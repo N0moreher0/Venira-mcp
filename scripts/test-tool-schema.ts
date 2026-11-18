@@ -9,7 +9,7 @@
  *      scope and guard entirely, so the handlers refuse them instead of silently widening the
  *      operation; the loose objects keep them reachable so the refusal can name the replacement.
  *   3. Every registered tool has a TOOL_DOCS entry (the model-facing wording).
- *   4. edit_batch's typed item shape stays in sync with the runtime
+ *   4. edit_file's typed edits[] item shape stays in sync with the runtime
  *      EDIT_ITEM_KEYS validator.
  *   5. (ROADMAP_TOOL_SCHEMA.md, phase 3) The fuzzy edit options are advertised, and mentioned in the
  *      model-facing text, only when VENIRA_EDIT_FUZZY=1; with it off they are still let through to the
@@ -424,7 +424,7 @@ check("core mode: blocks every other tool, and core stays inside the default sur
     assert.equal(toolMode.modeBlocksTool("core", name, false), !inCore, `core handling of ${name}`);
     if (inCore) assert.equal(toolMode.modeBlocksTool("default", name, false), false, `${name} is in core but not in default`);
   }
-  for (const name of ["secret", "read_batch", "health", "apply_patch", "copy_path", "get_file_info", "dependency_graph", "ci_status"]) {
+  for (const name of ["secret", "edit_batch", "health", "apply_patch", "copy_path", "get_file_info", "dependency_graph", "ci_status"]) {
     assert.equal(toolMode.modeBlocksTool("core", name, false), true, `core must not advertise ${name}`);
   }
 });
@@ -477,9 +477,15 @@ check("core mode: applyDisabledTools registers only the allowlist (plus setup to
 
 const fuzzyIn = (keys: string[]) => keys.filter((k) => FUZZY.includes(k)).sort();
 const editFileKeys = (tools: Registered) => Object.keys(shapeOf(tools.get("edit_file")!.inputSchema));
-/** The zod schema of one edit_batch item (`edits` is an array of loose objects). */
-const batchItemSchema = (tools: Registered) =>
-  defOf(shapeOf(tools.get("edit_batch")!.inputSchema).edits)!.element as z.ZodType;
+/** The zod schema of one edit_file edits[] item (`edits` is an array of loose objects). */
+const batchItemSchema = (tools: Registered) => {
+  const edits = (shapeOf(tools.get("edit_file")!.inputSchema) as Record<string, unknown>).edits;
+  let cur: Record<string, unknown> | undefined = defOf(edits);
+  while (cur && cur.type === "optional") cur = defOf(cur.innerType);
+  const element = cur?.element;
+  if (!element) throw new Error("edit_file#edits[] element schema not found");
+  return element as z.ZodType;
+};
 const batchItemKeys = (tools: Registered) => Object.keys(defOf(batchItemSchema(tools))!.shape as Record<string, unknown>);
 /** JSON Schema of one tool's input, as tools/list would carry it. */
 function jsonOf(input: unknown): string {
@@ -487,18 +493,18 @@ function jsonOf(input: unknown): string {
   return JSON.stringify(z.toJSONSchema(schema as never, { io: "input", unrepresentable: "any" }));
 }
 
-check("fuzzy off: edit_file and edit_batch items do not advertise the fuzzy options", () => {
+check("fuzzy off: edit_file and its edits[] items do not advertise the fuzzy options", () => {
   assert.deepEqual(fuzzyIn(editFileKeys(fuzzyOff)), []);
   assert.deepEqual(fuzzyIn(batchItemKeys(fuzzyOff)), []);
 });
 
-check("fuzzy on: edit_file and edit_batch items advertise all three fuzzy options", () => {
+check("fuzzy on: edit_file and its edits[] items advertise all three fuzzy options", () => {
   assert.deepEqual(fuzzyIn(editFileKeys(fuzzyOn)), [...FUZZY].sort());
   assert.deepEqual(fuzzyIn(batchItemKeys(fuzzyOn)), [...FUZZY].sort());
 });
 
-check("fuzzy off: nothing about fuzzy matching in the edit tools' text or schema", () => {
-  for (const tool of ["edit_file", "edit_batch"]) {
+check("fuzzy off: nothing about fuzzy matching in edit_file's text or schema", () => {
+  for (const tool of ["edit_file"]) {
     const cfg = fuzzyOff.get(tool)!;
     assert.ok(!/fuzzy/i.test(cfg.description ?? ""), `${tool} description still mentions fuzzy matching`);
     assert.ok(!/fuzzy/i.test(jsonOf(cfg.inputSchema)), `${tool} schema still mentions fuzzy matching`);
@@ -512,7 +518,7 @@ check("fuzzy on: the edit_file text explains the fuzzy fallback", () => {
   assert.match(effectiveDescription(oldText) ?? "", /near-match/);
 });
 
-check("fuzzy off: edit_file and edit_batch items still let fuzzy options through to the handler", () => {
+check("fuzzy off: edit_file and its edits[] items still let fuzzy options through to the handler", () => {
   const input = { relative_path: "a.txt", old_text: "x", new_text: "y", case_insensitive: 1, fuzzy_distance: 2 };
   const editFile = fuzzyOff.get("edit_file")!.inputSchema as z.ZodType;
   const one = editFile.safeParse(input);
@@ -520,8 +526,8 @@ check("fuzzy off: edit_file and edit_batch items still let fuzzy options through
   assert.equal((one.data as Record<string, unknown>).case_insensitive, 1, "edit_file stripped case_insensitive");
   assert.equal((one.data as Record<string, unknown>).fuzzy_distance, 2, "edit_file stripped fuzzy_distance");
   const item = batchItemSchema(fuzzyOff).safeParse(input);
-  assert.ok(item.success, "edit_batch item rejected a fuzzy option while fuzzy is off");
-  assert.equal((item.data as Record<string, unknown>).case_insensitive, 1, "edit_batch item stripped case_insensitive");
+  assert.ok(item.success, "edits[] item rejected a fuzzy option while fuzzy is off");
+  assert.equal((item.data as Record<string, unknown>).case_insensitive, 1, "edits[] item stripped case_insensitive");
 });
 
 check("fuzzy on: the options are typed (flag becomes boolean, distance is capped at 10)", () => {
@@ -553,19 +559,21 @@ check("read_file advertises start_line with minimum 1 (also in ranges[]) but sti
   const props = propsOf(input);
   assert.equal(props.start_line.minimum, 1, "start_line must advertise minimum 1");
   assert.equal(props.ranges.items.properties.start_line.minimum, 1, "ranges[].start_line must advertise minimum 1");
-  const parsed = z.object(input as never).safeParse({ relative_path: "a.txt", start_line: 0, ranges: [{ start_line: 0 }] });
+  const parsed = ((input as { _zod?: unknown })._zod ? (input as unknown as z.ZodType) : z.object(input as never)).safeParse({ relative_path: "a.txt", start_line: 0, ranges: [{ start_line: 0 }] });
   assert.ok(parsed.success, "start_line=0 must reach the handler, which answers with a hint");
 });
 
 check("max_response_bytes_per_item is not advertised on the batch tools but still reaches the handler", () => {
   for (const [tool, payload] of [
-    ["read_batch", { requests: [{ operation: "list_files", arguments: {} }], max_response_bytes_per_item: 2048 }],
-    ["edit_batch", { edits: [{ relative_path: "a.txt", old_text: "x", new_text: "y" }], max_response_bytes_per_item: 512 }],
+    ["read_file", { requests: [{ relative_path: "a.txt" }], max_response_bytes_per_item: 2048 }],
+    ["edit_file", { edits: [{ relative_path: "a.txt", old_text: "x", new_text: "y" }], max_response_bytes_per_item: 512 }],
   ] as const) {
     const input = registered.get(tool)!.inputSchema;
     assert.ok(!("max_response_bytes_per_item" in propsOf(input)), `${tool} still advertises max_response_bytes_per_item`);
     assert.ok(!jsonOf(input).includes("max_response_bytes_per_item"), `${tool} schema text still names max_response_bytes_per_item`);
-    const parsed = (input as unknown as z.ZodType).safeParse(payload);
+    // read_file is registered as a raw shape; edit_file as a loose object (has _zod).
+    const schema = (input as { _zod?: unknown })._zod ? (input as unknown as z.ZodType) : z.object(input as never);
+    const parsed = schema.safeParse(payload);
     assert.ok(parsed.success, `${tool}: the hidden key must pass the schema`);
     assert.equal(
       (parsed.data as Record<string, unknown>).max_response_bytes_per_item,
@@ -577,11 +585,11 @@ check("max_response_bytes_per_item is not advertised on the batch tools but stil
 
 check("the hidden per-item budget is range-checked by the handler (not by zod)", () => {
   const { checkItemBytes, READ_ITEM_BYTES_MIN, READ_ITEM_BYTES_MAX, EDIT_ITEM_BYTES_MIN, EDIT_ITEM_BYTES_MAX } = batchModule;
-  assert.equal(checkItemBytes("read_batch", undefined, READ_ITEM_BYTES_MIN, READ_ITEM_BYTES_MAX), undefined);
-  assert.equal(checkItemBytes("read_batch", 2048, READ_ITEM_BYTES_MIN, READ_ITEM_BYTES_MAX), undefined);
-  assert.equal(checkItemBytes("edit_batch", EDIT_ITEM_BYTES_MIN, EDIT_ITEM_BYTES_MIN, EDIT_ITEM_BYTES_MAX), undefined);
+  assert.equal(checkItemBytes("read_file", undefined, READ_ITEM_BYTES_MIN, READ_ITEM_BYTES_MAX), undefined);
+  assert.equal(checkItemBytes("read_file", 2048, READ_ITEM_BYTES_MIN, READ_ITEM_BYTES_MAX), undefined);
+  assert.equal(checkItemBytes("edit_file", EDIT_ITEM_BYTES_MIN, EDIT_ITEM_BYTES_MIN, EDIT_ITEM_BYTES_MAX), undefined);
   for (const bad of [1, READ_ITEM_BYTES_MAX + 1, 1.5, "2048", Number.NaN, null]) {
-    const result = batchModule.checkItemBytes("read_batch", bad, READ_ITEM_BYTES_MIN, READ_ITEM_BYTES_MAX);
+    const result = batchModule.checkItemBytes("read_file", bad, READ_ITEM_BYTES_MIN, READ_ITEM_BYTES_MAX);
     assert.ok(result, `${String(bad)} must be rejected`);
     const text = JSON.stringify(result);
     assert.match(text, /invalid_request/);

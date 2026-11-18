@@ -78,7 +78,6 @@ export const CORE_TOOLS: readonly string[] = [
   "outline_symbol",
   // edit
   "edit_file",
-  "edit_batch",
   "write_file",
   "delete_path",
   "create",

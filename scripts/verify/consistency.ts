@@ -16,7 +16,7 @@
  *      was a contradiction. Now `status` names what happened to the command.
  *   5. `health`: `capability.project_id: "chat-terminal"` was the
  *      fallback id and did not say so.
- *   6. `snapshot`: a failed `edit_batch` left its internal checkpoint behind
+ *   6. `snapshot`: a failed multi-file edit (edit_file, edits[] with per-item path) left its internal checkpoint behind
  *      and ate a VENIRA_SNAPSHOT_KEEP slot per attempt.
  */
 import { promises as fs } from "node:fs";
@@ -433,14 +433,14 @@ export async function runConsistency(
   );
 
   // -------------------------------------------------------------------------
-  // 6. A failed edit_batch does not leave its checkpoint behind
+  // 6. A failed multi-file edit does not leave its checkpoint behind
   // -------------------------------------------------------------------------
   await fs.writeFile(path.join(dir, "batch-a.txt"), "alpha\n");
   await fs.writeFile(path.join(dir, "batch-b.txt"), "beta\n");
   const beforeList = asEnvelope(await call("snapshot", { action: "list" }));
   const beforeCount = Number(beforeList.data?.total ?? 0);
   const batch = asEnvelope(
-    await call("edit_batch", {
+    await call("edit_file", {
       edits: [
         {
           relative_path: `${dir}/batch-a.txt`,
@@ -453,14 +453,14 @@ export async function runConsistency(
           new_text: "X",
         },
       ],
-      reason: "VERIFY_REASON_EDIT_BATCH_ROLLBACK",
+      reason: "VERIFY_REASON_EDIT_FILE_ROLLBACK",
     }),
   );
   const afterList = asEnvelope(await call("snapshot", { action: "list" }));
   const afterCount = Number(afterList.data?.total ?? 0);
   const batchA = await fs.readFile(path.join(dir, "batch-a.txt"), "utf8");
   check(
-    "a_failed_edit_batch_removes_its_own_checkpoint",
+    "a_failed_multi_file_edit_removes_its_own_checkpoint",
     batch.ok === false &&
       batch.data?.rollback_succeeded === true &&
       batch.data?.checkpoint_deleted === true &&

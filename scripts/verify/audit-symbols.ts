@@ -64,9 +64,9 @@ export async function runAuditSymbols(
   );
   await clientCompact.close();
 
-  // 20. Metrics ops present (read_batch, recent_files, health, shell_run)
+  // 20. Metrics ops present (read_file, recent_files, health, shell_run)
   const ops = Object.keys(healthData.data?.metrics?.operations ?? {});
-  const requiredOps = ["read_file", "read_batch", "recent_files", "shell_run"];
+  const requiredOps = ["read_file", "recent_files", "shell_run"];
   const hasRequired = requiredOps.every((op) => ops.includes(op));
   check("metrics_ops_present", hasRequired, ops);
 

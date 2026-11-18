@@ -1,11 +1,11 @@
 {
   "expert": {
-    "tool_count": 52,
-    "total_bytes": 80918
+    "tool_count": 50,
+    "total_bytes": 76826
   },
   "default": {
-    "tool_count": 39,
-    "total_bytes": 61728
+    "tool_count": 37,
+    "total_bytes": 57630
   },
   "tools": {
     "apply_patch": 1897,
@@ -21,11 +21,10 @@
     "delete_path": 882,
     "dependency_graph": 1910,
     "diff_files": 969,
-    "edit_batch": 2207,
-    "edit_file": 2429,
+    "edit_file": 2991,
     "execute_js": 1589,
     "explain_error": 1125,
-    "get_file_info": 986,
+    "get_file_info": 937,
     "git_branch": 1516,
     "git_commit": 1309,
     "git_diff": 1500,
@@ -38,7 +37,7 @@
     "memory": 1120,
     "move_path": 1258,
     "outline_symbol": 1158,
-    "plan_read_batch": 1265,
+    "plan_read_batch": 1271,
     "pr_close": 903,
     "pr_comment": 1853,
     "pr_create": 1434,
@@ -46,10 +45,9 @@
     "pr_merge": 1495,
     "pr_reopen": 953,
     "read_audit": 1772,
-    "read_batch": 4866,
-    "read_file": 1965,
-    "recent_files": 1018,
-    "search": 3637,
+    "read_file": 3710,
+    "recent_files": 1056,
+    "search": 4162,
     "secret": 2103,
     "shell_cancel": 661,
     "shell_cancel_session": 437,
@@ -59,6 +57,6 @@
     "switch_workspace": 1261,
     "symbol_references": 1426,
     "trace_status": 567,
-    "write_file": 1581
+    "write_file": 1735
   }
 }

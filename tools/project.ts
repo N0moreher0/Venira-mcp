@@ -132,7 +132,7 @@ const hybridDeps: HybridDeps = {
   execute: (operation, args) => executeCached(operation, args),
 };
 
-// read_batch / edit_batch live in ./project-batch.ts; same cached executor plus the
+// read_file's multi-read runner and edit_file's multi-file atomic runner live in ./project-batch.ts; same cached executor plus the
 // batch response budget (also used by this module's caches).
 const batchDeps: BatchDeps = { ...hybridDeps, maxBatchResponseBytes: MAX_BATCH_RESPONSE_BYTES };
 

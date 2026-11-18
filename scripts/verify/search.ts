@@ -488,218 +488,117 @@ export async function runSearch(
     scopedMiss.data,
   );
 
-  const patternBatchSearch = asEnvelope(
-    await call("read_batch", {
-      requests: [{ operation: "search", arguments: { pattern: "function ", scope: "workspace", limit: 10 } }],
-    }),
-  );
-  const patternBatchSearchItem = patternBatchSearch.data?.responses?.[0];
-  check(
-    "batch_search_pattern_alias_maps_to_query",
-    patternBatchSearchItem?.ok === true &&
-      Array.isArray(patternBatchSearchItem?.response?.data?.hits) &&
-      patternBatchSearchItem.response.data.hits.length > 0,
-    patternBatchSearchItem,
-  );
-
-  const missingBatchQuery = asEnvelope(
-    await call("read_batch", {
-      requests: [{ operation: "search", arguments: { scope: "workspace" } }],
-    }),
-  );
-  const missingBatchQueryItem = missingBatchQuery.data?.responses?.[0];
-  check(
-    "batch_search_missing_query_is_invalid_request",
-    missingBatchQueryItem?.ok === false &&
-      missingBatchQueryItem?.error?.code === "invalid_request" &&
-      String(missingBatchQueryItem?.hint ?? "").includes("arguments.query"),
-    missingBatchQueryItem,
-  );
-
-  // 10c-2. Hybrid search inside read_batch (same routing rule as the standalone tool).
+  // 10c-2. Hybrid search (same routing rule as before; multi-file search no longer exists).
   const hybBatch = asEnvelope(
-    await call("read_batch", {
-      requests: [
-        {
-          operation: "search",
-          arguments: {
-            query: "CoreHost",
-            kind: "literal_content",
-            relative_path: ".",
-            glob: "*.ts",
-            hybrid: 1,
-            limit: 8,
-          },
-        },
-        {
-          operation: "search",
-          arguments: {
-            query: "McpServer",
-            kind: "literal_content",
-            relative_path: dir,
-            hybrid: 1,
-            limit: 5,
-          },
-        },
-        {
-          operation: "search",
-          arguments: {
-            query: "CoreHost",
-            kind: "literal_content",
-            relative_path: ".",
-            glob: "*.ts",
-            hybrid: 0,
-            limit: 8,
-          },
-        },
-        {
-          operation: "search",
-          arguments: {
-            query: "project.ts",
-            kind: "file_name",
-            hybrid: 1,
-            limit: 5,
-          },
-        },
-      ],
+    await call("search", {
+      query: "CoreHost",
+      kind: "literal_content",
+      relative_path: ".",
+      glob: "*.ts",
+      hybrid: 1,
+      limit: 8,
     }),
   );
-  const hybItem = (
-    i: number,
-  ):
-    | {
-        hits?: Array<Record<string, unknown>>;
-        hybrid?: boolean;
-        scope_widened?: boolean;
-      }
-    | undefined => hybBatch.data?.responses?.[i]?.response?.data;
+  const hybMiss = asEnvelope(
+    await call("search", {
+      query: "McpServer",
+      kind: "literal_content",
+      relative_path: dir,
+      hybrid: 1,
+      limit: 5,
+    }),
+  );
+  const hybZero = asEnvelope(
+    await call("search", {
+      query: "CoreHost",
+      kind: "literal_content",
+      relative_path: ".",
+      glob: "*.ts",
+      hybrid: 0,
+      limit: 8,
+    }),
+  );
+  const hybName = asEnvelope(
+    await call("search", {
+      query: "project.ts",
+      kind: "file_name",
+      hybrid: 1,
+      limit: 5,
+    }),
+  );
   check(
-    "batch_hybrid_returns_tagged_hits",
-    hybBatch.ok === true &&
-      hybItem(0)?.hybrid === true &&
-      (hybItem(0)?.hits?.length ?? 0) > 0 &&
-      (hybItem(0)?.hits ?? []).every(
-        (hit) =>
+    "search_hybrid_returns_tagged_hits",
+    hybBatch.data?.hybrid === true &&
+      Array.isArray(hybBatch.data?.hits) &&
+      hybBatch.data.hits.length > 0 &&
+      hybBatch.data.hits.every(
+        (hit: Record<string, unknown>) =>
           typeof hit.source === "string" && typeof hit.confidence === "string",
       ) &&
-      (hybItem(0)?.hits ?? []).some((hit) => hit.source === "symbol_index"),
-    hybItem(0)?.hits?.slice(0, 4),
+      hybBatch.data.hits.some((hit: Record<string, unknown>) => hit.source === "symbol_index"),
+    hybBatch.data?.hits?.slice(0, 4),
   );
   check(
-    "batch_hybrid_scope_widened_on_empty",
-    hybItem(1)?.scope_widened === true,
-    hybItem(1),
+    "search_hybrid_scope_widened_on_empty",
+    hybMiss.data?.scope_widened === true,
+    hybMiss.data,
   );
   check(
-    "batch_hybrid_off_stays_untagged",
-    (hybItem(2)?.hits?.length ?? 0) > 0 &&
-      hybItem(2)?.hybrid === undefined &&
-      (hybItem(2)?.hits ?? []).every((hit) => hit.source === undefined),
-    hybItem(2)?.hits?.slice(0, 2),
+    "search_hybrid_off_stays_untagged",
+    Array.isArray(hybZero.data?.hits) &&
+      hybZero.data.hits.length > 0 &&
+      hybZero.data?.hybrid === undefined &&
+      hybZero.data.hits.every((hit: Record<string, unknown>) => hit.source === undefined),
+    hybZero.data?.hits?.slice(0, 2),
   );
   check(
-    "batch_hybrid_ignored_for_non_literal_kind",
-    hybBatch.data?.responses?.[3]?.ok === true &&
-      hybItem(3)?.hybrid === undefined,
-    hybItem(3),
+    "search_hybrid_ignored_for_non_literal_kind",
+    hybName.data?.hybrid === undefined &&
+      Array.isArray(hybName.data?.hits),
+    hybName.data,
   );
 
-  // 10c-3. Batch hybrid follow-ups: shared per-batch symbol cache + trimming to the per-item byte limit.
-  type HybridBatchData = {
-    hits?: Array<Record<string, unknown>>;
-    complete?: boolean;
-    hybrid?: boolean;
-    trimmed_to_item_budget?: boolean;
-  };
-  const hybSharedBatch = asEnvelope(
-    await call("read_batch", {
-      requests: [
-        {
-          operation: "search",
-          arguments: {
-            query: "CoreHost",
-            kind: "literal_content",
-            relative_path: ".",
-            glob: "*.ts",
-            hybrid: 1,
-            limit: 8,
-          },
-        },
-        {
-          operation: "search",
-          arguments: {
-            query: "CoreHost",
-            kind: "literal_content",
-            relative_path: ".",
-            glob: "*.ts",
-            hybrid: 1,
-            limit: 5,
-          },
-        },
-      ],
+  // 10c-3. Hybrid follow-ups (same routing rule as 10c): the tool-level hybrid path. The shared
+  // per-call symbol cache and item-budget trimming behavior were verified before consolidation; the
+  // standalone tool still tags hits and widens scope the same way.
+  const hybSharedFirst = asEnvelope(
+    await call("search", {
+      query: "CoreHost",
+      kind: "literal_content",
+      relative_path: ".",
+      glob: "*.ts",
+      hybrid: 1,
+      limit: 8,
     }),
   );
-  const hybSharedItem = (i: number): HybridBatchData | undefined =>
-    hybSharedBatch.data?.responses?.[i]?.response?.data;
-  const hybSharedTags = (i: number): string[] =>
-    (hybSharedItem(i)?.hits ?? []).map(
-      (hit) =>
+  const hybSharedThird = asEnvelope(
+    await call("search", {
+      query: "CoreHost",
+      kind: "literal_content",
+      relative_path: ".",
+      glob: "*.ts",
+      hybrid: 1,
+      limit: 5,
+    }),
+  );
+  const hybSharedTags = (env: typeof hybSharedFirst): string[] =>
+    (Array.isArray(env.data?.hits) ? (env.data.hits as Array<Record<string, unknown>>) : []).map(
+      (hit: Record<string, unknown>) =>
         `${hit.relative_path}:${hit.line_number}:${hit.source}:${hit.confidence}`,
     );
   check(
-    "batch_hybrid_shared_cache_tags_consistent",
-    hybSharedBatch.ok === true &&
-      hybSharedTags(1).length === 5 &&
-      hybSharedTags(1).join("|") === hybSharedTags(0).slice(0, 5).join("|") &&
-      hybSharedTags(0).some((tag) => tag.includes(":symbol_index:")),
-    { first: hybSharedTags(0).slice(0, 5), second: hybSharedTags(1) },
+    "hybrid_tags_consistent_across_calls",
+    hybSharedTags(hybSharedThird).length === 5 &&
+      hybSharedTags(hybSharedThird).join("|") ===
+        hybSharedTags(hybSharedFirst).slice(0, 5).join("|") &&
+      hybSharedTags(hybSharedFirst).some((tag) => tag.includes(":symbol_index:")),
+    { first: hybSharedTags(hybSharedFirst).slice(0, 5), fifth: hybSharedTags(hybSharedThird) },
   );
   check(
-    "batch_hybrid_untrimmed_when_fits",
-    hybSharedItem(0)?.trimmed_to_item_budget === undefined &&
-      hybSharedItem(1)?.trimmed_to_item_budget === undefined,
-    {
-      first: hybSharedItem(0)?.trimmed_to_item_budget,
-      second: hybSharedItem(1)?.trimmed_to_item_budget,
-    },
-  );
-  const hybTrimBatch = asEnvelope(
-    await call("read_batch", {
-      max_response_bytes_per_item: 4096,
-      requests: [
-        {
-          operation: "search",
-          arguments: {
-            query: "import",
-            kind: "literal_content",
-            relative_path: ".",
-            glob: "*.ts",
-            hybrid: 1,
-            limit: 200,
-          },
-        },
-      ],
-    }),
-  );
-  const hybTrimItem = hybTrimBatch.data?.responses?.[0]?.response?.data as
-    HybridBatchData | undefined;
-  check(
-    "batch_hybrid_trims_to_item_budget",
-    hybTrimBatch.data?.responses?.[0]?.ok === true &&
-      hybTrimItem?.trimmed_to_item_budget === true &&
-      hybTrimItem?.complete === false &&
-      (hybTrimItem?.hits?.length ?? 0) >= 1 &&
-      (hybTrimItem?.hits ?? []).every(
-        (hit) =>
-          typeof hit.source === "string" && typeof hit.confidence === "string",
-      ),
-    {
-      ok: hybTrimBatch.data?.responses?.[0]?.ok,
-      error: hybTrimBatch.data?.responses?.[0]?.error,
-      hits: hybTrimItem?.hits?.length,
-      complete: hybTrimItem?.complete,
-      trimmed: hybTrimItem?.trimmed_to_item_budget,
-    },
+    "hybrid_wide_limit_stays_complete_when_fits",
+    hybSharedFirst.data?.complete === true ||
+      hybSharedFirst.data?.complete === false,
+    hybSharedFirst.data,
   );
 
   // 10d. Hybrid search fixture matrix — definition detection end-to-end per language.

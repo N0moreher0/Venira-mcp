@@ -75,9 +75,9 @@ out.read_distinct_8 = stats(distinct);
 
 const batch: number[] = [];
 for (let i = 0; i < 3; i++) {
-  batch.push((await call("read_batch", { requests: files.map((file) => ({ operation: "read_file", arguments: { relative_path: file, max_bytes: 8192 } })) })).ms);
+  batch.push((await call("read_file", { requests: files.map((file) => ({ relative_path: file, max_bytes: 8192 })) })).ms);
 }
-out.read_batch_8_of_8 = stats(batch);
+out.read_file_batch_8_of_8 = stats(batch);
 
 const infos: number[] = [];
 for (let i = 0; i < 30; i++) infos.push((await call("get_file_info", { relative_path: "server.ts" })).ms);

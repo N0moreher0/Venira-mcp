@@ -80,8 +80,8 @@ type HybridHit = Record<string, unknown> & {
 };
 
 /**
- * Core of the hybrid search, shared by `search` (hybrid: 1) and by `search` items inside
- * `read_batch`. Returns the merged response so each caller builds its own envelope.
+ * Core of the hybrid search, shared by `search` (hybrid: 1). Returns the merged response
+ * so each caller builds its own envelope.
  */
 export async function computeHybridSearch(
   args: Args,

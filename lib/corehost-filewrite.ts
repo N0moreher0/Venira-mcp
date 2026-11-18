@@ -50,7 +50,8 @@ export async function opWriteFile(
 
   const content = args.content as string;
   const mode = (args.mode as string | undefined) ?? "overwrite";
-  const createDirs = args.create_dirs === true;
+  // mode=create implies create_dirs: "create" makes the parent folders too, not just the file.
+  const createDirs = args.create_dirs === true || mode === "create";
   const parentDir = path.dirname(absPath);
 
   if (createDirs) {

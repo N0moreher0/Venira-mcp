@@ -6,7 +6,8 @@
  *   2. missing_ok=true: missing path answers ok with data.exists:false; existing path answers as before plus exists:true.
  *   3. A directory answers like a file (exists:true, kind=directory).
  *   4. Errors other than [not_found] (e.g. path_escape) are NOT swallowed by the flag.
- *   5. read_batch: an item with missing_ok=true on a missing path is ok; a mixed batch (exists + missing) answers ok:true.
+ *   5. read_file's multi-file mode: an item on a missing path fails only itself; a mixed batch (exists + missing) answers ok:false with status:partial.
+ *   (read_batch was retired: the batch mode is now requests[] on read_file itself.)
  *   6. The cache does not leak: after a missing_ok=true probe, a default call on the same path still rejects with [not_found].
  *
  * Run with: npm run test:file-info-missing-ok
@@ -21,8 +22,30 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(), "venira-file-info-missing-ok-"
 fs.writeFileSync(path.join(dir, "present.txt"), "hello");
 fs.mkdirSync(path.join(dir, "subdir"));
 
-// Stub backend that mirrors lib/corehost-fileread.ts opGetFileInfo.
+// Stub backend that mirrors lib/corehost-fileread.ts opGetFileInfo (and read_file for multi-file tests).
 const execute = async (operation: string, args: Record<string, unknown>): Promise<any> => {
+  if (operation === "read_file") {
+    const rel = String(args.relative_path ?? ".");
+    const abs = path.resolve(dir, rel);
+    try {
+      const content = fs.readFileSync(abs, "utf8");
+      return {
+        status: "completed",
+        result: {
+          kind: "file_read",
+          data: {
+            relative_path: rel,
+            text: content,
+            first_line: 1,
+            last_line: content.split("\n").length,
+            total_bytes: Buffer.byteLength(content, "utf8"),
+          },
+        },
+      };
+    } catch {
+      throw new Error(`[not_found] File does not exist: ${rel}. Hint: create it or check with list_files.`);
+    }
+  }
   if (operation !== "get_file_info") throw new Error(`unexpected operation ${operation}`);
   const rel = String(args.relative_path ?? ".");
   if (!("missing_ok" in args)) {
@@ -50,7 +73,7 @@ const execute = async (operation: string, args: Record<string, unknown>): Promis
 
 const { createCacheLayer } = await import("../tools/project-cache.js");
 const { createCachedExecutor } = await import("../tools/project-executor.js");
-const { runReadBatch } = await import("../tools/project-batch.js");
+const { runReadFileBatch } = await import("../tools/project-batch.js");
 
 const toHostPath = (relativePath: string | undefined): string => {
   const rel = relativePath ?? ".";
@@ -111,38 +134,39 @@ try {
     );
   });
 
-  await check("read_batch: missing item with missing_ok=true is ok and a mixed batch answers ok:true", async () => {
+  await check("read_file multi-file: a missing item fails only itself; a mixed batch answers ok:false/status:partial", async () => {
     const batchDeps = { execute: (op: string, args: any) => executeCached(op, args), maxBatchResponseBytes: 2 * 1024 * 1024 };
-    const result: any = await runReadBatch(
+    const result: any = await runReadFileBatch(
       [
-        { operation: "get_file_info", arguments: { relative_path: "present.txt" } },
-        { operation: "get_file_info", arguments: { relative_path: "nope.txt", missing_ok: 1 } },
-      ],
-      524288,
-      batchDeps as any,
-    );
-    const payload = JSON.parse(result.content[0].text);
-    assert.equal(payload.ok, true);
-    assert.equal(payload.data.responses[0].ok, true);
-    assert.equal(payload.data.responses[0].response.data.exists, undefined);
-    assert.equal(payload.data.responses[1].ok, true);
-    assert.equal(payload.data.responses[1].response.data.exists, false);
-  });
-
-  await check("read_batch: missing item WITHOUT missing_ok still fails the batch (default unchanged)", async () => {
-    const batchDeps = { execute: (op: string, args: any) => executeCached(op, args), maxBatchResponseBytes: 2 * 1024 * 1024 };
-    const result: any = await runReadBatch(
-      [
-        { operation: "get_file_info", arguments: { relative_path: "present.txt" } },
-        { operation: "get_file_info", arguments: { relative_path: "nope.txt" } },
+        { relative_path: "present.txt" },
+        { relative_path: "nope.txt", missing_ok: 1 },
       ],
       524288,
       batchDeps as any,
     );
     const payload = JSON.parse(result.content[0].text);
     assert.equal(payload.ok, false);
+    assert.equal(payload.status, "partial");
+    assert.equal(payload.data.responses[0].ok, true);
+    assert.equal(payload.data.responses[0].response.data.text, "hello");
     assert.equal(payload.data.responses[1].ok, false);
     assert.equal(payload.data.responses[1].error.code, "not_found");
+  });
+
+  await check("read_file multi-file: every item passes missing_ok for a missing path (item isolation)", async () => {
+    // read_file itself has no missing_ok flag; an item on a missing path must fail the ITEM, not the call.
+    const batchDeps = { execute: (op: string, args: any) => executeCached(op, args), maxBatchResponseBytes: 2 * 1024 * 1024 };
+    const result: any = await runReadFileBatch(
+      [
+        { relative_path: "nope.txt" },
+      ],
+      524288,
+      batchDeps as any,
+    );
+    const payload = JSON.parse(result.content[0].text);
+    assert.equal(payload.ok, false);
+    assert.equal(payload.status, "partial");
+    assert.equal(payload.data.responses[0].error.code, "not_found");
   });
 
   await check("cache does not leak: default call after a missing_ok=true probe still rejects with [not_found]", async () => {

@@ -65,7 +65,7 @@ export const editOp = z.object({
 });
 
 /**
- * Fuzzy-match options of `edit_file` and of every `edit_batch` item. They are only part of
+ * Fuzzy-match options of `edit_file` (advertised in the `edit_file` schema only). They are only part of
  * the published schema when `VENIRA_EDIT_FUZZY=1` (ROADMAP_TOOL_SCHEMA.md, phase 3), like `execute_js`
  * and `VENIRA_JS_EXEC_MODE`; with the variable off the shape is empty and `lib/corehost-filewrite.ts` rejects
  * a caller that still sends them. Since they are only visible when fuzzy is on, the descriptions do not repeat
@@ -81,7 +81,7 @@ export function editFuzzyShape(enabled: boolean) {
 }
 
 /**
- * One `edit_batch` item: the full `edit_file` shape.
+ * `edit_file` / multi-file edit items: the full `edit_file` shape.
  * Deliberately loose (unknown keys pass through): the runtime validator in
  * `lib/arg-hints.ts` (`EDIT_ITEM_KEYS`) rejects a misspelled key with a
  * did-you-mean message, so the schema must not strip or reject it first.
@@ -103,21 +103,13 @@ export function editBatchItemFor(fuzzy: boolean) {
 }
 
 /**
- * `read_batch` arguments, keyed by `operation`: each variant is a loose
- * object holding exactly that standalone tool's parameters (with integer 0|1
- * flags left as numbers — the batch runner normalizes them, see
- * `tools/project-batch.ts` `normalizeBatchArgs`). Fields are optional here so a
- * bad item fails only itself (matching the documented per-item isolation);
- * required fields per operation are named in the describes. The shape is the
- * point: an LLM can call each operation correctly from this alone.
+ * `read_file` items of a multi-file call (`requests[]`): the full read_file shape.
+ * Deliberately loose (unknown keys pass through) and optional per field so a single bad item
+ * fails only itself instead of killing the whole multi-file call. The handler in
+ * `tools/project-batch.ts` (`checkReadItemKeys`) enforces `relative_path` per item with a
+ * did-you-mean message for misspellings.
  */
-export const readBatchListFilesArgs = z.looseObject({
-  relative_path: path_.optional(),
-  include_ignored: flag01.optional().describe("true also lists ignored folders (default false)."),
-  limit: z.number().int().min(1).max(200).optional().describe("Max entries (default 200, max 200)."),
-  depth: z.number().int().min(1).max(3).optional().describe("Tree depth (default 1, max 3)."),
-});
-export const readBatchReadFileArgs = z.looseObject({
+export const readFileRequestArgs = z.looseObject({
   relative_path: path_.optional().describe("Required (optional here so one bad item fails only itself)."),
   start_line: z.number().int().min(1).optional().describe("First line (1-based)."),
   end_line: z.number().int().min(1).optional().describe("Last line (1-based)."),
@@ -125,28 +117,6 @@ export const readBatchReadFileArgs = z.looseObject({
   max_bytes: z.number().int().min(1).max(1_048_576).optional().describe("Max bytes returned (default 1 MiB)."),
   ranges: z.array(z.object({ start_line: z.number().int().min(1).describe("First line (1-based)."), end_line: z.number().int().min(1).optional().describe("Last line (1-based)."), max_bytes: z.number().int().min(1).optional().describe("Max bytes for this range.") })).min(1).max(16).optional().describe("Disjoint ranges (max 16)."),
 });
-export const readBatchGetFileInfoArgs = z.looseObject({
-  relative_path: path_.optional().describe("Required (optional here so one bad item fails only itself)."),
-  missing_ok: flag01.optional().describe("true = answer ok with exists:false for a missing path instead of not_found (default false)."),
-});
-export const readBatchSearchArgs = z.looseObject({
-  query: z.string().optional().describe("Required; see kind."),
-  kind: z.enum(["file_name", "directory_name", "literal_content", "definition"]).optional().describe("Required: name substring | content | declaration lines."),
-  relative_path: path_.optional(),
-  glob: z.string().optional().describe("rg glob filter ('*.ts' = any depth)."),
-  exclude_glob: z.string().optional().describe("rg glob exclusion (same dialect as glob)."),
-  regex: flag01.optional().describe("true = regex query (default false)."),
-  case_sensitive: flag01.optional().describe("true = case-sensitive (default true)."),
-  whole_word: flag01.optional().describe("true = whole-word only (default false)."),
-  include_hidden: flag01.optional().describe("true includes dotfiles (default); false skips them."),
-  invert: flag01.optional().describe("true = lines WITHOUT the match (default false)."),
-  files_only: flag01.optional().describe("true = only files with >=1 match, paths only, no line content (default false)."),
-  context_lines: z.number().int().min(0).max(20).optional().describe("Context lines per hit (default 0)."),
-  count_only: flag01.optional().describe("true = counts only (default false)."),
-  limit: z.number().int().min(1).max(200).optional().describe("Max hits (ignored when count_only=true)."),
-  hybrid: flag01.optional().describe("true tags hits with source (default false)."),
-});
-
 /**
  * Machine metadata a registration passes to `config()` (`_meta.venira`): the model gains nothing from it,
  * so it is never printed. All model-facing text (description, use/avoid/output lines) lives in

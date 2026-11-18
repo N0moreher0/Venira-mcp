@@ -11,47 +11,61 @@ import {
   VeniraError,
 } from "../lib/output.js";
 import type { Failure, RustResponse, ToolResult } from "../lib/output.js";
-import {
-  computeHybridSearch,
-  fitHybridToBudget,
-  type HybridDeps,
-  type HybridSymbolCache,
-} from "./project-hybrid.js";
+import type { HybridDeps } from "./project-hybrid.js";
 
-// read_batch and edit_batch handlers. Extracted from tools/project.ts
-// (P1 #6, step 5f); behavior is unchanged. The cached backend executor and the batch
-// response budget are owned by project.ts and reach this module through BatchDeps, so
-// it never imports project.ts.
+// Multi-item edit / multi-item read runners.
+//
+// read_file executes several files in ONE call (`requests[]`); edit_file executes several replacements,
+// possibly across files (`edits[]` with per-item `relative_path`, all-or-nothing). Both used to be
+// separate tools (read_batch / edit_batch); they are the same logic with the same cached executor, just
+// registered under the one tool name. The standalone shapes of the operations are unchanged:
+// one item of requests[] OR edits[] is exactly what the standalone tool accepts.
 
 type Args = Record<string, unknown>;
 
 const serializedSize = (value: unknown): number => Buffer.byteLength(stringify(value), "utf8");
 
-/**
- * `max_response_bytes_per_item` is accepted by both batch tools but no longer advertised (ROADMAP_TOOL_SCHEMA.md,
- * phase 7). They are registered as loose objects so the SDK does not strip it, which also means zod no longer
- * range-checks it, so the range is checked here. Returns an error result for a bad value, undefined when it is
- * absent or fine.
- */
-export function checkItemBytes(operation: string, value: unknown, min: number, max: number): ToolResult | undefined {
-  if (value === undefined) return undefined;
-  if (typeof value === "number" && Number.isInteger(value) && value >= min && value <= max) return undefined;
-  return toolResult(
-    errorEnvelope(
-      operation,
-      new VeniraError(
-        "invalid_request",
-        `max_response_bytes_per_item must be an integer between ${min} and ${max} (got ${String(value)}).`,
-      ),
-      { hint: "Omit it to use the default." },
-    ),
-  );
+/** Numeric 0/1 flags accepted inside requests[]/edits[], coerced to booleans before the backend sees them. */
+const BATCH_FLAG_KEYS = new Set([
+  "regex",
+  "case_sensitive",
+  "whole_word",
+  "include_hidden",
+  "count_only",
+  "hybrid",
+  "include_ignored",
+  "line_numbers",
+  "missing_ok",
+  "invert",
+  "files_only",
+]);
+
+const BATCH_FLAG_VALUE_KEYS = ["max_bytes"] as const;
+
+function normalizeBatchArgs(operation: string, args: Args): Args {
+  const out: Args = { ...args };
+  for (const key of BATCH_FLAG_KEYS) {
+    const value = out[key];
+    if (typeof value === "number") out[key] = value === 1;
+    else if (typeof value === "boolean") out[key] = value;
+    else if (value === "1" || value === "true") out[key] = true;
+    else if (value === "0" || value === "false") out[key] = false;
+  }
+  for (const key of BATCH_FLAG_VALUE_KEYS) {
+    const value = out[key];
+    if (typeof value === "string" && /^\d+$/.test(value)) out[key] = Number(value);
+  }
+  // Search clients commonly call the text field `pattern`; the standalone
+  // search contract calls it `query`. Accept the alias in batches so
+  // a valid search is not forwarded with query=undefined to the backend.
+  if (operation === "search" && typeof out.query !== "string" && typeof out.pattern === "string") {
+    out.query = out.pattern;
+  }
+  return out;
 }
 
-export const EDIT_ITEM_BYTES_MIN = 256;
-export const EDIT_ITEM_BYTES_MAX = 1_048_576;
-export const READ_ITEM_BYTES_MIN = 1024;
-export const READ_ITEM_BYTES_MAX = 2 * 1024 * 1024;
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
 
 function failureItem(operation: string, failure: Failure): Record<string, unknown> {
   const envelope = errorEnvelope(
@@ -75,67 +89,54 @@ function failureItem(operation: string, failure: Failure): Record<string, unknow
 }
 
 /**
+ * `max_response_bytes_per_item` is accepted by the multi-read form of read_file and by edit_file's
+ * multi-file form but no longer advertised (ROADMAP_TOOL_SCHEMA.md, phase 7). Both tools are registered
+ * as loose objects so the SDK does not strip it, which also means zod no longer range-checks it, so the
+ * range is checked here. Returns an error result for a bad value, undefined when it is absent or fine.
+ */
+export function checkItemBytes(operation: string, value: unknown, min: number, max: number): ToolResult | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value === "number" && Number.isInteger(value) && value >= min && value <= max) return undefined;
+  return toolResult(
+    errorEnvelope(
+      operation,
+      new VeniraError(
+        "invalid_request",
+        `max_response_bytes_per_item must be an integer between ${min} and ${max} (got ${String(value)}).`,
+      ),
+      { hint: "Omit it to use the default." },
+    ),
+  );
+}
+
+export const EDIT_ITEM_BYTES_MIN = 256;
+export const EDIT_ITEM_BYTES_MAX = 1_048_576;
+export const READ_ITEM_BYTES_MIN = 1024;
+export const READ_ITEM_BYTES_MAX = 2 * 1024 * 1024;
+
+/**
  * Same `execute` as HybridDeps (project.ts `executeCached`), plus the total response budget that
  * project.ts also applies to its own caches.
  */
 export type BatchDeps = HybridDeps & {
-  /** Upper bound on the serialized size of one whole batch response. */
+  /** Upper bound on the serialized size of one whole multi-item response. */
   maxBatchResponseBytes: number;
 };
 
-/**
- * Numeric 0/1 flags accepted by the batchable read ops. The standalone tools coerce these
- * through the `flag01` zod transform (1 -> true), but `read_batch` takes
- * `arguments` as an untyped record, so without this step the host receives the raw number
- * and silently ignores it (e.g. `regex: 1` searched for the pattern as plain text and
- * `"A|B"` returned no matches).
- */
-const BATCH_FLAG_KEYS = new Set([
-  "regex",
-  "case_sensitive",
-  "whole_word",
-  "include_hidden",
-  "count_only",
-  "hybrid",
-  "include_ignored",
-  "line_numbers",
-  "missing_ok",
-  "invert",
-  "files_only",
-]);
-
-function normalizeBatchArgs(operation: string, args: Args): Args {
-  const out: Args = { ...args };
-  for (const key of BATCH_FLAG_KEYS) {
-    const value = out[key];
-    if (typeof value === "number") out[key] = value === 1;
-    else if (typeof value === "boolean") out[key] = value;
-    else if (value === "1" || value === "true") out[key] = true;
-    else if (value === "0" || value === "false") out[key] = false;
-  }
-  // Search clients commonly call the text field `pattern`; the standalone
-  // search contract calls it `query`. Accept the alias in batches so
-  // a valid search is not forwarded with query=undefined to the backend.
-  if (operation === "search" && typeof out.query !== "string" && typeof out.pattern === "string") {
-    out.query = out.pattern;
-  }
-  return out;
-}
-
-export async function runReadBatch(
-  requests: { operation: string; arguments: Args }[],
+/** The multi-read form of read_file: one call, several files, sequential + cached. */
+export async function runReadFileBatch(
+  requests: Args[],
   maxItemBytes: number,
   deps: BatchDeps,
 ): Promise<ToolResult> {
   const started = performance.now();
   const requestId = newRequestId();
+  const items = Array.isArray(requests) ? requests : [];
   const responses: unknown[] = [];
   let totalBytes = 0;
   let budgetExhausted = false;
-  // One symbol cache per batch call: hybrid items that hit the same files parse each file once.
-  const symbolCache: HybridSymbolCache = new Map();
 
-  for (const request of requests) {
+  for (const request of items) {
     if (budgetExhausted) {
       responses.push({
         ok: false,
@@ -144,40 +145,23 @@ export async function runReadBatch(
           message: "Item not executed: batch response budget exhausted.",
           retryable: false,
         },
-        hint: "Split the batch into smaller calls.",
+        hint: "Split into smaller calls.",
       });
       continue;
     }
 
     const itemStarted = performance.now();
     try {
-      const keyError = checkReadItemKeys(request.operation, request.arguments as Args);
+      const keyError = checkReadItemKeys("read_file", request as Args);
       if (keyError) throw new VeniraError("invalid_request", keyError);
-      const itemArgs = normalizeBatchArgs(request.operation, request.arguments as Args);
-      // Same routing rule as the standalone search tool: hybrid only applies to literal_content.
-      const useHybrid = request.operation === "search" && itemArgs.hybrid === true && itemArgs.kind === "literal_content";
-      const execution = useHybrid
-        ? await computeHybridSearch(itemArgs, deps, symbolCache)
-        : await deps.execute(request.operation, itemArgs);
-      const { cached } = execution;
-      let response = execution.response;
+      const itemArgs = normalizeBatchArgs("read_file", request as Args);
+      const { response, cached } = await deps.execute("read_file", itemArgs);
       const itemRequestId = newRequestId();
       const itemElapsedMs = performance.now() - itemStarted;
-      const render = (candidate: RustResponse) =>
-        buildEnvelope(request.operation, candidate, { requestId: itemRequestId, elapsedMs: itemElapsedMs, cached });
-      let envelope = render(response);
-      let size = serializedSize(envelope);
-      if (size > maxItemBytes && useHybrid) {
-        // Hybrid over-fetches up to 200 hits: keep the largest prefix that fits instead of failing the item.
-        const fitted = fitHybridToBudget(response, maxItemBytes, (candidate) => serializedSize(render(candidate)));
-        if (fitted) {
-          response = fitted;
-          envelope = render(response);
-          size = serializedSize(envelope);
-        }
-      }
+      const envelope = buildEnvelope("read_file", response, { requestId: itemRequestId, elapsedMs: itemElapsedMs, cached });
+      const size = serializedSize(envelope);
       if (size > maxItemBytes) {
-        recordMetric(request.operation, performance.now() - itemStarted, false);
+        recordMetric("read_file", performance.now() - itemStarted, false);
         responses.push({
           ok: false,
           error: {
@@ -185,13 +169,13 @@ export async function runReadBatch(
             message: `Item response exceeds max_response_bytes_per_item (${size} > ${maxItemBytes} bytes).`,
             retryable: false,
           },
-          hint: "Request this item alone with a smaller max_bytes/limit or a narrower line range.",
+          hint: "Request this file alone with a smaller max_bytes or a line range.",
         });
         continue;
       }
       if (totalBytes + size > deps.maxBatchResponseBytes) {
         budgetExhausted = true;
-        recordMetric(request.operation, performance.now() - itemStarted, false);
+        recordMetric("read_file", performance.now() - itemStarted, false);
         responses.push({
           ok: false,
           error: {
@@ -199,38 +183,36 @@ export async function runReadBatch(
             message: "Batch response size limit reached; this item was not included.",
             retryable: false,
           },
-          hint: "Split the batch or request items individually.",
+          hint: "Split into smaller calls.",
         });
         continue;
       }
       totalBytes += size;
-      recordMetric(request.operation, performance.now() - itemStarted, true);
+      recordMetric("read_file", performance.now() - itemStarted, true);
       responses.push({ ok: true, response: envelope });
     } catch (error) {
-      recordMetric(request.operation, performance.now() - itemStarted, false);
+      recordMetric("read_file", performance.now() - itemStarted, false);
       const failure = parseToolError(error);
-      responses.push(failureItem(request.operation, failure));
+      responses.push(failureItem("read_file", failure));
     }
   }
 
   const elapsedMs = performance.now() - started;
-  const failed = responses.some((response) => typeof response === "object" && response !== null && "ok" in response && response.ok === false);
-  recordMetric("read_batch", elapsedMs, !failed);
+  const failed = responses.some((response) => isRecord(response) && "ok" in response && response.ok === false);
+  recordMetric("read_file", elapsedMs, !failed);
   const envelope = batchEnvelope(requestId, responses, elapsedMs, {
     total_bytes_returned: totalBytes,
     max_response_bytes_per_item: maxItemBytes,
-  });
-  return toolResult(
-    envelope,
-    envelope.ok === false,
-  );
+  }, { kind: "read_file" });
+  return toolResult(envelope, envelope.ok === false);
 }
 
-export async function runEditBatch(args: Args, deps: BatchDeps): Promise<ToolResult> {
+/** The multi-file form of edit_file: one call, all-or-nothing, automatic rollback. */
+export async function runEditBatch(args: Args, deps: BatchDeps, kind = "edit_file"): Promise<ToolResult> {
   const started = performance.now();
   const requestId = newRequestId();
   const items = Array.isArray(args.edits) ? (args.edits as Args[]) : [];
-  const badBytes = checkItemBytes("edit_batch", args.max_response_bytes_per_item, EDIT_ITEM_BYTES_MIN, EDIT_ITEM_BYTES_MAX);
+  const badBytes = checkItemBytes("edit_file", args.max_response_bytes_per_item, EDIT_ITEM_BYTES_MIN, EDIT_ITEM_BYTES_MAX);
   if (badBytes) return badBytes;
   const maxItemBytes = Number(args.max_response_bytes_per_item ?? EDIT_ITEM_BYTES_MAX);
   const responses: unknown[] = [];
@@ -240,7 +222,7 @@ export async function runEditBatch(args: Args, deps: BatchDeps): Promise<ToolRes
   const argErrors = validateEditBatchItems(items);
   if (argErrors.length > 0) {
     const rejectedMs = performance.now() - started;
-    recordMetric("edit_batch", rejectedMs, false);
+    recordMetric(kind, rejectedMs, false);
     return toolResult(
       batchEnvelope(
         requestId,
@@ -259,7 +241,7 @@ export async function runEditBatch(args: Args, deps: BatchDeps): Promise<ToolRes
           validation_errors: argErrors,
         },
         {
-          kind: "edit_batch",
+          kind,
           failure: {
             code: "invalid_request",
             message: `Batch rejected before running; nothing was applied. ${argErrors.join("; ")}`,
@@ -279,8 +261,8 @@ export async function runEditBatch(args: Args, deps: BatchDeps): Promise<ToolRes
   let rollbackError: string | undefined;
   if (distinctPaths.length > 0) {
     try {
-      const batchLabel = `edit_batch: ${distinctPaths.slice(0, 3).join(", ")}${distinctPaths.length > 3 ? ` +${distinctPaths.length - 3} more` : ""}`;
-      const snap = await deps.execute("snapshot_create", { action: "create", paths: distinctPaths, label: batchLabel, reason: "edit_batch" });
+      const batchLabel = `edit_file: ${distinctPaths.slice(0, 3).join(", ")}${distinctPaths.length > 3 ? ` +${distinctPaths.length - 3} more` : ""}`;
+      const snap = await deps.execute("snapshot_create", { action: "create", paths: distinctPaths, label: batchLabel, reason: "edit_file" });
       const snapshotData = snap.response?.result?.data as
         | { id?: unknown; file_count?: unknown; truncated?: unknown; skipped?: unknown }
         | undefined;
@@ -326,11 +308,11 @@ export async function runEditBatch(args: Args, deps: BatchDeps): Promise<ToolRes
         rollbackSucceeded = snapshotComplete && skippedCount === 0 && restoredEnough;
         if (!rollbackSucceeded) {
           rollbackError = `Restore was incomplete (checkpoint_complete=${snapshotComplete}, skipped=${skippedCount}, restored_count=${String(restoreData?.restored_count ?? "unknown")}, expected_count=${String(snapshotFileCount ?? "unknown")}).`;
-          console.error(`[venira-coding] edit_batch rollback incomplete: ${rollbackError}`);
+          console.error(`[venira-coding] edit_file rollback incomplete: ${rollbackError}`);
         }
       } catch (restoreError) {
         rollbackError = restoreError instanceof Error ? restoreError.message : String(restoreError);
-        console.error(`[venira-coding] edit_batch rollback failed: ${rollbackError}`);
+        console.error(`[venira-coding] edit_file rollback failed: ${rollbackError}`);
       }
     }
     for (let skippedIndex = index + 1; skippedIndex < items.length; skippedIndex += 1) {
@@ -353,7 +335,7 @@ export async function runEditBatch(args: Args, deps: BatchDeps): Promise<ToolRes
       const envelope = buildEnvelope("edit_file", response, { requestId: newRequestId(), elapsedMs: performance.now() - itemStarted, cached });
       const size = serializedSize(envelope);
       if (size > maxItemBytes) {
-        recordMetric("edit_file", performance.now() - itemStarted, false);
+        recordMetric(kind, performance.now() - itemStarted, false);
         await abortBatch(itemIndex, {
           code: "resource_limit",
           message: `Edit ran, but its response (${size} bytes) exceeds the per-item limit (${maxItemBytes} bytes).`,
@@ -363,7 +345,7 @@ export async function runEditBatch(args: Args, deps: BatchDeps): Promise<ToolRes
         break;
       }
       if (totalBytes + size > deps.maxBatchResponseBytes) {
-        recordMetric("edit_file", performance.now() - itemStarted, false);
+        recordMetric(kind, performance.now() - itemStarted, false);
         await abortBatch(itemIndex, {
           code: "resource_limit",
           message: `Edit ran, but the batch response budget would be exceeded (${totalBytes + size} > ${deps.maxBatchResponseBytes} bytes).`,
@@ -373,26 +355,25 @@ export async function runEditBatch(args: Args, deps: BatchDeps): Promise<ToolRes
         break;
       }
       totalBytes += size;
-      recordMetric("edit_file", performance.now() - itemStarted, true);
+      recordMetric(kind, performance.now() - itemStarted, true);
       responses.push({ ok: true, response: envelope });
     } catch (error) {
-      recordMetric("edit_file", performance.now() - itemStarted, false);
+      recordMetric(kind, performance.now() - itemStarted, false);
       const failure = parseToolError(error);
       await abortBatch(itemIndex, failure);
       break;
     }
   }
   const elapsedMs = performance.now() - started;
-  recordMetric("edit_batch", elapsedMs, !failed);
-  // Roadmap item 15 (P2): a failed batch that rolled back cleanly left its
-  // internal checkpoint behind, eating one VENIRA_SNAPSHOT_KEEP slot per
-  // failed attempt. Nothing was changed, so the checkpoint has served its
-  // purpose: drop it. A FAILED rollback keeps it - it is the recovery path.
+  recordMetric(kind, elapsedMs, !failed);
+  // A failed batch that rolled back cleanly left its internal checkpoint behind, eating one
+  // VENIRA_SNAPSHOT_KEEP slot per failed attempt. Nothing was changed, so the checkpoint has served
+  // its purpose: drop it. A FAILED rollback keeps it - it is the recovery path.
   let checkpointDeleted = false;
   let checkpointDeleteError: string | undefined;
   if (failed && rollbackSucceeded && snapshotId) {
     try {
-      await deps.execute("snapshot_delete", { action: "delete", id: snapshotId, reason: "edit_batch rollback done" });
+      await deps.execute("snapshot_delete", { action: "delete", id: snapshotId, reason: "edit_file rollback done" });
       checkpointDeleted = true;
     } catch (error) {
       checkpointDeleteError = error instanceof Error ? error.message : String(error);
@@ -409,8 +390,6 @@ export async function runEditBatch(args: Args, deps: BatchDeps): Promise<ToolRes
     rollback_succeeded: rollbackSucceeded,
     ...(snapshotError ? { snapshot_error: snapshotError } : {}),
     ...(rollbackError ? { rollback_error: rollbackError } : {}),
-    // The id is only useful while the checkpoint exists; after the cleanup it
-    // would point at nothing.
     ...(snapshotId && !checkpointDeleted ? { snapshot_id: snapshotId } : {}),
     ...(checkpointDeleted ? { checkpoint_deleted: true } : {}),
     ...(checkpointDeleteError ? { checkpoint_delete_error: checkpointDeleteError } : {}),
@@ -424,7 +403,7 @@ export async function runEditBatch(args: Args, deps: BatchDeps): Promise<ToolRes
         ? { ...base, message: `edits[${failedIndex}] failed and the rollback FAILED; files may be partly edited.`, hint: `Run snapshot action=restore id=${snapshotId} verify=true now, then re-read the files.` }
         : { ...base, message: `edits[${failedIndex}] failed and rollback was not verified; files may still contain edits from data.executed or the failing item.`, hint: snapshotId ? "Inspect data.rollback_error and data.snapshot_error, then restore the checkpoint or re-read and repair the touched files." : "Re-read the touched files; finish or undo the applied edits by hand." };
   return toolResult(
-    batchEnvelope(requestId, responses, elapsedMs, batchExtra, failure ? { kind: "edit_batch", failure } : { kind: "edit_batch" }),
+    batchEnvelope(requestId, responses, elapsedMs, batchExtra, failure ? { kind, failure } : { kind }),
     failed,
   );
 }

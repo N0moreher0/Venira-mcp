@@ -188,7 +188,7 @@ Measured: Windows + Node 24, standalone build, 2026-11-01.
 | Op | p50 | Notes |
 |---|---|---|
 | Cached `read_file` | 8.0 ms | warm cache |
-| `read_batch` (8 files) | 12.8 ms | one call, 8 items |
+| `read_file` (multi, 8 files) | 12.8 ms | one call, 8 items |
 | `get_file_info` | 6.2 ms | cached |
 | `search` (literal, `*.ts`) | 11.5 ms | p95 ≈ 1.3 s (file count dependent) |
 | `health` (no DB) | 28.5 ms | |
@@ -233,9 +233,9 @@ Three tool modes set which tools the client sees. Set via `VENIRA_TOOL_MODE` env
 
 | Mode | Tools | Includes |
 |---|---|---|
-| `core` | **23** | Allowlist: `shell_run`, `shell_status`, `shell_cancel`, `execute_js`, `read_file`, `search`, `list_files`, `recent_files`, `outline_symbol`, `edit_file`, `edit_batch`, `write_file`, `delete_path`, `create`, `move_path`, `snapshot`, `git_status`, `git_diff`, `git_log`, `git_branch`, `git_commit`, `git_stash`, `memory` |
-| `default` | **39** | Read/write/edit/search, code intel, snapshots, shell, `delete_path`, `execute_js` — **no** CI/CD; `explain_error` and `plan_read_batch` are expert-only |
-| `expert` | **52** | Everything in default + `pr_*`, `ci_*`, `explain_error`, `plan_read_batch` |
+| `core` | **22** | Allowlist: `shell_run`, `shell_status`, `shell_cancel`, `execute_js`, `read_file`, `search`, `list_files`, `recent_files`, `outline_symbol`, `edit_file` (single **and** multi-file via `edits[]` with per-item `relative_path`, or `requests[]` on `read_file`), `write_file`, `delete_path`, `create`, `move_path`, `snapshot`, `git_status`, `git_diff`, `git_log`, `git_branch`, `git_commit`, `git_stash`, `memory` |
+| `default` | **37** | Read/write/edit/search, code intel, snapshots, shell, `delete_path`, `execute_js` — **no** CI/CD; `explain_error` and `plan_read_batch` are expert-only |
+| `expert` | **50** | Everything in default + `pr_*`, `ci_*`, `explain_error`, `plan_read_batch` |
 
 `delete_path` is always available. In `balanced` / `strict` mode, shell `rm -rf /` / `~` and Windows drive-wide deletes are hard-denied, and recursive/force deletes (`Remove-Item -Recurse -Force`, `rd /s /q`, `del /f /q`) need approval. `permissive` mode lets ordinary ask-rule and unclassified commands run without a prompt, but hard-denies require approval and uninspectable command substitutions require approval in every policy-enabled mode.
 
@@ -249,10 +249,10 @@ All tools return the standard envelope (`ok`, `kind`, `data`, `hint`, `elapsed_m
 |---|---|
 | `list_files` | List files/dirs, depth 1–3, limit ≤ 200 |
 | `read_file` | Read a file by line range; optional `ranges[]` (up to 16) |
-| `get_file_info` | File/dir metadata (kind, size, mtime); `missing_ok=true` answers ok with `exists:false` for missing paths (works in `read_batch`) |
+| `get_file_info` | File/dir metadata (kind, size, mtime); `missing_ok=true` answers ok with `exists:false` for missing paths |
 | `search` | Plain substring, file/dir name, regex or symbol; `invert` (grep -v) and `files_only` (grep -l); `hybrid: true` tags hits with `source`+`confidence`; `queries[]` ranks files by AND/OR/NOT patterns (advanced, rarely needed) |
 | `recent_files` | Recently modified files (index-first, scan-fallback) |
-| `read_batch` | Up to 8 read-only ops in one call; each item takes the same arguments as its standalone tool (`search` items support `regex`, `case_sensitive`, `hybrid`, ...) |
+| `read_file` | Single file (line ranges or `ranges[]` up to 16) **or** several files in one call via `requests[]` (max 8 items; same args per item). Also supports multi-file edits through `edits[]` with per-item `relative_path` (atomic) |
 | `health` | Diagnostics: capability, queue, cache hit-rates, p50/p95, security limits notice, and `server.workspace_switching` (`enabled`, `profile`, `allowed_roots`) |
 | `switch_workspace` | Re-root the workspace to another directory mid-session — for clients that spawn the server once (e.g. Claude Desktop). Follows `VENIRA_SECURITY_PROFILE`: `trusted`/`off` switch to any existing directory; `strict`/`balanced` only inside `VENIRA_WORKSPACE_ROOTS` (unset = locked to the spawn workspace) |
 | `read_audit` | Read recent audit log rows |
@@ -271,9 +271,9 @@ All tools return the standard envelope (`ok`, `kind`, `data`, `hint`, `elapsed_m
 | Tool | Purpose |
 |---|---|
 | `write_file` | Create/overwrite/append; `expected_sha256` guards blind overwrites |
-| `edit_file` | Replace `old_text`→`new_text`; `edits[]` (up to 64); fuzzy edit opt-in |
-| `edit_batch` | Multiple edits; stops at first failure and attempts checkpoint rollback. Check `data.atomic` and `data.rollback_succeeded`; snapshot failure/incompleteness or a partial restore means changes may remain. A batch that rolled back cleanly removes its own checkpoint (`data.checkpoint_deleted: true`), so a failed attempt does not eat a `VENIRA_SNAPSHOT_KEEP` slot; a **failed** rollback keeps the checkpoint - it is the recovery path. |
-| `create` | Create a directory (missing parents are created; use `write_file` for file content) |
+| `edit_file` | Replace `old_text`→`new_text`; `edits[]` (up to 64); fuzzy edit opt-in. Any `edits[]` item may carry its own `relative_path`: the whole call then edits every touched file all-or-nothing (atomic, rollback). Otherwise: replace in a single file (`edits[]` wins over `old_text`/`new_text`) |
+| `edit_file` | Replace `old_text`→`new_text`; `edits[]` (up to 64); fuzzy edit opt-in; `requests[]`-style multi-file edits (atomic) |
+| `create` | Create a directory (missing parents are created; `write_file` mode=create makes parent folders and the file in one step) |
 | `move_path` | Move or rename a file/dir; `overwrite=true` replaces a file (never a directory); **not undoable** |
 | `copy_path` | Copy a file, or a directory with `recursive=true`; skips symbolic links and protected files inside a directory |
 | `apply_patch` | Apply a unified diff (create/modify/delete/rename), all-or-nothing; `dry_run=true` to validate first; rolls back every file on failure |
@@ -346,7 +346,7 @@ CI reads are bounded and never hide a cap:
 **Diagnostics & planning**
 
 `explain_error` — turn an error into a cause + next tool calls (rule table, no model).
-`plan_read_batch` — plan which files to read for a task, returns ready `read_batch` call.
+`plan_read_batch` — plan which files to read for a task, returns ready `read_file requests[]` call.
 `cache_clear` — clear the in-process caches (all / read / info / list / search / recent / negative / graph / shell) when reads look stale because a tool changed files outside Venira.
 `trace_status` — show recent traced tool calls and the trace configuration; tracing is always on (`VENIRA_TRACE` was removed), and `VENIRA_TRACE_FILE` additionally appends to a rotating file.
 
@@ -387,7 +387,7 @@ Full reference: the source reads 80+ distinct supported `VENIRA_*` names; this t
 | `VENIRA_USE_RIPGREP` | `"1"` | `"1"` uses ripgrep if installed (faster on big repos) |
 | `VENIRA_SEARCH_MAX_FILES` | `"50000"` | Max files collected by the JS fallback walker before it stops and reports `complete: false`. Bounds searches rooted at huge trees (e.g. with `VENIRA_UNRESTRICTED=1` and an absolute path outside the workspace) |
 | `VENIRA_CACHE` | `"all"` | `all` every TTL cache on · `list` only directory listings · `search` only searches · `off` always fresh (slower) |
-| `VENIRA_EDIT_FUZZY` | `"0"` | `"1"` enables fuzzy-match fallback for `old_text`, and adds `fuzzy_distance`, `ignore_indentation` and `case_insensitive` to the `edit_file` / `edit_batch` schemas. `tools/list` changes with this flag, so reconnect the client after changing it. With `"0"` those options are not advertised and a call that still sends them is refused with `[unsupported]` |
+| `VENIRA_EDIT_FUZZY` | `"0"` | `"1"` enables fuzzy-match fallback for `old_text`, and adds `fuzzy_distance`, `ignore_indentation` and `case_insensitive` to the `edit_file` schema (single-file and multi-file calls use the same flags). `tools/list` changes with this flag, so reconnect the client after changing it. With `"0"` those options are not advertised and a call that still sends them is refused with `[unsupported]` |
 | `VENIRA_DATA_DIR` | per-user OS path | Where audit DB + encrypted secrets live |
 | `VENIRA_SNAPSHOT_ROOT` | `<per-user data dir>/snapshots` | Shared checkpoint root for every project and client; each workspace gets its own sub-folder (absolute path) |
 | `VENIRA_SNAPSHOT_DIR` | unset | Exact checkpoint store for a single project, no sub-folders; wins over `VENIRA_SNAPSHOT_ROOT` (absolute path) |
@@ -419,7 +419,7 @@ Sensible defaults; leave any of these unset unless you know why you set them.
 | Variable | Default | What it does |
 |---|---|---|
 | `VENIRA_PRETTY` | `"0"` | Pretty-print JSON envelopes |
-| `VENIRA_BATCH_ITEM_BYTES` | `524288` | Per-item response budget inside `read_batch`; larger items are trimmed |
+| `VENIRA_BATCH_ITEM_BYTES` | `524288` | Per-item response budget inside `read_file` requests[]; larger items are trimmed |
 | `VENIRA_SHELL_ENV_ALLOW` | unset | Extra environment variable names passed through to shell runs, beyond the scrubbed baseline |
 | `VENIRA_SHELL_CACHE` | `"1"` | Cache read-only shell results |
 | `VENIRA_SHELL_CACHE_READ_ONLY` | `"1"` | Compatibility flag (shell output caching is always read-only — nothing mutating is ever cached) |
@@ -584,8 +584,8 @@ Common codes: `not_found`, `invalid_request`, `old_text_not_found`, `old_text_am
 ```text
 Venira MCP rules:
 1. Unfamiliar task: call plan_read_batch first, then run steps[0].
-2. Read with read_batch (up to 8 items). Never re-read a file a tool already returned.
-3. Prefer edit_file / edit_batch over write_file; pass `reason` on every mutation.
+2. Read with `read_file` — `relative_path` for a single file, or `requests[]` (max 8) to read several files in one call. Never re-read a file a tool already returned.
+3. Prefer edit_file over write_file; pass `reason` on every mutation.
 4. Snapshot before multi-file or destructive changes.
 5. Short commands: shell_run with background: false. Long jobs: background: true, then poll shell_status.
 6. Do not call execute_js unless the user asked for JS; in `ask` mode it needs per-call approval. Network access is always open in every mode; in `semi-auto` the filesystem is limited to the workspace and the environment is scrubbed, in `auto` the containment is dropped.

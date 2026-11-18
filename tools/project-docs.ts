@@ -28,14 +28,14 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
     out: "entries[] {relative_path, kind, size_bytes}, truncated.",
   },
   read_file: {
-    about: "Read a text file, whole or by line range (start_line/end_line, 1-based; ranges[] for several disjoint ranges of one file).",
-    use: "you need one file's content. When truncated, call again with start_line=next_start_line.",
-    avoid: "you need 2+ files (read_batch) or only size/mtime (get_file_info).",
-    out: "text (as preview in compact mode; preview_truncated marks a cut), first_line, last_line, total_bytes, truncated, next_start_line (when truncated). sha256 hashes the whole file and is safe as expected_sha256; text_sha256 covers only the returned text. Missing path gives not_found.",
+    about: "Read a text file, whole or by line range, or several files in ONE call (`requests[]`, max 8, each with read_file's own arguments). ranges[] for several disjoint ranges of one file.",
+    use: "you need one (or several) file(s)' content. When truncated, call again with start_line=next_start_line. Multi-file: pass requests[]; each item runs exactly like its own read_file call and one failing item does not stop the rest.",
+    avoid: "you only want size/mtime without content (get_file_info).",
+    out: "single-file: text (as preview in compact mode; preview_truncated marks a cut), first_line, last_line, truncated, next_start_line, total_bytes, sha256 (whole-file, safe as expected_sha256). Multi-file (requests[]): data.responses[] each {ok, response|error}, count, total_bytes_returned; one item failing answers status:'partial' with ok:false. Missing path gives not_found.",
   },
   get_file_info: {
-    about: "Return kind, size and modification time of a path. `missing_ok=true` answers ok with `data.exists:false` for a missing path instead of `not_found` (works inside read_batch items too).",
-    use: "you need to know whether a path exists or how big it is. Use missing_ok=true to probe existence without failing the call or the batch.",
+    about: "Return kind, size and modification time of a path. `missing_ok=true` answers ok with `data.exists:false` for a missing path instead of `not_found`.",
+    use: "you need to know whether a path exists or how big it is. Use missing_ok=true to probe existence without failing the call.",
     avoid: "you need the content (read_file).",
     out: "kind, size_bytes, modified_unix_seconds, exists when missing_ok=true. Missing path gives not_found (or ok with exists:false and missing_ok=true).",
   },
@@ -47,35 +47,23 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
   },
   recent_files: {
     about: "List recently modified files, newest first, plus session_edits (files you wrote in this session).",
-    use: "you start or resume a task, or finished a build, format or git step and want to see what changed. Feed the top paths into read_batch.",
+    use: "you start or resume a task, or finished a build, format or git step and want to see what changed. Feed the top paths into read_file (its requests[] reads several at once).",
     avoid: "you need the full tree (list_files) or a content search (search).",
     out: "entries[] {relative_path, size_bytes, modified_ago_seconds}, session_edits, truncated.",
-  },
-  read_batch: {
-    about: "Run up to 8 read-only ops in one call. operation is the short name (list_files|read_file|get_file_info|search) mapping to list_files|read_file|get_file_info|search; arguments hold exactly that tool's parameters.",
-    use: "you need 2+ reads or mixed read steps. Items run in order and one failing item does not stop the rest.",
-    avoid: "a single read (read_file) or any edit (edit_batch).",
-    out: "responses[] each {ok, response | error}, total_bytes_returned.",
   },
 
   // ---- write --------------------------------------------------------------
   write_file: {
-    about: "Write a file. mode=create (fails if it exists), overwrite, or append. create_dirs=true creates parent folders.",
-    use: "you create a file, replace one entirely, or append. expected_sha256 refuses the write if the file changed since you read it.",
+    about: "Write a file. mode=create (makes the parent folders too, fails if the path exists), overwrite, or append. create_dirs=true creates parent folders (implied by mode=create).",
+    use: "you create a file (with its folder, e.g. `a/b/c.txt`), replace one entirely, or append. expected_sha256 refuses the write if the file changed since you read it.",
     avoid: "you change a few lines (edit_file). overwrite is immediate and not undoable: snapshot first when the file is not in git.",
     out: "action (created|overwritten|appended), bytes_written, sha256_after. mode=create on an existing path gives conflict.",
   },
   edit_file: {
-    about: "Replace exact text: old_text to new_text, or edits[] for several replacements in one file (edits[] wins).",
+    about: "Replace exact text: old_text to new_text, or edits[] for several replacements. Any edits[] item may carry its own relative_path: the whole call then edits every touched file all-or-nothing (atomic, with automatic rollback) — the former edit_batch mode.",
     use: "you make a targeted change. old_text must match exactly once unless replace_all=true. Pass expected_sha256 (read_file's sha256 or your last sha256_after) to refuse stale content and get a verified re-read.",
-    avoid: "you rewrite the whole file (write_file) or change several files at once (edit_batch).",
-    out: "replacements, sha256_after, verified (when expected_sha256 is given). Failures leave the file unchanged: old_text_not_found (data.mismatch is numbers only at the first difference, data.context.text shows the nearby lines) and old_text_ambiguous (lists each match with context).",
-  },
-  edit_batch: {
-    about: "Apply edits across one or more files all-or-nothing. Each item takes edit_file arguments (relative_path, old_text, new_text, ...). The first failure rolls back every touched file from an automatic snapshot and skips the rest.",
-    use: "a change spans several files or sections and must land completely or not at all.",
-    avoid: "you make one edit (edit_file).",
-    out: "success: per-edit {relative_path, replacements, sha256_after}. Failure: ok=false, error batch_failed, data {executed, skipped, rollback_succeeded, snapshot_id}.",
+    avoid: "you rewrite the whole file (write_file).",
+    out: "Single file: replacements, sha256_after, verified (when expected_sha256 is given); failures leave the file unchanged (mismatch is numbers only; context.text shows the nearby lines). Multi-file (edits[] with per-item relative_path): data.responses[] each {ok, response|error}, atomic, rollback_succeeded, total_bytes_returned.",
   },
   delete_path: {
     about: "Delete a file or directory (recursive=true is required for directories). Not undoable.",
@@ -104,7 +92,7 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
   apply_patch: {
     about: "Apply a unified diff (git apply compatible) to one or more files, all-or-nothing. Every file is validated in memory before anything is written; a failing hunk rolls every file back from an automatic checkpoint, like edit_batch. dry_run=true validates and reports without writing.",
     use: "a change arrives as a diff (git diff, a patch file, another tool's output) and must land completely or not at all — files created, modified, deleted or renamed.",
-    avoid: "you have no diff (edit_file/edit_batch) or only need a new file (write_file). Not for directories or symbolic links.",
+    avoid: "you have no diff (edit_file) or only need a new file (write_file). Not for directories or symbolic links.",
     out: "dry_run: files[] {action, relative_path, hunks, bytes} plus added/modified/deleted/renamed counts; nothing is written. success: same list plus sha256_after per file. Failure: nothing is changed; data carries rollback_succeeded and, for a mismatching hunk, nearest_context lines for the file and hunk that failed.",
   },
 
@@ -249,9 +237,9 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
 
   // ---- workflow -----------------------------------------------------------
   plan_read_batch: {
-    about: "Turn a task description into ranked candidate files and a ready-to-run read_batch call (keyword search plus recent files; deterministic, returns no file contents).",
+    about: "Turn a task description into ranked candidate files and a ready-to-run read_file requests[] call (keyword search plus recent files; deterministic, returns no file contents).",
     use: "you start in an unfamiliar area: run steps[0] instead of guessing files.",
-    avoid: "you know the files (read_batch) or only need one string or name (search).",
+    avoid: "you know the files (read_file) or only need one string or name (search).",
     out: "keywords[], candidates[] {relative_path, reason, hits}, steps[] {tool, arguments, why}.",
   },
   explain_error: {

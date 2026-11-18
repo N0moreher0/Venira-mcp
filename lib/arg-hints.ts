@@ -158,7 +158,7 @@ export function validateEditBatchItems(items: unknown[]): string[] {
 }
 
 /**
- * read_batch items are independent, so a bad item only fails itself. Flags the one mistake
+ * requests[] items of read_file, read by runReadFileBatch. Independent, so a bad item only fails itself. Flags the one mistake
  * that otherwise reaches the backend as a confusing error: a path alias used instead of
  * `relative_path`. Returns an error message or undefined.
  */

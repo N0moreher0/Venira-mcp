@@ -517,7 +517,7 @@ const DEFAULT_HINTS: Record<string, string> = {
   conflict: "The file changed or the edit is ambiguous; re-read it and retry.",
   scope_denied: "Use a path inside the workspace (workspace-relative is safest).",
   path_escape: "Paths must stay inside the workspace. Use a relative path under it, or enable VENIRA_UNRESTRICTED=1.",
-  resource_limit: "Narrow the request: smaller limit/max_bytes, line ranges, or read_batch.",
+  resource_limit: "Narrow the request: smaller limit/max_bytes, line ranges, or read_file (multi-file).",
   audit_unavailable:
     "The host refused the operation because its audit row could not be written. Tell the user; do not retry in a loop.",
   capability_expired: "The scope is reopened automatically on the next call; retry once.",
@@ -865,7 +865,7 @@ export function batchEnvelope(
     : undefined);
   const base = {
     request_id: requestId,
-    kind: options.kind ?? "read_batch",
+    kind: options.kind ?? "read_file",
     data: {
       responses,
       count: responses.length,

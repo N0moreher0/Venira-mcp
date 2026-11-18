@@ -165,7 +165,8 @@ export async function runDiagnosticsReadPlan($h: Harness): Promise<void> {
         (candidate: { relative_path?: string }) =>
           /^lib[\\/]+git-[^\\/]+\.ts$/i.test(String(candidate.relative_path)),
       ) &&
-      planTask.data?.steps?.[0]?.tool === "read_batch",
+      planTask.data?.steps?.[0]?.tool === "read_file" &&
+      planTask.data?.steps?.[0]?.arguments?.requests?.[0]?.relative_path !== undefined,
     planTask.data,
   );
   const rankedByPath = rankCandidates(
@@ -198,7 +199,7 @@ export async function runDiagnosticsReadPlan($h: Harness): Promise<void> {
     planHint.ok === true &&
       planHint.data?.searched === false &&
       planHint.data?.candidates?.[0]?.relative_path === "lib/snapshots.ts" &&
-      planHint.data?.steps?.[0]?.tool === "read_batch",
+      planHint.data?.steps?.[0]?.tool === "read_file",
     planHint.data,
   );
   const planEmpty = asEnvelope(
@@ -227,7 +228,7 @@ export async function runDiagnosticsReadPlan($h: Harness): Promise<void> {
   const artifactRequests = (
     (planArtifact.data?.steps ?? []) as Array<{
       arguments?: {
-        requests?: Array<{ arguments?: { relative_path?: string } }>;
+        requests?: Array<{ relative_path?: string }>;
       };
     }>
   ).flatMap((step) => step.arguments?.requests ?? []);
@@ -238,11 +239,11 @@ export async function runDiagnosticsReadPlan($h: Harness): Promise<void> {
         (c) => !/\.(db|log)$/i.test(String(c.relative_path)),
       ) &&
       artifactRequests.every(
-        (r) => !/\.(db|log)$/i.test(String(r.arguments?.relative_path)),
+        (r) => !/\.(db|log)$/i.test(String(r.relative_path)),
       ),
     {
       candidates: artifactCandidates.map((c) => c.relative_path),
-      requests: artifactRequests.map((r) => r.arguments?.relative_path),
+      requests: artifactRequests.map((r) => r.relative_path),
     },
   );
   const planSource = asEnvelope(

@@ -82,7 +82,7 @@ export function extractKeywords(task: string, max = MAX_KEYWORDS): string[] {
 /** Large files are cheaper to outline first than to read whole. */
 const OUTLINE_THRESHOLD_BYTES = 256 * 1024;
 
-/** `read_batch` accepts at most 8 items per call. */
+/** `read_file`'s multi-file mode accepts at most 8 items per call. */
 const BATCH_MAX = 8;
 
 /**
@@ -253,13 +253,9 @@ export function buildReadPlan(params: {
 
   if (candidates.length > 0) {
     steps.push({
-      tool: "read_batch",
+      tool: "read_file",
       arguments: {
-        requests: candidates.map((c) => ({
-          operation: "read_file",
-          arguments: { relative_path: c.relative_path },
-        })),
-        max_response_bytes_per_item: 512 * 1024,
+        requests: candidates.map((c) => ({ relative_path: c.relative_path })),
       },
       why: "read the ranked candidates in one round-trip (batch is cached and validated)",
     });

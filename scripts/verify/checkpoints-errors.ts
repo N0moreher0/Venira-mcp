@@ -819,10 +819,8 @@ export async function runCheckpointsErrors(
   await jsApprovalClient.close();
 
   // 18. batch per-item budget
-  const batchBudget = await call("read_batch", {
-    requests: [
-      { operation: "read_file", arguments: { relative_path: "server.ts" } },
-    ],
+  const batchBudget = await call("read_file", {
+    requests: [{ relative_path: "server.ts" }],
     max_response_bytes_per_item: 1024,
   });
   const batchBudgetData = JSON.parse(

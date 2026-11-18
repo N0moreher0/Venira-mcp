@@ -5,35 +5,29 @@ import { editFuzzyEnabled } from "../lib/env.js";
 import type { Args } from "./project-cache.js";
 import {
   checkItemBytes,
-  EDIT_ITEM_BYTES_MAX,
-  EDIT_ITEM_BYTES_MIN,
   READ_ITEM_BYTES_MAX,
   READ_ITEM_BYTES_MIN,
   runEditBatch,
-  runReadBatch,
+  runReadFileBatch,
   type BatchDeps,
 } from "./project-batch.js";
 import { runHybridSearch, type HybridDeps } from "./project-hybrid.js";
 import { runRecentFiles, type RecentFilesDeps } from "./project-recent.js";
 import {
   config,
-  editBatchItemFor,
   editFuzzyShape,
   editOp,
   flag01,
   lineNo,
   path_,
-  readBatchGetFileInfoArgs,
-  readBatchListFilesArgs,
-  readBatchReadFileArgs,
-  readBatchSearchArgs,
+  readFileRequestArgs,
   reason_,
 } from "./project-schema.js";
 
-// File tool registrations: list/read/info/search/recent/read_batch (read side) and
-// write/edit/edit_batch/delete (write side). Extracted from registerProjectTools in tools/project.ts
-// (roadmap item 6, step 5j). Schemas, descriptions and registration order are unchanged; the runners
-// and their state stay in project.ts and arrive through FileToolsDeps.
+// File tool registrations: list/read/info/search/recent (read side) and
+// write/edit/delete (write side). read_file is single OR multi (requests[]); edit_file is single OR
+// multi (edits[] with per-item relative_path, all-or-nothing). Extracted from registerProjectTools in
+// tools/project.ts (roadmap item 6, step 5j).
 
 export type FileToolsDeps = {
   runOne: (operation: string, args: Args, options?: { line_numbers?: boolean }) => Promise<ToolResult>;
@@ -82,8 +76,11 @@ export function registerFileTools(server: McpServer, deps: FileToolsDeps): void 
         },
         { readOnlyHint: true, openWorldHint: false },
       ),
-      inputSchema: {
-        relative_path: path_,
+      // Loose on purpose, like edit_file: `max_response_bytes_per_item` is accepted but not advertised (phase 7);
+      // the SDK validates with a strip-object for raw shapes, so the hidden key would be dropped before the handler
+      // saw it. A loose object keeps it reachable, and the handler range-checks it itself.
+      inputSchema: z.looseObject({
+        relative_path: path_.optional().describe("Workspace-relative file to read. Omit when sending requests[] (multi-file call)."),
         start_line: lineNo.optional().describe("First line (1-based)."),
         end_line: z.number().int().min(1).optional().describe("Last line (1-based, inclusive)."),
         line_numbers: flag01.optional().describe("true prefixes each line with its line number (default false)."),
@@ -99,11 +96,23 @@ export function registerFileTools(server: McpServer, deps: FileToolsDeps): void 
           .min(1)
           .max(16)
           .optional()
-          .describe("Multiple disjoint ranges of the SAME file (max 16). Use instead of multiple read_file calls."),
-      },
+          .describe("Multiple disjoint ranges of the SAME file (max 16); use instead of several read_file calls on ONE file."),
+        requests: z
+          .array(readFileRequestArgs)
+          .min(1)
+          .max(8)
+          .optional()
+          .describe("Multiple files in ONE call: each item takes read_file's own arguments (relative_path required per item, plus start_line/end_line/ranges/max_bytes/line_numbers). Omit for a single-file read using the top-level parameters. Max 8 items; each item behaves exactly like its own read_file call."),
+      }),
     },
     (args) => {
-      const wantNumbers = Boolean((args as Args).line_numbers);
+      const a = args as Args;
+      if (Array.isArray(a.requests)) {
+        const badBytes = checkItemBytes("read_file", a.max_response_bytes_per_item, READ_ITEM_BYTES_MIN, READ_ITEM_BYTES_MAX);
+        if (badBytes) return badBytes;
+        return runReadFileBatch(a.requests as Args[], (a.max_response_bytes_per_item as number | undefined) ?? maxBatchItemBytes, batchDeps);
+      }
+      const wantNumbers = Boolean(a.line_numbers);
       return runOne("read_file", args, wantNumbers ? { line_numbers: true } : undefined);
     },
   );
@@ -207,54 +216,6 @@ export function registerFileTools(server: McpServer, deps: FileToolsDeps): void 
   );
 
   server.registerTool(
-    "read_batch",
-    {
-      ...config(
-        "Batch read",
-        {
-          speed_profile: "fastest for read-heavy work; sequential + cached, with a response budget.",
-          batch_safe: true,
-        },
-        { readOnlyHint: true, openWorldHint: false },
-      ),
-      // Loose on purpose: `max_response_bytes_per_item` is accepted but not advertised (phase 7); a plain object
-      // would strip it, so the handler reads and range-checks it itself.
-      inputSchema: z.looseObject({
-        requests: z
-          .array(
-            z.union([
-              z.object({
-                operation: z.literal("list_files").describe("Short op name for list_files."),
-                arguments: readBatchListFilesArgs.describe("Same as list_files."),
-              }),
-              z.object({
-                operation: z.literal("read_file").describe("Short op name for read_file."),
-                arguments: readBatchReadFileArgs.describe("Same as read_file."),
-              }),
-              z.object({
-                operation: z.literal("get_file_info").describe("Short op name for get_file_info."),
-                arguments: readBatchGetFileInfoArgs.describe("Same as get_file_info."),
-              }),
-              z.object({
-                operation: z.literal("search").describe("Short op name for search."),
-                arguments: readBatchSearchArgs.describe("Same as search."),
-              }),
-            ]),
-          )
-          .min(1)
-          .max(8)
-          .describe("1-8 read items; one failing item does not stop the rest."),
-      }),
-    },
-    (args) => {
-      const itemBytes = (args as Args).max_response_bytes_per_item;
-      const badBytes = checkItemBytes("read_batch", itemBytes, READ_ITEM_BYTES_MIN, READ_ITEM_BYTES_MAX);
-      if (badBytes) return badBytes;
-      return runReadBatch(args.requests, (itemBytes as number | undefined) ?? maxBatchItemBytes, batchDeps);
-    },
-  );
-
-  server.registerTool(
     "write_file",
     {
       ...config(
@@ -268,8 +229,8 @@ export function registerFileTools(server: McpServer, deps: FileToolsDeps): void 
       inputSchema: {
         relative_path: path_,
         content: z.string().describe("Full file content to write."),
-        mode: z.enum(["create", "overwrite", "append"]).optional().describe("Default overwrite. create fails if the path exists; append adds to the end."),
-        create_dirs: flag01.optional().describe("true creates missing parent directories (default false)."),
+        mode: z.enum(["create", "overwrite", "append"]).optional().describe("Default overwrite. create makes the parent folders and the file (fails if the path already exists); append adds to the end."),
+        create_dirs: flag01.optional().describe("true creates missing parent directories (implied by mode=create)."),
         expected_sha256: z.string().optional().describe("Hex SHA-256 of the file's current full content. The write is refused if the file on disk differs. Use sha256_after from your last write/edit of this file; read_file's sha256 only matches when the whole file was returned."),
         reason: reason_,
       },
@@ -293,7 +254,7 @@ export function registerFileTools(server: McpServer, deps: FileToolsDeps): void 
       // answer with an error that names the variable. Same for the removed `guard` flag: it reaches the handler,
       // which refuses it with `[unsupported]` instead of silently skipping verification.
       inputSchema: z.looseObject({
-        relative_path: path_,
+        relative_path: path_.optional().describe("Workspace-relative file to edit. Omit when every edit carries its own relative_path (multi-file call)."),
         old_text: z
           .string()
           .min(1)
@@ -305,31 +266,38 @@ export function registerFileTools(server: McpServer, deps: FileToolsDeps): void 
           ),
         new_text: z.string().optional().describe("Replacement text (paired with old_text; ignored when edits[] is given)."),
         replace_all: flag01.optional().describe("true replaces every match; false (default) requires exactly one match."),
-        edits: z.array(editOp).max(64).optional().describe("Multiple section replacements in this file; takes precedence over old_text/new_text."),
+        edits: z
+          .array(
+            z.looseObject({
+              ...editOp.shape,
+              // `replace_all` is required in editOp (single nested edit), optional per item here.
+              replace_all: flag01.optional().describe("true replaces every match; false (default) requires exactly one match."),
+              ...editFuzzyShape(fuzzy),
+              relative_path: path_.optional().describe("Per-item file: the item edits this file instead of the top-level one, and the whole call becomes multi-file and atomic (all-or-nothing with automatic rollback), like the former edit_batch."),
+            })
+          )
+          .max(64)
+          .optional()
+          .describe(
+            "Multiple section replacements in this file (or across files, with per-item relative_path); takes precedence over old_text/new_text. " +
+              "Any item may carry its own relative_path; the whole call then edits every touched file all-or-nothing.",
+          ),
         expected_sha256: z.string().optional().describe("Hex SHA-256 of the file's current full content. The edit is refused if the file on disk differs. Use sha256_after from your last write/edit of this file; read_file's sha256 only matches when the whole file was returned. When given, the result is re-read after the write and reports verified."),
         ...editFuzzyShape(fuzzy),
         reason: reason_,
       }),
     },
-    (args) => runOne("edit_file", args),
-  );
-  server.registerTool(
-    "edit_batch",
-    {
-      ...config(
-        "Edit batch",
-        {
-          speed_profile: "depends on item count; each runs edit_file and clears caches.",
-          batch_safe: false,
-        },
-        { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
-      ),
-      // Loose for the same reason as read_batch: `max_response_bytes_per_item` is not advertised.
-      inputSchema: z.looseObject({
-        edits: z.array(editBatchItemFor(fuzzy)).min(1).max(64).describe("edit_file argument objects (typed like edit_file). Unknown fields are rejected with a did-you-mean hint and nothing is applied."),
-      }),
+    (args) => {
+      const a = args as Args;
+      const multi =
+        Array.isArray(a.edits) &&
+        (a.edits as Args[]).some(
+          (item) => item && typeof item.relative_path === "string" && (item.relative_path as string).trim().length > 0,
+        );
+      // Any edit item with its own relative_path => multi-file, all-or-nothing with rollback.
+      if (multi) return runEditBatch(a, batchDeps, "edit_file");
+      return runOne("edit_file", a);
     },
-    (args) => runEditBatch(args as Args, batchDeps),
   );
 
   server.registerTool(

@@ -83,15 +83,15 @@ const specs: Spec[] = [
     nativeSignature: (result) => normalizeText(result.text),
   },
   {
-    id: "read_batch_3_files",
-    mcp_tool: "read_batch",
+    id: "read_file_3_files",
+    mcp_tool: "read_file",
     cache: "read",
     args: {
       max_response_bytes_per_item: 30_000,
       requests: [
-        { operation: "read_file", arguments: { relative_path: "package.json", start_line: 1, end_line: 25 } },
-        { operation: "read_file", arguments: { relative_path: "README.md", start_line: 1, end_line: 20 } },
-        { operation: "read_file", arguments: { relative_path: "lib/corehost.ts", start_line: 1, end_line: 35 } },
+        { relative_path: "package.json", start_line: 1, end_line: 25 },
+        { relative_path: "README.md", start_line: 1, end_line: 20 },
+        { relative_path: "lib/corehost.ts", start_line: 1, end_line: 35 },
       ],
     },
     powershell_body: `

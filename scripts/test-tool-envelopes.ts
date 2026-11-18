@@ -6,7 +6,7 @@
  *   2. Failure envelopes carry the right recovery: a missing checkpoint or run id never points at
  *      list_files, an edit that did not match points at read_file, a bad regex says so.
  *   3. A shell command that exits non-zero stays ok=true but carries a "Command failed" hint.
- *   4. edit_batch reports a failed batch at the top level (ok=false, kind=edit_batch,
+ *   4. edit_file (multi-file mode) reports a failed batch at the top level (ok=false, kind=edit_file,
  *      error batch_failed) and says honestly whether the rollback happened.
  *
  * Run with: npm run test:tool-envelopes
@@ -333,7 +333,7 @@ try {
     }
   });
 
-  // ---- 4. edit_batch top-level reporting ---------------------------------
+  // ---- 4. edit_file multi-file (atomic) top-level reporting -----------------
   type Call = { op: string; args: Record<string, unknown> };
   function makeDeps(opts: {
     snapshot: boolean;
@@ -405,7 +405,7 @@ try {
     const env = parse(r);
     assert.equal(r.isError, undefined);
     assert.equal(env.ok, true);
-    assert.equal(env.kind, "edit_batch");
+    assert.equal(env.kind, "edit_file");
     assert.equal(env.data.atomic, true);
   });
   await check("edit_batch_failure_rolled_back", async () => {
@@ -415,7 +415,7 @@ try {
     assert.equal(r.isError, true);
     assert.equal(env.ok, false);
     assert.equal(env.status, "failed");
-    assert.equal(env.kind, "edit_batch");
+    assert.equal(env.kind, "edit_file");
     assert.equal(env.error.code, "batch_failed");
     assert.equal(env.data.failed_index, 1);
     assert.equal(env.data.rollback_succeeded, true);
@@ -440,7 +440,7 @@ try {
     const env = parse(r);
     assert.equal(r.isError, true);
     assert.equal(env.ok, false);
-    assert.equal(env.kind, "edit_batch");
+    assert.equal(env.kind, "edit_file");
     assert.equal(env.error.code, "invalid_request");
     assert.match(env.error.message, /edits\[1\]\.path.*relative_path/);
     assert.match(env.error.message, /nothing was applied/i);
@@ -467,12 +467,12 @@ try {
     assert.match(env.error.message, /edits\[0\]\.edits\[0\]\.old_string.*old_text/);
     assert.equal(calls.length, 0);
   });
-  await check("read_batch_flags_path_alias_per_item", async () => {
+  await check("read_file_multi_file_flags_path_alias_per_item", async () => {
     const { deps, calls } = makeDeps({ snapshot: true });
-    const r = await batch.runReadBatch(
-      [{ operation: "read_file", arguments: { path: "a.ts" } }],
+    const r = await batch.runReadFileBatch(
+      [{ path: "a.ts" }],
       1_048_576,
-      { ...(deps as object), maxBatchResponseBytes: 4_000_000 } as unknown as Parameters<typeof batch.runReadBatch>[2],
+      { ...(deps as object), maxBatchResponseBytes: 4_000_000 } as unknown as Parameters<typeof batch.runReadFileBatch>[2],
     );
     const env = parse(r);
     const item = env.data.responses[0];
@@ -606,7 +606,7 @@ try {
     },
   );
 
-  await check("read_batch_surfaces_partial_failures_at_top_level", async () => {
+  await check("read_file_multi_file_surfaces_partial_failures_at_top_level", async () => {
     const deps = {
       maxBatchResponseBytes: 1_000_000,
       execute: async (op: string, args: Record<string, unknown>) => {
@@ -627,18 +627,12 @@ try {
           cached: false,
         };
       },
-    } as unknown as Parameters<typeof batch.runReadBatch>[2];
-    const r = await batch.runReadBatch(
+    } as unknown as Parameters<typeof batch.runReadFileBatch>[2];
+    const r = await batch.runReadFileBatch(
       [
-        { operation: "read_file", arguments: { relative_path: "missing.txt" } },
-        {
-          operation: "get_file_info",
-          arguments: { relative_path: "notes.md" },
-        },
-        {
-          operation: "read_file",
-          arguments: { relative_path: "large-error.txt" },
-        },
+        { relative_path: "missing.txt" },
+        { relative_path: "notes.md" },
+        { relative_path: "large-error.txt" },
       ],
       1_000_000,
       deps,

@@ -224,10 +224,10 @@ export async function runCore($h: Harness) {
   );
 
   const pair = tools.tools.find((t) => t.name === "read_file");
-  const readBatch = tools.tools.find((t) => t.name === "read_batch");
+  const editFile = tools.tools.find((t) => t.name === "edit_file");
   check("instrumentation_read", !!pair?._meta?.venira, { meta: pair?._meta });
-  check("instrumentation_batch", !!readBatch?._meta?.venira, {
-    meta: readBatch?._meta,
+  check("instrumentation_edit", !!editFile?._meta?.venira, {
+    meta: editFile?._meta,
   });
   tools.tools.forEach((t) => {
     const hasUseWhen = t.description?.includes("Use when:");
@@ -253,19 +253,13 @@ export async function runCore($h: Harness) {
   // default and expert tool profiles are measured (expert is the worst case).
   // Measured 2026-11 (tool schema phase 4): expert=63803 B, default=47277 B,
   // worst per tool=5071 B (read_batch, the typed batch schema kept by phase 4).
-  // Raised deliberately in the same change that advertised boolean acceptance on every
-  // flag (flag01 = integer 0|1 in tools/list, parse accepts true/false): the anyOf grew
-  // every flag's schema, and read_batch (which enumerates four operations' args)
-  // crossed the old 5100 ceiling at 5647 bytes. Totals are unchanged: expert 68624 (limit 72000),
-  // default 49457 (limit 50000) both still fit.
   // Raised deliberately again in ROADMAP_TOOLS phase 1+2 (move/copy/apply_patch grew the default list to ~52950 B, measured JS-off; expert ~71900 B, limit 72000):
   // default 50000 -> 53000. Ceilings are explicit so any growth fails verification.
   // Raised deliberately again in phase 3 (six project_git_* tools, ~9250 B measured with JS; expert/default totals re-based to 83661/63851 in scripts/schema-budget.json):
   // default 53000 -> 63000, expert 72000 -> 85000. Ceilings are explicit so any growth fails verification.
-  // Raised deliberately again in Phase 12 (get_file_info missing_ok grew default/expert to 66458/86011 measured JS-off):
-  // default 64000 -> 66458, expert 85000 -> 86011. Ceilings are explicit so any growth fails verification.
-  // Raised deliberately again in the profile-driven workspace switching change (switch_workspace description, 66458->66516, 86011->86069):
-  // default 66458 -> 66516, expert 86011 -> 86069. Ceilings are explicit so any growth fails verification.
+  // Measured after tool consolidation (read_batch/edit_batch dropped; the remaining 17-param search kept
+  // re-ranked descriptions), expert/default totals re-based in scripts/schema-budget.json.
+  // Ceilings are explicit so any growth fails verification.
   const TOOL_SCHEMA_MAX_BYTES = 5700;
   const EXPERT_TOOL_LIST_MAX_BYTES = 86077;
   const DEFAULT_TOOL_LIST_MAX_BYTES = 66524;
@@ -339,11 +333,8 @@ export async function runCore($h: Harness) {
   // 2. First batch (cold)
   console.log("[verify] checking cold batch...");
   let started = performance.now();
-  const firstBatch = await call("read_batch", {
-    requests: names.map((relative_path) => ({
-      operation: "read_file",
-      arguments: { relative_path },
-    })),
+  const firstBatch = await call("read_file", {
+    requests: names.map((relative_path) => ({ relative_path })),
   });
   results.batch_first_ms = +(performance.now() - started).toFixed(1);
   const parsed = JSON.parse(textOf(firstBatch));
@@ -377,15 +368,12 @@ export async function runCore($h: Harness) {
 
   // 3. Second batch (cached)
   started = performance.now();
-  await call("read_batch", {
-    requests: names.map((relative_path) => ({
-      operation: "read_file",
-      arguments: { relative_path },
-    })),
+  const secondBatch = await call("read_file", {
+    requests: names.map((relative_path) => ({ relative_path })),
   });
   results.batch_cached_ms = +(performance.now() - started).toFixed(1);
 
-  // 3b. Regression: numeric 0/1 flags must work inside read_batch (they used to be
+  // 3b. Regression: numeric 0/1 flags must work inside requests[] (they used to be
   // passed through as raw numbers and ignored, so regex alternation returned no matches).
   console.log("[verify] checking batch flag coercion...");
   await fs.writeFile(
@@ -394,69 +382,26 @@ export async function runCore($h: Harness) {
   );
   const flagBatch = JSON.parse(
     textOf(
-      await call("read_batch", {
+      await call("read_file", {
         requests: [
-          {
-            operation: "search",
-            arguments: {
-              kind: "literal_content",
-              query: "alpha|beta",
-              regex: 1,
-              relative_path: dir,
-            },
-          },
-          {
-            operation: "search",
-            arguments: {
-              kind: "literal_content",
-              query: "alpha|beta",
-              regex: 0,
-              relative_path: dir,
-            },
-          },
-          {
-            operation: "search",
-            arguments: {
-              kind: "literal_content",
-              query: "gamma",
-              case_sensitive: 1,
-              relative_path: dir,
-            },
-          },
-          {
-            operation: "search",
-            arguments: {
-              kind: "literal_content",
-              query: "gamma",
-              case_sensitive: 0,
-              relative_path: dir,
-            },
-          },
+          { relative_path: `${dir}/batch-flags.txt`, line_numbers: 1 },
+          { relative_path: `${dir}/batch-flags.txt`, line_numbers: 0 },
         ],
       }),
     ),
   );
-  const flagHits = (i: number): number =>
-    ((flagBatch.data?.responses?.[i]?.response?.data?.hits ?? []) as unknown[])
-      .length;
+  const flagText = (i: number): string =>
+    String(
+      flagBatch.data?.responses?.[i]?.response?.data?.text ?? "",
+    );
   check(
-    "batch_flag_regex_on_matches_alternation",
-    flagBatch.ok && flagHits(0) >= 2,
+    "batch_flag_line_numbers_on_prefixes_numbers",
+    flagBatch.ok === true && /(^|\n) *1\| alpha one/.test(flagText(0)),
     flagBatch,
   );
   check(
-    "batch_flag_regex_off_is_literal",
-    flagBatch.ok && flagHits(1) === 0,
-    flagBatch,
-  );
-  check(
-    "batch_flag_case_sensitive_on_no_match",
-    flagBatch.ok && flagHits(2) === 0,
-    flagBatch,
-  );
-  check(
-    "batch_flag_case_sensitive_off_matches",
-    flagBatch.ok && flagHits(3) >= 1,
+    "batch_flag_line_numbers_off_omits_numbers",
+    flagBatch.ok === true && !/(^|\n) *1\| alpha one/.test(flagText(1)),
     flagBatch,
   );
 

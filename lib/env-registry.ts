@@ -287,7 +287,7 @@ export const ENV_REGISTRY: readonly EnvVarSpec[] = [
     choices: ["full", "compact"],
   }),
   toolFlag("VENIRA_PRETTY", "Pretty-print JSON envelopes.", true, { default: "0" }),
-  toolInt("VENIRA_BATCH_ITEM_BYTES", "Per-item response budget inside read_batch.", true, {
+  toolInt("VENIRA_BATCH_ITEM_BYTES", "Per-item response budget inside read_file requests[].", true, {
     default: "524288",
   }),
   toolFlag("VENIRA_EDIT_FUZZY", "Allow fuzzy matching as a fallback in edit_file. Also decides whether fuzzy_distance, ignore_indentation and case_insensitive are advertised in the edit tool schemas (tools/list changes with this flag).", true, { default: "0" }),
