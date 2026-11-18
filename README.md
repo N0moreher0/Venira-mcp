@@ -1,7 +1,7 @@
 # venira-mcp
 
 Fast, workspace-scoped MCP server for coding agents (OpenCode, Claude Desktop, any MCP client).
-Three tool modes — **Core** (32 tools: coding set minus code intelligence, for small models) · **Default** (39 coding tools + shell, no CI/CD) · **Expert** (52 tools: default + CI/CD). `VENIRA_JS_EXEC_MODE=off` hides `execute_js` in every mode (52 → 51, 39 → 38, 32 → 31); otherwise it is registered and approval-gated. `VENIRA_SETUP_TOOLS=1` adds the two setup tools `detect_harnesses` and `install_self` (+2); `npx venira-mcp --install` and `--print-config` do the same from a terminal.
+Three tool modes — **Core** (18 tools: shell, `execute_js`, read/search/list, edit, snapshot, git — for small models) · **Default** (39 coding tools + shell, no CI/CD) · **Expert** (52 tools: default + CI/CD). `VENIRA_JS_EXEC_MODE=off` hides `execute_js` in every mode (52 → 51, 39 → 38, 18 → 17); otherwise it is registered and approval-gated. `VENIRA_SETUP_TOOLS=1` adds the two setup tools `detect_harnesses` and `install_self` (+2); `npx venira-mcp --install` and `--print-config` do the same from a terminal.
 Pure Node, 1 native dependency (better-sqlite3), no GUI, no external binary.
 
 > **Security scope.** Venira is a guard rail with an audit trail, not a sandbox. It runs with the privileges of the OS user that started it. The workspace lock limits the paths the file tools can touch (unless `VENIRA_UNRESTRICTED=1`), not what a shell command does: commands are classified by rules (allow / ask / deny) and every call is audited, but a malicious prompt can still steer the agent into running a harmful command that the active profile lets through (with `off`, every command runs). Anything running as the same OS user can read the keys in `VENIRA_DATA_DIR`. For untrusted workspaces, or whenever you need a real isolation boundary, run Venira in a container or VM. Details: [`SECURITY.md`](./SECURITY.md).
@@ -154,7 +154,7 @@ Pick one block and put its variables in the `env` section of your client config.
 | Fewer prompts on a personal machine | Minimal, plus `VENIRA_SECURITY_PROFILE=trusted` |
 | Full trust (isolated or personal machine only) | Minimal, plus `VENIRA_SECURITY_PROFILE=off` |
 
-`off` keeps full trust: shell checks off (hard-deny included), no workspace lock (`VENIRA_UNRESTRICTED=1`), `VENIRA_JS_EXEC_MODE=auto` as the default JS mode, no elicitation, full env passed to shell, `reveal=1` prints secrets and nothing prompts. A variable you set yourself always wins over the profile (e.g. `VENIRA_JS_EXEC_MODE=off` stays `off`). Deliberate opt-ins are never implied: `VENIRA_SHELL_OVERRIDES`, `VENIRA_ALLOW_SELF_INSTALL` and `VENIRA_SECRET_KEYCHAIN`.
+`off` keeps full trust: shell checks off (hard-deny included), no workspace lock (`VENIRA_UNRESTRICTED=1`), `VENIRA_JS_EXEC_MODE=auto` as the default JS mode, no elicitation, full env passed to shell, `reveal=true` prints secrets and nothing prompts. A variable you set yourself always wins over the profile (e.g. `VENIRA_JS_EXEC_MODE=off` stays `off`). Deliberate opt-ins are never implied: `VENIRA_SHELL_OVERRIDES`, `VENIRA_ALLOW_SELF_INSTALL` and `VENIRA_SECRET_KEYCHAIN`.
 
 Do not write a variable just to restate its default (for example `VENIRA_OUTPUT_MODE=full`, `VENIRA_USE_RIPGREP=1` or `VENIRA_SECURITY_PROFILE=balanced`).
 
@@ -229,11 +229,11 @@ repository root with `npm run bench:tools -- --runs=100`.
 
 Three tool modes set which tools the client sees. Set via `VENIRA_TOOL_MODE` env var or
 `"toolMode"` in `venira.config.json` (env wins). `VENIRA_DISABLE_TOOLS` hides additional tools on top.
-`core` is the small-model / restricted-context preset (the old `VENIRA_PROFILE=core`, now folded into this one variable).
+`core` is the small-model / restricted-context preset (the old `VENIRA_PROFILE=core`, now folded into this one variable). Unlike the other two modes it is an **allowlist**: only the must-have tools below are advertised, and any tool added later stays out of `tools/list` until it is added to `CORE_TOOLS` (`tools/project-tool-mode.ts`), because every extra schema costs tokens on every prompt.
 
 | Mode | Tools | Includes |
 |---|---|---|
-| `core` | **32** | `default` minus the code-intelligence tools: `dependency_graph`, `change_impact`, `outline_symbol`, `diff_files`, `symbol_references`, `recent_files`, `execute_js` |
+| `core` | **18** | Allowlist: `shell_run`, `shell_status`, `shell_cancel`, `execute_js`, `read_file`, `search`, `list_files`, `edit_file`, `edit_batch`, `write_file`, `delete_path`, `snapshot`, `git_status`, `git_diff`, `git_log`, `git_branch`, `git_commit`, `git_stash` |
 | `default` | **39** | Read/write/edit/search, code intel, snapshots, shell, `delete_path`, `execute_js` — **no** CI/CD; `explain_error` and `plan_read_batch` are expert-only |
 | `expert` | **52** | Everything in default + `pr_*`, `ci_*`, `explain_error`, `plan_read_batch` |
 
@@ -249,8 +249,8 @@ All tools return the standard envelope (`ok`, `kind`, `data`, `hint`, `elapsed_m
 |---|---|
 | `list_files` | List files/dirs, depth 1–3, limit ≤ 200 |
 | `read_file` | Read a file by line range; optional `ranges[]` (up to 16) |
-| `get_file_info` | File/dir metadata (kind, size, mtime); `missing_ok=1` answers ok with `exists:false` for missing paths (works in `read_batch`) |
-| `search` | Search by file/dir name, content, regex, or symbol; `hybrid: 1` tags hits with `source`+`confidence`; `queries[]` ranks files by AND/OR/NOT patterns |
+| `get_file_info` | File/dir metadata (kind, size, mtime); `missing_ok=true` answers ok with `exists:false` for missing paths (works in `read_batch`) |
+| `search` | Search by file/dir name, content, regex, or symbol; `hybrid: true` tags hits with `source`+`confidence`; `queries[]` ranks files by AND/OR/NOT patterns |
 | `recent_files` | Recently modified files (index-first, scan-fallback) |
 | `read_batch` | Up to 8 read-only ops in one call; each item takes the same arguments as its standalone tool (`search` items support `regex`, `case_sensitive`, `hybrid`, ...) |
 | `health` | Diagnostics: capability, queue, cache hit-rates, p50/p95, security limits notice, and `server.workspace_switching` (`enabled`, `profile`, `allowed_roots`) |
@@ -274,9 +274,9 @@ All tools return the standard envelope (`ok`, `kind`, `data`, `hint`, `elapsed_m
 | `edit_file` | Replace `old_text`→`new_text`; `edits[]` (up to 64); fuzzy edit opt-in |
 | `edit_batch` | Multiple edits; stops at first failure and attempts checkpoint rollback. Check `data.atomic` and `data.rollback_succeeded`; snapshot failure/incompleteness or a partial restore means changes may remain. A batch that rolled back cleanly removes its own checkpoint (`data.checkpoint_deleted: true`), so a failed attempt does not eat a `VENIRA_SNAPSHOT_KEEP` slot; a **failed** rollback keeps the checkpoint - it is the recovery path. |
 | `create` | Create a directory (missing parents are created; use `write_file` for file content) |
-| `move_path` | Move or rename a file/dir; `overwrite=1` replaces a file (never a directory); **not undoable** |
-| `copy_path` | Copy a file, or a directory with `recursive=1`; skips symbolic links and protected files inside a directory |
-| `apply_patch` | Apply a unified diff (create/modify/delete/rename), all-or-nothing; `dry_run=1` to validate first; rolls back every file on failure |
+| `move_path` | Move or rename a file/dir; `overwrite=true` replaces a file (never a directory); **not undoable** |
+| `copy_path` | Copy a file, or a directory with `recursive=true`; skips symbolic links and protected files inside a directory |
+| `apply_patch` | Apply a unified diff (create/modify/delete/rename), all-or-nothing; `dry_run=true` to validate first; rolls back every file on failure |
 | `delete_path` | Delete file/dir; **not undoable** |
 
 **Checkpoints (git-free rollback)**
@@ -303,12 +303,12 @@ All tools return the standard envelope (`ok`, `kind`, `data`, `hint`, `elapsed_m
 
 | Tool | Purpose |
 |---|---|
-| `shell_run` | Run a command; `background: 0` blocks for final output; `1` returns `run_id`. `shell`: `powershell` (Windows PowerShell 5.1), `pwsh` (PowerShell 7+), `cmd` or `bash`; omitted → `VENIRA_DEFAULT_SHELL`, else `cmd` on Windows and `$SHELL`/`bash` elsewhere |
+| `shell_run` | Run a command; `background: false` blocks for final output; `true` returns `run_id`. `shell`: `powershell` (Windows PowerShell 5.1), `pwsh` (PowerShell 7+), `cmd` or `bash`; omitted → `VENIRA_DEFAULT_SHELL`, else `cmd` on Windows and `$SHELL`/`bash` elsewhere |
 | `shell_status` | Poll a running command (not queued, not audit-logged) |
 | `shell_cancel` | Kill a running command by `run_id` |
 | `shell_cancel_session` | Kill all shell runs in this session |
 
-**Repeated-failure guard.** A shell invocation is fingerprinted (normalized command, shell, resolved cwd and the non-secret inputs; `secret_env` contributes its names only) and the fingerprint is remembered per session when the run fails or times out. The identical invocation is then **not** run again: the call fails with `repeated_failure` and carries `data.previous` (exit code, timed-out flag, bounded stderr tail, failure count). Nothing is stored but the hash - never the command text, never a secret value - so a repeat with secrets is reported as "same command and inputs", never as an exact match of the secret values. Change the command, the shell, the cwd or the inputs and it runs normally; a deliberate rerun of the identical command is `retry_failed: 1`. A successful run clears the memory.
+**Repeated-failure guard.** A shell invocation is fingerprinted (normalized command, shell, resolved cwd and the non-secret inputs; `secret_env` contributes its names only) and the fingerprint is remembered per session when the run fails or times out. The identical invocation is then **not** run again: the call fails with `repeated_failure` and carries `data.previous` (exit code, timed-out flag, bounded stderr tail, failure count). Nothing is stored but the hash - never the command text, never a secret value - so a repeat with secrets is reported as "same command and inputs", never as an exact match of the secret values. Change the command, the shell, the cwd or the inputs and it runs normally; a deliberate rerun of the identical command is `retry_failed: true`. A successful run clears the memory.
 
 **What the shell really did.** The response names the binary that ran the command (`shell_path`, `shell_kind`: `native`, `wsl`, `git-bash` or `unknown`) - on Windows `bash` is often the WSL launcher, which runs the command inside a Linux distro and reports its own messages in UTF-16 (those are decoded for you, and a WSL without a distribution comes back with a `shell_hint`). `cmd.exe` receives the command verbatim, so double quotes survive; PowerShell reports the **native** exit code of the last command (`git status` outside a repository reports 128, not 1), while a failing cmdlet still reports 1.
 
@@ -319,11 +319,11 @@ All tools return the standard envelope (`ok`, `kind`, `data`, `hint`, `elapsed_m
 | Tool | Purpose |
 |---|---|
 | `git_status` | Parsed worktree status: branch/detached, upstream (+ `upstream_gone`), ahead/behind, per-file `{path, old_path?, staged, unstaged, untracked, unmerged, kind, status, index_status, worktree_status}` + `counts`; `clean` flag; `paths[]` limits |
-| `git_diff` | Parsed diff (`staged=1` for the index): per-file `action` (`added|modified|deleted|renamed`) + `hunks[]` (`old_start/old_lines`, `new_start/new_lines`, `section`), `counts`, `patch_bytes`; `include_patch=1` adds the unified text capped at `max_bytes` |
-| `git_log` | Commit list (`ref`, `limit`, `paths[]`, `author`, `grep`) — or `blame=1` with `path` for per-line blame (`line, commit, author, authored_at, summary, prev_*`); `max_lines` caps blame |
-| `git_branch` | `action=list` (local; `include_remote=1` for remotes), `current`, `create` (`from=` optional), `switch`, `delete` (`force=1`) |
-| `git_commit` | Commit staged changes, or stage `paths[]` first; `amend=1` / `allow_empty=1` opt-in; reports `sha`, `files_changed`, `files` |
-| `git_stash` | `action=push|list|apply|pop|drop|show` (`stash@{N}`); `include_untracked=1` includes untracked files |
+| `git_diff` | Parsed diff (`staged=true` for the index): per-file `action` (`added|modified|deleted|renamed`) + `hunks[]` (`old_start/old_lines`, `new_start/new_lines`, `section`), `counts`, `patch_bytes`; `include_patch=true` adds the unified text capped at `max_bytes` |
+| `git_log` | Commit list (`ref`, `limit`, `paths[]`, `author`, `grep`) — or `blame=true` with `path` for per-line blame (`line, commit, author, authored_at, summary, prev_*`); `max_lines` caps blame |
+| `git_branch` | `action=list` (local; `include_remote=true` for remotes), `current`, `create` (`from=` optional), `switch`, `delete` (`force=true`) |
+| `git_commit` | Commit staged changes, or stage `paths[]` first; `amend=true` / `allow_empty=true` opt-in; reports `sha`, `files_changed`, `files` |
+| `git_stash` | `action=push|list|apply|pop|drop|show` (`stash@{N}`); `include_untracked=true` includes untracked files |
 
 Read-only git (`status`, `diff`, `log`/blame, `branch` list/current, `stash` list/show) needs no `reason`; mutating calls do. Mutations invalidate the whole cache (worktree-wide change). Local only against the workspace repository root (`git rev-parse --show-toplevel`; paths stay workspace-relative); **push is never performed by these tools** — routine git pushes need no approval, force/delete/URL pushes ask one, and `ALLOW_ENV_READ` is the only remaining named override.
 
@@ -373,7 +373,7 @@ Full reference: the source reads 80+ distinct supported `VENIRA_*` names; this t
 | Variable | Default | What it does |
 |---|---|---|
 | `VENIRA_WORKSPACE` | `process.cwd()` | Workspace root; all paths resolve against it |
-| `VENIRA_TOOL_MODE` | `default` | `core` (32 tools) / `default` (39 tools) / `expert` (52 tools); +2 with `VENIRA_SETUP_TOOLS=1` |
+| `VENIRA_TOOL_MODE` | `default` | `core` (18 tools) / `default` (39 tools) / `expert` (52 tools); +2 with `VENIRA_SETUP_TOOLS=1` (in every mode, `core` included) |
 | `VENIRA_OUTPUT_MODE` | `full` | `full` or `compact` (summarize/trim payloads > 8 KiB; generic payloads use `preview_text`) |
 | `VENIRA_AUDIT_DETAIL` | `summary` | What `read_audit` can show per job: `off` stores nothing extra, `summary` keeps one args line and one result line, `full` also keeps redacted JSON args/result (up to 16 KiB per job). Long or sensitive values (file content, `old_text`/`new_text`, secret values) are stored as a length only |
 | `VENIRA_UNRESTRICTED` | `"0"` | `"1"` disables workspace lock (never in production) |
@@ -486,7 +486,7 @@ Sensible defaults; leave any of these unset unless you know why you set them.
 | Shell `ask` | An ask rule matches, or the command is unclassified in `balanced` / `strict` | `VENIRA_SECURITY_PROFILE` (`balanced`) · advanced override: `VENIRA_SHELL_MODE` |
 | Secret injection | `shell_run` with `secret_env` | always asks, in every mode |
 | `execute_js` | Every call | `VENIRA_JS_EXEC_MODE` (`off`: tool not registered; `ask`: per-call approval, skipped when `VENIRA_PERMISSION_MODE=allow_all`; `semi-auto`: no approval, contained; `auto`: no approval, no containment) |
-| Secret plaintext | `secret` with `reveal=1` | `VENIRA_SHELL_MODE` (`off` / `permissive`) |
+| Secret plaintext | `secret` with `reveal=true` | `VENIRA_SHELL_MODE` (`off` / `permissive`) |
 | Self-install | `install_self` writes another client's config | `VENIRA_ALLOW_SELF_INSTALL` (`0`) |
 | Named shell override | `ALLOW_ENV_READ` | `VENIRA_SHELL_OVERRIDES` (unset), plus `override` and a `reason` on the call |
 
@@ -501,7 +501,7 @@ Granting a shell or JS approval:
 **TTL behavior:** the pending request (`approval_id`) is valid for a fixed 5 minutes and cannot be revived by retrying. A `--session` grant lasts 10 minutes by default (`VENIRA_SHELL_APPROVAL_TTL_MS`) and lives only in this server process; restarting the server clears it.
 
 Agent helpers:
-- `shell_run` with `dry_run: 1` returns the tier, rule and `would_run` / `requires_approval` without running anything or creating an approval, so an agent knows beforehand which command will be asked.
+- `shell_run` with `dry_run: true` returns the tier, rule and `would_run` / `requires_approval` without running anything or creating an approval, so an agent knows beforehand which command will be asked.
 - `approval_wait_s` (max 45) on `shell_run` / `execute_js` keeps the call open while the human approves; a grant that arrives in time runs the command in the same call, otherwise you get the normal `[approval_required]` (the pending `approval_id` stays valid). Keep it below the client's request timeout.
 - `health` reports `approvals` (mode, JS gate, elicitation, session rules, TTL, max wait), the shared `posture` report (`level`, stable finding ids such as `workspace.unrestricted`, `profile.off`, `combo.unrestricted_open_shell`, `js.exec_without_approval`) and the flat `warnings` list. Posture findings are warnings only; invalid values already fail closed at startup. `doctor` surfaces the same report.
 
@@ -528,7 +528,7 @@ Checkpoints live outside every workspace, in one shared per-user folder, so ever
 - The file tools (read, write, edit, search, delete) refuse anything under the snapshot root or exact dir, the same way they refuse the data dir. Only `snapshot` touches the store.
 - Retention is per project (`VENIRA_SNAPSHOT_KEEP`), so one busy project cannot push out another's checkpoints.
 - Shell commands are guarded too: any read, write or delete operand inside the snapshot store is a hard deny in `balanced` / `strict` (`deny.protected_file_access`) and needs approval in `permissive`. `off` disables shell policy entirely, so keep checkpoints you cannot afford to lose in a separate backup as well.
-- Unreadable checkpoints are reported, never dropped silently. `snapshot action=list` adds `unreadable[]` (`snapshot_version_unsupported` = written by a newer venira-mcp, `snapshot_corrupt` = broken index file) and a hint. While any index is unreadable, blob cleanup is paused (`gc_skipped: "unreadable_manifests"` on delete), because that index still owns blobs this build cannot enumerate. For the first case upgrade venira-mcp; for the second, remove the broken `index\<id>.json.gz` yourself (agent shell access to the store is denied by design) and cleanup resumes.
+- Unreadable checkpoints are reported, never dropped silently. `snapshot action=list` adds `unreadable[]` (each row has `code` and `message`: `snapshot_version_unsupported` = written by a newer venira-mcp, `snapshot_unsafe_path` = a file path leaves the workspace (written by an older build; it is never restored), `snapshot_corrupt` = broken index file) and a hint. While any index is unreadable, blob cleanup is paused (`gc_skipped: "unreadable_manifests"` on delete), because that index still owns blobs this build cannot enumerate. For the first case upgrade venira-mcp; for `snapshot_unsafe_path` and `snapshot_corrupt`, `snapshot action=delete` with that id removes the index when its header names this workspace (`was_unreadable: true`) and cleanup resumes; an index whose bytes cannot be parsed at all, or that names another workspace, is refused, so remove such a file yourself (agent shell access to the store is denied by design).
 - Manifests carry a `version`. Older layouts are upgraded in memory when read (`MIGRATIONS` in `lib/snapshot-store.ts`); the file on disk is never rewritten.
 
 **Backing up the store**
@@ -545,9 +545,9 @@ The store is plain files: immutable content-addressed `blobs\<ab>\<sha256>`, gzi
 Set `VENIRA_SNAPSHOT_MIRROR_DIR` to an existing absolute folder and venira keeps a second copy there, with no cloud SDKs, credentials or network code of its own (point it at a OneDrive/Dropbox folder, NAS share, USB drive or rclone mount and let that tool move the bytes).
 
 - Same layout as the store (`<mirror>\<project>\project.json`, `index\`, `blobs\`), so restoring is copying the folder back to the store location; there is no separate format.
-- After every `snapshot action=create` the result carries `mirror` (`status`, `copied_blobs`, `copied_indexes`, `bytes`, `failed[]`, `error`). It is best-effort: a mirror problem never changes the checkpoint's own status. `snapshot action=mirror` runs the same sync on demand; add `verify=1` to re-hash every blob already at the mirror and re-copy bad ones.
+- After every `snapshot action=create` the result carries `mirror` (`status`, `copied_blobs`, `copied_indexes`, `bytes`, `failed[]`, `error`). It is best-effort: a mirror problem never changes the checkpoint's own status. `snapshot action=mirror` runs the same sync on demand; add `verify=true` to re-hash every blob already at the mirror and re-copy bad ones.
 - Order is blobs, then indexes, then `project.json`, so the mirror never holds a checkpoint whose blobs are missing. Every copy is verified (blob sha256 equals its file name; index bytes equal the source) before it gets its final name. A corrupt local blob blocks only the checkpoints that use it.
-- Append-only: venira never deletes anything at the mirror. A checkpoint pruned locally (`VENIRA_SNAPSHOT_KEEP`) or deleted stays at the mirror until you remove it by hand, so expect it to grow; the only overwrite is `verify=1` replacing a file that no longer matches its source.
+- Append-only: venira never deletes anything at the mirror. A checkpoint pruned locally (`VENIRA_SNAPSHOT_KEEP`) or deleted stays at the mirror until you remove it by hand, so expect it to grow; the only overwrite is `verify=true` replacing a file that no longer matches its source.
 - Bounded: a run stops between files once its time budget is spent and reports `partial` / `timed_out`; run it again to resume (only missing files are copied). A first sync of a large store may need a few runs.
 - Refused (`[config_invalid]`): a relative path, a folder that does not exist (venira never creates the mirror root, so an unmounted drive is not silently replaced by a local folder), and a folder that equals, contains or sits inside the local store or sits inside the workspace. A mirror folder already owned by a different workspace fails with `[mirror_conflict]`.
 - The mirror folder is a protected root like the store: file tools refuse it and shell commands that read, write or delete inside it are denied.
@@ -587,11 +587,11 @@ Venira MCP rules:
 2. Read with read_batch (up to 8 items). Never re-read a file a tool already returned.
 3. Prefer edit_file / edit_batch over write_file; pass `reason` on every mutation.
 4. Snapshot before multi-file or destructive changes.
-5. Short commands: shell_run with background: 0. Long jobs: background: 1, then poll shell_status.
+5. Short commands: shell_run with background: false. Long jobs: background: true, then poll shell_status.
 6. Do not call execute_js unless the user asked for JS; in `ask` mode it needs per-call approval. Network access is always open in every mode; in `semi-auto` the filesystem is limited to the workspace and the environment is scrubbed, in `auto` the containment is dropped.
 7. On failure, follow the envelope's hint. Treat ok:false + retryable:false as final.
 8. Report only what the tool returned.
-9. On [approval_required]: stop, tell the user the approval_id and approve_command, do not loop or approve it yourself; retry once with data.approval.retry_with after they confirm. Use dry_run: 1 to preview a command's tier.
+9. On [approval_required]: stop, tell the user the approval_id and approve_command, do not loop or approve it yourself; retry once with data.approval.retry_with after they confirm. Use dry_run: true to preview a command's tier.
 ```
 
 ## 10. Development
