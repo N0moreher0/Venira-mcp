@@ -105,7 +105,7 @@ export class GithubDeviceFlow {
     poll_interval_seconds: number;
   }> {
     if (this.hasToken() && !replaceExisting) {
-      throw new Error("[already_configured] A GitHub credential is already stored. Set replace_existing=1 to connect another account.");
+      throw new Error("[already_configured] A GitHub credential is already stored. Set replace_existing=true to connect another account.");
     }
     this.pruneExpired();
     if (this.pending.size >= 4) {

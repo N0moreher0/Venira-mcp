@@ -71,7 +71,7 @@ export async function opWriteFile(
       if (error instanceof Error && error.message.startsWith("[invalid_request]")) throw error;
       throw new Error(
         `[invalid_request] The parent directory does not exist: ${path.relative(root, parentDir) || "."}. ` +
-          "Hint: pass create_dirs=1, or create the directory with create.",
+          "Hint: pass create_dirs=true, or create the directory with create.",
       );
     }
   }
@@ -470,7 +470,7 @@ export async function opDeletePath(
 ): Promise<RustResponse> {
   const absPath = resolveInWorkspace(args.relative_path as string, root);
   // Refuse to delete the workspace root (or an ancestor of it). One call with
-  // `relative_path: "."` and recursive=1 used to wipe the whole tree, and this
+  // `relative_path: "."` and recursive=true used to wipe the whole tree, and this
   // op is explicitly not undoable.
   const caseFold = (value: string) => (PLATFORM === "win32" ? value.toLowerCase() : value);
   const rootTarget = caseFold(path.resolve(root));
@@ -503,7 +503,7 @@ export async function opDeletePath(
 
   if (stat.isDirectory() && !recursive) {
     throw new Error(
-      `[invalid_request] Directory requires recursive=1: ${args.relative_path}.`,
+      `[invalid_request] Directory requires recursive=true: ${args.relative_path}.`,
     );
   }
 
@@ -600,7 +600,7 @@ type TransferPlan = {
   srcStat: Stats;
   /** Source and target differ only by letter case on a case-insensitive file system. */
   caseOnly: boolean;
-  /** The target is an existing file that overwrite=1 allows replacing. */
+  /** The target is an existing file that overwrite=true allows replacing. */
   overwrites: boolean;
   createDirs: boolean;
 };
@@ -654,11 +654,11 @@ async function planTransfer(
     const dstStat = await fs.lstat(absTo).catch(() => null);
     if (dstStat) {
       if (args.overwrite !== true) {
-        throw new Error(`[conflict] Target already exists: ${to}. Hint: pass overwrite=1 to replace a file, or choose another target.`);
+        throw new Error(`[conflict] Target already exists: ${to}. Hint: pass overwrite=true to replace a file, or choose another target.`);
       }
       if (dstStat.isDirectory() || srcStat.isDirectory()) {
         throw new Error(
-          `[conflict] overwrite=1 only replaces a file with a file; ${to} or ${from} is a directory. ` +
+          `[conflict] overwrite=true only replaces a file with a file; ${to} or ${from} is a directory. ` +
             "Hint: delete the target with delete_path first, or choose another target.",
         );
       }
@@ -681,7 +681,7 @@ async function ensureTargetParent(plan: TransferPlan, root: string): Promise<voi
   const stat = await fs.stat(parent).catch(() => null);
   if (!stat || !stat.isDirectory()) {
     throw new Error(
-      `[invalid_request] The target's parent directory does not exist: ${relativeOf(root, parent)}. Hint: pass create_dirs=1 (the default) or create it with create.`,
+      `[invalid_request] The target's parent directory does not exist: ${relativeOf(root, parent)}. Hint: pass create_dirs=true (the default) or create it with create.`,
     );
   }
 }
@@ -755,7 +755,7 @@ export async function opCopyPath(
   }
   const isDir = plan.srcStat.isDirectory();
   if (isDir && args.recursive !== true) {
-    throw new Error(`[invalid_request] ${args.from} is a directory. Hint: pass recursive=1 to copy it.`);
+    throw new Error(`[invalid_request] ${args.from} is a directory. Hint: pass recursive=true to copy it.`);
   }
   await ensureTargetParent(plan, root);
 

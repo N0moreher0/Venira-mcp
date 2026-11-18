@@ -103,7 +103,7 @@ function isScopeValid(capabilityId: string): boolean {
 //
 // Values are never returned by default: `get`/`list` expose only metadata
 // (length + sha256 prefix + update time) so an agent can confirm a key exists
-// without ever putting it in a transcript. `reveal=1` is an explicit opt-in
+// without ever putting it in a transcript. `reveal=true` is an explicit opt-in
 // *and* needs VENIRA_SHELL_MODE=permissive or off on the host, so a compromised agent
 // cannot exfiltrate keys from a normal install.
 // ---------------------------------------------------------------------------
@@ -215,7 +215,7 @@ async function opSecret(args: Record<string, unknown>): Promise<RustResponse> {
           hint:
             "Metadata only (the value stays out of the transcript). Hint: inject it with shell_run secret_env=[\"" +
             name +
-            '"], or set VENIRA_SHELL_MODE=permissive or off and pass reveal=1.',
+            '"], or set VENIRA_SHELL_MODE=permissive or off and pass reveal=true.',
         };
       }
       if (!(loadShellPolicy().mode === "off" || loadShellPolicy().mode === "permissive")) {
@@ -240,7 +240,7 @@ async function opSecret(args: Record<string, unknown>): Promise<RustResponse> {
             value: value.slice(0, MAX_REVEAL_VALUE_CHARS),
           },
         },
-        hint: "Revealed because reveal=1 and VENIRA_SHELL_MODE is permissive or off. The value is now in this transcript.",
+        hint: "Revealed because reveal=true and VENIRA_SHELL_MODE is permissive or off. The value is now in this transcript.",
       };
     }
 
@@ -466,7 +466,7 @@ function describeExternalOp(operation: string, args: Record<string, unknown>): s
     case "secret": {
       const action = String(args.action ?? "").toLowerCase();
       const name = typeof args.name === "string" ? args.name : "";
-      summary = `secret_${action || "?"} name=${name}${args.reveal === true ? " reveal=1" : ""}`;
+      summary = `secret_${action || "?"} name=${name}${args.reveal === true ? " reveal=true" : ""}`;
       break;
     }
     case "github_connect":
@@ -631,7 +631,7 @@ export class CoreHost {
           const response = await opShellStatus(args);
           return response as T;
         }
-        // apply_patch with dry_run=1 reads and validates only: it writes nothing, so it is
+        // apply_patch with dry_run=true reads and validates only: it writes nothing, so it is
         // treated like a read-only observation and skips the audit row (like shell_status).
         if (operation === "apply_patch" && isDryRunFlag(args.dry_run)) {
           const response = await opApplyPatch(args, WORKSPACE);

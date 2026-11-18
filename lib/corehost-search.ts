@@ -190,7 +190,7 @@ export async function opSearch(
     );
   }
   // Hidden files are searched by default (parity with the JS walker; agents
-  // legitimately search `.github/`, `.vscode/`). Pass include_hidden=0 to skip
+  // legitimately search `.github/`, `.vscode/`). Pass include_hidden=false to skip
   // dotfiles (rg-style). Protected secrets are always excluded either way.
   const includeHidden = args.include_hidden === undefined
     ? true
@@ -283,7 +283,7 @@ export async function opSearch(
         : "The scan was cut before any hit was found. Narrow relative_path/glob, or raise the limit (max 200).";
     }
     if (hits.length === 0) {
-      return "No matches. Broaden the search: drop glob/relative_path, set regex=0, or use kind=file_name.";
+      return "No matches. Broaden the search: drop glob/relative_path, set regex=false, or use kind=file_name.";
     }
     if (!complete) {
       if (cutReason === "file_cap") {
@@ -325,7 +325,7 @@ export async function opSearch(
       for (const entry of entries) {
         if (scanTruncated) return;
         if (entry.isSymbolicLink()) continue;
-        // Hidden files/dot-directories are skipped unless include_hidden=1.
+        // Hidden files/dot-directories are skipped unless include_hidden=true.
         // IGNORED (node_modules/target/…) and isProtectedPath always apply.
         if (!includeHidden && entry.name.startsWith(".")) continue;
         const abs = path.join(d, entry.name);
@@ -396,7 +396,7 @@ export async function opSearch(
           if (excludeGlob && !String(excludeGlob).includes("/")) argList.push("--glob", `!${excludeGlob}`);
           // Hidden exclusion goes last: rg applies later globs with higher
           // precedence, so a caller glob such as `*.ts` cannot re-include a
-          // dotfile when include_hidden=0.
+          // dotfile when include_hidden=false.
           if (!includeHidden) {
             argList.push("--glob", "!**/.*");
             argList.push("--glob", "!**/.*/**");

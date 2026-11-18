@@ -218,7 +218,7 @@ export async function opShellRun(
   //
   // The identical invocation already failed in this session. Running it again
   // would only reproduce the same error, so the caller gets the previous
-  // evidence instead. A deliberate rerun is possible with retry_failed=1, and
+  // evidence instead. A deliberate rerun is possible with retry_failed=true, and
   // any change to the command, the shell, the cwd or the inputs makes it a
   // different invocation that runs normally.
   // -------------------------------------------------------------------------
@@ -249,7 +249,7 @@ export async function opShellRun(
             : {}),
           next_step:
             "Read previous.stderr_tail, fix the cause, then change the command or its inputs. " +
-            "Pass retry_failed=1 only when you deliberately want the identical command to run again.",
+            "Pass retry_failed=true only when you deliberately want the identical command to run again.",
         },
       );
     }

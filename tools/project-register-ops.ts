@@ -51,7 +51,7 @@ export function registerOpsTools(server: McpServer, deps: OpsToolsDeps): void {
         relative_path: path_,
         create_dirs: flag01
           .optional()
-          .describe("1 creates missing parent directories (default 1); 0 fails when a parent is missing."),
+          .describe("true (default) creates missing parent directories; false fails when a parent is missing."),
         reason: reason_,
       }),
     },
@@ -64,13 +64,13 @@ export function registerOpsTools(server: McpServer, deps: OpsToolsDeps): void {
       ...config(
         "Health & metrics",
         {
-          speed_profile: "fast (~a few ms + 1 audit DB query); set include_audit=0 to skip the DB query.",
+          speed_profile: "fast (~a few ms + 1 audit DB query); set include_audit=false to skip the DB query.",
           batch_safe: false,
         },
         { readOnlyHint: true, openWorldHint: false },
       ),
       inputSchema: {
-        include_audit: flag01.optional().describe("1 includes the audit-log summary in the result (default 1); 0 skips the audit DB query."),
+        include_audit: flag01.optional().describe("true includes the audit-log summary in the result (default true); false skips the audit DB query."),
         sections: z
           .array(z.string())
           .max(24)
@@ -213,7 +213,7 @@ export function registerOpsTools(server: McpServer, deps: OpsToolsDeps): void {
         request_id: z.string().optional().describe("One job by request_id: its args and result."),
         limit: z.number().int().min(1).max(200).optional().describe("Max rows, newest first (default 50; 15 in VENIRA_OUTPUT_MODE=compact; max 200)."),
         since_unix: z.number().int().min(0).optional().describe("Only rows at or after this Unix timestamp (seconds)."),
-        verify: flag01.optional().describe("1 verifies the audit hash chain and returns chain_ok; 0 disables verification."),
+        verify: flag01.optional().describe("true verifies the audit hash chain and returns chain_ok; false disables verification."),
       },
     },
     (args) => runReadAudit(args as Args, auditDbPath()),

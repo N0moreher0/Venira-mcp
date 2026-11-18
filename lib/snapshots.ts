@@ -21,7 +21,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { resolveWithin } from "./workspace.js";
 import type { RustResponse } from "./output.js";
-import { MANIFEST_VERSION, MAX_TOTAL_BYTES, KEEP_CHECKPOINTS, MAX_DELETE_EXTRA, effectiveMaxFiles, DEFAULT_EXCLUDES, snapshotDataDir, indexPath, blobRoot, blobPath, protectedPrefixes, isProtected, isAuditDbFile, newId, validId, sanitizeReason, type SnapshotManifest, readManifest, writeManifest, listManifests, listManifestsDetailed, hashBuffer, fileSignature, normalizeRel, pathHasSymlinkAncestor } from "./snapshot-store.js";
+import { MANIFEST_VERSION, MAX_TOTAL_BYTES, KEEP_CHECKPOINTS, MAX_DELETE_EXTRA, effectiveMaxFiles, DEFAULT_EXCLUDES, snapshotDataDir, indexPath, blobRoot, blobPath, protectedPrefixes, isProtected, isAuditDbFile, newId, validId, sanitizeReason, type SnapshotManifest, readManifest, readManifestOwner, writeManifest, listManifests, listManifestsDetailed, hashBuffer, fileSignature, normalizeRel, pathHasSymlinkAncestor } from "./snapshot-store.js";
 import { walkForSnapshot, storeBlob } from "./snapshot-walk.js";
 import { runMirrorAfterCreate } from "./snapshot-mirror.js";
 export { snapshotDataDir, sanitizeReason, type SnapshotManifest } from "./snapshot-store.js";
@@ -207,9 +207,9 @@ export async function opSnapshotList(args: Record<string, unknown>): Promise<Rus
         latest: rows[0]?.id,
         store: snapshotDataDir(),
         checkpoints: rows,
-        unreadable: unreadable.length > 0 ? unreadable.map((u) => ({ id: u.id, code: u.code })) : undefined,
+        unreadable: unreadable.length > 0 ? unreadable.map((u) => ({ id: u.id, code: u.code, message: u.message.slice(0, 300) })) : undefined,
         hint: unreadable.length > 0
-          ? "Some checkpoint indexes could not be read (see unreadable[].code). They are kept, and blob cleanup is paused until they are resolved: snapshot_version_unsupported -> upgrade venira-mcp; snapshot_corrupt -> delete the index file by hand if it is truly broken."
+          ? "Some checkpoint indexes could not be read (see unreadable[].code and message). They are kept, and blob cleanup is paused until they are resolved: snapshot_version_unsupported -> upgrade venira-mcp; snapshot_corrupt / snapshot_unsafe_path -> snapshot action=delete with that id removes it when its header names this workspace."
           : undefined,
       },
     },
@@ -442,11 +442,31 @@ export async function opSnapshotDelete(
   root: string,
 ): Promise<RustResponse> {
   const id = validId(args.id);
-  const manifest = await readManifest(id);
+  let manifest: SnapshotManifest | undefined;
+  let owner: { workspace: string; label?: string } | undefined;
+  let wasUnreadable = false;
+  try {
+    manifest = await readManifest(id);
+    owner = { workspace: manifest.workspace, label: manifest.label };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    // Only `snapshot_corrupt` and `snapshot_unsafe_path` may fall through: a `snapshot_version_unsupported` index belongs to a newer build
+    // that can still read it, and a missing one is a plain not_found.
+    if (!message.startsWith("[snapshot_corrupt]") && !message.startsWith("[snapshot_unsafe_path]")) throw error;
+    const head = await readManifestOwner(id);
+    if (!head) {
+      throw new Error(
+        `[snapshot_corrupt] Checkpoint '${id}' index cannot be parsed, so its workspace cannot be verified and the tool will not delete it. ` +
+          "Hint: restore the store from a backup, or remove that index file outside the agent (the store is protected from agent file and shell tools).",
+      );
+    }
+    owner = head;
+    wasUnreadable = true;
+  }
   // A shared VENIRA_DATA_DIR must not let one workspace drop another's checkpoint.
-  if (path.resolve(manifest.workspace) !== path.resolve(root)) {
+  if (path.resolve(owner.workspace) !== path.resolve(root)) {
     throw new Error(
-      `[scope_denied] Checkpoint '${id}' belongs to a different workspace (${manifest.workspace}). Hint: delete it from that workspace.`,
+      `[scope_denied] Checkpoint '${id}' belongs to a different workspace (${owner.workspace}). Hint: delete it from that workspace.`,
     );
   }
   await fs.rm(indexPath(id), { force: true });
@@ -457,8 +477,9 @@ export async function opSnapshotDelete(
       kind: "snapshot_delete",
       data: {
         id,
-        label: manifest.label,
+        label: owner.label,
         deleted: true,
+        was_unreadable: wasUnreadable ? true : undefined,
         blobs_removed: gc.removed,
         bytes_freed: gc.bytes,
         gc_skipped: gc.skipped,

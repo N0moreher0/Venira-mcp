@@ -155,12 +155,12 @@ try {
     await assert.rejects(() => opSnapshotRestore({ id: "snap-../../escape" }, workspaceDir), /invalid_request/);
   });
 
-  await check("a manifest file path with .. is rejected as corrupt", async () => {
+  await check("a manifest file path with .. is rejected as an unsafe path", async () => {
     const id = snapshotId(await opSnapshotCreate({ paths: ["."] }, workspaceDir));
     tamperManifest(outsideStore, id, (manifest) => {
       manifest.files[0].path = "../escape.txt";
     });
-    await assert.rejects(() => opSnapshotRestore({ id }, workspaceDir), /snapshot_corrupt/);
+    await assert.rejects(() => opSnapshotRestore({ id }, workspaceDir), /snapshot_unsafe_path/);
   });
 
   await check("a manifest from another workspace is refused", async () => {

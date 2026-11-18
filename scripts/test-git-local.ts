@@ -118,7 +118,7 @@ try {
     assert.equal(d2.clean, true);
   });
 
-  await check("a second empty commit is refused without allow_empty=1", async () => {
+  await check("a second empty commit is refused without allow_empty=true", async () => {
     await assert.rejects(() => opGitCommit({ message: "nope" }, root), /^Error: \[invalid_request\]/);
     const d = data(await opGitCommit({ message: "empty ok", allow_empty: 1 }, root));
     assert.ok(String(d.sha).length >= 7);

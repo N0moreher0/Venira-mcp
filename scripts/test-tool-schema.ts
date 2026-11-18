@@ -15,7 +15,7 @@
  *      model-facing text, only when VENIRA_EDIT_FUZZY=1; with it off they are still let through to the
  *      handler (which refuses them with a clear error) instead of being stripped.
  *   6. (phase 4) create advertises directory-only arguments; shell_run.background is advertised
- *      as the integer 0|1 while its handler keeps accepting booleans and strings. (phase 5) the removed
+ *      as a boolean (item 20) while its handler keeps accepting 1/0, booleans and strings. (phase 5) the removed
  *      file arguments still reach the handler, which refuses them with `[unsupported]`.
  *
  * Run with: npm run test:tool-schema
@@ -58,6 +58,9 @@ const workflow = (await load(
 const vcs = (await load(
   "tools/project-register-vcs.ts",
 )) as typeof import("../tools/project-register-vcs.js");
+const git = (await load(
+  "tools/project-register-git.ts",
+)) as typeof import("../tools/project-register-git.js");
 const docs = (await load(
   "tools/project-docs.ts",
 )) as typeof import("../tools/project-docs.js");
@@ -67,6 +70,9 @@ const schema = (await load(
 const argHints = (await load(
   "lib/arg-hints.ts",
 )) as typeof import("../lib/arg-hints.js");
+const toolMode = (await load(
+  "tools/project-tool-mode.ts",
+)) as typeof import("../tools/project-tool-mode.js");
 
 const fileToolDeps = {
   runOne: dummy,
@@ -111,6 +117,7 @@ workflow.registerWorkflowTools(fakeServer, {
   runSnapshot: dummy,
 });
 vcs.registerVcsTools(fakeServer, { runOne: dummy, runSecret: dummy });
+git.registerGitTools(fakeServer, { runOne: dummy });
 
 /** Walk a zod schema; collect paths whose named properties lack a description. */
 const missing: string[] = [];
@@ -193,6 +200,27 @@ check("every parameter has a description", () => {
     }
   }
   assert.deepEqual(missing, [], `parameters without a description:\n  ${missing.join("\n  ")}`);
+});
+
+check("flags are advertised as booleans and still parse 1/0/true/false", () => {
+  for (const [name, flag] of [["flag01", schema.flag01], ["backgroundFlag", schema.backgroundFlag]] as const) {
+    const json = z.toJSONSchema(flag as unknown as z.ZodType, { io: "input", unrepresentable: "any" }) as Record<string, unknown>;
+    assert.equal(json.type, "boolean", `${name} must be advertised as boolean`);
+    assert.equal(json.minimum, undefined, `${name} must not advertise an integer range`);
+    assert.equal(json.maximum, undefined, `${name} must not advertise an integer range`);
+    assert.equal(json.anyOf, undefined, `${name} must not publish an anyOf (it would carry the integer 0|1 branch)`);
+  }
+  const parse = (value: unknown) => (schema.flag01 as unknown as z.ZodType).parse(value);
+  assert.equal(parse(true), true);
+  assert.equal(parse(1), true);
+  assert.equal(parse(false), false);
+  assert.equal(parse(0), false);
+  for (const bad of [2, -1, "1", "yes", null, undefined, {}]) {
+    assert.throws(() => parse(bad), `flag01 must refuse ${JSON.stringify(bad)}`);
+  }
+  const bg = (value: unknown) => (schema.backgroundFlag as unknown as z.ZodType).parse(value);
+  assert.equal(bg("0"), false);
+  assert.equal(bg(true), true);
 });
 
 check("deprecated parameters are gone from the schema", () => {
@@ -314,6 +342,27 @@ function registerFilesWithFuzzy(value: "0" | "1"): Registered {
 
 const fuzzyOff = registerFilesWithFuzzy("0");
 const fuzzyOn = registerFilesWithFuzzy("1");
+
+// Item 20: a flag is published as a JSON Schema boolean; an integer 0|1 flag must not come back.
+check("file tools: no integer 0|1 flag is advertised (item 20)", () => {
+  for (const [name, cfg] of fuzzyOff) {
+    const raw = cfg.inputSchema as unknown;
+    const zschema = raw instanceof z.ZodType ? raw : z.object((raw ?? {}) as z.ZodRawShape);
+    const json = z.toJSONSchema(zschema, { io: "input", unrepresentable: "any" }) as {
+      properties?: Record<string, { type?: string; minimum?: number; maximum?: number; anyOf?: Array<{ type?: string }> }>;
+    };
+    for (const [prop, def] of Object.entries(json.properties ?? {})) {
+      assert.ok(
+        !(def.type === "integer" && def.minimum === 0 && def.maximum === 1),
+        `${name}.${prop} must be advertised as boolean, not integer 0|1`,
+      );
+      assert.ok(
+        !(def.anyOf ?? []).some((branch) => branch.type === "integer" && (branch as { maximum?: number }).maximum === 1),
+        `${name}.${prop} must not publish an anyOf with an integer 0|1 branch`,
+      );
+    }
+  }
+});
 // ---- Phase 8 patch 2: the setup tools are advertised only when VENIRA_SETUP_TOOLS=1 ----
 const SETUP_TOOLS = ["detect_harnesses", "install_self"];
 
@@ -349,6 +398,80 @@ check("setup tools: not advertised by default (unset or 0), the other workflow t
 
 check("setup tools: VENIRA_SETUP_TOOLS=1 advertises detect_harnesses and install_self", () => {
   assert.deepEqual(workflowToolNames("1").filter((n) => SETUP_TOOLS.includes(n)).sort(), [...SETUP_TOOLS].sort());
+});
+
+// ---- core mode is an allowlist of the must-have tools ----
+check("core mode: every allowlisted tool is a real registered tool (no typo or renamed tool)", () => {
+  const missingTools = toolMode.CORE_TOOLS.filter((name) => !registered.has(name));
+  assert.deepEqual(missingTools, [], `CORE_TOOLS names no registered tool: ${missingTools.join(", ")}`);
+  assert.equal(new Set(toolMode.CORE_TOOLS).size, toolMode.CORE_TOOLS.length, "CORE_TOOLS has a duplicate");
+});
+
+check("core mode: keeps shell, execute_js, read, search, list, edit, snapshot and git", () => {
+  for (const name of [
+    "shell_run", "shell_status", "execute_js", "read_file", "search", "list_files",
+    "edit_file", "write_file", "snapshot", "git_status", "git_diff", "git_commit",
+  ]) {
+    assert.ok(toolMode.CORE_TOOLS.includes(name), `core must keep ${name}`);
+  }
+  assert.ok(toolMode.CORE_TOOLS.includes("delete_path"), "delete_path stays in every mode (shell rm is hard-denied)");
+});
+
+check("core mode: blocks every other tool, and core stays inside the default surface", () => {
+  for (const name of registered.keys()) {
+    const inCore = toolMode.CORE_TOOLS.includes(name);
+    assert.equal(toolMode.modeBlocksTool("core", name, false), !inCore, `core handling of ${name}`);
+    if (inCore) assert.equal(toolMode.modeBlocksTool("default", name, false), false, `${name} is in core but not in default`);
+  }
+  for (const name of ["memory", "secret", "recent_files", "read_batch", "health", "apply_patch", "copy_path", "ci_status"]) {
+    assert.equal(toolMode.modeBlocksTool("core", name, false), true, `core must not advertise ${name}`);
+  }
+});
+
+check("core mode: setup tools join only with VENIRA_SETUP_TOOLS=1; default and expert never block them", () => {
+  for (const name of SETUP_TOOLS) {
+    assert.equal(toolMode.modeBlocksTool("core", name, false), true, `${name} must stay out of core by default`);
+    assert.equal(toolMode.modeBlocksTool("core", name, true), false, `${name} must join core with VENIRA_SETUP_TOOLS=1`);
+    assert.equal(toolMode.modeBlocksTool("default", name, false), false);
+    assert.equal(toolMode.modeBlocksTool("expert", name, false), false);
+  }
+});
+
+check("core mode: applyDisabledTools registers only the allowlist (plus setup tools with VENIRA_SETUP_TOOLS=1)", () => {
+  const registerAll = (setup: "0" | "1", disable?: string): string[] => {
+    const saved = {
+      mode: process.env.VENIRA_TOOL_MODE,
+      setup: process.env.VENIRA_SETUP_TOOLS,
+      disable: process.env.VENIRA_DISABLE_TOOLS,
+    };
+    process.env.VENIRA_TOOL_MODE = "core";
+    process.env.VENIRA_SETUP_TOOLS = setup;
+    if (disable === undefined) delete process.env.VENIRA_DISABLE_TOOLS;
+    else process.env.VENIRA_DISABLE_TOOLS = disable;
+    const originalError = console.error;
+    console.error = () => undefined; // the mode logs its surface on stderr
+    try {
+      const names: string[] = [];
+      const server = { registerTool: (name: string) => void names.push(name) };
+      toolMode.applyDisabledTools(server as never);
+      for (const name of new Set([...registered.keys(), ...SETUP_TOOLS])) server.registerTool(name);
+      return names;
+    } finally {
+      console.error = originalError;
+      for (const [key, value] of [
+        ["VENIRA_TOOL_MODE", saved.mode],
+        ["VENIRA_SETUP_TOOLS", saved.setup],
+        ["VENIRA_DISABLE_TOOLS", saved.disable],
+      ] as const) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  };
+  assert.deepEqual(registerAll("0").sort(), [...toolMode.CORE_TOOLS].sort());
+  assert.deepEqual(registerAll("1").sort(), [...toolMode.CORE_TOOLS, ...SETUP_TOOLS].sort());
+  // VENIRA_DISABLE_TOOLS still layers on top of the allowlist.
+  assert.deepEqual(registerAll("0", "git_stash,execute_js").sort(), toolMode.CORE_TOOLS.filter((n) => n !== "git_stash" && n !== "execute_js").sort());
 });
 
 const fuzzyIn = (keys: string[]) => keys.filter((k) => FUZZY.includes(k)).sort();

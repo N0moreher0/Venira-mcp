@@ -4,7 +4,8 @@
  * Pins two promises that matter once the checkpoint layout changes or a store is shared between venira-mcp
  * versions:
  *   1. A manifest this build cannot read is reported (`snapshot_version_unsupported` for a newer/unmigratable
- *      layout, `snapshot_corrupt` for broken bytes) instead of silently disappearing from the list.
+ *      layout, `snapshot_unsafe_path` for a file path that leaves the workspace, `snapshot_corrupt` for broken
+ *      bytes) instead of silently disappearing from the list.
  *   2. Blob gc never runs while such a manifest exists, because that manifest still owns blobs we cannot
  *      enumerate; deleting "unreferenced" blobs would destroy its data.
  *
@@ -223,6 +224,55 @@ await check("removed_scope_alias_is_refused_and_captures_nothing", async () => {
   assert.equal(viaPaths.file_count, 1);
   assert.equal(viaPaths.deprecated, undefined, "paths is the only spelling and is not flagged");
   await snapshots.opSnapshotDelete({ id: String(viaPaths.id) }, workspaceDir);
+});
+
+const ESCAPE_ID = "snap-20990101-000003-escp";
+const OTHER_ID = "snap-20990101-000004-othr";
+
+await check("path_escape_index_shows_its_cause_and_its_own_workspace_can_delete_it", async () => {
+  // Same shape as a checkpoint written by an old build that allowed a root outside the workspace.
+  await writeManifestJson(ESCAPE_ID, { ...manifestB, id: ESCAPE_ID, files: [{ ...manifestB.files[0], path: "../outside.txt" }] });
+  const list = dataOf(await snapshots.opSnapshotList({}));
+  const row = (list.unreadable as Array<{ id: string; code: string; message?: string }>).find((u) => u.id === ESCAPE_ID);
+  assert.equal(row?.code, "snapshot_unsafe_path", "an escaping path is its own code, not generic corruption");
+  assert.match(String(row?.message), /^\[snapshot_unsafe_path\].*outside the workspace.*\.\.\/outside\.txt/, "the list must say why the index is rejected");
+  assert.match(String(list.hint), /snapshot_unsafe_path/);
+  assert.match(await errorMessage(store.readManifest(ESCAPE_ID)), /^\[snapshot_unsafe_path\]/, "readManifest keeps the specific code");
+  assert.match(
+    await errorMessage(snapshots.opSnapshotRestore({ id: ESCAPE_ID }, workspaceDir)),
+    /^\[snapshot_unsafe_path\]/,
+    "an unsafe checkpoint is never restored",
+  );
+  const deleted = dataOf(await snapshots.opSnapshotDelete({ id: ESCAPE_ID }, workspaceDir));
+  assert.equal(deleted.deleted, true);
+  assert.equal(deleted.was_unreadable, true);
+  assert.equal(existsSync(store.indexPath(ESCAPE_ID)), false);
+});
+
+await check("an_absolute_path_entry_is_unsafe_and_a_malformed_entry_stays_corrupt", async () => {
+  const ABS_ID = "snap-20990101-000005-abs0";
+  const BAD_ID = "snap-20990101-000006-bad0";
+  await writeManifestJson(ABS_ID, { ...manifestB, id: ABS_ID, files: [{ ...manifestB.files[0], path: path.resolve(tempDir, "abs.txt") }] });
+  await writeManifestJson(BAD_ID, { ...manifestB, id: BAD_ID, files: [{ ...manifestB.files[0], sha256: "not-a-hash" }] });
+  assert.match(await errorMessage(store.readManifest(ABS_ID)), /^\[snapshot_unsafe_path\]/);
+  assert.match(await errorMessage(store.readManifest(BAD_ID)), /^\[snapshot_corrupt\].*invalid file entry/);
+  const codes = new Map((await store.listManifestsDetailed()).unreadable.map((u) => [u.id, u.code]));
+  assert.equal(codes.get(ABS_ID), "snapshot_unsafe_path");
+  assert.equal(codes.get(BAD_ID), "snapshot_corrupt");
+  assert.equal(dataOf(await snapshots.opSnapshotDelete({ id: ABS_ID }, workspaceDir)).was_unreadable, true);
+  assert.equal(dataOf(await snapshots.opSnapshotDelete({ id: BAD_ID }, workspaceDir)).was_unreadable, true);
+  assert.equal(existsSync(store.indexPath(ABS_ID)) || existsSync(store.indexPath(BAD_ID)), false);
+});
+
+await check("deleting_an_unreadable_checkpoint_is_refused_unless_ownership_is_shown", async () => {
+  await writeManifestJson(OTHER_ID, { ...manifestB, id: OTHER_ID, workspace: path.join(tempDir, "another-workspace"), files: [{ ...manifestB.files[0], path: "../x.txt" }] });
+  assert.match(await errorMessage(snapshots.opSnapshotDelete({ id: OTHER_ID }, workspaceDir)), /^\[scope_denied\]/);
+  assert.ok(existsSync(store.indexPath(OTHER_ID)), "another workspace's index stays");
+  assert.match(await errorMessage(snapshots.opSnapshotDelete({ id: BROKEN_ID }, workspaceDir)), /^\[snapshot_corrupt\].*cannot be parsed/);
+  assert.ok(existsSync(store.indexPath(BROKEN_ID)), "unparseable bytes: ownership unknown, nothing is deleted");
+  assert.match(await errorMessage(snapshots.opSnapshotDelete({ id: FUTURE_ID }, workspaceDir)), /^\[snapshot_version_unsupported\]/);
+  assert.ok(existsSync(store.indexPath(FUTURE_ID)), "a newer build may still read it");
+  await dropIndex(OTHER_ID);
 });
 
 await check("gc_resumes_and_sweeps_orphans_once_nothing_is_unreadable", async () => {

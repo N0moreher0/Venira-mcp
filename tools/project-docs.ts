@@ -22,7 +22,7 @@ export type ToolDoc = { about: string; use: string; avoid: string; out: string }
 export const TOOL_DOCS: Record<string, ToolDoc> = {
   // ---- read ---------------------------------------------------------------
   list_files: {
-    about: "List files and directories (depth 1-3, limit up to 200). include_ignored=1 also lists ignored folders.",
+    about: "List files and directories (depth 1-3, limit up to 200). include_ignored=true also lists ignored folders.",
     use: "you need the directory tree or want to confirm a path exists.",
     avoid: "you know the file (read_file) or want what changed lately (recent_files).",
     out: "entries[] {relative_path, kind, size_bytes}, truncated.",
@@ -34,13 +34,13 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
     out: "text (as preview in compact mode; preview_truncated marks a cut), first_line, last_line, total_bytes, truncated, next_start_line (when truncated). sha256 hashes the whole file and is safe as expected_sha256; text_sha256 covers only the returned text. Missing path gives not_found.",
   },
   get_file_info: {
-    about: "Return kind, size and modification time of a path. `missing_ok=1` answers ok with `data.exists:false` for a missing path instead of `not_found` (works inside read_batch items too).",
-    use: "you need to know whether a path exists or how big it is. Use missing_ok=1 to probe existence without failing the call or the batch.",
+    about: "Return kind, size and modification time of a path. `missing_ok=true` answers ok with `data.exists:false` for a missing path instead of `not_found` (works inside read_batch items too).",
+    use: "you need to know whether a path exists or how big it is. Use missing_ok=true to probe existence without failing the call or the batch.",
     avoid: "you need the content (read_file).",
-    out: "kind, size_bytes, modified_unix_seconds, exists when missing_ok=1. Missing path gives not_found (or ok with exists:false and missing_ok=1).",
+    out: "kind, size_bytes, modified_unix_seconds, exists when missing_ok=true. Missing path gives not_found (or ok with exists:false and missing_ok=true).",
   },
   search: {
-    about: "Search by kind: file_name, directory_name, literal_content (regex=1 for regex) or definition (symbol declarations). `queries` instead ranks matching lines by several weighted patterns (must/weight).",
+    about: "Search by kind: file_name, directory_name, literal_content (regex=true for regex) or definition (symbol declarations). `queries` instead ranks matching lines by several weighted patterns (must/weight).",
     use: "you must locate code, strings or symbols before reading. Keep relative_path narrow: a scan stops at 50000 files.",
     avoid: "you know the path (read_file), want a file's structure (outline_symbol), a symbol's usages (symbol_references) or an executable on PATH (shell_run: `where <name>`).",
     out: "hits[] {relative_path, line_number, snippet}, complete, total_match_lines, files_matched. With queries: hits also carry score/matched, plus total_files/total_hits. No match is ok with empty hits.",
@@ -60,14 +60,14 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
 
   // ---- write --------------------------------------------------------------
   write_file: {
-    about: "Write a file. mode=create (fails if it exists), overwrite, or append. create_dirs=1 creates parent folders.",
+    about: "Write a file. mode=create (fails if it exists), overwrite, or append. create_dirs=true creates parent folders.",
     use: "you create a file, replace one entirely, or append. expected_sha256 refuses the write if the file changed since you read it.",
     avoid: "you change a few lines (edit_file). overwrite is immediate and not undoable: snapshot first when the file is not in git.",
     out: "action (created|overwritten|appended), bytes_written, sha256_after. mode=create on an existing path gives conflict.",
   },
   edit_file: {
     about: "Replace exact text: old_text to new_text, or edits[] for several replacements in one file (edits[] wins).",
-    use: "you make a targeted change. old_text must match exactly once unless replace_all=1. Pass expected_sha256 (read_file's sha256 or your last sha256_after) to refuse stale content and get a verified re-read.",
+    use: "you make a targeted change. old_text must match exactly once unless replace_all=true. Pass expected_sha256 (read_file's sha256 or your last sha256_after) to refuse stale content and get a verified re-read.",
     avoid: "you rewrite the whole file (write_file) or change several files at once (edit_batch).",
     out: "replacements, sha256_before, sha256_after, verified (when expected_sha256 is given). Failures leave the file unchanged: old_text_not_found (data.mismatch locates the first difference, data.context shows the nearby lines) and old_text_ambiguous (lists each match with context).",
   },
@@ -78,31 +78,31 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
     out: "success: per-edit {relative_path, replacements, sha256_after}. Failure: ok=false, error batch_failed, data {executed, skipped, rollback_succeeded, snapshot_id}.",
   },
   delete_path: {
-    about: "Delete a file or directory (recursive=1 is required for directories). Not undoable.",
+    about: "Delete a file or directory (recursive=true is required for directories). Not undoable.",
     use: "you remove files or folders. Take a snapshot first when they are not in git.",
     avoid: "the target is uncertain (check with get_file_info or list_files).",
     out: "entries_deleted, bytes_deleted. Missing path gives not_found.",
   },
   create: {
-    about: "Create a directory; missing parents are created unless create_dirs=0.",
+    about: "Create a directory; missing parents are created unless create_dirs=false.",
     use: "you need an empty directory. For a file use write_file, which also creates parent folders.",
     avoid: "you edit existing content (edit_file).",
     out: "directory_created {relative_path, created, parents_created}.",
   },
   move_path: {
-    about: "Move or rename a file or directory inside the workspace. overwrite=1 replaces an existing file, never a directory; create_dirs (default 1) makes missing parents of `to`.",
+    about: "Move or rename a file or directory inside the workspace. overwrite=true replaces an existing file, never a directory; create_dirs (default true) makes missing parents of `to`.",
     use: "you rename or relocate files or folders. Not undoable: take a snapshot first when they are not in git.",
     avoid: "you duplicate (copy_path) or remove (delete_path).",
     out: "from, to, kind, overwritten, entries, bytes. Missing source gives not_found, an existing target without overwrite gives conflict.",
   },
   copy_path: {
-    about: "Copy a file, or a directory with recursive=1, inside the workspace. overwrite=1 replaces an existing file; symbolic links and protected files inside a directory are skipped.",
+    about: "Copy a file, or a directory with recursive=true, inside the workspace. overwrite=true replaces an existing file; symbolic links and protected files inside a directory are skipped.",
     use: "you duplicate a file or folder, for example to start from a template.",
     avoid: "you move or rename (move_path).",
     out: "from, to, kind, overwritten, entries, bytes, skipped_symlinks/skipped_protected when any. Missing source gives not_found, an existing target without overwrite gives conflict.",
   },
   apply_patch: {
-    about: "Apply a unified diff (git apply compatible) to one or more files, all-or-nothing. Every file is validated in memory before anything is written; a failing hunk rolls every file back from an automatic checkpoint, like edit_batch. dry_run=1 validates and reports without writing.",
+    about: "Apply a unified diff (git apply compatible) to one or more files, all-or-nothing. Every file is validated in memory before anything is written; a failing hunk rolls every file back from an automatic checkpoint, like edit_batch. dry_run=true validates and reports without writing.",
     use: "a change arrives as a diff (git diff, a patch file, another tool's output) and must land completely or not at all — files created, modified, deleted or renamed.",
     avoid: "you have no diff (edit_file/edit_batch) or only need a new file (write_file). Not for directories or symbolic links.",
     out: "dry_run: files[] {action, relative_path, hunks, bytes} plus added/modified/deleted/renamed counts; nothing is written. success: same list plus sha256_after per file. Failure: nothing is changed; data carries rollback_succeeded and, for a mismatching hunk, nearest_context lines for the file and hunk that failed.",
@@ -115,13 +115,13 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
     out: "ok, branch/detached, upstream (gone flag), ahead/behind, files[] {path, old_path?, staged, unstaged, untracked, unmerged, kind, status, index_status/worktree_status}, counts{}, clean.",
   },
   git_diff: {
-    about: "Parsed git diff (staged or worktree): files + hunks (old_start/lines, new_start/lines, section). Patch text is opt-in via include_patch=1.",
+    about: "Parsed git diff (staged or worktree): files + hunks (old_start/lines, new_start/lines, section). Patch text is opt-in via include_patch=true.",
     use: "you need per-file hunk info for review/preview or a test, not free text.",
-    avoid: "you need a raw unified blob (use include_patch=1 or diff_files) or a PR diff (provider tools).",
-    out: "files[] {old_path|null, new_path|null, action (added|modified|deleted|renamed), binary, hunks[] {old_start, old_lines, new_start, new_lines, section}}, counts{}, patch_bytes, patch/patch_truncated when include_patch=1.",
+    avoid: "you need a raw unified blob (use include_patch=true or diff_files) or a PR diff (provider tools).",
+    out: "files[] {old_path|null, new_path|null, action (added|modified|deleted|renamed), binary, hunks[] {old_start, old_lines, new_start, new_lines, section}}, counts{}, patch_bytes, patch/patch_truncated when include_patch=true.",
   },
   git_log: {
-    about: "Local commit log, or per-line blame when blame=1 with path. Filters: ref, author, grep, paths.",
+    about: "Local commit log, or per-line blame when blame=true with path. Filters: ref, author, grep, paths.",
     use: "you need recent commits or who last touched lines (blame).",
     avoid: "you need tags/remote refs only (git branch --all) or a remote CI’s log (ci_logs).",
     out: "mode=log: commits[] {sha, short_sha, author, email, authored_at, committer, subject, body}, count. mode=blame: entries[] {line, commit, author, authored_at, summary}, lines.",
@@ -139,7 +139,7 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
     out: "sha, short_sha, subject, files_changed, files, amend. No staged changes gives invalid_request (pass paths or stage first).",
   },
   git_stash: {
-    about: "Stash push/list/apply/pop/drop/show. Push stashes staged+unstaged tracked changes (add include_untracked=1 for untracked files).",
+    about: "Stash push/list/apply/pop/drop/show. Push stashes staged+unstaged tracked changes (add include_untracked=true for untracked files).",
     use: "you need to pause work to switch branches or commit selectively.",
     avoid: "you need to stash and keep a copy (stash keeps one; use apply over pop) or drop permanently (prefer apply, then commit).",
     out: "push: pushed, message, selector, output. list: entries[] {selector, sha, subject}, count. apply/pop/drop: applied/dropped. show: files[], count.",
@@ -147,10 +147,10 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
 
   // ---- shell & JS ---------------------------------------------------------
   shell_run: {
-    about: "Run a shell command in the workspace (shell, relative_cwd, timeout_s). Default is background: returns run_id, poll shell_status. background=0 blocks until exit and returns stdout/stderr.",
-    use: "you build, test, run git or install packages. background=0 for short commands you need now.",
+    about: "Run a shell command in the workspace (shell, relative_cwd, timeout_s). Default is background: returns run_id, poll shell_status. background=false blocks until exit and returns stdout/stderr.",
+    use: "you build, test, run git or install packages. background=false for short commands you need now.",
     avoid: "you read or edit files (file tools) or run a tiny JS calculation (execute_js).",
-    out: "run_id, kill_key, running, exit_code, timed_out, stdout/stderr (background=0) or stdout_tail/stderr_tail. ok=true only means the call ran; status (completed|failed|running|cancelled) and command_status describe the command. shell_path/shell_kind name the binary that ran it (on Windows bash may be the WSL launcher). approval_required: ask the user to approve, then retry once with approval_id. repeated_failure: the identical invocation already failed; read data.previous.stderr_tail, then change the command or pass retry_failed=1.",
+    out: "run_id, kill_key, running, exit_code, timed_out, stdout/stderr (background=false) or stdout_tail/stderr_tail. ok=true only means the call ran; status (completed|failed|running|cancelled) and command_status describe the command. shell_path/shell_kind name the binary that ran it (on Windows bash may be the WSL launcher). approval_required: ask the user to approve, then retry once with approval_id. repeated_failure: the identical invocation already failed; read data.previous.stderr_tail, then change the command or pass retry_failed=true.",
   },
   shell_status: {
     about: "Return the state and output tail of a shell run. wait_seconds (0-300) waits up to that long for it to finish.",
@@ -180,7 +180,7 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
   // ---- diagnostics --------------------------------------------------------
   health: {
     about: "Server diagnostics: version, workspace, security posture and warnings, caches, queue, running shells, latency, snapshot store, audit status.",
-    use: "you debug slowness or errors, or want the security warnings before risky work. include_audit=0 skips the audit query.",
+    use: "you debug slowness or errors, or want the security warnings before risky work. include_audit=false skips the audit query.",
     avoid: "normal file work.",
     out: "One key per report section (see sections); with sections set, also sections_requested and sections_unknown.",
   },
@@ -209,10 +209,10 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
     out: "read: exists, content, bytes, updated_at_ms. write: replaced, previous_bytes, bytes, updated_at_ms. Over the cap or empty content: invalid_request, old note kept.",
   },
   read_audit: {
-    about: "Read recent audit-log rows, newest first: what each job was asked and returned. Filter by session_id, operation, outcome, request_id, since_unix (seconds); verify=1 checks the hash chain.",
+    about: "Read recent audit-log rows, newest first: what each job was asked and returned. Filter by session_id, operation, outcome, request_id, since_unix (seconds); verify=true checks the hash chain.",
     use: "you review what ran and how it ended, or look one job up by request_id.",
     avoid: "you want live metrics (health).",
-    out: "rows[] {session_id, operation, outcome, reason_code, reason, args_hash, command, request_id, started_at_ms, completed_at_ms, elapsed_ms, args_summary, result_summary, result_bytes}, count, truncated, chain_ok (verify=1). Output mode full adds redacted args and result per row; bulk text is kept as its length only. Timestamps are epoch milliseconds (since_unix filters in seconds). args_hash identifies the call, command is the redacted command line.",
+    out: "rows[] {session_id, operation, outcome, reason_code, reason, args_hash, command, request_id, started_at_ms, completed_at_ms, elapsed_ms, args_summary, result_summary, result_bytes}, count, truncated, chain_ok (verify=true). Output mode full adds redacted args and result per row; bulk text is kept as its length only. Timestamps are epoch milliseconds (since_unix filters in seconds). args_hash identifies the call, command is the redacted command line.",
   },
 
   // ---- code intelligence --------------------------------------------------
@@ -262,7 +262,7 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
   },
   snapshot: {
     about: "Checkpoint and roll back workspace files. action: create (label, paths) | list | restore (id) | delete (id) | mirror (copy to VENIRA_SNAPSHOT_MIRROR_DIR).",
-    use: "before multi-file refactors or overwriting/deleting files git does not hold. Keep paths narrow and check file_count and skipped. Roll back with restore dry_run=1, then restore with verify=1.",
+    use: "before multi-file refactors or overwriting/deleting files git does not hold. Keep paths narrow and check file_count and skipped. Roll back with restore dry_run=true, then restore with verify=true.",
     avoid: "tiny single-file edits or states git already holds.",
     out: "create: id, file_count, total_bytes, truncated, skipped[]. restore: restored[], deleted_count, skipped[].",
   },
@@ -273,7 +273,7 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
     out: "harnesses[] {harness, detected, config_path, format, note}.",
   },
   install_self: {
-    about: "Add the Venira MCP server entry to a client's config. Atomic write with a backup at <file>.venira-bak. dry_run=1 previews.",
+    about: "Add the Venira MCP server entry to a client's config. Atomic write with a backup at <file>.venira-bak. dry_run=true previews.",
     use: "the user asks to install Venira into a client.",
     avoid: "the config path is unknown (detect_harnesses first).",
     out: "harness, config_path, status (installed|already_present|config_missing|error|would_merge|would_create), needs_restart, dry_run, note.",
@@ -359,7 +359,7 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
   secret: {
     about: "Store and inspect tokens without exposing them (AES-256-GCM at rest). action: set | get (metadata only) | list | delete. Inject into commands with shell_run secret_env=[NAME]; the GitHub tools read GITHUB_TOKEN on their own.",
     use: "you save a non-GitHub token, check expiry or rotation, or remove one. Prefer value_env over value so the secret never appears in chat.",
-    avoid: "the value is plain config (use .env or the config file). reveal=1 prints plaintext and needs VENIRA_SHELL_MODE=permissive or off.",
+    avoid: "the value is plain config (use .env or the config file). reveal=true prints plaintext and needs VENIRA_SHELL_MODE=permissive or off.",
     out: "set: name, length, expires_at, days_left. get and list: metadata only.",
   },
 };

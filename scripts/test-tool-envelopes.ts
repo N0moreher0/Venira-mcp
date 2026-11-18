@@ -132,7 +132,7 @@ try {
     const env = fail(
       "[invalid_request] Invalid regex: Unterminated character class",
     );
-    assert.match(env.hint, /regex=0/);
+    assert.match(env.hint, /regex=false/);
   });
   await check("venira_error_preserves_code_data_and_actions", () => {
     const action = {
@@ -816,7 +816,7 @@ try {
       ["[invalid_request] Invalid checkpoint id. Use the id returned.", /action=list/],
       ["[invalid_request] harness must be one of: a, b. Got: x", /detect_harnesses/],
       ["[invalid_request] No edits provided. Pass old_text/new_text or edits[].", /edits\[\]/],
-      ["[invalid_request] Directory requires recursive=1: lib.", /snapshot/],
+      ["[invalid_request] Directory requires recursive=true: lib.", /snapshot/],
       ["[invalid_request] `command` must be a non-empty string.", /command/],
       ["[invalid_request] Missing or incorrect kill_key. Each shell process.", /shell_run/],
       ["[invalid_request] `secret_env` must be an array of secret names.", /secret/],
@@ -840,7 +840,7 @@ try {
     }
     assert.match(
       fail("[invalid_request] Invalid regex: Unterminated character class").hint,
-      /regex=0/,
+      /regex=false/,
     );
     assert.equal(
       fail("[invalid_request] x. Hint: keep this one.").hint,

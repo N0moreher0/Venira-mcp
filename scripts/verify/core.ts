@@ -40,16 +40,16 @@ export async function runCore($h: Harness) {
   check(
     "snapshot_workflow_in_shared_instructions",
     instructions.includes("Snapshot discipline") &&
-      instructions.includes("dry_run=1") &&
+      instructions.includes("dry_run=true") &&
       instructions.includes("same-size content changes") &&
-      instructions.includes("delete_extra=0") &&
+      instructions.includes("delete_extra=false") &&
       instructions.includes("every delete_path call"),
     {
       includes: [
         "Snapshot discipline",
-        "dry_run=1",
+        "dry_run=true",
         "same-size content changes",
-        "delete_extra=0",
+        "delete_extra=false",
       ].map((text) => instructions.includes(text)),
     },
   );
@@ -100,10 +100,27 @@ export async function runCore($h: Harness) {
       .filter(([, schema]) => (schema as { type?: string }).type === "boolean")
       .map(([name]) => `${tool.name}.${name}`),
   );
+  // Item 20: every flag is advertised as a bare JSON Schema boolean; no integer 0|1 flag (neither as the type nor as
+  // an anyOf branch) may remain.
+  const integerFlagToolInputs = tools.tools.flatMap((tool) =>
+    Object.entries(tool.inputSchema?.properties ?? {})
+      .filter(([, schema]) => {
+        const s = schema as {
+          type?: string;
+          minimum?: number;
+          maximum?: number;
+          anyOf?: { type?: string; maximum?: number }[];
+        };
+        const isIntFlag = (x: { type?: string; minimum?: number; maximum?: number }) =>
+          x.type === "integer" && x.minimum === 0 && x.maximum === 1;
+        return isIntFlag(s) || (s.anyOf ?? []).some((branch) => isIntFlag(branch as never));
+      })
+      .map(([name]) => `${tool.name}.${name}`),
+  );
   check(
-    "tool_boolean_flags_are_numeric",
-    directBooleanToolInputs.length === 0,
-    directBooleanToolInputs,
+    "tool_boolean_flags_are_booleans",
+    integerFlagToolInputs.length === 0 && directBooleanToolInputs.length > 0,
+    { integerFlagToolInputs, booleanFlagCount: directBooleanToolInputs.length },
   );
   const shellToolSchema = tools.tools.find(
     (tool) => tool.name === "shell_run",
@@ -125,10 +142,10 @@ export async function runCore($h: Harness) {
     shellProperties?.early_exit,
   );
   check(
-    "shell_background_schema_is_integer_only",
-    shellProperties?.background?.type === "integer" &&
-      shellProperties?.background?.minimum === 0 &&
-      shellProperties?.background?.maximum === 1 &&
+    "shell_background_schema_is_boolean",
+    shellProperties?.background?.type === "boolean" &&
+      shellProperties?.background?.minimum === undefined &&
+      shellProperties?.background?.maximum === undefined &&
       shellProperties?.background?.anyOf === undefined,
     shellProperties?.background,
   );
@@ -143,8 +160,8 @@ export async function runCore($h: Harness) {
   // behaviour (dry run first, verify on restore, inspect coverage) instead of the old wording.
   check(
     "snapshot_tool_teaches_safe_rollback",
-    snapshotDescription.includes("dry_run=1") &&
-      snapshotDescription.includes("verify=1") &&
+    snapshotDescription.includes("dry_run=true") &&
+      snapshotDescription.includes("verify=true") &&
       snapshotDescription.includes("file_count") &&
       snapshotDescription.includes("skipped"),
     snapshotDescription,
@@ -628,7 +645,7 @@ export async function runCore($h: Harness) {
     status?.data,
   );
 
-  // background=0 / "False" must block for the whole run and return final output.
+  // background=false / "False" must block for the whole run and return final output.
   const sleepCommand = (ms: number) =>
     isWin ? `Start-Sleep -Milliseconds ${ms}` : `sleep ${ms / 1000}`;
   for (const [label, background, delay] of [

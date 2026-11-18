@@ -67,7 +67,7 @@ export function registerWorkflowTools(server: McpServer, deps: WorkflowToolsDeps
         ]).describe("Which client's config to update (see detect_harnesses)."),
         workspace: z.string().optional().describe("VENIRA_WORKSPACE value to write (default: process.cwd())."),
         data_dir: z.string().optional().describe("VENIRA_DATA_DIR value to write (default: the per-user Venira data directory)."),
-        dry_run: flag01.optional().describe("1 reports what would happen without writing; 0 performs the action."),
+        dry_run: flag01.optional().describe("true reports what would happen without writing; false performs the action."),
       },
     },
     (args) => runInstallSelf(args as Args),
@@ -136,7 +136,7 @@ export function registerWorkflowTools(server: McpServer, deps: WorkflowToolsDeps
         max_files: z.number().int().min(1).max(8).optional().describe("Max candidates to plan (default 6; batch accepts 8)."),
         include_search: flag01
           .optional()
-          .describe("1 runs keyword searches (default); 0 plans only from files_hint/recent files."),
+          .describe("true runs keyword searches (default); false: only files_hint/recent files."),
       },
     },
     (args) => runPlanReadBatch(args as Args),
@@ -177,16 +177,16 @@ export function registerWorkflowTools(server: McpServer, deps: WorkflowToolsDeps
         exclude: z.array(z.string()).max(64).optional().describe("Extra directory/file names to skip."),
         respect_default_excludes: flag01
           .optional()
-          .describe("1 skips standard generated/cache directories (default); 0 disables those exclusions."),
+          .describe("true (default) skips standard generated/cache directories; false disables those exclusions."),
         max_files: z.number().int().min(1).max(20000).optional().describe("Max files captured (default 20000, max 20000)."),
         max_total_bytes: z.number().int().min(1).max(512 * 1024 * 1024).optional().describe("Max total bytes captured (default and max 512 MiB)."),
-        dry_run: flag01.optional().describe("restore only: 1 previews path/size changes without writing."),
+        dry_run: flag01.optional().describe("restore only: true previews path/size changes without writing."),
         verify: flag01
           .optional()
-          .describe("restore: 1 verifies each blob before writing (default). mirror: 1 re-hashes blobs already at the mirror and re-copies bad ones (default 0)."),
+          .describe("restore: true (default) verifies each blob before writing. mirror: true re-hashes blobs already at the mirror and re-copies bad ones (default false)."),
         delete_extra: flag01
           .optional()
-          .describe("restore only: 1 also deletes files in captured dirs that are not in the checkpoint (max 500). Default 0; use only when intended."),
+          .describe("restore only: true also deletes files in captured dirs that are not in the checkpoint (max 500). Default false; use only when intended."),
         limit: z.number().int().min(1).max(100).optional().describe("list only: max checkpoints to return (default 20)."),
         reason: reason_,
       }),

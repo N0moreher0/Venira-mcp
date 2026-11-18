@@ -3,11 +3,11 @@
  *
  * Pins:
  *   1. Default (no flag): a missing path rejects with [not_found] (unchanged behavior).
- *   2. missing_ok=1: missing path answers ok with data.exists:false; existing path answers as before plus exists:true.
+ *   2. missing_ok=true: missing path answers ok with data.exists:false; existing path answers as before plus exists:true.
  *   3. A directory answers like a file (exists:true, kind=directory).
  *   4. Errors other than [not_found] (e.g. path_escape) are NOT swallowed by the flag.
- *   5. read_batch: an item with missing_ok=1 on a missing path is ok; a mixed batch (exists + missing) answers ok:true.
- *   6. The cache does not leak: after a missing_ok=1 probe, a default call on the same path still rejects with [not_found].
+ *   5. read_batch: an item with missing_ok=true on a missing path is ok; a mixed batch (exists + missing) answers ok:true.
+ *   6. The cache does not leak: after a missing_ok=true probe, a default call on the same path still rejects with [not_found].
  *
  * Run with: npm run test:file-info-missing-ok
  */
@@ -82,14 +82,14 @@ try {
     await assert.rejects(() => executeCached("get_file_info", { relative_path: "nope.txt" }), /^Error: \[not_found\]/);
   });
 
-  await check("missing_ok=1 on a missing path answers ok with exists:false", async () => {
+  await check("missing_ok=true on a missing path answers ok with exists:false", async () => {
     const { response } = await executeCached("get_file_info", { relative_path: "nope.txt", missing_ok: 1 });
     const data = (response.result as any).data;
     assert.equal(data.exists, false);
     assert.equal(data.relative_path, "nope.txt");
   });
 
-  await check("missing_ok=1 on an existing file answers like before plus exists:true", async () => {
+  await check("missing_ok=true on an existing file answers like before plus exists:true", async () => {
     const { response } = await executeCached("get_file_info", { relative_path: "present.txt", missing_ok: true });
     const data = (response.result as any).data;
     assert.equal(data.exists, true);
@@ -97,21 +97,21 @@ try {
     assert.equal(typeof data.size_bytes, "number");
   });
 
-  await check("missing_ok=1 on a directory answers kind=directory with exists:true", async () => {
+  await check("missing_ok=true on a directory answers kind=directory with exists:true", async () => {
     const { response } = await executeCached("get_file_info", { relative_path: "subdir", missing_ok: 1 });
     const data = (response.result as any).data;
     assert.equal(data.exists, true);
     assert.equal(data.kind, "directory");
   });
 
-  await check("missing_ok=1 does not swallow non-[not_found] errors", async () => {
+  await check("missing_ok=true does not swallow non-[not_found] errors", async () => {
     await assert.rejects(
       () => executeCached("get_file_info", { relative_path: "../outside.txt", missing_ok: 1 }),
       /^Error: \[path_escape\]/,
     );
   });
 
-  await check("read_batch: missing item with missing_ok=1 is ok and a mixed batch answers ok:true", async () => {
+  await check("read_batch: missing item with missing_ok=true is ok and a mixed batch answers ok:true", async () => {
     const batchDeps = { execute: (op: string, args: any) => executeCached(op, args), maxBatchResponseBytes: 2 * 1024 * 1024 };
     const result: any = await runReadBatch(
       [
@@ -145,7 +145,7 @@ try {
     assert.equal(payload.data.responses[1].error.code, "not_found");
   });
 
-  await check("cache does not leak: default call after a missing_ok=1 probe still rejects with [not_found]", async () => {
+  await check("cache does not leak: default call after a missing_ok=true probe still rejects with [not_found]", async () => {
     // Fresh cache state for this path: the probe stores nothing, so the default call hits the backend again.
     const { response } = await executeCached("get_file_info", { relative_path: "nope.txt", missing_ok: 1 });
     assert.equal((response.result as any).data.exists, false);

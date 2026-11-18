@@ -6,7 +6,7 @@
  *   - unsafe targets are refused (inside/containing the store, inside the workspace, relative, missing root);
  *   - blobs first, then indexes, then project.json; idempotent and additive across checkpoints;
  *   - append-only: deleting a local checkpoint never deletes anything at the mirror;
- *   - bad copies never get their final name; `verify=1` repairs corruption at the mirror;
+ *   - bad copies never get their final name; `verify=true` repairs corruption at the mirror;
  *   - a corrupt local blob blocks its index (the mirror never holds an index without its blobs) and the next
  *     run resumes; a time-budget stop is `partial`, not an error;
  *   - config problems after `snapshot_create` are reported in `mirror{}` without failing the checkpoint;

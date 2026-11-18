@@ -148,7 +148,7 @@ export async function runSearch(
   );
 
   // 10a4. Literal query with regex metacharacters must not crash ranking;
-  // regex=1 with an invalid pattern must surface [invalid_request] instead of
+  // regex=true with an invalid pattern must surface [invalid_request] instead of
   // silently returning zero hits from the ripgrep fast path.
   const metaSearch = asEnvelope(
     await call("search", {

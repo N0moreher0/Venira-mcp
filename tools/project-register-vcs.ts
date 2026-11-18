@@ -48,7 +48,7 @@ export function registerVcsTools(server: McpServer, deps: VcsDeps): void {
         head: z.string().max(200).optional().describe("Source branch (default: the current branch)."),
         base: z.string().max(200).optional().describe("Target branch (default: the repository default branch)."),
         body: z.string().max(65_536).optional().describe("PR description (markdown); usually a summary + test plan."),
-        draft: flag01.optional().describe("1 opens as a draft PR; 0 opens as ready for review."),
+        draft: flag01.optional().describe("true opens as a draft PR; false opens as ready for review."),
         repo: repoArg,
         provider: providerArg,
         reason: reason_,
@@ -104,7 +104,7 @@ export function registerVcsTools(server: McpServer, deps: VcsDeps): void {
         method: z.enum(["merge", "squash", "rebase"]).optional().describe("Merge strategy (default: merge)."),
         commit_title: z.string().max(256).optional().describe("Title for the merge commit (squash/merge)."),
         commit_message: z.string().max(65_536).optional().describe("Merge commit body (title goes in commit_title)."),
-        delete_branch: flag01.optional().describe("1 deletes the head branch after a successful merge (same-repo only); 0 keeps it."),
+        delete_branch: flag01.optional().describe("true deletes the head branch after a successful merge (same-repo only); false keeps it."),
         repo: repoArg,
         provider: providerArg,
         reason: reason_,
@@ -322,7 +322,7 @@ export function registerVcsTools(server: McpServer, deps: VcsDeps): void {
         until: z.enum(["terminal", "any_change"]).optional().describe("Stop at a terminal state (default) or on the first state change."),
         timeout_s: z.number().min(1).max(110).optional().describe("Max wait in seconds (default 45, max 110; fractional ok). Values > ~55 s need a client request timeout > 60 s."),
         interval_s: z.number().min(2).max(15).optional().describe("Poll interval in seconds (default 5; min 2, max 15; fractional ok)."),
-        include_failure_tail: flag01.optional().describe("1 fetches the failing job/run log tail on failure (default); 0 skips it."),
+        include_failure_tail: flag01.optional().describe("true fetches the failing job/run log tail on failure (default); false skips it."),
         tail_lines: z.number().int().min(1).max(1000).optional().describe("Failure tail lines (default 80)."),
         repo: repoArg,
         provider: providerArg,
@@ -375,7 +375,7 @@ export function registerVcsTools(server: McpServer, deps: VcsDeps): void {
         { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
       ),
       inputSchema: {
-        action: z.enum(["get", "set", "list", "delete"]).default("list").describe("set stores a secret; get returns metadata only (plaintext needs reveal=1); list shows all stored secrets; delete removes one."),
+        action: z.enum(["get", "set", "list", "delete"]).default("list").describe("set stores a secret; get returns metadata only (plaintext needs reveal=true); list shows all stored secrets; delete removes one."),
         name: z
           .string()
           .max(64)

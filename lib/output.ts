@@ -106,7 +106,7 @@ function inferHint(kind: string, data: unknown): string | undefined {
     if (typeof data.hint === "string" && data.hint) return data.hint;
     const hits = Array.isArray(data.hits) ? data.hits : [];
     if (hits.length === 0) {
-      return "No matches. Broaden the search: drop glob/relative_path, set regex=0, or use kind=file_name.";
+      return "No matches. Broaden the search: drop glob/relative_path, set regex=false, or use kind=file_name.";
     }
     if (data.complete === false) {
       return "Search incomplete (see diagnostics). Narrow with relative_path/glob or raise limit (max 200).";
@@ -538,11 +538,11 @@ const DEFAULT_HINTS: Record<string, string> = {
   old_text_not_found:
     "The text to replace is not in the file. data.mismatch says the line, the first differing character and how many characters are off; data.context.text is three lines around the wrong spot (no line numbers) - copy it into old_text. The file was not changed.",
   old_text_ambiguous:
-    "old_text matches more than one place. Extend it with surrounding context, or set replace_all=1. The file was not changed.",
+    "old_text matches more than one place. Extend it with surrounding context, or set replace_all=true. The file was not changed.",
   stale_content:
     "The file changed since you read it. Read it again with read_file, rebuild the patch against the current content and send the new sha256 as expected_sha256. Never replay the same edit unchanged.",
   repeated_failure:
-    "This exact invocation already failed in this session. Read data.previous.stderr_tail, fix the cause, then change the command or its inputs. Pass retry_failed=1 only for a deliberate rerun of the identical command.",
+    "This exact invocation already failed in this session. Read data.previous.stderr_tail, fix the cause, then change the command or its inputs. Pass retry_failed=true only for a deliberate rerun of the identical command.",
   batch_failed: "Check data.atomic for rollback state, fix the failed item, resubmit the rest.",
   batch_partial_failure: "Fix or drop the failed items in data.responses, retry only those.",
   config_invalid: "Fix the named VENIRA_* setting or config value and restart; do not retry unchanged.",
@@ -553,6 +553,7 @@ const DEFAULT_HINTS: Record<string, string> = {
   shell_unavailable:
     "The shell binary is not installed or not on PATH; nothing ran. Follow error.message to install it or pick another shell; do not retry unchanged.",
   snapshot_corrupt: "Snapshot is damaged; pick another id from snapshot action=list.",
+  snapshot_unsafe_path: "Snapshot lists a path outside the workspace and is not restored; pick another id, or snapshot action=delete removes it.",
   snapshot_version_unsupported: "Snapshot format not supported by this version; use a newer snapshot or upgrade.",
   mirror_conflict: "Snapshot mirror differs from primary; change nothing and check health.",
   secret_missing: "No such secret; see secret action=list or create it with action=set.",
@@ -575,7 +576,7 @@ const DEFAULT_HINTS: Record<string, string> = {
   repo_unresolved: 'Pass repo as "owner/name" or set VENIRA_GIT_REPO.',
   detached_head: "No current branch (detached HEAD); pass an explicit ref/head.",
   already_exists: "Already exists; update the existing one instead.",
-  already_configured: "Credential already set; use replace_existing=1 only if the user wants to replace it.",
+  already_configured: "Credential already set; use replace_existing=true only if the user wants to replace it.",
 };
 
 function classify(raw: string): string {
@@ -591,6 +592,7 @@ const DEFAULT_NEXT_ACTIONS: Record<string, unknown[]> = {
   not_found: [{ tool: "list_files", arguments: { relative_path: "." }, why: "locate the correct path" }],
   path_escape: [{ tool: "list_files", arguments: { relative_path: "." }, why: "stay inside the workspace" }],
   snapshot_corrupt: [{ tool: "snapshot", arguments: { action: "list" }, why: "pick another checkpoint" }],
+  snapshot_unsafe_path: [{ tool: "snapshot", arguments: { action: "list" }, why: "pick another checkpoint" }],
   secret_missing: [{ tool: "secret", arguments: { action: "list" }, why: "see stored names" }],
 };
 
@@ -653,7 +655,7 @@ const TOOL_RECOVERY: Record<string, Record<string, { hint?: string; next_actions
   },
   write_file: {
     not_found: {
-      hint: "No such file. Check the path with list_files, or pass create_dirs=1 to create the parent directory.",
+      hint: "No such file. Check the path with list_files, or pass create_dirs=true to create the parent directory.",
     },
   },
   edit_file: {
@@ -714,7 +716,7 @@ const INVALID_REQUEST_HINTS: Array<[RegExp, string]> = [
   [/harness must be one of/i, "See detect_harnesses for valid names."],
   [/No edits provided/i, "Pass old_text+new_text, or edits[] of { old_text, new_text }."],
   [/old_text must be a non-empty/i, "old_text is the exact text to replace; to replace a whole file use write_file."],
-  [/Directory requires recursive=1/i, "Set recursive=1 only after a scoped snapshot of it."],
+  [/Directory requires recursive=true/i, "Set recursive=true only after a scoped snapshot of it."],
   [/`command` must be a non-empty/i, "Pass command as the shell command line."],
   [/override must be/i, "override: ALLOW_ENV_READ (operator-enabled), plus reason."],
   [/reason of at most 400/i, "Add reason (one line, max 400 chars)."],
@@ -773,7 +775,7 @@ export function parseToolError(error: unknown): Failure & { data?: unknown } {
     body = body.slice(0, hintAt).trim();
   }
   if (!hint && code === "not_found" && /^Unknown run_id/i.test(body)) hint = "Run ids only live for this session; start the command again with shell_run.";
-  if (!hint && code === "invalid_request" && /^Invalid regex/i.test(body)) hint = "Fix the pattern, or set regex=0 to search it as literal text.";
+  if (!hint && code === "invalid_request" && /^Invalid regex/i.test(body)) hint = "Fix the pattern, or set regex=false to search it as literal text.";
   if (!hint && code === "invalid_request") hint = invalidRequestHint(body);
   if (!hint) hint = DEFAULT_HINTS[code] ?? GENERIC_HINT;
   const message = body || raw;

@@ -174,7 +174,7 @@ export function evaluateConfigPosture(input: ConfigPostureInput): ConfigPosture 
       id: "secret.reveal_enabled",
       severity: "warning",
       summary: "Secret plaintext reveal is enabled.",
-      detail: "`secret reveal=1` can print a stored secret value into the transcript (VENIRA_SHELL_MODE=permissive or off).",
+      detail: "`secret reveal=true` can print a stored secret value into the transcript (VENIRA_SHELL_MODE=permissive or off).",
       recommendation: "Keep reveal off and inject secrets through `secret_env` instead.",
     });
   }

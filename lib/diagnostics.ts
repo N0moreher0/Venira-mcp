@@ -180,7 +180,7 @@ const RULES: Rule[] = [
     fix: [
       "Read data.previous.stderr_tail: it is the failure you would have reproduced.",
       "Fix the cause, then change the command or its inputs - a different command, shell, cwd or input is a different invocation and runs normally.",
-      "Pass retry_failed=1 only when you deliberately want the identical command to run again after reading the previous error.",
+      "Pass retry_failed=true only when you deliberately want the identical command to run again after reading the previous error.",
     ],
     retry: "Do not rerun the identical command unchanged.",
   },

@@ -241,8 +241,16 @@ function validateManifest(value: unknown, expectedId: string): SnapshotManifest 
     throw new Error("[snapshot_corrupt] Checkpoint manifest has an invalid header.");
   }
   for (const file of manifest.files) {
+    // A path that leaves the workspace is its own failure: the index is well-formed, but restoring it would write
+    // outside the root (older builds allowed extra roots), so it is neither restorable nor plain "corrupt".
+    if (file && typeof file === "object" && typeof file.path === "string" &&
+        (path.isAbsolute(file.path) || file.path.split(/[\\/]/).includes(".."))) {
+      throw new Error(
+        `[snapshot_unsafe_path] Checkpoint manifest lists a path outside the workspace: '${file.path.slice(0, 200)}'. ` +
+          "It will not be restored. Hint: snapshot action=delete with this id removes it when its header names this workspace.",
+      );
+    }
     if (!file || typeof file !== "object" || typeof file.path !== "string" ||
-        path.isAbsolute(file.path) || file.path.split(/[\\/]/).includes("..") ||
         !/^[a-f0-9]{64}$/i.test(file.sha256) ||
         !Number.isSafeInteger(file.size) || file.size < 0 ||
         !Number.isFinite(file.mtime_ms)) {
@@ -299,9 +307,32 @@ export async function readManifest(id: string): Promise<SnapshotManifest> {
     return validateManifest(migrateManifest(JSON.parse(json)), id);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    // Keep the specific code: a newer/unmigratable manifest is not a corrupt one.
-    if (message.startsWith("[snapshot_version_unsupported]")) throw new Error(message);
+    // Keep the specific code: a newer/unmigratable manifest is not a corrupt one, and an unsafe path is not either.
+    if (message.startsWith("[snapshot_version_unsupported]") || message.startsWith("[snapshot_unsafe_path]")) throw new Error(message);
     throw new Error(`[snapshot_corrupt] Cannot read checkpoint '${id}' manifest: ${message}`);
+  }
+}
+
+/**
+ * Lenient header read for an index that `readManifest` rejects: only the workspace and label, no validation of
+ * the file entries. Used to decide who owns an unreadable checkpoint before it is deleted. Returns null when the
+ * bytes are not a gzip'd JSON object with a string `workspace` and the expected id (truly broken: ownership
+ * cannot be shown).
+ */
+export async function readManifestOwner(id: string): Promise<{ workspace: string; label?: string; version?: number } | null> {
+  try {
+    const raw = await fs.readFile(indexPath(id));
+    const parsed: unknown = JSON.parse(gunzipSync(raw, { maxOutputLength: 64 * 1024 * 1024 }).toString("utf8"));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    const head = parsed as { workspace?: unknown; label?: unknown; version?: unknown; id?: unknown };
+    if (typeof head.workspace !== "string" || !head.workspace || head.id !== id) return null;
+    return {
+      workspace: head.workspace,
+      label: typeof head.label === "string" ? head.label : undefined,
+      version: typeof head.version === "number" ? head.version : undefined,
+    };
+  } catch {
+    return null;
   }
 }
 
@@ -317,7 +348,7 @@ export async function writeManifest(manifest: SnapshotManifest): Promise<void> {
 
 export type UnreadableManifest = {
   id: string;
-  code: "snapshot_corrupt" | "snapshot_version_unsupported";
+  code: "snapshot_corrupt" | "snapshot_version_unsupported" | "snapshot_unsafe_path";
   message: string;
 };
 
@@ -345,11 +376,10 @@ export async function listManifestsDetailed(): Promise<{ manifests: SnapshotMani
     } catch (error) {
       // a bad manifest must not hide the other checkpoints, but it must not vanish silently either
       const message = error instanceof Error ? error.message : String(error);
-      unreadable.push({
-        id,
-        code: message.startsWith("[snapshot_version_unsupported]") ? "snapshot_version_unsupported" : "snapshot_corrupt",
-        message,
-      });
+      const code = message.startsWith("[snapshot_version_unsupported]")
+        ? "snapshot_version_unsupported"
+        : message.startsWith("[snapshot_unsafe_path]") ? "snapshot_unsafe_path" : "snapshot_corrupt";
+      unreadable.push({ id, code, message });
     }
   }
   manifests.sort((a, b) => b.created_at - a.created_at);

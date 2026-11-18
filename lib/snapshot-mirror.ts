@@ -13,7 +13,7 @@
  *     are all present, then `project.json`, so the mirror never holds an index whose blobs are absent.
  *   - Every copied byte is checked before it gets its final name (blob: sha256 equals its file name;
  *     index/meta: bytes equal the source). A bad copy is removed and reported, never kept.
- *   - Append-only: nothing in the mirror is ever deleted. The single overwrite is `verify=1` replacing a
+ *   - Append-only: nothing in the mirror is ever deleted. The single overwrite is `verify=true` replacing a
  *     blob/index that no longer matches its source (repair). Pruning the mirror is a manual decision.
  *   - Best-effort and bounded: it stops between files once the time budget is spent (`partial`); the next
  *     run resumes because it only copies what is still missing.

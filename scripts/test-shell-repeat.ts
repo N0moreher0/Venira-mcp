@@ -8,7 +8,7 @@
  *      `repeated_failure` and carries the previous exit code and stderr tail.
  *   2. The refused command really did not run (its side effect is missing).
  *   3. A changed command, a changed cwd or another session runs normally.
- *   4. `retry_failed=1` is the deliberate way to run the identical command
+ *   4. `retry_failed=true` is the deliberate way to run the identical command
  *      again, and it really runs.
  *   5. A success clears the memory, so a later failure is a new failure.
  *   6. The store keeps names and hashes only: no command text, no secret value.
@@ -134,7 +134,7 @@ await check("a changed command runs normally", async () => {
   assert.equal(second.ok, true, "a different command is a different invocation");
 });
 
-await check("retry_failed=1 runs the identical command again", async () => {
+await check("retry_failed=true runs the identical command again", async () => {
   await reset();
   await attempt(failing);
   await writeFile(marker, "SENTINEL\n", "utf8");

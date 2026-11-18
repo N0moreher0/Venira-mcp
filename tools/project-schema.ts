@@ -9,28 +9,35 @@ import { parseBackgroundFlag } from "../lib/env.js";
 export const PATH_DESC = "Workspace-relative ('.' = root); absolute/.. outside it rejected.";
 export const path_ = z.string().describe(PATH_DESC);
 /**
- * Boolean convention (item 16): tool flags are integer 0|1 in the published
- * JSON Schema (`.meta()` keeps tools/list integer), but the parser also
- * accepts `true`/`false` — LLMs are trained on booleans and would otherwise
- * send `true` and get a validation error back.
+ * Boolean convention (item 20): tool flags are advertised as a bare JSON Schema `{ "type": "boolean" }` and the
+ * descriptions say true/false. The base is `z.unknown()` on purpose: `.meta()` only adds keys on top of what zod
+ * derives from the input side, so a `z.union([boolean, integer 0|1])` input kept an `anyOf` with the integer
+ * branch in `tools/list` (~70 B per flag) even with `type: "boolean"` set. The transform still accepts
+ * `true`/`false` and the integers `1`/`0` that older prompts and cached clients send, and refuses anything else
+ * with a validation error, like the union did.
  */
 export const flag01 = z
-  .union([z.boolean(), z.number().int().min(0).max(1)])
-  .transform((value) => value === true || value === 1)
-  .meta({ type: "integer", minimum: 0, maximum: 1 });
+  .unknown()
+  .transform((value, ctx) => {
+    if (value === true || value === 1) return true;
+    if (value === false || value === 0) return false;
+    ctx.issues.push({ code: "custom", message: "Invalid input: expected true or false", input: value });
+    return z.NEVER;
+  })
+  .meta({ type: "boolean" });
 /**
- * `shell_run.background` is advertised as the integer 0|1 like every other flag (ROADMAP_TOOL_SCHEMA.md,
- * phase 4), but the value is still normalised from the older shapes a cached client may send: `true`/`false`,
- * `"1"`/`"0"`, `"true"`/`"False"`. `.meta()` overrides only the JSON Schema, so `tools/list` stays integer
- * while `safeParse` keeps a permissive input; never advertise a union here again.
+ * `shell_run.background` is advertised as a boolean like every other flag (item 20), but the value is still
+ * normalised from the older shapes a cached client may send: `1`/`0`, `"1"`/`"0"`, `"true"`/`"False"`.
+ * `.meta()` overrides only the JSON Schema, so `tools/list` stays boolean while `safeParse` keeps a permissive
+ * input.
  */
 export const backgroundFlag = z
   .unknown()
   .transform((value) => parseBackgroundFlag(value))
-  .meta({ type: "integer", minimum: 0, maximum: 1 })
+  .meta({ type: "boolean" })
   .describe(
-    "1 = background (default): return immediately with run_id. " +
-      "0 = foreground: block until the command exits, then return the final stdout/stderr in this call.",
+    "true = background (default): return immediately with run_id. " +
+      "false = foreground: block until the command exits, then return the final stdout/stderr in this call.",
   );
 /**
  * `reason` rule (item 16): optional on every tool, audit-logged when provided.
@@ -54,7 +61,7 @@ export const lineNo = z.number().int().meta({ minimum: 1 });
 export const editOp = z.object({
   old_text: z.string().min(1).describe("Exact text to replace."),
   new_text: z.string().describe("Replacement text."),
-  replace_all: flag01.describe("1 replaces every match; 0 (default) requires exactly one match."),
+  replace_all: flag01.describe("true replaces every match; false (default) requires exactly one match."),
 });
 
 /**
@@ -68,8 +75,8 @@ export function editFuzzyShape(enabled: boolean) {
   if (!enabled) return {};
   return {
     fuzzy_distance: z.number().int().min(0).max(10).optional().describe("Max edit distance when old_text has no exact match (default 3)."),
-    ignore_indentation: flag01.optional().describe("1 = fuzzy match ignores leading whitespace."),
-    case_insensitive: flag01.optional().describe("1 = fuzzy match ignores case."),
+    ignore_indentation: flag01.optional().describe("true = fuzzy match ignores leading whitespace."),
+    case_insensitive: flag01.optional().describe("true = fuzzy match ignores case."),
   };
 }
 
@@ -87,7 +94,7 @@ export function editBatchItemFor(fuzzy: boolean) {
     relative_path: path_.describe("File to edit (required per item)."),
     old_text: z.string().min(1).optional().describe("Exact text to replace (see edit_file)."),
     new_text: z.string().optional().describe("Replacement text (see edit_file)."),
-    replace_all: flag01.optional().describe("1 replaces every match; 0 (default) requires exactly one match."),
+    replace_all: flag01.optional().describe("true replaces every match; false (default) requires exactly one match."),
     edits: z.array(editOp).max(64).optional().describe("Several replacements in this file; wins over old_text/new_text."),
     expected_sha256: z.string().optional().describe("Hex SHA-256 of the current full content; edit refused if it differs; when given, the result also reports verified."),
     ...editFuzzyShape(fuzzy),
@@ -106,7 +113,7 @@ export function editBatchItemFor(fuzzy: boolean) {
  */
 export const readBatchListFilesArgs = z.looseObject({
   relative_path: path_.optional(),
-  include_ignored: flag01.optional().describe("1 also lists ignored folders (default 0)."),
+  include_ignored: flag01.optional().describe("true also lists ignored folders (default false)."),
   limit: z.number().int().min(1).max(200).optional().describe("Max entries (default 200, max 200)."),
   depth: z.number().int().min(1).max(3).optional().describe("Tree depth (default 1, max 3)."),
 });
@@ -114,13 +121,13 @@ export const readBatchReadFileArgs = z.looseObject({
   relative_path: path_.optional().describe("Required (optional here so one bad item fails only itself)."),
   start_line: z.number().int().min(1).optional().describe("First line (1-based)."),
   end_line: z.number().int().min(1).optional().describe("Last line (1-based)."),
-  line_numbers: flag01.optional().describe("1 prefixes lines (default 0)."),
+  line_numbers: flag01.optional().describe("true prefixes lines (default false)."),
   max_bytes: z.number().int().min(1).max(1_048_576).optional().describe("Max bytes returned (default 1 MiB)."),
   ranges: z.array(z.object({ start_line: z.number().int().min(1).describe("First line (1-based)."), end_line: z.number().int().min(1).optional().describe("Last line (1-based)."), max_bytes: z.number().int().min(1).optional().describe("Max bytes for this range.") })).min(1).max(16).optional().describe("Disjoint ranges (max 16)."),
 });
 export const readBatchGetFileInfoArgs = z.looseObject({
   relative_path: path_.optional().describe("Required (optional here so one bad item fails only itself)."),
-  missing_ok: flag01.optional().describe("1 = answer ok with exists:false for a missing path instead of not_found (default 0)."),
+  missing_ok: flag01.optional().describe("true = answer ok with exists:false for a missing path instead of not_found (default false)."),
 });
 export const readBatchSearchArgs = z.looseObject({
   query: z.string().optional().describe("Required; see kind."),
@@ -128,14 +135,14 @@ export const readBatchSearchArgs = z.looseObject({
   relative_path: path_.optional(),
   glob: z.string().optional().describe("rg glob filter ('*.ts' = any depth)."),
   exclude_glob: z.string().optional().describe("rg glob exclusion (same dialect as glob)."),
-  regex: flag01.optional().describe("1 = regex query (default 0)."),
-  case_sensitive: flag01.optional().describe("1 = case-sensitive (default 0)."),
-  whole_word: flag01.optional().describe("1 = whole-word only (default 0)."),
-  include_hidden: flag01.optional().describe("1 includes dotfiles (default); 0 skips them."),
+  regex: flag01.optional().describe("true = regex query (default false)."),
+  case_sensitive: flag01.optional().describe("true = case-sensitive (default false)."),
+  whole_word: flag01.optional().describe("true = whole-word only (default false)."),
+  include_hidden: flag01.optional().describe("true includes dotfiles (default); false skips them."),
   context_lines: z.number().int().min(0).max(20).optional().describe("Context lines per hit (default 0)."),
-  count_only: flag01.optional().describe("1 = counts only (default 0)."),
-  limit: z.number().int().min(1).max(200).optional().describe("Max hits (ignored when count_only=1)."),
-  hybrid: flag01.optional().describe("1 tags hits with source (default 0)."),
+  count_only: flag01.optional().describe("true = counts only (default false)."),
+  limit: z.number().int().min(1).max(200).optional().describe("Max hits (ignored when count_only=true)."),
+  hybrid: flag01.optional().describe("true tags hits with source (default false)."),
 });
 
 /**

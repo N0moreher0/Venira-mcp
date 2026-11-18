@@ -46,7 +46,7 @@ function isNotFoundError(error: unknown): boolean {
   return error instanceof Error && error.message.startsWith("[not_found]");
 }
 
-/** Copy of `response` with `exists` set on its data payload (used when `missing_ok=1`). */
+/** Copy of `response` with `exists` set on its data payload (used when `missing_ok=true`). */
 function withExists(response: RustResponse, exists: boolean): RustResponse {
   const result = response.result;
   const data = result && typeof result === "object" ? result.data : undefined;

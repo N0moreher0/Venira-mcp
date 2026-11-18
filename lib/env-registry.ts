@@ -245,7 +245,7 @@ export const ENV_REGISTRY: readonly EnvVarSpec[] = [
   removed(
     "VENIRA_SECRET_ALLOW_REVEAL",
     "flag",
-    "Allow `secret reveal=1` to print a stored secret (removed; merged into VENIRA_SHELL_MODE).",
+    "Allow `secret reveal=true` to print a stored secret (removed; merged into VENIRA_SHELL_MODE).",
     "nothing to set: secrets may be revealed only in VENIRA_SHELL_MODE=permissive or off; strict and balanced refuse.",
   ),
   removed(

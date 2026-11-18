@@ -3,11 +3,11 @@
  *
  * Pins:
  *   1. move: rename, move into a new directory (create_dirs defaults to 1), directories keep their contents.
- *   2. move/copy refuse an existing target without overwrite=1, and leave both sides untouched.
- *   3. overwrite=1 replaces a file with a file, never a directory.
+ *   2. move/copy refuse an existing target without overwrite=true, and leave both sides untouched.
+ *   3. overwrite=true replaces a file with a file, never a directory.
  *   4. A directory cannot be moved or copied into itself; the workspace root cannot be the source.
- *   5. Missing source -> [not_found]; from == to -> [invalid_request]; create_dirs=0 with a missing parent -> [invalid_request].
- *   6. copy: a directory needs recursive=1, the source stays, entries/bytes are reported, symbolic links are skipped.
+ *   5. Missing source -> [not_found]; from == to -> [invalid_request]; create_dirs=false with a missing parent -> [invalid_request].
+ *   6. copy: a directory needs recursive=true, the source stays, entries/bytes are reported, symbolic links are skipped.
  *
  * Run with: npm run test:move-copy
  */
@@ -142,7 +142,7 @@ try {
     assert.equal(read("out/k2.txt"), "kappa");
   });
 
-  await check("copying a directory needs recursive=1", async () => {
+  await check("copying a directory needs recursive=true", async () => {
     write("tree/a.txt", "a");
     write("tree/sub/b.txt", "bb");
     await assert.rejects(() => opCopyPath({ from: "tree", to: "tree2" }, root), /^Error: \[invalid_request\].*recursive/);

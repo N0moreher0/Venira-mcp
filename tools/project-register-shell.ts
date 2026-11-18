@@ -5,7 +5,7 @@ import type { ToolResult } from "../lib/output.js";
 import { WORKSPACE } from "../lib/workspace.js";
 import type { Args } from "./project-cache.js";
 import { runShell, type ShellDeps } from "./project-shell.js";
-import { backgroundFlag, config } from "./project-schema.js";
+import { backgroundFlag, config, flag01 } from "./project-schema.js";
 
 // Shell tool registrations: shell_run, shell_status, shell_cancel.
 // Extracted from registerProjectTools in tools/project.ts (roadmap item 6, step 5k). Schemas, descriptions
@@ -27,8 +27,8 @@ export function registerShellTools(server: McpServer, deps: ShellToolsDeps): voi
         "Shell run",
         {
           speed_profile:
-            "background=1 returns in ~5 ms, run time is up to the command; " +
-            "background=0 blocks for the whole run (bounded by timeout_s, default 10 min).",
+            "background=true returns in ~5 ms, run time is up to the command; " +
+            "background=false blocks for the whole run (bounded by timeout_s, default 10 min).",
           batch_safe: false,
         },
         { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
@@ -62,21 +62,13 @@ export function registerShellTools(server: McpServer, deps: ShellToolsDeps): voi
           .max(APPROVAL_WAIT_MAX_S)
           .optional()
           .describe("If approval is needed, wait up to this many seconds (max 45; fractional ok) for the human, then run in the same call."),
-        dry_run: z
-          .number()
-          .int()
-          .min(0)
-          .max(1)
+        dry_run: flag01
           .optional()
-          .describe("1 = evaluate policy only; nothing runs, no approval is created (default 0)."),
-        retry_failed: z
-          .number()
-          .int()
-          .min(0)
-          .max(1)
+          .describe("true = evaluate policy only; nothing runs, no approval is created (default false)."),
+        retry_failed: flag01
           .optional()
           .describe(
-            "1 = rerun an identical invocation that already failed (default 0: refused with repeated_failure and the previous stderr tail).",
+            "true = rerun an identical invocation that already failed (default false: refused with repeated_failure and the previous stderr tail).",
           ),
         override: z
           .enum(["ALLOW_ENV_READ"])

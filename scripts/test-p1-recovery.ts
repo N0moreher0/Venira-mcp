@@ -156,12 +156,12 @@ await check("a missing parent directory is an invalid_request, not a transient e
     );
   assert.ok(error, "the write must be refused");
   assert.match(error?.message ?? "", /^\[invalid_request\]/);
-  assert.match(error?.message ?? "", /create_dirs=1/);
+  assert.match(error?.message ?? "", /create_dirs=true/);
   assert.equal((error?.message ?? "").includes(".venira-tmp"), false, "no temporary file name");
   assert.equal((error?.message ?? "").includes("may be locked"), false, "no transient-error hint");
 });
 
-await check("create_dirs=1 creates the parent directory", async () => {
+await check("create_dirs=true creates the parent directory", async () => {
   const data = (
     await filewrite.opWriteFile(
       { relative_path: "new-dir/file.txt", content: "x", create_dirs: true, mode: "create" },

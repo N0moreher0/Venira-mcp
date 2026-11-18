@@ -277,7 +277,8 @@ export async function runEditBatch(args: Args, deps: BatchDeps): Promise<ToolRes
   let rollbackError: string | undefined;
   if (distinctPaths.length > 0) {
     try {
-      const snap = await deps.execute("snapshot_create", { action: "create", paths: distinctPaths, label: "edit_batch", reason: "edit_batch" });
+      const batchLabel = `edit_batch: ${distinctPaths.slice(0, 3).join(", ")}${distinctPaths.length > 3 ? ` +${distinctPaths.length - 3} more` : ""}`;
+      const snap = await deps.execute("snapshot_create", { action: "create", paths: distinctPaths, label: batchLabel, reason: "edit_batch" });
       const snapshotData = snap.response?.result?.data as
         | { id?: unknown; file_count?: unknown; truncated?: unknown; skipped?: unknown }
         | undefined;
@@ -418,7 +419,7 @@ export async function runEditBatch(args: Args, deps: BatchDeps): Promise<ToolRes
     : rollbackSucceeded
       ? { ...base, message: `edits[${failedIndex}] failed; every file was restored from snapshot ${snapshotId}. Nothing changed.`, hint: `Fix edits[${failedIndex}] (see data.responses) and resend the whole batch.` }
       : rollbackAttempted
-        ? { ...base, message: `edits[${failedIndex}] failed and the rollback FAILED; files may be partly edited.`, hint: `Run snapshot action=restore id=${snapshotId} verify=1 now, then re-read the files.` }
+        ? { ...base, message: `edits[${failedIndex}] failed and the rollback FAILED; files may be partly edited.`, hint: `Run snapshot action=restore id=${snapshotId} verify=true now, then re-read the files.` }
         : { ...base, message: `edits[${failedIndex}] failed and rollback was not verified; files may still contain edits from data.executed or the failing item.`, hint: snapshotId ? "Inspect data.rollback_error and data.snapshot_error, then restore the checkpoint or re-read and repair the touched files." : "Re-read the touched files; finish or undo the applied edits by hand." };
   return toolResult(
     batchEnvelope(requestId, responses, elapsedMs, batchExtra, failure ? { kind: "edit_batch", failure } : { kind: "edit_batch" }),

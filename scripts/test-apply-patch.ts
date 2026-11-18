@@ -4,7 +4,7 @@
  * Pins:
  *   1. A hunk applies; the file reports the action and the totals add up.
  *   2. CRLF files keep CRLF line endings; a CRLF patch applies to an LF file.
- *   3. dry_run=1 validates, reports the files and writes nothing (no files, no directories).
+ *   3. dry_run=true validates, reports the files and writes nothing (no files, no directories).
  *   4. Created files (incl. into missing parent dirs), deleted files, pure renames and renames with hunks.
  *   5. Multi-file patch: one failing hunk changes NOTHING (validation happens before any write).
  *   6. expected_sha256: correct hash applies, wrong hash is stale_content, unknown keys are invalid_request.
@@ -93,7 +93,7 @@ try {
     assert.equal(read("crlf-patch/a.txt"), "one\nTWO\nthree\n");
   });
 
-  await check("dry_run=1 writes nothing and creates no directories", async () => {
+  await check("dry_run=true writes nothing and creates no directories", async () => {
     write("dry/a.txt", "one\ntwo\nthree\n");
     const d = data(await opApplyPatch({ patch: createFile("dry/new-dir/out.txt", ["seed"]), dry_run: 1 }, root));
     assert.equal(d.dry_run, true);
