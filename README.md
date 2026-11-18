@@ -1,7 +1,7 @@
 # venira-mcp
 
 Fast, workspace-scoped MCP server for coding agents (OpenCode, Claude Desktop, any MCP client).
-Three tool modes — **Core** (18 tools: shell, `execute_js`, read/search/list, edit, snapshot, git — for small models) · **Default** (39 coding tools + shell, no CI/CD) · **Expert** (52 tools: default + CI/CD). `VENIRA_JS_EXEC_MODE=off` hides `execute_js` in every mode (52 → 51, 39 → 38, 18 → 17); otherwise it is registered and approval-gated. `VENIRA_SETUP_TOOLS=1` adds the two setup tools `detect_harnesses` and `install_self` (+2); `npx venira-mcp --install` and `--print-config` do the same from a terminal.
+Three tool modes — **Core** (23 tools: shell, `execute_js`, read/search/list, edit/create/move, snapshot, git, memory — for small models) · **Default** (39 coding tools + shell, no CI/CD) · **Expert** (52 tools: default + CI/CD). `VENIRA_JS_EXEC_MODE=off` hides `execute_js` in every mode (52 → 51, 39 → 38, 23 → 22); otherwise it is registered and approval-gated. `VENIRA_SETUP_TOOLS=1` adds the two setup tools `detect_harnesses` and `install_self` (+2); `npx venira-mcp --install` and `--print-config` do the same from a terminal.
 Pure Node, 1 native dependency (better-sqlite3), no GUI, no external binary.
 
 > **Security scope.** Venira is a guard rail with an audit trail, not a sandbox. It runs with the privileges of the OS user that started it. The workspace lock limits the paths the file tools can touch (unless `VENIRA_UNRESTRICTED=1`), not what a shell command does: commands are classified by rules (allow / ask / deny) and every call is audited, but a malicious prompt can still steer the agent into running a harmful command that the active profile lets through (with `off`, every command runs). Anything running as the same OS user can read the keys in `VENIRA_DATA_DIR`. For untrusted workspaces, or whenever you need a real isolation boundary, run Venira in a container or VM. Details: [`SECURITY.md`](./SECURITY.md).
@@ -233,7 +233,7 @@ Three tool modes set which tools the client sees. Set via `VENIRA_TOOL_MODE` env
 
 | Mode | Tools | Includes |
 |---|---|---|
-| `core` | **18** | Allowlist: `shell_run`, `shell_status`, `shell_cancel`, `execute_js`, `read_file`, `search`, `list_files`, `edit_file`, `edit_batch`, `write_file`, `delete_path`, `snapshot`, `git_status`, `git_diff`, `git_log`, `git_branch`, `git_commit`, `git_stash` |
+| `core` | **23** | Allowlist: `shell_run`, `shell_status`, `shell_cancel`, `execute_js`, `read_file`, `search`, `list_files`, `recent_files`, `outline_symbol`, `edit_file`, `edit_batch`, `write_file`, `delete_path`, `create`, `move_path`, `snapshot`, `git_status`, `git_diff`, `git_log`, `git_branch`, `git_commit`, `git_stash`, `memory` |
 | `default` | **39** | Read/write/edit/search, code intel, snapshots, shell, `delete_path`, `execute_js` — **no** CI/CD; `explain_error` and `plan_read_batch` are expert-only |
 | `expert` | **52** | Everything in default + `pr_*`, `ci_*`, `explain_error`, `plan_read_batch` |
 
@@ -373,7 +373,7 @@ Full reference: the source reads 80+ distinct supported `VENIRA_*` names; this t
 | Variable | Default | What it does |
 |---|---|---|
 | `VENIRA_WORKSPACE` | `process.cwd()` | Workspace root; all paths resolve against it |
-| `VENIRA_TOOL_MODE` | `default` | `core` (18 tools) / `default` (39 tools) / `expert` (52 tools); +2 with `VENIRA_SETUP_TOOLS=1` (in every mode, `core` included) |
+| `VENIRA_TOOL_MODE` | `default` | `core` (23 tools) / `default` (39 tools) / `expert` (52 tools); +2 with `VENIRA_SETUP_TOOLS=1` (in every mode, `core` included) |
 | `VENIRA_OUTPUT_MODE` | `full` | `full` or `compact` (summarize/trim payloads > 8 KiB; generic payloads use `preview_text`) |
 | `VENIRA_AUDIT_DETAIL` | `summary` | What `read_audit` can show per job: `off` stores nothing extra, `summary` keeps one args line and one result line, `full` also keeps redacted JSON args/result (up to 16 KiB per job). Long or sensitive values (file content, `old_text`/`new_text`, secret values) are stored as a length only |
 | `VENIRA_UNRESTRICTED` | `"0"` | `"1"` disables workspace lock (never in production) |
