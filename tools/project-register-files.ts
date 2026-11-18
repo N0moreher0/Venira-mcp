@@ -139,7 +139,23 @@ export function registerFileTools(server: McpServer, deps: FileToolsDeps): void 
         { readOnlyHint: true, openWorldHint: false },
       ),
       inputSchema: {
-        query: z.string().optional().describe("What to find (meaning depends on kind). Required unless `queries`/`files_hint` is set."),
+        // 80% case lives above the fold: one substring + one folder. Everything below is fine-tuning.
+        query: z.string().optional().describe("What to find (plain substring by default; regex=true for regex). Almost every call only needs `query`."),
+        relative_path: path_.optional().describe("Directory (or one file) to scan. Defaults to the workspace root; narrow it for speed."),
+        kind: z.enum(["file_name", "directory_name", "literal_content", "definition"]).optional().describe("literal_content (default): lines containing the match. definition: symbol declarations only (function/class/const...). file_name/directory_name: name substring of files or folders."),
+        glob: z.string().optional().describe("rg glob filter ('*.ts' = any depth, 'tools/*.ts' = that dir)."),
+        exclude_glob: z.string().optional().describe("rg glob exclusion (same dialect as glob)."),
+        limit: z.number().int().min(1).max(200).optional().describe("Max hits returned (default and max 200; ignored when count_only=true)."),
+        regex: flag01.optional().describe("true treats query as a regular expression for literal_content/definition (default false = plain substring)."),
+        case_sensitive: flag01.optional().describe("true makes literal_content/definition matching case-sensitive (default true)."),
+        whole_word: flag01.optional().describe("true = whole-word match only (rg -w / JS word boundaries) for literal_content and definition."),
+        include_hidden: flag01.optional().describe("true = include hidden files (default); false = skip dotfiles. Secrets always excluded."),
+        invert: flag01.optional().describe("true returns lines WITHOUT the match (grep -v)."),
+        files_only: flag01.optional().describe("true returns only files with at least one match (grep -l) — no line content, no line numbers."),
+        context_lines: z.number().int().min(0).max(20).optional().describe("Context lines around each hit (default 0)."),
+        count_only: flag01.optional().describe("true returns only match counts; limit is then ignored. false (default) returns hits."),
+        // advanced: weighted multi-pattern ranking and the opt-in AI-tagged mode. 99% of calls don't need these.
+        hybrid: flag01.optional().describe("true = tag hits with source/confidence; literal_content only."),
         queries: z
           .array(
             z.object({
@@ -151,24 +167,12 @@ export function registerFileTools(server: McpServer, deps: FileToolsDeps): void 
           .min(1)
           .max(8)
           .optional()
-          .describe("Rank matching lines by several patterns: each matching pattern adds its weight to the line's score, and `must` patterns have to match. When set, `kind` and `query` are ignored and hits carry `score`/`matched`. Combine with `files_hint` to scan specific files."),
+          .describe("Advanced (rarely needed). Rank matching lines by several weighted patterns: each adds its weight, `must` patterns must all match. Overrides kind/query and hits carry `score`/`matched`. Combine with `files_hint` to scan specific files."),
         files_hint: z
           .array(z.string().max(300))
           .max(20)
           .optional()
-          .describe("Workspace paths to search when `queries` is set (first 20 are used). Omit to scan a shallow listing of `relative_path` instead."),
-        kind: z.enum(["file_name", "directory_name", "literal_content", "definition"]).optional().describe("name substring | content (substring, or regex when regex=true) | declaration lines. Required unless `queries`/`files_hint` is set."),
-        relative_path: path_.optional(),
-        glob: z.string().optional().describe("rg glob filter ('*.ts' = any depth, 'tools/*.ts' = that dir)."),
-        exclude_glob: z.string().optional().describe("rg glob exclusion (same dialect as glob)."),
-        regex: flag01.optional().describe("true treats query as a regular expression for literal_content/definition (default false = plain substring)."),
-        case_sensitive: flag01.optional().describe("true makes literal_content/definition matching case-sensitive (default false)."),
-        whole_word: flag01.optional().describe("true = whole-word match only (rg -w / JS word boundaries) for literal_content and definition."),
-        include_hidden: flag01.optional().describe("true = include hidden files (default); false = skip dotfiles. Secrets always excluded."),
-        context_lines: z.number().int().min(0).max(20).optional().describe("Context lines around each hit (default 0)."),
-        count_only: flag01.optional().describe("true returns only match counts; limit is then ignored. false (default) returns hits."),
-        limit: z.number().int().min(1).max(200).optional().describe("Max hits returned (default and max 200; ignored when count_only=true)."),
-        hybrid: flag01.optional().describe("true = tag hits with source/confidence; literal_content only."),
+          .describe("Advanced (rarely needed). Workspace paths to search when `queries` is set (first 20 are used). Omit to scan a shallow listing of `relative_path` instead."),
       },
     },
     (args) => {

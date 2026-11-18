@@ -205,6 +205,8 @@ export async function opSearch(
   const limit = Math.min(200, (args.limit as number | undefined) ?? 200);
   const contextLines = Math.min(20, (args.context_lines as number | undefined) ?? 0);
   const countOnly = args.count_only === true;
+  const invert = args.invert === true || args.invert === 1;
+  const filesOnly = args.files_only === true || args.files_only === 1;
 
   // Glob-to-regex with rg/gitignore semantics, matched against the workspace-relative path:
   //   *  = any characters except "/"      ?  = one character except "/"      [seq] = character class
@@ -243,6 +245,17 @@ export async function opSearch(
     ".git", "node_modules", "target", "dist", "build",
     ".next", ".venv", "__pycache__", ".cache", ".turbo", "coverage",
   ]);
+
+  /**
+   * Line split that drops the phantom trailing empty line produced by a final newline
+   * (rg does not count it; the JS scanner must not either, or over-counting/empty
+   * non-matching lines would leak into invert results and file line counts).
+   */
+  function splitLines(content: string): string[] {
+    const lines = content.split(/\r?\n/);
+    if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+    return lines;
+  }
 
   type Hit = {
     relative_path: string;
@@ -283,6 +296,9 @@ export async function opSearch(
         : "The scan was cut before any hit was found. Narrow relative_path/glob, or raise the limit (max 200).";
     }
     if (hits.length === 0) {
+      if (invert) {
+        return "invert=true matches lines WITHOUT the pattern — everything matched, or the scan was cut. Narrow with glob/relative_path, or drop invert.";
+      }
       return "No matches. Broaden the search: drop glob/relative_path, set regex=false, or use kind=file_name.";
     }
     if (!complete) {
@@ -351,8 +367,8 @@ export async function opSearch(
     for (const abs of files) {
       if (hits.length >= limit) { markCut("limit"); break; }
       const basename = path.basename(abs);
-      const match = caseSensitive ? basename.includes(query) : basename.toLowerCase().includes(needle);
-      if (!match) continue;
+      const matchRaw = caseSensitive ? basename.includes(query) : basename.toLowerCase().includes(needle);
+      if (invert ? matchRaw : !matchRaw) continue;
       if (kind === "file_name" && (await fs.stat(abs)).isDirectory()) continue;
       if (kind === "directory_name" && !(await fs.stat(abs)).isDirectory()) continue;
       const rel = relToRoot(abs, root);
@@ -362,6 +378,67 @@ export async function opSearch(
   } else {
     // literal_content, regex, definition — Phase 1 (bounded parallel
     // chunked reads) + Phase 2 (binary-ext + null-byte guards).
+    // files_only (grep -l): list files with >=1 matching line — no line content,
+    // paths only, alphabetically sorted (both backends agree), no total_match_lines.
+    if (envFlag("VENIRA_USE_RIPGREP", true) && kind === "literal_content" && !countOnly && filesOnly) {
+      if (await ripgrepInstalled()) {
+        try {
+          const argList = ["-l", "--max-filesize=1M", "--color=never", "--no-ignore", "--no-ignore-vcs"];
+          for (const ign of [".git", "node_modules", "target", "dist", "build", ".next", ".venv", "__pycache__", ".cache", ".turbo", "coverage"]) {
+            argList.push("--glob", `!**/${ign}/**`);
+          }
+          if (!caseSensitive) argList.push("-i");
+          if (wholeWord) argList.push("-w");
+          if (invert) argList.push("--invert-match");
+          if (includeHidden) argList.push("--hidden");
+          if (args.regex === true) argList.push("-e", String(query));
+          else argList.push("-F", "-e", String(query));
+          if (glob && !String(glob).includes("/")) argList.push("--glob", String(glob));
+          if (excludeGlob && !String(excludeGlob).includes("/")) argList.push("--glob", `!${excludeGlob}`);
+          if (!includeHidden) { argList.push("--glob", "!**/.*"); argList.push("--glob", "!**/.*/**"); }
+          argList.push(searchRoot);
+          const resp = await ripgrepExec(argList, 10000);
+          if ((resp.status === 0 || resp.status === 1) && !resp.error) {
+            const seen = new Set<string>();
+            const files: string[] = [];
+            for (const raw of String(resp.stdout ?? "").split(/\r?\n/).filter(Boolean)) {
+              const abs = path.isAbsolute(raw) ? raw : path.resolve(searchRoot, raw);
+              if (isProtectedPath(abs)) continue;
+              const rel = relToRoot(abs, root);
+              const segments = rel.split("/");
+              if (!includeHidden && segments.some((seg) => seg.startsWith("."))) continue;
+              if (segments.some((seg) => IGNORED.has(seg))) continue;
+              if (includeRe && !includeRe.test(rel)) continue;
+              if (excludeRe && excludeRe.test(rel)) continue;
+              if (seen.has(rel)) continue;
+              seen.add(rel);
+              files.push(rel);
+              if (files.length >= limit) { markCut("limit"); break; }
+            }
+            for (const rel of files.sort((a, b) => a.localeCompare(b))) hits.push({ relative_path: rel });
+            return {
+              status: "completed",
+              truncated: !complete,
+              result: {
+                kind: "search",
+                data: {
+                  hits,
+                  complete,
+                  diagnostics,
+                  files_matched: hits.length,
+                  ...searchMeta(),
+                  limited: !complete,
+                  hint: searchHint(),
+                },
+              },
+            };
+          }
+        } catch {
+          // fall through to the JS scanner
+        }
+      }
+    }
+
     // Ripgrep-backed fast path if available (safe spawn, no shell).
     // Include/exclude globs map to `rg --glob` (a negated glob for exclude);
     // they no longer silently disable this path on huge workspaces.
@@ -387,6 +464,7 @@ export async function opSearch(
           }
           if (!caseSensitive) argList.push("-i");
           if (wholeWord) argList.push("-w");
+          if (invert) argList.push("--invert-match");
           if (includeHidden) argList.push("--hidden");
           if (args.regex === true) { argList.push("-e", String(query)); }
           else { argList.push("-F", "-e", String(query)); }
@@ -465,7 +543,7 @@ export async function opSearch(
                   catch { return; }
                   if (Buffer.byteLength(content, "utf8") > 1_048_576) return;
                   if (content.indexOf("\u0000") >= 0) return;
-                  const lines = content.split(/\r?\n/);
+                  const lines = splitLines(content);
                   for (const hit of hitsByRel.get(rel) ?? []) {
                     const idx = (hit.line_number ?? 0) - 1;
                     if (idx < 0 || idx >= lines.length) continue;
@@ -540,28 +618,49 @@ export async function opSearch(
     }
 
     const needleConst = needle;
+    // One predicate for all three collection branches (normal / count-only / files_only):
+    // drift between them would break the rg <-> JS parity.
+    const lineMatches = (line: string): boolean => {
+      const lineLower = caseSensitive ? line : line.toLowerCase();
+      const match = useRegex
+        ? (contentRe as RegExp).test(line)
+        : kind === "definition"
+          ? /^\s*(?:export\s+)?(?:function|class|const|let|var|type|interface|struct|fn|impl|trait|enum)\s+/.test(line) &&
+            (wordRe ? wordRe.test(lineLower) : lineLower.includes(needleConst))
+          : wordRe
+            ? wordRe.test(lineLower)
+            : lineLower.includes(needleConst);
+      return invert ? !match : match;
+    };
     // When countOnly is true, we don't collect hits at all - just count matches.
     // The limit is ignored for counting (per schema: "limit is then ignored").
-    if (!countOnly) {
+    if (filesOnly) {
+      // grep -l: which files have >=1 matching line; no per-line hits, no context.
+      const filesWithMatches = new Set<string>();
+      for (const entry of entries) {
+        if (!entry) continue;
+        const { rel, content } = entry;
+        for (const line of splitLines(content)) {
+          if (lineMatches(line)) {
+            filesWithMatches.add(rel);
+            break;
+          }
+        }
+      }
+      for (const rel of [...filesWithMatches].sort((a, b) => a.localeCompare(b))) {
+        if (hits.length >= limit) { markCut("limit"); break; }
+        hits.push({ relative_path: rel });
+      }
+    } else if (!countOnly) {
       for (const entry of entries) {
         if (!entry) continue;
         if (hits.length >= limit) { markCut("limit"); break; }
         const { rel, content } = entry;
 
-        const lines = content.split(/\r?\n/);
+        const lines = splitLines(content);
         const matchIndices: number[] = [];
         for (let i = 0; i < lines.length; i++) {
-          const line = lines[i];
-          const lineLower = caseSensitive ? line : line.toLowerCase();
-          const match = useRegex
-            ? (contentRe as RegExp).test(line)
-            : kind === "definition"
-              ? /^\s*(?:export\s+)?(?:function|class|const|let|var|type|interface|struct|fn|impl|trait|enum)\s+/.test(line) &&
-                (wordRe ? wordRe.test(lineLower) : lineLower.includes(needleConst))
-              : wordRe
-                ? wordRe.test(lineLower)
-                : lineLower.includes(needleConst);
-          if (match) matchIndices.push(i);
+          if (lineMatches(lines[i])) matchIndices.push(i);
         }
         if (matchIndices.length === 0) continue;
         totalMatchLines += matchIndices.length;
@@ -594,19 +693,9 @@ export async function opSearch(
       for (const entry of entries) {
         if (!entry) continue;
         const { content } = entry;
-        const lines = content.split(/\r?\n/);
+        const lines = splitLines(content);
         for (let i = 0; i < lines.length; i++) {
-          const line = lines[i];
-          const lineLower = caseSensitive ? line : line.toLowerCase();
-          const match = useRegex
-            ? (contentRe as RegExp).test(line)
-            : kind === "definition"
-              ? /^\s*(?:export\s+)?(?:function|class|const|let|var|type|interface|struct|fn|impl|trait|enum)\s+/.test(line) &&
-                (wordRe ? wordRe.test(lineLower) : lineLower.includes(needleConst))
-              : wordRe
-                ? wordRe.test(lineLower)
-                : lineLower.includes(needleConst);
-          if (match) totalMatchLines += 1;
+          if (lineMatches(lines[i])) totalMatchLines += 1;
         }
       }
       // Count files that have at least one match
@@ -614,19 +703,9 @@ export async function opSearch(
       for (const entry of entries) {
         if (!entry) continue;
         const { rel, content } = entry;
-        const lines = content.split(/\r?\n/);
+        const lines = splitLines(content);
         for (let i = 0; i < lines.length; i++) {
-          const line = lines[i];
-          const lineLower = caseSensitive ? line : line.toLowerCase();
-          const match = useRegex
-            ? (contentRe as RegExp).test(line)
-            : kind === "definition"
-              ? /^\s*(?:export\s+)?(?:function|class|const|let|var|type|interface|struct|fn|impl|trait|enum)\s+/.test(line) &&
-                (wordRe ? wordRe.test(lineLower) : lineLower.includes(needleConst))
-              : wordRe
-                ? wordRe.test(lineLower)
-                : lineLower.includes(needleConst);
-          if (match) {
+          if (lineMatches(lines[i])) {
             filesWithMatches.add(rel);
             break;
           }
@@ -649,7 +728,7 @@ export async function opSearch(
         ...(!countOnly ? { hits } : {}),
         complete,
         diagnostics,
-        total_match_lines: totalMatchLines,
+        ...(filesOnly ? {} : { total_match_lines: totalMatchLines }),
         files_matched: finalFilesMatched,
         ...searchMeta(),
         limited: !complete,

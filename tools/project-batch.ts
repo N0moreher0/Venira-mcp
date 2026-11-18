@@ -100,6 +100,8 @@ const BATCH_FLAG_KEYS = new Set([
   "include_ignored",
   "line_numbers",
   "missing_ok",
+  "invert",
+  "files_only",
 ]);
 
 function normalizeBatchArgs(operation: string, args: Args): Args {

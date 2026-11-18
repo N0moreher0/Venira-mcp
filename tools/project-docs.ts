@@ -40,10 +40,10 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
     out: "kind, size_bytes, modified_unix_seconds, exists when missing_ok=true. Missing path gives not_found (or ok with exists:false and missing_ok=true).",
   },
   search: {
-    about: "Search by kind: file_name, directory_name, literal_content (regex=true for regex) or definition (symbol declarations). `queries` instead ranks matching lines by several weighted patterns (must/weight).",
+    about: "Find matching lines. Simplest call: search { query: \"foo\", kind: \"literal_content\", relative_path: \"src\" }. Use kind: file_name/directory_name for names, definition for symbol declarations. `invert` = lines without the match (grep -v); `files_only` = paths only (grep -l). `queries` = weighted AND/OR ranking (advanced).",
     use: "you must locate code, strings or symbols before reading. Keep relative_path narrow: a scan stops at 50000 files.",
     avoid: "you know the path (read_file), want a file's structure (outline_symbol), a symbol's usages (symbol_references) or an executable on PATH (shell_run: `where <name>`).",
-    out: "hits[] {relative_path, line_number, snippet}, complete, total_match_lines, files_matched. With queries: hits also carry score/matched, plus total_files/total_hits. No match is ok with empty hits.",
+    out: "hits[] {relative_path, line_number, snippet}, complete, total_match_lines, files_matched. files_only: hits are file paths (no line content; total_match_lines omitted). With queries: hits also carry score/matched, plus total_files/total_hits. No match is ok with empty hits.",
   },
   recent_files: {
     about: "List recently modified files, newest first, plus session_edits (files you wrote in this session).",

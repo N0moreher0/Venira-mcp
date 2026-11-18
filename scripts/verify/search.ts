@@ -48,6 +48,72 @@ export async function runSearch(
       arguments: parityArgs,
     }),
   );
+  // 9b. grep -v (invert) and grep -l (files_only) behave the same in both backends.
+  const gvDir = `${dir}/grep-flags`;
+  await fs.mkdir(gvDir, { recursive: true });
+  await fs.writeFile(`${gvDir}/match.ts`, "alpha\nbeta GV_TOKEN here\ngamma\n");
+  await fs.writeFile(`${gvDir}/plain.ts`, "nothing to see\nnothing either\nlast line\n");
+  const gvArgs = {
+    query: "GV_TOKEN",
+    kind: "literal_content",
+    relative_path: gvDir,
+    glob: "*.ts",
+  };
+  const gvRg = asEnvelope(await call("search", { ...gvArgs, invert: 1 }));
+  const gvJs = asEnvelope(
+    await searchJsClient.callTool({ name: "search", arguments: { ...gvArgs, invert: 1 } }),
+  );
+  const snippetsOf = (env: typeof gvRg) =>
+    Array.isArray(env.data?.hits)
+      ? (env.data.hits as Array<Record<string, unknown>>).map((h) => String(h.snippet))
+      : [];
+  const gvRgSnip = snippetsOf(gvRg);
+  const gvJsSnip = snippetsOf(gvJs);
+  check(
+    "search_invert_parity_non_matching_lines",
+    gvRgSnip.length === 5 &&
+      JSON.stringify([...gvRgSnip].sort()) === JSON.stringify([...gvJsSnip].sort()) &&
+      gvRgSnip.every((s) => !s.includes("GV_TOKEN")),
+    { rg: gvRgSnip, js: gvJsSnip },
+  );
+
+  const flArgs = { ...gvArgs, files_only: 1 };
+  const flRg = asEnvelope(await call("search", flArgs));
+  const flJs = asEnvelope(
+    await searchJsClient.callTool({ name: "search", arguments: flArgs }),
+  );
+  const pathList = (env: typeof flRg) =>
+    Array.isArray(env.data?.hits)
+      ? (env.data.hits as Array<Record<string, unknown>>).map((h) => String(h.relative_path))
+      : [];
+  const flRgFiles = pathList(flRg);
+  const flJsFiles = pathList(flJs);
+  const flRgFirst = (flRg.data?.hits as Array<Record<string, unknown>> | undefined)?.[0];
+  check(
+    "search_files_only_parity_paths_only",
+    flRgFiles.length === 1 &&
+      flJsFiles.length === 1 &&
+      flRgFiles[0].endsWith("match.ts") &&
+      flJsFiles[0].endsWith("match.ts") &&
+      flRgFirst?.line_number === undefined &&
+      flRg.data?.total_match_lines === undefined &&
+      flRg.data?.files_matched === 1,
+    { rg: flRg.data, js: flJs.data },
+  );
+
+  // invert + files_only together: every file has non-matching lines → both listed.
+  const flInvArgs = { ...gvArgs, invert: 1, files_only: 1 };
+  const flInvRg = asEnvelope(await call("search", flInvArgs));
+  const flInvJs = asEnvelope(
+    await searchJsClient.callTool({ name: "search", arguments: flInvArgs }),
+  );
+  const flInvFiles = (env: typeof flInvRg) =>
+    Array.isArray(env.data?.hits) ? env.data.hits.length : -1;
+  check(
+    "search_invert_files_only_lists_all_files",
+    flInvFiles(flInvRg) === 2 && flInvFiles(flInvJs) === 2,
+    { rg: flInvRg.data?.hits, js: flInvJs.data?.hits },
+  );
   await searchJsClient.close();
   const hitKeys = (env: { data?: { hits?: unknown } }) => {
     const hits = Array.isArray(env.data?.hits)
@@ -66,7 +132,6 @@ export async function runSearch(
       rgKeys.every((k, i) => k === jsKeys[i]),
     { rg: rgKeys, js: jsKeys },
   );
-
   // 10a2. Search relevance ranking — most useful hits surface first:
   // - file name matching the query outranks plain content match
   // - whole-word match outranks substring match
