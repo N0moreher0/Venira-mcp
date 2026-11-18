@@ -268,7 +268,7 @@ export const ENV_REGISTRY: readonly EnvVarSpec[] = [
   ),
 
   // --- tools / output ------------------------------------------------------
-  toolEnum("VENIRA_TOOL_MODE", "Tool surface: `core` (small models: default minus code-intelligence tools), `default` (full coding toolset, no CI/CD) or `expert` (everything).", true, {
+  toolEnum("VENIRA_TOOL_MODE", "Tool surface: `core` (small models: an allowlist of 23 must-have tools - shell, execute_js, read/search/list, recent_files, outline_symbol, edit/create/move, snapshot, git, memory), `default` (full coding toolset, no CI/CD) or `expert` (everything).", true, {
     default: "default",
     choices: ["default", "expert", "core"],
     allowEmpty: true,

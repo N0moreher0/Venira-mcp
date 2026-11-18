@@ -15,8 +15,9 @@ import { WORKSPACE } from "../lib/workspace.js";
  *               tools, which are expert-only.
  *   `core`    - the small-model / restricted-context preset. Unlike the other
  *               two it is an **allowlist** (`CORE_TOOLS`): only the must-have
- *               tools are advertised (shell, execute_js, read, search, list,
- *               edit/write/delete, snapshot, git), every other tool stays out
+ *               tools are advertised (shell, execute_js, read, search, list, recent_files,
+ *               outline_symbol,
+ *               edit/write/create/move/delete, snapshot, git, memory), every other tool stays out
  *               of `tools/list` — including tools added later — because each
  *               one costs schema tokens on every prompt. `delete_path` stays
  *               available: shell `rm -rf` / `rd /s` / `Remove-Item -Recurse
@@ -73,11 +74,15 @@ export const CORE_TOOLS: readonly string[] = [
   "read_file",
   "search",
   "list_files",
+  "recent_files",
+  "outline_symbol",
   // edit
   "edit_file",
   "edit_batch",
   "write_file",
   "delete_path",
+  "create",
+  "move_path",
   // checkpoint
   "snapshot",
   // git
@@ -87,6 +92,8 @@ export const CORE_TOOLS: readonly string[] = [
   "git_branch",
   "git_commit",
   "git_stash",
+  // handoff note that outlives the chat
+  "memory",
 ];
 
 /** Exclusion lists for the modes that are defined by what they leave out. `core` is an allowlist (CORE_TOOLS). */

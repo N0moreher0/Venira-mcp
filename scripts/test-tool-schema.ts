@@ -411,6 +411,7 @@ check("core mode: keeps shell, execute_js, read, search, list, edit, snapshot an
   for (const name of [
     "shell_run", "shell_status", "execute_js", "read_file", "search", "list_files",
     "edit_file", "write_file", "snapshot", "git_status", "git_diff", "git_commit",
+    "create", "move_path", "recent_files", "outline_symbol", "memory",
   ]) {
     assert.ok(toolMode.CORE_TOOLS.includes(name), `core must keep ${name}`);
   }
@@ -423,7 +424,7 @@ check("core mode: blocks every other tool, and core stays inside the default sur
     assert.equal(toolMode.modeBlocksTool("core", name, false), !inCore, `core handling of ${name}`);
     if (inCore) assert.equal(toolMode.modeBlocksTool("default", name, false), false, `${name} is in core but not in default`);
   }
-  for (const name of ["memory", "secret", "recent_files", "read_batch", "health", "apply_patch", "copy_path", "ci_status"]) {
+  for (const name of ["secret", "read_batch", "health", "apply_patch", "copy_path", "get_file_info", "dependency_graph", "ci_status"]) {
     assert.equal(toolMode.modeBlocksTool("core", name, false), true, `core must not advertise ${name}`);
   }
 });
