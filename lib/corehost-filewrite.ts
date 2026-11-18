@@ -369,13 +369,11 @@ export async function opEditFile(
 
   // Verify: re-read and check the content matches what we wrote
   let verified = false;
-  let verifiedSha = "";
   if (verifyMode) {
     try {
       const verifyBytes = await fs.readFile(absPath);
       const verifySha = crypto.createHash("sha256").update(verifyBytes).digest("hex");
       verified = verifySha === sha256After;
-      verifiedSha = verifySha;
     } catch {
       verified = false;
     }
@@ -397,12 +395,9 @@ export async function opEditFile(
         relative_path: path.relative(root, absPath).replace(/\\/g, "/"),
         action: "edited",
         replacements,
-        sha256_before: sha256Before || undefined,
         sha256_after: sha256After || undefined,
         verified: verifyMode ? verified : undefined,
-        verified_sha256: verifyMode && verifiedSha ? verifiedSha : undefined,
         fuzzy_used: usedFuzzy || undefined,
-        reason: sanitizeReason(args.reason),
       },
     },
   };

@@ -27,6 +27,11 @@ export function editMatchLocations(
 // context on each side of the wrong spot.
 // ---------------------------------------------------------------------------
 
+/**
+ * A precise diagnosis of a failed edit: numbers only. The agent wrote the
+ * edit, so echoing its line(s) back burns tokens; what it needs is where the
+ * file diverged — see `context` for the lines themselves.
+ */
 export type EditMismatch = {
   /** The line in the file where the text stops matching (1-based). */
   line: number;
@@ -36,12 +41,6 @@ export type EditMismatch = {
   char_offset: number;
   /** How many characters the line is off (the length difference). */
   chars_off: number;
-  /** The line the edit expected (truncated). */
-  expected_line: string;
-  /** The line the file has (truncated). */
-  actual_line: string;
-  /** One sentence: what is wrong. */
-  detail: string;
 };
 
 /** How many characters of one line the error carries. */
@@ -207,44 +206,34 @@ export function findEditMismatch(content: string, needle: string): EditMismatch 
   }
   const { char_offset, chars_off } = lineDifference(expected, actual);
   const line = fileIndex >= 0 ? fileIndex + 1 : Math.min(n, Math.max(1, fileIndex + 2));
-  const detail =
-    fileIndex >= 0
-      ? `the file has "${truncateLine(actual)}" where the edit expects "${truncateLine(expected)}"`
-      : `the edit expects a line the file does not have: "${truncateLine(expected)}"`;
 
   return {
     line,
     edit_line: needleIndex + 1,
     char_offset,
     chars_off,
-    expected_line: truncateLine(expected),
-    actual_line: truncateLine(actual),
-    detail,
   };
 }
 
 /**
  * The lines around the wrong spot: three before, the line itself, three
- * after. No line numbers in `text` (copy it straight into old_text), the
- * numbers only in `numbered` for orientation.
+ * after. No line numbers in `text` (copy it straight into old_text), and no
+ * numbered variant: first_line/last_line give the orientation without
+ * doubling the payload.
  */
 export function buildEditContext(
   content: string,
   line: number,
   relativePath: string,
   radius = CONTEXT_RADIUS,
-): { header: string; text: string; numbered: string; first_line: number; last_line: number } {
+): { header: string; text: string; first_line: number; last_line: number } {
   const lines = content.split("\n");
   const first = Math.max(0, line - 1 - radius);
   const last = Math.min(lines.length, line + radius);
   const slice = lines.slice(first, last).map((value) => truncateLine(value));
-  const width = String(last).length;
   return {
     header: `Lines ${first + 1}-${last} of ${relativePath}:`,
     text: slice.join("\n"),
-    numbered: slice
-      .map((value, index) => `${String(first + 1 + index).padStart(width, " ")}| ${value}`)
-      .join("\n"),
     first_line: first + 1,
     last_line: last,
   };

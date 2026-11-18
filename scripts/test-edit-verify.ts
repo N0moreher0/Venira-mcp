@@ -54,7 +54,9 @@ try {
       ),
     );
     assert.equal(d.verified, true);
-    assert.equal(d.verified_sha256, d.sha256_after);
+    assert.equal((d as Record<string, unknown>).sha256_before, undefined, "sha256_before is not echoed (the agent has read_file's whole-file hash)");
+    assert.equal((d as Record<string, unknown>).verified_sha256, undefined, "verified_sha256 was an exact duplicate of sha256_after");
+    assert.equal((d as Record<string, unknown>).reason, undefined, "the agent's reason is not echoed back");
     assert.equal(d.sha256_after, sha("1 two\n"));
   });
 

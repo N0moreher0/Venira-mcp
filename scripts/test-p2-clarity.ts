@@ -331,21 +331,22 @@ await check("a failed edit hands back a small diagnosis and a copy-pasteable con
     edit_line: number;
     char_offset: number;
     chars_off: number;
-    detail: string;
   };
-  const context = data?.context as { text: string; numbered: string; header: string; first_line: number; last_line: number };
+  const context = data?.context as { text: string; header: string; first_line: number; last_line: number };
   assert.ok(mismatch, "the error says where it went wrong");
   assert.ok(mismatch.line >= 1, "the file line");
+  assert.equal(typeof mismatch.edit_line, "number");
   assert.equal(typeof mismatch.char_offset, "number");
   assert.equal(typeof mismatch.chars_off, "number");
-  assert.match(mismatch.detail, /the file has/);
+  // The agent's edit text is not parsed into the output: the mismatch is
+  // numbers only, and the double-spaced "line  20" appears nowhere.
+  assert.ok(!JSON.stringify(data).includes("line  20"), "the agent's old_text is echoed in the output");
   // The context is three lines around the wrong spot - not the whole file.
   const contextLines = context.text.split("\n");
   assert.ok(contextLines.length <= 7, `context has ${contextLines.length} lines`);
   assert.ok(context.first_line <= mismatch.line && context.last_line >= mismatch.line);
   // Trap 1: the context itself has no line-number prefixes.
   assert.equal(/^\s*\d+[|:]/.test(context.text), false, `the context still has numbers: ${context.text.slice(0, 60)}`);
-  assert.match(context.numbered, /\d+\|/, "the numbered variant is there for orientation");
   assert.match(context.header, /^Lines \d+-\d+ of trap\.txt:$/);
   // The whole error stays small: a long edit must not answer with a long error.
   assert.ok(JSON.stringify(data).length < 4000, `the error payload is ${JSON.stringify(data).length} bytes`);
