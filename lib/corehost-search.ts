@@ -1,5 +1,5 @@
 /**
- * corehost content-search op (opSearch + ripgrep fast path + hit ranking).
+ * corehost content-search op (rg → grep → JS walker chain + hit ranking).
  * Extracted from corehost.ts; behaviour is unchanged.
  */
 import { spawn } from "node:child_process";
@@ -58,6 +58,75 @@ async function ripgrepInstalled(): Promise<boolean> {
 function ripgrepExec(args: string[], timeoutMs: number): Promise<{ status: number | null; stdout: string; stderr: string; error?: any; }> {
   return new Promise((resolve) => {
     const child = spawn("rg", args, { timeout: timeoutMs });
+    let stdout = "";
+    let stderr = "";
+    let done = false;
+    const timer = setTimeout(() => {
+      if (done) return;
+      done = true;
+      try { child.kill("SIGKILL"); } catch { /* ignored */ }
+      resolve({ status: null, stdout, stderr, error: { code: "ETIMEDOUT" } });
+    }, timeoutMs);
+    child.stdout?.setEncoding("utf8");
+    child.stderr?.setEncoding("utf8");
+    child.stdout?.on("data", (d: string) => { stdout += d; });
+    child.stderr?.on("data", (d: string) => { stderr += d; });
+    child.on("error", (e: any) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      resolve({ status: null, stdout, stderr, error: e });
+    });
+    child.on("exit", (code: number | null) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      resolve({ status: code, stdout, stderr });
+    });
+  });
+}
+
+let grepAvailableCache: boolean | null = null;
+
+/**
+ * Second link in the engine chain: rg -> GNU grep -> JS walker.
+ * grep is unavailable on stock Windows (no grep.exe), so the chain degenerates
+ * to rg -> JS walker there. The grep path mirrors the rg fast path flag-for-flag
+ * (same IGNORED dirs, hidden handling, glob filters, ranking) and is intentionally
+ * conservative: any anomaly falls through to the JS scanner, never a silent empty
+ * “no matches”.
+ */
+async function grepInstalled(): Promise<boolean> {
+  if (process.platform === "win32") return false;
+  if (grepAvailableCache !== null) return grepAvailableCache;
+  try {
+    const result = await new Promise<boolean>((resolve) => {
+      const child = spawn("grep", ["--version"], { timeout: 5000 });
+      let timer: NodeJS.Timeout | null = setTimeout(() => {
+        try { child.kill("SIGKILL"); } catch { /* ignored */ }
+        resolve(false);
+      }, 5000);
+      child.on("exit", (code: number | null) => {
+        if (timer) { clearTimeout(timer); timer = null; }
+        resolve(code === 0);
+      });
+      child.on("error", () => {
+        if (timer) { clearTimeout(timer); timer = null; }
+        resolve(false);
+      });
+      child.stdout?.resume();
+      child.stderr?.resume();
+    });
+    grepAvailableCache = result;
+  } catch {
+    grepAvailableCache = false;
+  }
+  return grepAvailableCache;
+}
+
+function grepExec(args: string[], timeoutMs: number): Promise<{ status: number | null; stdout: string; stderr: string; error?: any; }> {
+  return new Promise((resolve) => {
+    const child = spawn("grep", args, { timeout: timeoutMs });
     let stdout = "";
     let stderr = "";
     let done = false;
@@ -326,6 +395,171 @@ export async function opSearch(
     files_matched_scope: "returned_hits" as const,
   });
 
+  /**
+   * GNU grep backstop (engine chain rg -> grep -> JS walker). Same flag semantics
+   * as the rg fast path; paths are NUL-separated (`grep -Z`), so matching content
+   * that contains a colon or backslashes cannot corrupt the parse.
+   *
+   *   normal:  <path>\0<line>:<content>
+   *   -l mode: <path>\0<path>\0...
+   *
+   * Any anomaly (grep missing, spawn error, exit code outside {0,1}, malformed
+   * record) returns null => the caller falls through to the JS scanner, so grep
+   * can never invent a silent empty “no matches”.
+   */
+  async function grepTry(filesOnlyMode: boolean): Promise<RustResponse | null> {
+    if (process.platform === "win32") return null; // no grep on stock Windows
+    if (!envFlag("VENIRA_USE_GREP", true)) return null;
+    if (!(await grepInstalled())) return null;
+    try {
+      const COLLECT_CAP = Math.max(limit * 10, 1000);
+      const argList = ["-r", "-I", "-H", "-Z"];
+      if (filesOnlyMode) argList.push("-l");
+      else argList.push("-n");
+      // Mirror collectFiles(): skip the built-in IGNORED dirs. grep includes
+      // dotfiles by default; include_hidden=false drops them via exclude globs.
+      for (const ign of [".git", "node_modules", "target", "dist", "build", ".next", ".venv", "__pycache__", ".cache", ".turbo", "coverage"]) {
+        argList.push("--exclude-dir", ign);
+      }
+      if (!includeHidden) {
+        argList.push("--exclude", ".*");
+        argList.push("--exclude-dir", ".*");
+      }
+      if (!caseSensitive) argList.push("-i");
+      if (wholeWord) argList.push("-w");
+      if (invert) argList.push("-v");
+      if (args.regex === true) { argList.push("-E", "-e", String(query)); }
+      else { argList.push("-F", "-e", String(query)); }
+      // rg anchors a glob containing "/" to its own cwd; grep's --include only
+      // understands basename-style globs, so anything with "/" is applied below
+      // via includeRe/excludeRe, exactly like the rg path.
+      if (glob && !String(glob).includes("/")) argList.push("--include", String(glob));
+      if (excludeGlob && !String(excludeGlob).includes("/")) argList.push("--exclude", String(excludeGlob));
+      argList.push(searchRoot);
+      const resp = await grepExec(argList, 10000);
+      // Only clean exits (0 = matches, 1 = no matches) are served here. Any
+      // spawn error or exit 2 (bad regex) returns null => JS fallback.
+      if (resp.error || (resp.status !== 0 && resp.status !== 1)) return null;
+      const raw = String(resp.stdout ?? "");
+      if (filesOnlyMode) {
+        const seen = new Set<string>();
+        const files: string[] = [];
+        for (const absRaw of raw.split("\0").filter(Boolean)) {
+          const abs = path.isAbsolute(absRaw) ? absRaw : path.resolve(searchRoot, absRaw);
+          if (isProtectedPath(abs)) continue;
+          const rel = relToRoot(abs, root);
+          const segments = rel.split("/");
+          if (!includeHidden && segments.some((seg) => seg.startsWith("."))) continue;
+          if (segments.some((seg) => IGNORED.has(seg))) continue;
+          if (includeRe && !includeRe.test(rel)) continue;
+          if (excludeRe && excludeRe.test(rel)) continue;
+          if (seen.has(rel)) continue;
+          seen.add(rel);
+          files.push(rel);
+          if (files.length >= limit) { markCut("limit"); break; }
+        }
+        for (const rel of files.sort((a, b) => a.localeCompare(b))) hits.push({ relative_path: rel });
+        return {
+          status: "completed",
+          truncated: !complete,
+          result: {
+            kind: "search",
+            data: {
+              hits,
+              complete,
+              diagnostics,
+              files_matched: hits.length,
+              ...searchMeta(),
+              limited: !complete,
+              hint: searchHint(),
+            },
+          },
+        };
+      }
+      const lines = raw.split(/\r?\n/).filter(Boolean);
+      for (const rawLine of lines) {
+        const nulAt = rawLine.indexOf("\0");
+        if (nulAt <= 0) continue;
+        const abs = path.isAbsolute(rawLine.slice(0, nulAt))
+          ? rawLine.slice(0, nulAt)
+          : path.resolve(searchRoot, rawLine.slice(0, nulAt));
+        if (isProtectedPath(abs)) continue;
+        const rel = relToRoot(abs, root);
+        // Mirror collectFiles() exactly: hidden segments and built-in IGNORED dirs
+        // are dropped even if grep's glob handling lets one through.
+        const segments = rel.split("/");
+        if (!includeHidden && segments.some((seg) => seg.startsWith("."))) continue;
+        if (segments.some((seg) => IGNORED.has(seg))) continue;
+        if (includeRe && !includeRe.test(rel)) continue;
+        if (excludeRe && excludeRe.test(rel)) continue;
+        const rest = rawLine.slice(nulAt + 1);
+        const colonAt = rest.indexOf(":");
+        if (colonAt <= 0) continue;
+        const ln = Number(rest.slice(0, colonAt));
+        const lineText = rest.slice(colonAt + 1);
+        const snippet = lineText.trim().slice(0, 200);
+        hits.push({ relative_path: rel, line_number: Number.isFinite(ln) ? ln : 0, snippet });
+        totalMatchLines += 1;
+        if (hits.length >= COLLECT_CAP) { markCut("match_cap", COLLECT_CAP); break; }
+      }
+      // Rank first, then trim — rg's multithreaded output order is unstable, so is grep's.
+      rankHits(hits, needle);
+      if (hits.length > limit) {
+        hits.length = limit;
+        markCut("limit");
+      }
+      if (contextLines > 0 && hits.length > 0) {
+        const hitsByRel = new Map<string, Hit[]>();
+        for (const hit of hits) {
+          const list = hitsByRel.get(hit.relative_path) ?? [];
+          list.push(hit);
+          hitsByRel.set(hit.relative_path, list);
+        }
+        const distinct = [...hitsByRel.keys()];
+        for (let ci = 0; ci < distinct.length; ci += 16) {
+          const chunk = distinct.slice(ci, ci + 16);
+          await Promise.all(chunk.map(async (rel) => {
+            const abs = path.resolve(root, rel);
+            if (isProtectedPath(abs)) return;
+            let content: string;
+            try { content = await fs.readFile(abs, "utf8"); }
+            catch { return; }
+            if (Buffer.byteLength(content, "utf8") > 1_048_576) return;
+            if (content.indexOf("\u0000") >= 0) return;
+            const split = content.split(/\r?\n/);
+            if (split.length > 0 && split[split.length - 1] === "") split.pop();
+            for (const hit of hitsByRel.get(rel) ?? []) {
+              const idx = (hit.line_number ?? 0) - 1;
+              if (idx < 0 || idx >= split.length) continue;
+              const start = Math.max(0, idx - contextLines);
+              const end = Math.min(split.length, idx + contextLines + 1);
+              hit.context = split.slice(start, end);
+            }
+          }));
+        }
+      }
+      return {
+        status: "completed",
+        truncated: !complete,
+        result: {
+          kind: "search",
+          data: {
+            hits,
+            complete,
+            diagnostics,
+            total_match_lines: totalMatchLines,
+            files_matched: new Set(hits.map((h) => h.relative_path)).size,
+            ...searchMeta(),
+            limited: !complete,
+            hint: searchHint(),
+          },
+        },
+      };
+    } catch {
+      return null; // grep missing/misbehaving ⇒ JS walker (never a silent empty answer)
+    }
+  }
+
   async function collectFiles(dir: string): Promise<{ files: string[]; scanTruncated: boolean }> {
     const files: string[] = [];
     let scanTruncated = false;
@@ -439,6 +673,12 @@ export async function opSearch(
       }
     }
 
+    if (envFlag("VENIRA_USE_GREP", true) && kind === "literal_content" && !countOnly && filesOnly) {
+      // 2nd link: rg absent/failed ⇒ try GNU grep (non-Windows). Fallback to the JS walker on any anomaly.
+      const viaGrep = await grepTry(true);
+      if (viaGrep) return viaGrep;
+    }
+
     // Ripgrep-backed fast path if available (safe spawn, no shell).
     // Include/exclude globs map to `rg --glob` (a negated glob for exclude);
     // they no longer silently disable this path on huge workspaces.
@@ -450,6 +690,12 @@ export async function opSearch(
     // Without this, rg (which compiles patterns in Rust) would happily serve a
     // query such as `(a+)+$` and the resource guard would never fire.
     if (args.regex === true) compileSearchRegex(query, caseSensitive);
+
+    if (envFlag("VENIRA_USE_GREP", true) && kind === "literal_content" && !countOnly && !filesOnly) {
+      // 2nd link (backstop): rg absent or failed ⇒ try GNU grep before the JS walker.
+      const viaGrep = await grepTry(false);
+      if (viaGrep) return viaGrep;
+    }
 
     if (envFlag("VENIRA_USE_RIPGREP", true) && kind === "literal_content" && !countOnly) {
       if (await ripgrepInstalled()) {

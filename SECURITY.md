@@ -36,7 +36,7 @@ deploying:
   so an external edit or delete can never silently serve stale content.
 - **Audit integrity.** Every operation is written to a SQLite WAL table with a
   keyed hash chain (`prev_hash`/`row_hash`, HMAC-SHA256 with `audit.key` in the
-  data dir). `read_audit verify=1` recomputes the digest of the fields
+  data dir). `read_audit verify=true` recomputes the digest of the fields
   that are immutable after insert, so in-place edits or a rewritten chain fail
   verification unless the attacker also has the key file. Legacy databases with
   a required `created_at` column are supported in place; `health`
@@ -103,7 +103,7 @@ directly affected:
 3. **Keep shell overrides off by default.** If one is necessary, enable only the named
    exception and review its per-call reason and `policy_rule` in the audit trail.
 4. **Review the audit trail.** Periodically query `project_tool_audit`
-   (or run `health` with `include_audit=1`) to confirm what the
+   (or run `health` with `include_audit=true`) to confirm what the
    agent actually did.
 5. **Least-privilege user.** Run the MCP client (and thus this server)
    as a regular user, not root.

@@ -293,6 +293,7 @@ export const ENV_REGISTRY: readonly EnvVarSpec[] = [
   toolFlag("VENIRA_EDIT_FUZZY", "Allow fuzzy matching as a fallback in edit_file. Also decides whether fuzzy_distance, ignore_indentation and case_insensitive are advertised in the edit tool schemas (tools/list changes with this flag).", true, { default: "0" }),
   toolFlag("VENIRA_SETUP_TOOLS", "Advertise detect_harnesses and install_self in tools/list (off by default; `npx venira-mcp --install` and `--print-config` do the same from a terminal). tools/list changes with this flag.", true, { default: "0" }),
   toolFlag("VENIRA_USE_RIPGREP", "Use ripgrep for literal content search when available.", true, { default: "1" }),
+  toolFlag("VENIRA_USE_GREP", "Use GNU grep as the second engine link when ripgrep is unavailable (non-Windows only); the JS fallback walker is the final link.", true, { default: "1" }),
   toolInt("VENIRA_SEARCH_MAX_FILES", "Max files collected by the JS fallback walker (collectFiles) before the walk stops and `complete=false` is returned. Bounds searches rooted at huge trees (e.g. VENIRA_UNRESTRICTED=1 with an absolute path outside the workspace).", true, { default: "50000" }),
 
   // --- shell ---------------------------------------------------------------

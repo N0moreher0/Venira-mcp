@@ -281,6 +281,7 @@ check("startup boolean validation never loses a legacy flag", () => {
 check("flags read through envFlag at runtime are registered as flags", () => {
   for (const name of [
     "VENIRA_USE_RIPGREP",
+    "VENIRA_USE_GREP",
     "VENIRA_SHELL_CACHE",
     "VENIRA_SHELL_CACHE_READ_ONLY",
     "VENIRA_EDIT_FUZZY",

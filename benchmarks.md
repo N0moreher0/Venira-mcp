@@ -16,7 +16,7 @@ Sections 1–2 and 5 were re-measured on **2026-11-07** with `venira-mcp@1.17.0`
 ## 0. Methodology & caveats
 
 - **Single machine/environment.** Sections 1–2 use one host (Windows 11 / NVMe / Node 24). Latency reflects that disk/CPU; treat deltas vs a new baseline, not absolute targets.
-- **Foreground shell includes process startup.** `shell_run` (background=0) spawns a child process and waits for exit, so `shell_foreground_ms` includes shell spawn + stdio handshake. Pure tool latency is better read from the in-process `npm run bench` row or from cached reads.
+- **Foreground shell includes process startup.** `shell_run` (background=false) spawns a child process and waits for exit, so `shell_foreground_ms` includes shell spawn + stdio handshake. Pure tool latency is better read from the in-process `npm run bench` row or from cached reads.
 - **Warm-up required.** The first 3 `read_file` warm-ups attach the session cache; the reported "First call" row is post-warm-up. Cold runs (capability open) take ~100-200ms longer.
 - **Cache state matters.** Cached-read rows only apply after the warm-up calls; reset with `cache_clear` or a fresh session before re-benchmarking.
 - **p95 is only shown when n ≥ 30.** With n=3 or n=10 the p95 mostly restates the observed maximum, so it is omitted for those rows. Use `avg`/`max` for small samples instead.

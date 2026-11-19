@@ -142,46 +142,45 @@ export function registerFileTools(server: McpServer, deps: FileToolsDeps): void 
       ...config(
         "Search workspace",
         {
-          speed_profile: "medium (file scan); TTL cache 3s for the same query.",
+          speed_profile: "rg → grep → JS walker; TTL cache 3s.",
           batch_safe: true,
         },
         { readOnlyHint: true, openWorldHint: false },
       ),
       inputSchema: {
-        // 80% case lives above the fold: one substring + one folder. Everything below is fine-tuning.
-        query: z.string().optional().describe("What to find (plain substring by default; regex=true for regex). Almost every call only needs `query`."),
-        relative_path: path_.optional().describe("Directory (or one file) to scan. Defaults to the workspace root; narrow it for speed."),
-        kind: z.enum(["file_name", "directory_name", "literal_content", "definition"]).optional().describe("literal_content (default): lines containing the match. definition: symbol declarations only (function/class/const...). file_name/directory_name: name substring of files or folders."),
-        glob: z.string().optional().describe("rg glob filter ('*.ts' = any depth, 'tools/*.ts' = that dir)."),
-        exclude_glob: z.string().optional().describe("rg glob exclusion (same dialect as glob)."),
-        limit: z.number().int().min(1).max(200).optional().describe("Max hits returned (default and max 200; ignored when count_only=true)."),
-        regex: flag01.optional().describe("true treats query as a regular expression for literal_content/definition (default false = plain substring)."),
-        case_sensitive: flag01.optional().describe("true makes literal_content/definition matching case-sensitive (default true)."),
-        whole_word: flag01.optional().describe("true = whole-word match only (rg -w / JS word boundaries) for literal_content and definition."),
-        include_hidden: flag01.optional().describe("true = include hidden files (default); false = skip dotfiles. Secrets always excluded."),
-        invert: flag01.optional().describe("true returns lines WITHOUT the match (grep -v)."),
-        files_only: flag01.optional().describe("true returns only files with at least one match (grep -l) — no line content, no line numbers."),
+        // ~99% of calls need only `query` (+ optionally relative_path). Everything below is fine-tuning.
+        query: z.string().optional().describe("What to find (plain substring; regex=true for regex). The only parameter most calls need."),
+        relative_path: path_.optional().describe("Directory (or one file) to scan. Default: workspace root; narrow it for speed."),
+        kind: z.enum(["file_name", "directory_name", "literal_content", "definition"]).optional().describe("literal_content (default): lines containing the match. definition: symbol declarations only. file_name/directory_name: name substring."),
+        glob: z.string().optional().describe("rg glob filter ('*.ts' = any depth, 'tools/*.ts' = that folder)."),
+        exclude_glob: z.string().optional().describe("rg glob exclusion (same syntax as glob)."),
+        limit: z.number().int().min(1).max(200).optional().describe("Max hits (default/max 200; ignored when count_only=true)."),
+        regex: flag01.optional().describe("true = query is a regex (default false = plain substring)."),
+        case_sensitive: flag01.optional().describe("true (default) = case-sensitive match for literal_content/definition."),
+        whole_word: flag01.optional().describe("true = whole-word match only (rg -w)."),
+        include_hidden: flag01.optional().describe("default true; false = skip dotfiles. Secrets always excluded."),
+        invert: flag01.optional().describe("true = lines WITHOUT a match (grep -v)."),
+        files_only: flag01.optional().describe("true = only files with a match (grep -l), no lines/content."),
         context_lines: z.number().int().min(0).max(20).optional().describe("Context lines around each hit (default 0)."),
-        count_only: flag01.optional().describe("true returns only match counts; limit is then ignored. false (default) returns hits."),
-        // advanced: weighted multi-pattern ranking and the opt-in AI-tagged mode. 99% of calls don't need these.
-        hybrid: flag01.optional().describe("true = tag hits with source/confidence; literal_content only."),
+        count_only: flag01.optional().describe("true = only counts; limit is ignored."),
+        hybrid: flag01.optional().describe("Advanced: tag hits with source/confidence. literal_content only."),
         queries: z
           .array(
             z.object({
-              pattern: z.string().min(1).describe("Case-insensitive substring matched against each line."),
-              must: flag01.optional().describe("true = only lines containing this pattern count as hits (default false)."),
-              weight: z.number().int().optional().describe("Points added to a line's score when it matches this pattern (default 1)."),
+              pattern: z.string().min(1).describe("Substring matched against each line."),
+              must: flag01.optional().describe("true (default false): line must contain this pattern too."),
+              weight: z.number().int().optional().describe("Points per matching line (default 1)."),
             }),
           )
           .min(1)
           .max(8)
           .optional()
-          .describe("Advanced (rarely needed). Rank matching lines by several weighted patterns: each adds its weight, `must` patterns must all match. Overrides kind/query and hits carry `score`/`matched`. Combine with `files_hint` to scan specific files."),
+          .describe("Advanced (rarely needed): weighted multi-pattern ranking (overrides kind/query). Hits carry score/matched. Pair with files_hint."),
         files_hint: z
           .array(z.string().max(300))
           .max(20)
           .optional()
-          .describe("Advanced (rarely needed). Workspace paths to search when `queries` is set (first 20 are used). Omit to scan a shallow listing of `relative_path` instead."),
+          .describe("Advanced (rarely needed): paths to scan when queries[] is set (first 20 used)."),
       },
     },
     (args) => {
