@@ -27,7 +27,7 @@ import { opSnapshotMirror } from "./snapshot-mirror.js";
 import { opCiControl, opCiLogs, opCiStatus, opCiTrigger, opPrClose, opPrComment, opPrCreate, opPrList, opPrMerge, opPrReopen } from "./git-provider.js";
 import { assertSecretName, deleteSecret, getSecretValueSync, listSecrets, MAX_EXPIRY_DAYS, redactSecretValues, secretsDir, setSecret } from "./secrets.js";
 import { GithubDeviceFlow } from "./github-device-flow.js";
-import { buildChangeImpact, buildDependencyGraph } from "./dependency-graph.js";
+import { buildDependencyGraph } from "./dependency-graph.js";
 import { opCiWait } from "./ci-wait.js";
 import { auditDecision, auditDetailInsert, auditFinish, auditStart, closeAuditDb } from "./audit-store.js";
 import { buildAuditDetail } from "./audit-detail.js";
@@ -341,19 +341,6 @@ async function opDependencyGraph(
   };
 }
 
-async function opChangeImpact(
-  args: Record<string, unknown>,
-  root: string,
-): Promise<RustResponse> {
-  const built = await buildChangeImpact(args, root);
-  return {
-    status: "completed",
-    result: { kind: "change_impact", data: built.data },
-    ...(built.truncated ? { truncated: true } : {}),
-    ...(built.hint ? { hint: built.hint } : {}),
-  };
-}
-
 /** True for the 0|1 integer or boolean flag shapes clients send for dry_run. */
 function isDryRunFlag(value: unknown): boolean {
   return value === true || value === 1 || value === "1" || value === "true";
@@ -398,7 +385,6 @@ const operations: Record<string, OperationHandler> = {
   ci_logs: opCiLogs,
   ci_wait: opCiWait,
   dependency_graph: opDependencyGraph,
-  change_impact: opChangeImpact,
   secret: opSecret,
   github_connect: opGithubConnect,
   workspace_switch: opWorkspaceSwitch,

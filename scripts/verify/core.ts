@@ -201,7 +201,6 @@ export async function runCore($h: Harness) {
     "ci_wait",
     "ci_control",
     "dependency_graph",
-    "change_impact",
     "secret",
     "explain_error",
     "plan_read_batch",

@@ -92,9 +92,6 @@ export function prepareRequest(operation: string, args: Args): Args {
     if (Array.isArray(out.paths)) {
       out.paths = (out.paths as unknown[]).map((entry) => toHostPath(String(entry)));
     }
-  } else if (operation === "change_impact") {
-    // Impact seeds: file paths and the optional `{name, file}` symbol form.
-    // Keep as workspace-relative; corehost resolves them internally.
   }
   // Most file operations expect a workspace-relative path in args.relative_path
   // (they call resolveInWorkspace internally). Converting to absolute here would
@@ -130,7 +127,7 @@ export function requestTimeout(operation: string, args: Args): number {
     const bounded = Math.min(110_000, Math.max(1_000, Number.isFinite(wait) ? wait : 45_000));
     return bounded + 10_000;
   }
-  if (operation === "dependency_graph" || operation === "change_impact") return 60_000;
+  if (operation === "dependency_graph") return 60_000;
   if (EXTERNAL_OPS.has(operation)) return 60_000;
   return 30_000;
 }

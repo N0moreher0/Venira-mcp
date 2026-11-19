@@ -1,7 +1,7 @@
 # venira-mcp
 
 Fast, workspace-scoped MCP server for coding agents (OpenCode, Claude Desktop, any MCP client).
-Three tool modes — **Core** (23 tools: shell, `execute_js`, read/search/list, edit/create/move, snapshot, git, memory — for small models) · **Default** (39 coding tools + shell, no CI/CD) · **Expert** (52 tools: default + CI/CD). `VENIRA_JS_EXEC_MODE=off` hides `execute_js` in every mode (52 → 51, 39 → 38, 23 → 22); otherwise it is registered and approval-gated. `VENIRA_SETUP_TOOLS=1` adds the two setup tools `detect_harnesses` and `install_self` (+2); `npx venira-mcp --install` and `--print-config` do the same from a terminal.
+Three tool modes — **Core** (17 tools: shell, `execute_js`, read/search/list, edit/create/move, snapshot, git, memory — for small models) · **Default** (31 coding tools, no CI/CD) · **Expert** (44 tools: default + CI/CD). `VENIRA_JS_EXEC_MODE=off` hides `execute_js` in every mode (44 → 43, 31 → 30, 17 → 16); otherwise it is registered and approval-gated. `VENIRA_SETUP_TOOLS=1` adds the two setup tools `detect_harnesses` and `install_self` (+2); `npx venira-mcp --install` and `--print-config` do the same from a terminal.
 Pure Node, 1 native dependency (better-sqlite3), no GUI, no external binary.
 
 > **Security scope.** Venira is a guard rail with an audit trail, not a sandbox. It runs with the privileges of the OS user that started it. The workspace lock limits the paths the file tools can touch (unless `VENIRA_UNRESTRICTED=1`), not what a shell command does: commands are classified by rules (allow / ask / deny) and every call is audited, but a malicious prompt can still steer the agent into running a harmful command that the active profile lets through (with `off`, every command runs). Anything running as the same OS user can read the keys in `VENIRA_DATA_DIR`. For untrusted workspaces, or whenever you need a real isolation boundary, run Venira in a container or VM. Details: [`SECURITY.md`](./SECURITY.md).
@@ -234,8 +234,8 @@ Three tool modes set which tools the client sees. Set via `VENIRA_TOOL_MODE` env
 | Mode | Tools | Includes |
 |---|---|---|
 | `core` | **17** | Allowlist: `shell_run`, `shell_status`, `shell_cancel`, `execute_js`, `read_file`, `search`, `list_files`, `recent_files`, `outline_symbol`, `edit_file` (single **and** multi-file via `edits[]` with per-item `relative_path`, or `requests[]` on `read_file`), `write_file`, `delete_path`, `create`, `move_path`, `snapshot`, `git`, `memory` |
-| `default` | **37** | Read/write/edit/search, code intel, snapshots, shell, `delete_path`, `execute_js` — **no** CI/CD; `explain_error` and `plan_read_batch` are expert-only |
-| `expert` | **50** | Everything in default + `pr_*`, `ci_*`, `explain_error`, `plan_read_batch` |
+| `default` | **31** | Read/write/edit/search, code intel, snapshots, shell, `delete_path`, `execute_js` — **no** CI/CD; `explain_error` and `plan_read_batch` are expert-only |
+| `expert` | **44** | Everything in default + `pr_*`, `ci_*`, `explain_error`, `plan_read_batch` |
 
 `delete_path` is always available. In `balanced` / `strict` mode, shell `rm -rf /` / `~` and Windows drive-wide deletes are hard-denied, and recursive/force deletes (`Remove-Item -Recurse -Force`, `rd /s /q`, `del /f /q`) need approval. `permissive` mode lets ordinary ask-rule and unclassified commands run without a prompt, but hard-denies require approval and uninspectable command substitutions require approval in every policy-enabled mode.
 
@@ -291,11 +291,8 @@ All tools return the standard envelope (`ok`, `kind`, `data`, `hint`, `elapsed_m
 | `diff_files` | Unified diff between two files |
 | `symbol_references` | Find all occurrences of a named symbol |
 | `dependency_graph` | TS/JS/Python/Rust/Go/Java/Kotlin import/symbol graph (JSON/DOT/Mermaid) |
-| `change_impact` | "What breaks if I edit this?" — bounded reverse/forward closure |
 
 **Two caps, two names.** `symbol_references` has `max_references` (how many references come back - the token bill, default 100) and `limit` (how many workspace hits are scanned - the work, default: `max_references`). The result says which one bit: `count` (found), `returned`, `omitted`, `scan_limit` and `limited`.
-
-**`change_impact` says what it could not resolve.** `unresolved[]` holds the **seeds** that did not resolve (the symbol is not declared, or the name is ambiguous in N files) with a `next_step`; the graph-wide unresolved imports are only counted (`stats.unresolved_imports`), because they say nothing about the seeds and cost tokens on every call.
 
 **The graph's side lists are short and counted.** `dependency_graph` returns the 50 most used `external[]` entries and the 10 first `unresolved[]` ones; `stats.externals` and `stats.unresolved_imports` hold the full counts, and `limited: true` says that a list was cut.
 

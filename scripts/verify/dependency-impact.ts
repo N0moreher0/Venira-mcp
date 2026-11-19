@@ -5,8 +5,8 @@ import type { Harness } from "./harness.js";
 export async function runDependencyImpact($h: Harness): Promise<void> {
   const { call, check, dir, textOf } = $h;
   const asEnvelope = (result: unknown) => JSON.parse(textOf(result) || "{}");
-  // 11d-ter. Dependency graph + change impact fixtures (written directly: no tool call needed).
-  console.log("[verify] checking dependency graph + change impact...");
+  // 11d-ter. Dependency graph fixtures (written directly: no tool call needed).
+  console.log("[verify] checking dependency graph...");
   const dgRoot = `${dir}/dg`;
   const dgPath = (rel: string) => `${dgRoot}/${rel}`;
   async function writeFixture(rel: string, text: string): Promise<void> {
@@ -469,138 +469,6 @@ interface KChild2 : KParent
     (graphAfterWrite.data?.nodes ?? []).map((node: { id: string }) => node.id),
   );
 
-  const impact = asEnvelope(
-    await call("change_impact", {
-      files: [dgPath("src/lib/util.ts")],
-      direction: "dependents",
-      depth: 5,
-      max_nodes: 50,
-    }),
-  );
-  const impactIds = (impact.data?.affected ?? []).map(
-    (entry: { id: string }) => entry.id,
-  ) as string[];
-  check(
-    "change_impact_reverse_closure",
-    impact.ok === true &&
-      impactIds.includes(dgPath("src/app.ts")) &&
-      impactIds.includes(dgPath("src/child.ts")) &&
-      impactIds.includes(dgPath("src/lib/index.ts")) &&
-      impactIds.includes(dgPath("src/lib/util.test.ts")) &&
-      Number(impact.data?.summary?.max_distance) >= 1,
-    { affected: impactIds, summary: impact.data?.summary },
-  );
-  check(
-    "change_impact_tests_counted_separately",
-    impact.data?.summary?.tests_affected === 1 &&
-      Number(impact.data?.summary?.affected_symbols) >= 1,
-    impact.data?.summary,
-  );
-  const impactNoTests = asEnvelope(
-    await call("change_impact", {
-      files: [dgPath("src/lib/util.ts")],
-      direction: "dependents",
-      depth: 5,
-      include_tests: 0,
-    }),
-  );
-  check(
-    "change_impact_excludes_tests",
-    !(impactNoTests.data?.affected ?? []).some(
-      (entry: { id: string }) => entry.id === dgPath("src/lib/util.test.ts"),
-    ) && impactNoTests.data?.summary?.tests_affected === 0,
-    impactNoTests.data?.summary,
-  );
-  const impactAmbiguous = asEnvelope(
-    await call("change_impact", {
-      symbols: ["dup"],
-      direction: "dependents",
-      depth: 3,
-      min_confidence: "possible",
-    }),
-  );
-  check(
-    "change_impact_ambiguous_symbol_possible",
-    impactAmbiguous.ok === true &&
-      (impactAmbiguous.data?.unresolved ?? []).some(
-        (entry: { symbol?: string; reason?: string }) =>
-          entry.symbol === "dup" && /ambiguous/.test(entry.reason ?? ""),
-      ) &&
-      (impactAmbiguous.data?.affected ?? []).every(
-        (entry: { confidence: string }) => entry.confidence === "possible",
-      ),
-    {
-      unresolved: impactAmbiguous.data?.unresolved,
-      affected: impactAmbiguous.data?.affected,
-    },
-  );
-  const impactPinned = asEnvelope(
-    await call("change_impact", {
-      symbols: [{ name: "dup", file: dgPath("src/dup-a.ts") }],
-      direction: "dependents",
-      depth: 3,
-    }),
-  );
-  check(
-    "change_impact_symbol_pinned_to_file",
-    impactPinned.ok === true &&
-      impactPinned.data?.seed?.files?.length === 1 &&
-      (impactPinned.data?.affected ?? []).some(
-        (entry: { id: string; confidence: string }) =>
-          entry.id === dgPath("src/use-dup.ts") && entry.confidence === "exact",
-      ),
-    {
-      seed: impactPinned.data?.seed,
-      affected: impactPinned.data?.affected,
-      unresolved: impactPinned.data?.unresolved,
-    },
-  );
-  const impactMermaid = asEnvelope(
-    await call("change_impact", {
-      files: [dgPath("src/lib/util.ts")],
-      direction: "dependents",
-      format: "mermaid",
-    }),
-  );
-  check(
-    "change_impact_mermaid",
-    impactMermaid.ok === true &&
-      String(impactMermaid.data?.graph ?? "").startsWith("graph LR"),
-    String(impactMermaid.data?.graph ?? "").slice(0, 120),
-  );
-  const rustImpact = asEnvelope(
-    await call("change_impact", {
-      files: [dgPath("rust/cli/src/main.rs")],
-      direction: "dependencies",
-      depth: 5,
-      max_nodes: 50,
-    }),
-  );
-  const rustImpactIds = (rustImpact.data?.affected ?? []).map(
-    (entry: { id: string }) => entry.id,
-  ) as string[];
-  check(
-    "change_impact_rust_module_dependent",
-    rustImpact.ok === true &&
-      rustImpactIds.includes(dgPath("rust/cli/src/report.rs")),
-    { affected: rustImpactIds, summary: rustImpact.data?.summary },
-  );
-  const goImpact = asEnvelope(
-    await call("change_impact", {
-      files: [dgPath("pkg/tool/tool.go")],
-      direction: "dependents",
-      depth: 5,
-      max_nodes: 50,
-    }),
-  );
-  const goImpactIds = (goImpact.data?.affected ?? []).map(
-    (entry: { id: string }) => entry.id,
-  ) as string[];
-  check(
-    "change_impact_go_package_dependent",
-    goImpact.ok === true && goImpactIds.includes(dgPath("main.go")),
-    { affected: goImpactIds, summary: goImpact.data?.summary },
-  );
   const javaGraphEdges = (graph.data?.edges ?? []).filter(
     (edge: { type: string; from: string }) =>
       edge.type === "import" &&
@@ -686,23 +554,6 @@ interface KChild2 : KParent
         "extends",
       ),
     graphEdges.filter((edge) => edge.from.includes("com/demo/K")),
-  );
-  const javaImpact = asEnvelope(
-    await call("change_impact", {
-      files: [dgPath("src/main/java/com/demo/service/Service.java")],
-      direction: "dependents",
-      depth: 5,
-      max_nodes: 50,
-    }),
-  );
-  const javaImpactIds = (javaImpact.data?.affected ?? []).map(
-    (entry: { id: string }) => entry.id,
-  ) as string[];
-  check(
-    "change_impact_java_package_dependent",
-    javaImpact.ok === true &&
-      javaImpactIds.includes(dgPath("src/main/java/com/demo/Main.java")),
-    { affected: javaImpactIds, summary: javaImpact.data?.summary },
   );
 
 }

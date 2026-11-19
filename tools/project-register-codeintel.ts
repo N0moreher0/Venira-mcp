@@ -6,7 +6,7 @@ import { runDiffFiles, runOutlineSymbol } from "./project-codeintel.js";
 import { config, flag01, path_ } from "./project-schema.js";
 
 // Code-intelligence tool registrations: outline_symbol, diff_files,
-// symbol_references, dependency_graph, change_impact.
+// symbol_references, dependency_graph.
 // Extracted from registerProjectTools in tools/project.ts (roadmap item 6, step 5m). Schemas, descriptions
 // and registration order are unchanged; handlers that need project.ts state arrive through CodeIntelDeps.
 
@@ -109,42 +109,4 @@ export function registerCodeIntelTools(server: McpServer, deps: CodeIntelDeps): 
     (args) => runOne("dependency_graph", args as Args),
   );
 
-  server.registerTool(
-    "change_impact",
-    {
-      ...config(
-        "Change impact",
-        {
-          speed_profile:
-            "medium; reuses the dependency index (5 s cache, invalidated on writes), BFS bounded by depth. No network.",
-          batch_safe: true,
-        },
-        { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
-      ),
-      inputSchema: {
-        files: z.array(z.string().max(500)).max(32).optional().describe("Workspace paths you plan to edit. At least one of files/symbols is required."),
-        symbols: z
-          .array(
-            z.union([
-              z.string().max(200),
-              z.object({
-                name: z.string().max(200).describe("Symbol name."),
-                file: z.string().max(500).optional().describe("Alias of relative_path (relative_path wins when both are given)."),
-                relative_path: z.string().max(500).optional().describe("File the symbol is declared in; preferred over file."),
-              }),
-            ]),
-          )
-          .max(32)
-          .optional()
-          .describe('Symbols you plan to rename/change; pass a name, or {name, relative_path} (or {name, file}) when the name is ambiguous. At least one of files/symbols is required.'),
-        direction: z.enum(["dependents", "dependencies", "both"]).optional().describe("Traversal direction (default dependents)."),
-        depth: z.number().int().min(1).max(10).optional().describe("Max hops from the seeds (default 5)."),
-        include_tests: flag01.optional().describe("true includes test files (default) and counts them in tests_affected."),
-        max_nodes: z.number().int().min(1).max(2000).optional().describe("Max affected files (default 300)."),
-        min_confidence: z.enum(["exact", "likely", "possible"]).optional().describe('Only traverse edges at or above this confidence (default "likely"). "exact" = import/declared-in-one-file ties; "likely" = unique name match; "possible" = name matched several declarations (noisy at distance >= 2). Skipped edges are counted in stats.filtered_possible.'),
-        format: z.enum(["json", "mermaid"]).optional().describe("Output format (default json)."),
-      },
-    },
-    (args) => runOne("change_impact", args as Args),
-  );
 }

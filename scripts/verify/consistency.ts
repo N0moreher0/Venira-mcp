@@ -3,9 +3,7 @@
  *
  * The small items that made an agent work harder than it had to:
  *
- *   1. `change_impact`: `unresolved[]` mixed the caller's own seed problems
- *      with graph-wide unresolved imports (noise). Now: the seeds only, plus
- *      a count for the graph noise.
+ *   1. `dependency_graph`: the side lists are capped and counted.
  *   2. `symbol_references`: `limit` and `max_references` overlapped and the
  *      schema did not say which was which. Now: the scan and the returned
  *      list have separate names, and the result says what was cut.
@@ -39,56 +37,12 @@ export async function runConsistency(
 
   // The harness writes fixture files directly (not through the MCP tools), so
   // the dependency-graph cache may hold a pre-fixture index: the server does
-  // not know .verify-tmp/impact/alpha.ts exists yet, and a shared 5 s cache
-  // entry built moments earlier hides it. Flush it before seeding.
+  // not know .verify-tmp/many-externals/pkg-*.ts exists yet, and a shared 5 s
+  // cache entry built moments earlier hides it. Flush it before seeding.
   await call("cache_clear", { type: "graph" });
 
   // -------------------------------------------------------------------------
-  // 1. change_impact: the seeds' problems, not the graph's noise
-  // -------------------------------------------------------------------------
-  await fs.mkdir(path.join(dir, "impact"), { recursive: true });
-  await fs.writeFile(
-    path.join(dir, "impact", "alpha.ts"),
-    "export function alphaSymbol(): number {\n  return 1;\n}\n",
-  );
-  await fs.writeFile(
-    path.join(dir, "impact", "beta.ts"),
-    'import { alphaSymbol } from "./missing-module";\nexport const beta = alphaSymbol;\n',
-  );
-  const impactOk = asEnvelope(
-    await call("change_impact", {
-      symbols: ["alphaSymbol"],
-      direction: "dependents",
-    }),
-  );
-  const impactUnresolved = (impactOk.data?.unresolved ?? []) as Array<
-    Record<string, unknown>
-  >;
-  check(
-    "change_impact_unresolved_holds_the_seed_problems_only",
-    impactOk.ok === true &&
-      Array.isArray(impactOk.data?.unresolved) &&
-      impactUnresolved.length === 0 &&
-      Number(impactOk.data?.stats?.unresolved_imports ?? 0) >= 1,
-    { unresolved: impactUnresolved, stats: impactOk.data?.stats },
-  );
-  const impactGhost = asEnvelope(
-    await call("change_impact", { symbols: ["ghostSymbolNobodyDeclared"] }),
-  );
-  const ghostUnresolved = (impactGhost.data?.unresolved ?? []) as Array<
-    Record<string, unknown>
-  >;
-  check(
-    "change_impact_names_the_seed_that_did_not_resolve",
-    ghostUnresolved.length === 1 &&
-      ghostUnresolved[0]?.symbol === "ghostSymbolNobodyDeclared" &&
-      typeof ghostUnresolved[0]?.next_step === "string" &&
-      !JSON.stringify(ghostUnresolved).includes("specifier"),
-    { unresolved: ghostUnresolved },
-  );
-
-  // -------------------------------------------------------------------------
-  // 1b. dependency_graph: the side lists are capped and counted
+  // 1. dependency_graph: the side lists are capped and counted
   // -------------------------------------------------------------------------
   await fs.mkdir(path.join(dir, "many-externals"), { recursive: true });
   await Promise.all(

@@ -212,7 +212,6 @@ export async function runShellEnvAudit(
       defaultList.tools.some((t) => t.name === "read_file") &&
       defaultList.tools.some((t) => t.name === "write_file") &&
       defaultList.tools.some((t) => t.name === "dependency_graph") &&
-      defaultList.tools.some((t) => t.name === "change_impact") &&
       defaultList.tools.some((t) => t.name === "snapshot"),
     {
       defaultCount: defaultList.tools.length,

@@ -233,7 +233,7 @@ Create a snapshot (`snapshot`, `action=create`, narrow `paths`, label like `befo
 | Duplicate | `copy_path` |
 | Delete | `delete_path` (`recursive=true` for folders), only on request, snapshot first |
 
-Before changing a shared symbol, signature or file name, run `change_impact` (pass `symbols` or `files`) to list dependents and the tests affected. Pass a short `reason` on mutating calls so the audit trail explains why.
+Before changing a shared symbol, signature or file name, check `symbol_references` for its usages; `dependency_graph` shows the structure around it. Pass a short `reason` on mutating calls so the audit trail explains why.
 
 ## 4. Verify
 
@@ -289,7 +289,7 @@ Find the root cause from evidence (logs, error text), fix it, and prove the fix.
 
 Pass the error block to `explain_error`. It matches known signatures (TypeScript, Python, git, npm, GitHub) offline and returns likely cause plus next actions. Treat that as a hypothesis and confirm it against the code:
 - Locate the failing file and line with `search` and `read_file` (ranges).
-- If the failure points at a changed symbol, check `change_impact`.
+- If the failure points at a changed symbol, check `symbol_references` for its usages.
 - Separate three causes: a code bug, a flaky or environment problem (timeouts, network, cache), and a config or dependency drift. Each has a different fix.
 
 ## 3. Fix

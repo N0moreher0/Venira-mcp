@@ -150,8 +150,8 @@ async function main() {
       await new Promise((r) => setTimeout(r, 500)); // let warm-up finish
 
       const tools = await client.listTools();
-      // Doctor pins VENIRA_JS_EXEC_MODE="off", which hides execute_js: expert = 52 - 1 = 51.
-      const expectedTools = 51; // expert minus the off-gated execute_js (52 with JS exec on; same as schema-budget's 52)
+      // Doctor pins VENIRA_JS_EXEC_MODE="off", which hides execute_js: expert = 44 - 1 = 43.
+      const expectedTools = 43; // expert minus the off-gated execute_js (44 with JS exec on; same as schema-budget's 44)
       results.push(await check("tools_count", tools.tools.length === expectedTools, { actual: tools.tools.length, expected: expectedTools }));
 
       const healthRes = await client.callTool({ name: "health", arguments: { include_audit: 0 } });

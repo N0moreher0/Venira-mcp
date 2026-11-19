@@ -4,6 +4,14 @@ Local release notes for venira-mcp. Not published (not listed in `package.json` 
 
 ## Unreleased
 
+### Breaking - `change_impact` tool removed entirely
+
+- **`change_impact` is gone** — the MCP surface now has `dependency_graph` (structure) and `symbol_references` (usages) only. Removed: tool registration (`tools/project-register-codeintel.ts`), handler (`opChangeImpact` in `lib/corehost.ts`), `buildChangeImpact` in `lib/dependency-graph.ts` (shared `buildDependencyGraph` untouched), `TOOL_DOCS.change_impact`, `corehost-search` comment reference, `project-request.ts` special-case, and all verify-suite checks (`consistency.ts` seed section, `dependency-impact.ts` impact checks; `shell-env-audit.ts` default-mode expectation).
+- **Docs corrected against reality**: the README/check-docs/doctor pinned counts of default 39 / expert 52 that no longer matched the registered tools (actual with JS exec on is default **31**, expert **44**, core **17**; with `VENIRA_JS_EXEC_MODE=off`: 30/43/16 — every extra schema byte is on every prompt, so the stale numbers matter). Fixed README (intro + mode table), `scripts/check-docs.ts` (EXPECTED_DEFAULT_TOOLS=31/EXPECTED_EXPERT_TOOLS=44), `scripts/doctor.ts` (JS-off expectedTools=43), `scripts/schema-budget.json` (entry dropped) and the git-merge changelog bullet. Measured via a temporary stdio `listTools` probe per mode (deleted after use).
+- **Verification:** `npm run build` passes; `npm run doctor` now passes `tools_count`; `npm run check:docs` passes.
+
+## Unreleased
+
 ### Breaking - six `git_*` tools merged into one `git` tool
 
 - **One tool, `git`** (used by client plugins as `venira_git`), replacing `git_status`, `git_diff`, `git_log`, `git_branch`, `git_commit`, `git_stash`. Same scope as before: workspace-relative paths, LC_ALL=C porcelain parsing, no pushing ever, audit reason for mutations.
@@ -11,7 +19,7 @@ Local release notes for venira-mcp. Not published (not listed in `package.json` 
   - `action=branch` / `action=stash` take `sub` (default `list`): branch `sub` = `list|current|create|switch|delete`; stash `sub` = `push|list|apply|pop|drop|show`. All sibling flags stay as before (`name`, `from`, `include_remote`, `force` for branch; `selector`, `include_untracked` for stash).
   - `message` is now capped at **1000** chars (was 500) for both `git commit -m` and `git stash push -m`.
 - The corehost ops (`git_status` … `git_stash`) are unchanged — the merge is schema-surface only.
-- `CORE_TOOLS` allowlist: the six entries replaced by `git` (still 22 → **17** tools; default 37, expert 50 unchanged by count before the budget update).
+- `CORE_TOOLS` allowlist: the six entries replaced by `git` (still 17 tools; default 31, expert 44 with JS exec on).
 - Docs updated: README (tool table core 17 + single `git` row), AGENTS.md, GEMINI.md, TOOL_DOCS (six entries → one), decision tree in `server.ts`, `scripts/test-tool-schema.ts`, `scripts/schema-budget.json` regenerated with `--update` (ratchet down). CHANGELOG/ROADMAP notes deliberately kept as history.
 - Verification: `npm run build`, `test:git-local`, `test:tool-schema`, `test:schema-budget`, `check:docs`.
 

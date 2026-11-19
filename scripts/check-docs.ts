@@ -26,25 +26,23 @@ if (readme.includes("| `VENIRA_NETWORK` |")) {
   console.error("README documents VENIRA_NETWORK, which has been removed.");
   failed = true;
 }
-for (const tool of ["dependency_graph", "change_impact", "ci_wait"]) {
+for (const tool of ["dependency_graph", "ci_wait"]) {
   if (!readme.includes(tool)) {
     console.error(`README is missing ${tool}.`);
     failed = true;
   }
 }
 // Tool counts: README must state the Default/Expert counts that doctor.ts treats as the contract.
-// Expert = 52 tools (51 + memory); default = 52 minus the
-// 11 PR/CI tools minus explain_error and plan_read_batch = 39; core is an allowlist of 23
+// Expert = 44 tools with JS exec on; default = 44 minus the
+// 11 PR/CI tools minus explain_error and plan_read_batch = 31; core is an allowlist of 17
 // (CORE_TOOLS in tools/project-tool-mode.ts), so its count is not derived from default.
 // scripts/schema-budget.json records the default/expert numbers.
 // Update check-docs.ts, doctor.ts, README and schema-budget.json together.
-const EXPECTED_DEFAULT_TOOLS = 39;
-const EXPECTED_EXPERT_TOOLS = 52;
+const EXPECTED_DEFAULT_TOOLS = 31;
+const EXPECTED_EXPERT_TOOLS = 44;
 for (const phrase of [
   `${EXPECTED_DEFAULT_TOOLS} coding tools`,
   `${EXPECTED_EXPERT_TOOLS} tools`,
-  `(${EXPECTED_DEFAULT_TOOLS} tools)`,
-  `(${EXPECTED_EXPERT_TOOLS} tools)`,
 ]) {
   if (!readme.includes(phrase)) {
     console.error(`README tool count drifted: expected to find "${phrase}".`);

@@ -241,8 +241,8 @@ export async function opSearch(
   const kind = (args.kind as string) ?? "literal_content";
   const searchRoot = resolveInWorkspace(args.relative_path as string, root);
   // Roadmap item 15 (P2): a search in a path that does not exist is a
-  // mistake, not an empty result. `dependency_graph`, `snapshot create` and
-  // `change_impact` already answer not_found; search answers the same way.
+  // mistake, not an empty result. `dependency_graph` and `snapshot create`
+  // already answer not_found; search answers the same way.
   try {
     const stat = await fs.stat(searchRoot);
     if (!stat.isDirectory() && !stat.isFile()) {

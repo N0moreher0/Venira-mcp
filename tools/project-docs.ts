@@ -195,14 +195,8 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
   dependency_graph: {
     about: "Build the import and reference graph for TypeScript/JavaScript, Python, Rust, Go, Java and Kotlin. format: json, dot or mermaid.",
     use: "you want module structure or what a subtree depends on. Narrow with relative_path, depth, languages.",
-    avoid: "you need usages of one symbol (symbol_references) or the impact of an edit (change_impact).",
+    avoid: "you need usages of one symbol (symbol_references) or arbitrary text (search).",
     out: "nodes[], edges[] {from, to, type, confidence}, external[] (top 50), unresolved[] (top 10), stats {externals, unresolved_imports}, limited, truncated. dot and mermaid return data.graph.",
-  },
-  change_impact: {
-    about: "List the files and symbols affected by changing given files or symbols (direction: dependents, dependencies or both). At least one of files/symbols; a symbol seed takes {name, relative_path} (file is an alias).",
-    use: "you are about to rename or change something and need which files to read and which tests to run.",
-    avoid: "you want the whole graph (dependency_graph).",
-    out: "affected[] {id, distance, path, confidence}, summary {affected_files, affected_symbols, tests_affected}, unresolved[] (the seeds that did not resolve: symbol, reason, next_step), stats {unresolved_imports, min_confidence, filtered_possible}. By default only exact/likely edges are traversed; pass min_confidence=\"possible\" to follow name-matching guesses.",
   },
 
   // ---- workflow -----------------------------------------------------------
