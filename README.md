@@ -233,7 +233,7 @@ Three tool modes set which tools the client sees. Set via `VENIRA_TOOL_MODE` env
 
 | Mode | Tools | Includes |
 |---|---|---|
-| `core` | **22** | Allowlist: `shell_run`, `shell_status`, `shell_cancel`, `execute_js`, `read_file`, `search`, `list_files`, `recent_files`, `outline_symbol`, `edit_file` (single **and** multi-file via `edits[]` with per-item `relative_path`, or `requests[]` on `read_file`), `write_file`, `delete_path`, `create`, `move_path`, `snapshot`, `git_status`, `git_diff`, `git_log`, `git_branch`, `git_commit`, `git_stash`, `memory` |
+| `core` | **17** | Allowlist: `shell_run`, `shell_status`, `shell_cancel`, `execute_js`, `read_file`, `search`, `list_files`, `recent_files`, `outline_symbol`, `edit_file` (single **and** multi-file via `edits[]` with per-item `relative_path`, or `requests[]` on `read_file`), `write_file`, `delete_path`, `create`, `move_path`, `snapshot`, `git`, `memory` |
 | `default` | **37** | Read/write/edit/search, code intel, snapshots, shell, `delete_path`, `execute_js` — **no** CI/CD; `explain_error` and `plan_read_batch` are expert-only |
 | `expert` | **50** | Everything in default + `pr_*`, `ci_*`, `explain_error`, `plan_read_batch` |
 
@@ -318,12 +318,7 @@ All tools return the standard envelope (`ok`, `kind`, `data`, `hint`, `elapsed_m
 
 | Tool | Purpose |
 |---|---|
-| `git_status` | Parsed worktree status: branch/detached, upstream (+ `upstream_gone`), ahead/behind, per-file `{path, old_path?, staged, unstaged, untracked, unmerged, kind, status, index_status, worktree_status}` + `counts`; `clean` flag; `paths[]` limits |
-| `git_diff` | Parsed diff (`staged=true` for the index): per-file `action` (`added|modified|deleted|renamed`) + `hunks[]` (`old_start/old_lines`, `new_start/new_lines`, `section`), `counts`, `patch_bytes`; `include_patch=true` adds the unified text capped at `max_bytes` |
-| `git_log` | Commit list (`ref`, `limit`, `paths[]`, `author`, `grep`) — or `blame=true` with `path` for per-line blame (`line, commit, author, authored_at, summary, prev_*`); `max_lines` caps blame |
-| `git_branch` | `action=list` (local; `include_remote=true` for remotes), `current`, `create` (`from=` optional), `switch`, `delete` (`force=true`) |
-| `git_commit` | Commit staged changes, or stage `paths[]` first; `amend=true` / `allow_empty=true` opt-in; reports `sha`, `files_changed`, `files` |
-| `git_stash` | `action=push|list|apply|pop|drop|show` (`stash@{N}`); `include_untracked=true` includes untracked files |
+| `git` | One tool: `action` = `status` | `diff` | `log` | `branch` | `commit` | `stash`. `status`: parsed worktree state (branch, ahead/behind, per-file staged/unstaged/untracked, counts, `clean`); `paths[]` limits. `diff`: per-file `action` + `hunks[]`, `include_patch=true` for the unified text capped at `max_bytes`; `staged=true` for the index. `log`: `ref`, `limit`, `paths[]`, `author`, `grep`, `blame=true` + `path` for per-line blame; `max_lines` caps blame. `branch`: `sub` = `list` (local; `include_remote=true` for remotes) | `current` | `create` (`from=` optional) | `switch` | `delete` (`force=true`). `commit`: `message` (first line = subject, max **1000** chars), stages `paths[]` first; `amend` / `allow_empty` opt-in. `stash`: `sub` = `push` | `list` | `apply` | `pop` | `drop` | `show` (`selector` = `stash@{N}`); `message` max **1000** chars, `include_untracked=true` for untracked files |
 
 Read-only git (`status`, `diff`, `log`/blame, `branch` list/current, `stash` list/show) needs no `reason`; mutating calls do. Mutations invalidate the whole cache (worktree-wide change). Local only against the workspace repository root (`git rev-parse --show-toplevel`; paths stay workspace-relative); **push is never performed by these tools** — routine git pushes need no approval, force/delete/URL pushes ask one, and `ALLOW_ENV_READ` is the only remaining named override.
 
@@ -385,6 +380,7 @@ Full reference: the source reads 80+ distinct supported `VENIRA_*` names; this t
 | `VENIRA_SHELL_MAX_TIMEOUT_MS` | `1800000` | Upper bound for a caller-supplied shell timeout (`timeout_s`); larger values are clamped to this |
 | `VENIRA_JS_EXEC_MODE` | `"off"` | `"off"` hides `execute_js` · `"ask"` registers it with per-call approval (skipped when `VENIRA_PERMISSION_MODE=allow_all`) · `"semi-auto"` registers it without approval, contained (workspace-only fs, scrubbed env, no child processes; network always open) · `"auto"` registers it without approval and without containment |
 | `VENIRA_USE_RIPGREP` | `"1"` | `"1"` uses ripgrep if installed (faster on big repos) |
+| `VENIRA_USE_GREP` | `"1"` | `"1"` tries GNU grep when ripgrep is unavailable (non-Windows); JS walker is the final fallback |
 | `VENIRA_SEARCH_MAX_FILES` | `"50000"` | Max files collected by the JS fallback walker before it stops and reports `complete: false`. Bounds searches rooted at huge trees (e.g. with `VENIRA_UNRESTRICTED=1` and an absolute path outside the workspace) |
 | `VENIRA_CACHE` | `"all"` | `all` every TTL cache on · `list` only directory listings · `search` only searches · `off` always fresh (slower) |
 | `VENIRA_EDIT_FUZZY` | `"0"` | `"1"` enables fuzzy-match fallback for `old_text`, and adds `fuzzy_distance`, `ignore_indentation` and `case_insensitive` to the `edit_file` schema (single-file and multi-file calls use the same flags). `tools/list` changes with this flag, so reconnect the client after changing it. With `"0"` those options are not advertised and a call that still sends them is refused with `[unsupported]` |

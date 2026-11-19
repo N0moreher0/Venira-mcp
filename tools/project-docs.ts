@@ -96,41 +96,11 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
     out: "dry_run: files[] {action, relative_path, hunks, bytes} plus added/modified/deleted/renamed counts; nothing is written. success: same list plus sha256_after per file. Failure: nothing is changed; data carries rollback_succeeded and, for a mismatching hunk, nearest_context lines for the file and hunk that failed.",
   },
 
-  git_status: {
-    about: "Parsed local git status: branch, ahead/behind vs upstream, and every changed file with staged/unstaged/untracked state and staged/worktree status letters.",
-    use: "you need the current repo state in a parseable form (before committing, stashing or opening a PR).",
-    avoid: "you only need the raw command (shell_run) or a remote host’s CI status (ci_status).",
-    out: "ok, branch/detached, upstream (gone flag), ahead/behind, files[] {path, old_path?, staged, unstaged, untracked, unmerged, kind, status, index_status/worktree_status}, counts{}, clean.",
-  },
-  git_diff: {
-    about: "Parsed git diff (staged or worktree): files + hunks (old_start/lines, new_start/lines, section). Patch text is opt-in via include_patch=true.",
-    use: "you need per-file hunk info for review/preview or a test, not free text.",
-    avoid: "you need a raw unified blob (use include_patch=true or diff_files) or a PR diff (provider tools).",
-    out: "files[] {old_path|null, new_path|null, action (added|modified|deleted|renamed), binary, hunks[] {old_start, old_lines, new_start, new_lines, section}}, counts{}, patch_bytes, patch/patch_truncated when include_patch=true.",
-  },
-  git_log: {
-    about: "Local commit log, or per-line blame when blame=true with path. Filters: ref, author, grep, paths.",
-    use: "you need recent commits or who last touched lines (blame).",
-    avoid: "you need tags/remote refs only (git branch --all) or a remote CI’s log (ci_logs).",
-    out: "mode=log: commits[] {sha, short_sha, author, email, authored_at, committer, subject, body}, count. mode=blame: entries[] {line, commit, author, authored_at, summary}, lines.",
-  },
-  git_branch: {
-    about: "List local (and optionally remote-tracking) branches, or create/switch/delete one.",
-    use: "you need the current branch, want to branch off HEAD, switch branches, or prune a merged branch.",
-    avoid: "you need the worktree state (git_status) or a remote PR’s head branch (pr_list).",
-    out: "list: current, branches[] {name, current, commit, upstream, track, remote}, branch_count. create/switch/delete: branch, commit/created/switched/deleted/force. Missing branch gives not_found; duplicate name gives conflict.",
-  },
-  git_commit: {
-    about: "Commit changes. Without paths: commit whatever is staged (paths given to it are staged first with git add). Amend is opt-in.",
-    use: "your edits are ready to be committed locally.",
-    avoid: "nothing should be committed (git only stages when paths are given, or you already staged). Merge/rebase and push are not performed.",
-    out: "sha, short_sha, subject, files_changed, files, amend. No staged changes gives invalid_request (pass paths or stage first).",
-  },
-  git_stash: {
-    about: "Stash push/list/apply/pop/drop/show. Push stashes staged+unstaged tracked changes (add include_untracked=true for untracked files).",
-    use: "you need to pause work to switch branches or commit selectively.",
-    avoid: "you need to stash and keep a copy (stash keeps one; use apply over pop) or drop permanently (prefer apply, then commit).",
-    out: "push: pushed, message, selector, output. list: entries[] {selector, sha, subject}, count. apply/pop/drop: applied/dropped. show: files[], count.",
+  git: {
+    about: "Local git in one call: `action` = status | diff | log | branch | commit | stash. status: parsed worktree state (branch, ahead/behind, per-file staged/unstaged/untracked, counts, clean). diff: staged (`staged=true`) or worktree diff: per-file action (added|modified|deleted|renamed) + hunks; unified text opt-in via `include_patch=true` (byte-capped by max_bytes). log: commit list or `--blame` for one file (`path` + `blame=true`); filters ref/author/grep. branch: `sub` = list|current|create|switch|delete (name/from/include_remote/force). commit: message (required, first line = subject, max 1000 chars); stages paths[] first, else commits already-staged; `allow_empty`/`amend` opt-in. stash: `sub` = push|list|apply|pop|drop|show (selector stash@{N}, message max 1000 chars, include_untracked=1 for -u). Never pushes; audited reason needed for mutations.",
+    use: "you need the repo state, a diff, history/blame, a branch/stash or a commit. blame for who last touched lines; log with author/grep for filtered history; diff (not shell_run git) for hunk previews.",
+    avoid: "you only need to push (shell_run) or a remote host's CI status (ci_status).",
+    out: "status: ok, branch/detached, upstream (gone flag), ahead/behind, files[] {path, old_path?, staged, unstaged, untracked, unmerged, kind, status, index_status/worktree_status}, counts{}, clean. diff: files[] {old_path|null, new_path|null, action, hunks[] {old_start, old_lines, new_start, new_lines, section}}, counts{}, patch_bytes, patch/patch_truncated when include_patch=true. log: commits[] {sha, short_sha, author, email, authored_at, committer, subject, body} (blame mode: entries[] {line, commit, author, authored_at, summary}). branch: list -> current, branches[]; create/switch/delete -> created/switched/deleted/force (missing branch -> not_found; duplicate -> conflict). commit: sha, short_sha, subject, files_changed, files, amend (no staged changes -> invalid_request; pass allow_empty=true). stash: pushed, message, selector, output / entries[] {selector, sha, subject}, count.",
   },
 
   // ---- shell & JS ---------------------------------------------------------
@@ -193,7 +163,7 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
   memory: {
     about: "Read or overwrite this workspace's handoff note at <workspace>/.venira/memory.md (action=read|write; write replaces it all, max 6000 bytes).",
     use: "a task starts or resumes (read, after recent_files); before you finish or run out of context (write: goal, decisions, files touched, next steps).",
-    avoid: "lasting docs (write_file) or history (git_log). Plain text on disk: no secrets.",
+    avoid: "lasting docs (write_file) or history (git action=log). Plain text on disk: no secrets.",
     out: "read: exists, content, bytes, updated_at_ms. write: replaced, previous_bytes, bytes, updated_at_ms. Over the cap or empty content: invalid_request, old note kept.",
   },
   read_audit: {

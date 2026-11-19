@@ -4,8 +4,19 @@ import type { ToolResult } from "../lib/output.js";
 import type { Args } from "./project-cache.js";
 import { config, flag01, reason_ } from "./project-schema.js";
 
-// Local git tools: git_status, git_diff, git_log,
-// git_branch, git_commit, git_stash.
+// Local git: ONE tool `git` (exposed as `venira_git` in client plugins) with
+// `action` = status | diff | log | branch | commit | stash, plus `sub` for the
+// branch/stash sub-actions. The corehost operations stay `git_status`..`git_stash`;
+// this file only merges the schema surface and maps argv for the runners.
+//
+//   git action=status {paths?}
+//   git action=diff   {staged?, paths?, context_lines?, include_patch?, max_bytes?}
+//   git action=log    {ref?, limit?, paths?, author?, grep?, blame?, path?, max_lines?}
+//   git action=branch {sub?, name?, from?, include_remote?, force?}   sub: list|current|create|switch|delete
+//   git action=commit {message, paths?, allow_empty?, amend?}
+//   git action=stash  {sub?, selector?, paths?, message?, include_untracked?}  sub: push|list|apply|pop|drop|show
+//
+// message (commit body, stash push note) is capped at 1000 chars.
 
 export type GitToolsDeps = {
   runOne: (operation: string, args: Args) => Promise<ToolResult>;
@@ -29,122 +40,72 @@ const context_lines_ = z
   .optional()
   .describe("Unified-diff context lines (default 3).");
 
+const branch_sub_ = z
+  .enum(["list", "current", "create", "switch", "delete"])
+  .optional()
+  .describe("Branch sub-action (action=branch): list (default; local branches, include_remote=true for origin), current (checked-out branch), create/switch/delete (name required; create uses from=start ref, default HEAD; delete uses force=true to keep an unmerged branch).");
+
+const stash_sub_ = z
+  .enum(["push", "list", "apply", "pop", "drop", "show"])
+  .optional()
+  .describe("Stash sub-action (action=stash): push (staged+unstaged tracked changes; include_untracked=true adds -u), list (default), show, apply/pop/drop (selector stash@{N}).");
+
 export function registerGitTools(server: McpServer, deps: GitToolsDeps): void {
   const { runOne } = deps;
   // -------------------------------------------------------------------------
-  // Local git: read-only queries run free; commit/branch/stash mutations need
-  // an audit reason and never push (routine git is allowed; force/delete/URL pushes need approval).
+  // Local git: merged into ONE tool (`git`). Read-only sub-actions run free;
+  // mutations need an audited `reason`; this tool never pushes.
   // -------------------------------------------------------------------------
 
   server.registerTool(
-    "git_status",
+    "git",
     {
-      ...config("Git status", {
-        speed_profile: "fast; one git status call, output parsed.",
-        batch_safe: true,
-      }, { readOnlyHint: true, openWorldHint: false }),
+      ...config("Local git", {
+        speed_profile: "one git call per action; output is parsed and locale-independent.",
+        batch_safe: false,
+      }, { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }),
       inputSchema: {
-        paths: paths_.describe("Optional workspace-relative paths to limit the status."),
+        action: z
+          .enum(["status", "diff", "log", "branch", "commit", "stash"])
+          .default("status")
+          .describe("Which git operation to run: status | diff | log | branch | commit | stash."),
+        // shared options
+        paths: paths_.describe("Optional workspace-relative paths. status/diff/log/stash: limits what the command looks at. commit: paths to stage first (git add); omit to commit the already-staged set. Not used by action=branch."),
         reason: reason_,
-      },
-    },
-    (args) => runOne("git_status", args as Args),
-  );
-
-  server.registerTool(
-    "git_diff",
-    {
-      ...config("Git diff", {
-        speed_profile: "scales with the diff; hunk metadata is parsed, patch text is opt-in.",
-        batch_safe: true,
-      }, { readOnlyHint: true, openWorldHint: false }),
-      inputSchema: {
-        staged: flag01.optional().describe("true compares the index to HEAD (git diff --cached); false compares worktree to HEAD/index."),
-        paths: paths_.describe("Optional workspace-relative paths to limit the diff."),
+        // diff
+        staged: flag01.optional().describe("action=diff: true compares the index to HEAD (git diff --cached); false compares worktree to HEAD/index."),
         context_lines: context_lines_,
-        include_patch: flag01.optional().describe("true includes the unified diff text (truncated to max_bytes)."),
+        include_patch: flag01.optional().describe("action=diff: true includes the unified diff text (truncated to max_bytes)."),
         max_bytes: z.number().int().min(1024).max(1_048_576).optional().describe("Patch text budget when include_patch=true (default 65536)."),
-        reason: reason_,
-      },
-    },
-    (args) => runOne("git_diff", args as Args),
-  );
-
-  server.registerTool(
-    "git_log",
-    {
-      ...config("Git log", {
-        speed_profile: "bounded by limit; blame mode scales with file size and max_lines.",
-        batch_safe: true,
-      }, { readOnlyHint: true, openWorldHint: false }),
-      inputSchema: {
+        // log
         ref: ref_,
         limit: limit_,
-        paths: paths_.describe("Optional workspace-relative paths to limit the log."),
-        author: z.string().max(300).optional().describe("Filter commits by author name or email."),
-        grep: z.string().max(300).optional().describe("Filter commit messages by substring."),
-        blame: flag01.optional().describe("true switches to blame mode for path (optionally ref)."),
-        path: z.string().min(1).max(4096).optional().describe("Required when blame=true: the file to blame."),
+        author: z.string().max(300).optional().describe("action=log: filter commits by author name or email."),
+        grep: z.string().max(300).optional().describe("action=log: filter commit messages by substring."),
+        blame: flag01.optional().describe("action=log: true switches to blame mode for path (optionally ref)."),
+        path: z.string().min(1).max(4096).optional().describe("action=log + blame: the file to blame."),
         max_lines: z.number().int().min(1).max(5_000).optional().describe("Blame entries to return (default 1000)."),
-        reason: reason_,
+        // branch / stash
+        sub: z.union([branch_sub_, stash_sub_]).optional().describe("Branch sub-action when action=branch (list|current|create|switch|delete); stash sub-action when action=stash (push|list|apply|pop|drop|show). Default: list."),
+        name: z.string().max(250).optional().describe("action=branch sub=create|switch|delete: branch name (required)."),
+        from: z.string().max(300).optional().describe("action=branch sub=create: start ref (default: HEAD)."),
+        include_remote: flag01.optional().describe("action=branch sub=list: true includes remote-tracking branches in the list."),
+        force: flag01.optional().describe("action=branch sub=delete: true allows deleting an unmerged branch (git branch -D); false uses -d."),
+        selector: z.string().max(30).optional().describe("action=stash sub=apply|pop|drop: stash selector (default stash@{0}); format stash@{N}."),
+        // commit / stash push
+        message: z.string().max(1000).optional().describe("action=commit: commit message (first line is the subject, required). action=stash sub=push: optional note stored in the stash entry."),
+        allow_empty: flag01.optional().describe("action=commit: true allows an empty commit (git commit --allow-empty)."),
+        amend: flag01.optional().describe("action=commit: true amends HEAD instead of creating a new commit."),
+        include_untracked: flag01.optional().describe("action=stash sub=push: true includes untracked files when pushing."),
       },
     },
-    (args) => runOne("git_log", args as Args),
-  );
-
-  server.registerTool(
-    "git_branch",
-    {
-      ...config("Git branch", {
-        speed_profile: "fast; one branch call, remote branches optional.",
-        batch_safe: false,
-      }, { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false }),
-      inputSchema: {
-        action: z.enum(["list", "current", "create", "switch", "delete"]).default("list").describe("list: local branches (add include_remote=true for origin); current: just the checked-out branch; create/switch/delete: local branch."),
-        name: z.string().max(250).optional().describe("Branch name (required for create/switch/delete)."),
-        from: z.string().max(300).optional().describe("Optional start ref for action=create (default: HEAD)."),
-        include_remote: flag01.optional().describe("true includes remote-tracking branches in action=list."),
-        force: flag01.optional().describe("true allows deleting an unmerged branch (git branch -D); false uses -d."),
-        reason: reason_,
-      },
+    (args) => {
+      const { action, sub, ...rest } = args as Record<string, unknown>;
+      const payload: Record<string, unknown> = { ...rest };
+      if (action === "branch" || action === "stash") {
+        payload.action = typeof sub === "string" && sub.trim() ? sub : "list";
+      }
+      return runOne(`git_${String(action)}`, payload as Args);
     },
-    (args) => runOne("git_branch", args as Args),
-  );
-
-  server.registerTool(
-    "git_commit",
-    {
-      ...config("Git commit", {
-        speed_profile: "one git add (only when paths given) plus one git commit; output is the new HEAD plus file count.",
-        batch_safe: false,
-      }, { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }),
-      inputSchema: {
-        message: z.string().min(1).max(500).describe("Commit message (first line is the subject)."),
-        paths: paths_.describe("Optional workspace-relative paths to stage. Omit to commit what is already staged."),
-        allow_empty: flag01.optional().describe("true allows an empty commit (git commit --allow-empty)."),
-        amend: flag01.optional().describe("true amends HEAD instead of creating a new commit."),
-        reason: reason_,
-      },
-    },
-    (args) => runOne("git_commit", args as Args),
-  );
-
-  server.registerTool(
-    "git_stash",
-    {
-      ...config("Git stash", {
-        speed_profile: "fast; list is read-only, push/apply/pop/drop touch the worktree.",
-        batch_safe: false,
-      }, { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }),
-      inputSchema: {
-        action: z.enum(["push", "list", "apply", "pop", "drop", "show"]).default("list").describe("push: stash changes; list: list stashes; apply/pop/drop: apply/pop/drop a stash; show: list files in a stash."),
-        selector: z.string().max(30).optional().describe("Stash selector (default stash@{0}); format stash@{N}."),
-        paths: paths_.describe("Optional workspace-relative paths to limit what gets stashed."),
-        message: z.string().max(500).optional().describe("Optional message for action=push."),
-        include_untracked: flag01.optional().describe("true includes untracked files when pushing."),
-        reason: reason_,
-      },
-    },
-    (args) => runOne("git_stash", args as Args),
   );
 }

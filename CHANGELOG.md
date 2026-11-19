@@ -2,6 +2,76 @@
 
 Local release notes for venira-mcp. Not published (not listed in `package.json` `files`) and not pushed to git.
 
+## Unreleased
+
+### Breaking - six `git_*` tools merged into one `git` tool
+
+- **One tool, `git`** (used by client plugins as `venira_git`), replacing `git_status`, `git_diff`, `git_log`, `git_branch`, `git_commit`, `git_stash`. Same scope as before: workspace-relative paths, LC_ALL=C porcelain parsing, no pushing ever, audit reason for mutations.
+  - `action` (default `status`): `status` | `diff` | `log` | `branch` | `commit` | `stash`.
+  - `action=branch` / `action=stash` take `sub` (default `list`): branch `sub` = `list|current|create|switch|delete`; stash `sub` = `push|list|apply|pop|drop|show`. All sibling flags stay as before (`name`, `from`, `include_remote`, `force` for branch; `selector`, `include_untracked` for stash).
+  - `message` is now capped at **1000** chars (was 500) for both `git commit -m` and `git stash push -m`.
+- The corehost ops (`git_status` … `git_stash`) are unchanged — the merge is schema-surface only.
+- `CORE_TOOLS` allowlist: the six entries replaced by `git` (still 22 → **17** tools; default 37, expert 50 unchanged by count before the budget update).
+- Docs updated: README (tool table core 17 + single `git` row), AGENTS.md, GEMINI.md, TOOL_DOCS (six entries → one), decision tree in `server.ts`, `scripts/test-tool-schema.ts`, `scripts/schema-budget.json` regenerated with `--update` (ratchet down). CHANGELOG/ROADMAP notes deliberately kept as history.
+- Verification: `npm run build`, `test:git-local`, `test:tool-schema`, `test:schema-budget`, `check:docs`.
+
+## Unreleased
+
+### Changed - `search` engine chain rg → grep → JS walker + slimmer schema
+
+- **New second engine link.** `opSearch` now runs ripgrep → GNU grep → JS walker: on machines without `rg` (mostly Linux/macOS boxes), a clean `grep` exit serves the `literal_content` path (both normal hits and `files_only`) with the same flag semantics as the rg fast path (IGNORED dirs, include_hidden, glob filters, ranking, `files_only` sorted output, `invert`). Any anomaly — grep missing, spawn error, exit code outside {0,1}, malformed record — falls back to the JS walker; grep can never invent an empty "no matches". Controlled by the new `VENIRA_USE_GREP=1` flag (default on; Windows never has grep on PATH, so it degenerates to rg → JS there).
+- **Search schema descriptions slimmed down** (~550 B less, `scripts/schema-budget.json` search entry now 3611 B, ceiling unchanged at 4162 B). Names, defaults and the `invert`/`files_only`/`queries[]` advanced tier are unchanged; only the wording got tighter, plus the tool config speed_profile now names the chain (`rg → grep → JS walker`).
+- Tests: `test:tool-schema` (29/29), `test:tool-envelopes`, `test:p2-clarity` (30/30), `test:schema-budget`, `test:env-registry` (56 checks incl. the new flag) all pass. `scripts/smoke.ts` reports `escape NOT blocked — bug!` — pre-existing (unmodified file, fails on HEAD too); the `rg → grep → JS` chain could not be exercised on Windows because no `grep` binary exists here — parity for grep is only guaranteed by code review, not run.
+
+## Unreleased
+
+### Breaking - `read_batch` / `edit_batch` merged into `read_file` / `edit_file`; `write_file` create makes folders
+
+- **`read_batch` is gone.** `read_file` is now single **and** multi: pass `requests[]` (max 8 items; each item takes read_file's own arguments: `relative_path`, `start_line`/`end_line`, `ranges[]`, `max_bytes`, `line_numbers`). Each item runs exactly like its own read_file call; a bad item fails only itself, and the envelope answers `status:"partial"` / `ok:false` with `data.responses[]`. `max_response_bytes_per_item` still accepted, range-checked by the handler. `read_file` is registered as a loose object so the hidden key reaches the handler (the SDK strips keys for raw shapes; without that, the per-item budget would be silently lost). Expert/default tool totals ratchet DOWN: expert 80918→76826 B (50 tools), default 61728→57630 B (37 tools); `scripts/schema-budget.json` updated.
+- **`edit_batch` is gone.** `edit_file` is now single **and** multi-file: any `edits[]` item may carry its own `relative_path`; the whole call then edits every touched file all-or-nothing, like the former edit_batch (automatic checkpoint, rollback, `rollback_succeeded`). Mixed calls (some items with `relative_path`) are supported. Without per-item paths it is the old single-file behavior. `replace_all` is optional per item (was optional in edit_batch too). `fuzzy` options ride along as before (`VENIRA_EDIT_FUZZY=1`).
+- **`write_file` mode=`create` now creates the parent folders too** (create implies `create_dirs=true`), e.g. `venira/file.txt` in one call. `create_dirs` remains as an explicit opt-in for `overwrite`/`append`.
+- Envelope `kind` for multi-file edits is now `edit_file`; `read_file` multi-file answers with `status:"partial"` when any item fails.
+- Core allowlist: `edit_batch` removed from `CORE_TOOLS` (core stays 22 tools; default 37, expert 50).
+- Docs updated: README, AGENTS.md, GEMINI.md, TOOL_DOCS, decision tree in `server.ts`, `plan_read_batch` (returns a `read_file` `requests[]` call). CHANGELOG/ROADMAP notes deliberately kept as history.
+- Tests updated: `test:tool-schema` (29), `test:tool-envelopes` (renamed/pointed at the multi-file mode), `test:file-info-missing-ok` (read_file multi-file item isolation), `test:p2-clarity`, `scripts/verify/{core,search,checkpoints-errors}.ts`, `verify` 582 checks expected green.
+
+### Changed - `search` accepts grep -v / grep -l flags
+- Two new boolean flags: `invert` (grep -v — lines WITHOUT the match; also applies to `file_name`/`directory_name` and `definition`) and `files_only` (grep -l — only files with at least one match; `hits` are file paths, line numbers/snippets omitted, `total_match_lines` is omitted too). `count_only` is implicitly redundant with `files_only`; `limit` still caps the list.
+- Both ripgrep fast path and the JS scanner support both flags; backend parity is pinned by `scripts/verify/search.ts` (3 new checks).
+- The JS scanner's phantom trailing empty line (the `""` element after a final `\n`) is no longer treated as a line — fixes over-counting for `invert` (and for file line counts generally).
+- `case_sensitive` descriptions claimed "default false" while the code always defaulted to true; both tool `inputSchema` and the `read_batch` search args now document "default true". The 80% usage path is listed first in the schema (reordered: `query`, `relative_path`, `kind`, `glob`, ...; `queries`/`files_hint`/`hybrid` moved to the end, labelled "Advanced (rarely needed)"), `TOOL_DOCS.search.about` and decision-tree step 3 teach `search { query: "foo", kind: "literal_content", relative_path: "src" }`, and `kind`'s "Required unless ..." note was corrected (`literal_content` is the default).
+- Commit: 11243d3 covered the edit output slim-down; this entry rides the next release together with it.
+
+### Changed - edit output slimmed down (`edit_file` + `edit_batch`)
+
+Every failed `edit_file` item and every per-item response in `edit_batch` is smaller:
+- `mismatch` is numbers only (`line`, `edit_line`, `char_offset`, `chars_off`); `expected_line`, `actual_line` and `detail` (which echoed the agent's own edit text) are gone.
+- `buildEditContext` drops `numbered` (duplicate of `context.text`); `header`, `text`, `first_line`, `last_line` remain. The hint keeps pointing at `context.text`.
+- Success data is now `{relative_path, action, replacements, sha256_after, verified?, fuzzy_used?}` — `sha256_before` (you already hold read_file's whole-file hash), `verified_sha256` (exact duplicate of `sha256_after`), and the agent's `reason` echoed back are no longer returned. Roughly 142 B/item.
+- Docs: `project-docs.ts` `TOOL_DOCS` + `README.md`; tests updated (`scripts/test-p2-clarity.ts`, `scripts/test-edit-verify.ts` asserts the slim contract); `npm run verify` 582 checks, `test:tool-schema` 29/29.
+
+## 4.5.0 - 2026-11-18
+
+### Changed - `core` tool mode is an allowlist of 23 tools
+- `VENIRA_TOOL_MODE=core` no longer means "default minus code intelligence" (32 tools). It is now an allowlist (`CORE_TOOLS` in `tools/project-tool-mode.ts`) holding only the must-have tools: `shell_run`, `shell_status`, `shell_cancel`, `execute_js`, `read_file`, `search`, `list_files`, `edit_file`, `edit_batch`, `write_file`, `delete_path`, `snapshot`, `git_status`, `git_diff`, `git_log`, `git_branch`, `git_commit`, `git_stash`, plus the light helpers `recent_files`, `outline_symbol`, `create`, `move_path` and `memory` (about 5.5 KB of schema; core is roughly 36 KB against 61.7 KB for default). Everything else, including tools added later, stays out of `tools/list` until it is listed. `execute_js` is still gated by `VENIRA_JS_EXEC_MODE` (core with it off = 22 tools). `delete_path` stays because shell `rm -rf` / `rd /s` are hard-denied in every mode.
+- The setup tools (`detect_harnesses`, `install_self`) live in their own `SETUP_TOOLS` group and join any mode, `core` included, only with `VENIRA_SETUP_TOOLS=1` (core + setup = 25). `default` and `expert` never block them.
+- `plan_read_batch`: the `include_search` description was shortened so the `true`/`false` wording stays inside its schema byte budget (1262 B, ceiling 1265 B).
+- Tests: `npm run test:tool-schema` (29 checks) asserts every allowlisted tool is a real registered tool, core blocks every other tool and stays inside the default surface, and setup tools join only with `VENIRA_SETUP_TOOLS=1`.
+- Docs: README (intro, §4 mode table, env table) and the `check-docs.ts` comment now describe the allowlist.
+
+### Added - `snapshot_unsafe_path` error code
+- A checkpoint index that is valid but lists an absolute or `..` file path (written by an older build that allowed roots outside the workspace) is now reported as `snapshot_unsafe_path` instead of `snapshot_corrupt`. It is never restored. `snapshot action=list` shows it in `unreadable[]` with the offending path in `message`; `snapshot action=delete` removes it when its header names this workspace, like `snapshot_corrupt`. A malformed entry (bad sha256, size or mtime) stays `snapshot_corrupt`.
+- `lib/output.ts` carries a hint and a next action for the new code.
+- Tests: `npm run test:snapshot-lifecycle` (18 checks) covers `..` and absolute paths, restore refusal and delete.
+
+### Changed - unreadable checkpoints can be cleared through the tool
+- `snapshot action=list` returns `message` for every `unreadable[]` row, so the cause is visible; `snapshot action=delete` removes an unreadable `snapshot_corrupt` / `snapshot_unsafe_path` index owned by this workspace (`was_unreadable: true`) and resumes blob cleanup. It still refuses another workspace's index (`scope_denied`), unparseable bytes and `snapshot_version_unsupported`.
+- `edit_batch` checkpoints are labelled `edit_batch: <paths>` instead of the bare `edit_batch`.
+
+### Changed - boolean flags are advertised as booleans
+- `flag01` and `backgroundFlag` advertise `type: boolean` in `tools/list`, and parameter descriptions, README and `AGENTS.md` say `true`/`false`. The parser is unchanged: `1`/`0` and the string spellings are still accepted, so existing clients and prompts keep working. Environment variables keep their `0`/`1` values.
+- `scripts/test-tool-schema.ts` asserts the boolean schema (no integer range, no `anyOf`) and the accepted spellings.
+
 ## 4.4.0 - 2026-11-14
 
 ### Changed - `memory` note lives in the workspace, not the data dir

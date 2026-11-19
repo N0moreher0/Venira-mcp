@@ -10,16 +10,16 @@ client. Follow the same loop the skills teach, scoped to the server itself:
 
 1. **Orient** — `recent_files` for what moved; `list_files`/`search` for
    exact layout. In unfamiliar territory call `plan_read_batch` and run its suggestion
-   (`read_batch`, max 8 files per call).
+   (`read_file` with `requests[]`, max 8 files per call).
 2. **Checkpoint** — `snapshot action=create` with a narrow `paths` set and a descriptive
    label before touching behavior, config, or more than one file. Git is the floor, snapshots
    are the ceiling.
 3. **Edit** — smallest change that fixes the problem; no drive-by cleanups. Prefer
    `edit_file` (exact `old_text`, `expected_sha256` on re-reads); `apply_patch` /
-   `edit_batch` for a multi-file change that cannot land half-written. Routine git
+   `edit_file` (`edits[]` with per-item `relative_path`) for a multi-file change that cannot land half-written. Routine git
    (`add`, `commit`, `merge`, `rebase`, plain `push`) runs without approval; force / delete /
    URL pushes do not — see `README.md` § Approvals.
-4. **Verify** — read the diff (`git_diff`), build if you compiled anything
+4. **Verify** — read the diff (`git action=diff`), build if you compiled anything
    (`npm run build`), then the narrowest check first: `npm run test:<suite>`. Full gate =
    `npm run verify` (must be green) plus `npm run doctor` on host-sensitive changes. If a check
    fails, read the log first and only then edit; do not retry the identical command blindly.
@@ -43,7 +43,7 @@ client. Follow the same loop the skills teach, scoped to the server itself:
   diff, log, blame, branch, commit, stash. Read-only git runs free; plain push is allowed;
   everything else with an effect still respects the shell policy.
 - Routines are cache-aware: write/move/apply/edit invalidate the whole cache; list/search are
-  TTL-cached. `recent_files`, `read_batch` etc. are served warm; distorted
+  TTL-cached. `recent_files`, `read_file` etc. are served warm; distorted
   behaviour usually means the binary changed but the running server did not — re-ask or
   restart the client.
 
@@ -90,7 +90,7 @@ npm run bench:mcp          # end-to-end numbers for PRs
 - **New `VENIRA_*` variable** — add it to `ENV_REGISTRY` in `lib/env-registry.ts`
   (`test:env-registry` compares the registry against the runtime source) *and* to the README
   env table (`check:docs` compares the docs against the source).
-- Every boolean tool flag is the integer `0|1` (`flag01` in `tools/project-schema.ts`), every
+- Every boolean tool flag is advertised as a boolean (`flag01` / `backgroundFlag` in `tools/project-schema.ts`; the parser still accepts `1`/`0`), every
   parameter needs a non-empty description, and `reason` (max 400 chars) is audit-logged on
   mutating calls.
 - Shell policy changes need `npm run test:policy-corpus` (corpus: `scripts/policy-corpus.json`
@@ -124,18 +124,19 @@ The repo's own client config (`.mcp.json`, local only) runs `dist/server.js`, so
 source edits** or the MCP tools serve the old build.
 
 - Start with `recent_files` (limit 10–20) instead of guessing files; feed the paths
-  into `read_batch` (max 8 items). `plan_read_batch` returns a ready batch call
-  for an unfamiliar area.
-- 2+ reads → one `read_batch`. One file → `read_file` with `start_line/end_line`
+  into `read_file` with `requests[]` (max 8 items). `plan_read_batch` returns a ready
+  `read_file` call for an unfamiliar area.
+- 2+ reads → one `read_file` with `requests[]`. One file → `read_file` with `start_line/end_line`
   or `ranges[]` (max 16); follow `next_start_line` when truncated.
 - Prefer `edit_file` (exact `old_text`→`new_text`, `expected_sha256` for a verified
-  re-read) over `write_file`; `edit_batch` for multi-file, all-or-nothing edits.
+  re-read) over `write_file`; `edit_file` with per-item `relative_path` in `edits[]` for
+  multi-file, all-or-nothing edits.
 - Take a `snapshot` before multi-file/overwrite/delete work. Restore with
-  `dry_run=1` first, then `verify=1, delete_extra=0`; never `delete_extra=1`.
+  `dry_run=true` first, then `verify=true, delete_extra=false`; never `delete_extra=true`.
 - Pass `reason` ("why", <=400 chars) on every write/edit/delete/snapshot/PR/CI call — it lands in
   the audit trail.
 - `shell_run` returns `run_id`; poll `shell_status` until `running=false`, or use
-  `background: 0` for short commands whose output you need now. `ok=true` only means the call
+  `background: false` for short commands whose output you need now. `ok=true` only means the call
   completed — read `command_status`/`exit_code`.
 - `approval_required`: stop, show the user `approval_id` and `approve_command`, retry once after
   they confirm. Never approve it yourself and never loop.
@@ -159,7 +160,7 @@ New tools must look and behave like the existing ones, because clients and agent
 ## 1. Learn the conventions first
 
 - `recent_files` and `list_files` on the `tools/`, `lib/`, and `scripts/verify/` folders.
-- Read one or two tools close to the new one (for example a small read-only tool and a mutating one) with `read_batch`.
+- Read one or two tools close to the new one (for example a small read-only tool and a mutating one) with `read_file` (`requests[]`).
 - Find where tools are registered: `search` (kind `literal_content`) for an existing tool name, and follow it to the registry.
 - Note the helpers the existing tools share: workspace path validation, error codes, audit logging, output-mode trimming.
 
@@ -182,7 +183,7 @@ Checkpoint first with `snapshot` (include the registry file, README, and CHANGEL
 
 ## 5. Document
 
-Update the README tool list and add a CHANGELOG entry. Then review everything with `git_diff` and report: tool name, files touched, snapshot id, and which checks passed.
+Update the README tool list and add a CHANGELOG entry. Then review everything with `git action=diff` and report: tool name, files touched, snapshot id, and which checks passed.
 
 <!-- /venira-skill:venira-add-tool -->
 
@@ -210,7 +211,7 @@ Clients may prefix tool names (for example `mcp__venira__read_file`). The tool n
 ## 1. Orient
 
 - `recent_files` (depth 2-3, limit 20-30) shows what moved lately and which files are in play.
-- In an unfamiliar area, `plan_read_batch` with a one-line task description, then run the `read_batch` it proposes (max 8 files per call).
+- In an unfamiliar area, `plan_read_batch` with a one-line task description, then run the `read_file` call it proposes (max 8 files per call).
 - For big files use `outline_symbol` first, then `read_file` with `start_line`/`end_line` or `ranges`.
 - Never guess paths. Use `search` (`file_name`, `literal_content`, `definition`) or `list_files`.
 - Read project instructions if they exist (AGENTS.md, CONTRIBUTING.md, README) before the first edit.
@@ -224,27 +225,27 @@ Create a snapshot (`snapshot`, `action=create`, narrow `paths`, label like `befo
 | Need | Tool |
 |---|---|
 | One targeted change | `edit_file` with exact `old_text`, plus `expected_sha256`; use `edits[]` for several replacements in one file |
-| Several files that must land together | `edit_batch` (all-or-nothing, automatic rollback) |
-| Change that arrives as a diff | `apply_patch`, `dry_run=1` first |
-| New file | `write_file` `mode=create`, `create_dirs=1` |
+| Several files that must land together | `edit_file` with `edits[]` carrying per-item `relative_path` (all-or-nothing, automatic rollback) |
+| Change that arrives as a diff | `apply_patch`, `dry_run=true` first |
+| New file | `write_file` `mode=create`, `create_dirs=true` |
 | Replace a whole file | `write_file` `mode=overwrite` with `expected_sha256`, after a snapshot |
 | Rename or move | `move_path` (not undoable, snapshot first) |
 | Duplicate | `copy_path` |
-| Delete | `delete_path` (`recursive=1` for folders), only on request, snapshot first |
+| Delete | `delete_path` (`recursive=true` for folders), only on request, snapshot first |
 
 Before changing a shared symbol, signature or file name, run `change_impact` (pass `symbols` or `files`) to list dependents and the tests affected. Pass a short `reason` on mutating calls so the audit trail explains why.
 
 ## 4. Verify
 
-- Review the change with `git_diff` (`include_patch=1`) or `diff_files`.
-- Run the narrowest check first (type-check or one test), then the full suite once before finishing. Use `shell_run` with `background=0` for short commands. For long ones use `background=1`, then `shell_status` with `wait_seconds` until `running=false`.
+- Review the change with `git action=diff` (`include_patch=true`) or `diff_files`.
+- Run the narrowest check first (type-check or one test), then the full suite once before finishing. Use `shell_run` with `background=false` for short commands. For long ones use `background=true`, then `shell_status` with `wait_seconds` until `running=false`.
 - Pick the shell explicitly when syntax matters. Windows PowerShell 5.1 has no `&&`: chain with `;`, or use `pwsh` or `bash`.
 - On failure, pass the stderr to `explain_error`, confirm the cause in the code, then fix. Do not retry blindly.
 - Fix and re-verify until clean. If you cannot run a check, say so instead of implying it passed.
 
 ## 5. Roll back
 
-`snapshot` `action=restore` with the id: first `dry_run=1` to preview, then `verify=1`. Use `paths` to restore only some files. Use `delete_extra=1` only when you really want files created after the snapshot removed. Restore beats hand-reverting because it is exact.
+`snapshot` `action=restore` with the id: first `dry_run=true` to preview, then `verify=true`. Use `paths` to restore only some files. Use `delete_extra=true` only when you really want files created after the snapshot removed. Restore beats hand-reverting because it is exact.
 
 ## Error recovery
 
@@ -252,12 +253,12 @@ Before changing a shared symbol, signature or file name, run `change_impact` (pa
 |---|---|---|
 | `not_found` | Wrong path | `search` for the name. Do not guess. |
 | `old_text_not_found` | File changed, or whitespace or line endings differ | Read `data.mismatch` and `data.context`, re-read that range, retry with exact text |
-| `old_text_ambiguous` | Text matches several places | Widen `old_text` with surrounding lines. `replace_all=1` only if every match should change |
+| `old_text_ambiguous` | Text matches several places | Widen `old_text` with surrounding lines. `replace_all=true` only if every match should change |
 | `expected_sha256` refused | File changed since you read it | Re-read, re-apply the change. Never force it |
 | `conflict` | Target already exists | Choose another path, or snapshot then `overwrite` if intended |
 | `batch_failed` | Everything was rolled back (`rollback_succeeded`) | Fix the item named in `data.executed` and `data.skipped`, rerun the batch |
 | `approval_required` | A human must approve | Tell the user, give `data.approval.approve_command` or use `approval_wait_s`, retry once with `approval_id`. Do not work around it |
-| `repeated_failure` | The identical command already failed | Read `data.previous.stderr_tail` and change the command. `retry_failed=1` only for flaky or environmental failures |
+| `repeated_failure` | The identical command already failed | Read `data.previous.stderr_tail` and change the command. `retry_failed=true` only for flaky or environmental failures |
 | `truncated: true` | Output was cut | Continue with `start_line=next_start_line`, or narrow `relative_path`, `limit` or `depth` |
 | Odd or stale results | Cache out of sync after external changes | `cache_clear`, then `health` (sections `warnings`, `posture`) |
 
@@ -281,7 +282,7 @@ Find the root cause from evidence (logs, error text), fix it, and prove the fix.
 
 ## 1. Get the evidence
 
-- Local failure: reproduce with `shell_run` (`background=0` for short commands). Capture the stderr tail.
+- Local failure: reproduce with `shell_run` (`background=false` for short commands). Capture the stderr tail.
 - CI failure: `ci_status` with `pr`, `branch`, or `ref` to find the failing run. Pass `run_id` to see its jobs, then `ci_logs` with the failing `job_id` (start with the default tail, widen `tail_lines` only if needed).
 
 ## 2. Classify the failure
@@ -293,7 +294,7 @@ Pass the error block to `explain_error`. It matches known signatures (TypeScript
 
 ## 3. Fix
 
-Follow the venira-coding-workflow habits: snapshot if the fix is multi-file, edit surgically, then re-run the exact failing command locally. If `shell_run` answers `repeated_failure`, read `data.previous.stderr_tail` and change the approach instead of passing `retry_failed=1`.
+Follow the venira-coding-workflow habits: snapshot if the fix is multi-file, edit surgically, then re-run the exact failing command locally. If `shell_run` answers `repeated_failure`, read `data.previous.stderr_tail` and change the approach instead of passing `retry_failed=true`.
 
 ## 4. Confirm on CI
 
@@ -319,24 +320,24 @@ Make each step explicit and reversible. Merging and pushing change shared state,
 
 ## 1. Inspect
 
-Call `git_status` (branch, ahead/behind, changed files) and `git_diff` to see exactly what would be committed. Use `git_log` for recent commit style so new messages match the repo.
+Call `git action=status` (branch, ahead/behind, changed files) and `git action=diff` to see exactly what would be committed. Use `git action=log` for recent commit style so new messages match the repo.
 
 ## 2. Branch
 
-- New work goes on a branch: `git_branch` action `create` (optionally `from`), then `switch`.
-- Need to pause? `git_stash` push (add `include_untracked=1` when needed), then `apply` over `pop` so a copy is kept until you are sure.
+- New work goes on a branch: `git action=branch sub=create` (optionally `from`), then `sub=switch`.
+- Need to pause? `git action=stash sub=push` (add `include_untracked=true` when needed), then `sub=apply` over `sub=pop` so a copy is kept until you are sure.
 
 ## 3. Commit
 
-- Stage and commit with `git_commit`, passing explicit `paths` so unrelated files stay out.
+- Stage and commit with `git action=commit`, passing explicit `paths` so unrelated files stay out.
 - Write an imperative subject line, matching the repo's convention from the log. Put the why in the body.
 - Amend only when the user asks. Never use it to rewrite commits that were already pushed.
 
 ## 4. Push and open the PR
 
-`git_commit` does not push. Push with `shell_run` (`git push -u origin <branch>`). Under the current policy: plain push is allowed without approval everywhere except `strict` (needs approval there); force pushes (`--force`, `+ref`, `--force-with-lease`), delete pushes, `--mirror`, and pushes to URLs need approval in `balanced` and `strict`, and run freely in `permissive` and `off`. If one asks for approval, tell the user instead of trying to dodge it.
+`git action=commit` does not push. Push with `shell_run` (`git push -u origin <branch>`). Under the current policy: plain push is allowed without approval everywhere except `strict` (needs approval there); force pushes (`--force`, `+ref`, `--force-with-lease`), delete pushes, `--mirror`, and pushes to URLs need approval in `balanced` and `strict`, and run freely in `permissive` and `off`. If one asks for approval, tell the user instead of trying to dodge it.
 
-Then `pr_create` with a one-line imperative title and a body holding a summary and a test plan. Use `draft=1` if the work is unfinished.
+Then `pr_create` with a one-line imperative title and a body holding a summary and a test plan. Use `draft=true` if the work is unfinished.
 
 ## 5. Watch CI and respond
 

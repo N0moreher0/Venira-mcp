@@ -85,12 +85,7 @@ export const CORE_TOOLS: readonly string[] = [
   // checkpoint
   "snapshot",
   // git
-  "git_status",
-  "git_diff",
-  "git_log",
-  "git_branch",
-  "git_commit",
-  "git_stash",
+  "git",
   // handoff note that outlives the chat
   "memory",
 ];

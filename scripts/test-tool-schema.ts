@@ -410,7 +410,7 @@ check("core mode: every allowlisted tool is a real registered tool (no typo or r
 check("core mode: keeps shell, execute_js, read, search, list, edit, snapshot and git", () => {
   for (const name of [
     "shell_run", "shell_status", "execute_js", "read_file", "search", "list_files",
-    "edit_file", "write_file", "snapshot", "git_status", "git_diff", "git_commit",
+    "edit_file", "write_file", "snapshot", "git",
     "create", "move_path", "recent_files", "outline_symbol", "memory",
   ]) {
     assert.ok(toolMode.CORE_TOOLS.includes(name), `core must keep ${name}`);
@@ -472,7 +472,7 @@ check("core mode: applyDisabledTools registers only the allowlist (plus setup to
   assert.deepEqual(registerAll("0").sort(), [...toolMode.CORE_TOOLS].sort());
   assert.deepEqual(registerAll("1").sort(), [...toolMode.CORE_TOOLS, ...SETUP_TOOLS].sort());
   // VENIRA_DISABLE_TOOLS still layers on top of the allowlist.
-  assert.deepEqual(registerAll("0", "git_stash,execute_js").sort(), toolMode.CORE_TOOLS.filter((n) => n !== "git_stash" && n !== "execute_js").sort());
+  assert.deepEqual(registerAll("0", "git,execute_js").sort(), toolMode.CORE_TOOLS.filter((n) => n !== "git" && n !== "execute_js").sort());
 });
 
 const fuzzyIn = (keys: string[]) => keys.filter((k) => FUZZY.includes(k)).sort();
