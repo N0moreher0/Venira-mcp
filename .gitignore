@@ -59,3 +59,6 @@ Desktop.ini
 # Local MCP client config (machine-specific env, may hold relaxed security flags): never commit
 .vscode/mcp.json
 .mcp.json
+# Local-only notes and client config (never commit)
+/commit-msg.txt
+/opencode.jsonc

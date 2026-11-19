@@ -109,10 +109,8 @@ npm run bench:mcp          # end-to-end numbers for PRs
 - Git-ignored local-only files — do not treat as canonical and do not commit:
   `.mcp.json`, `mcp.json`, `Bug.txt`, `ROADMAP*.md`, `PUSH-NOTES.md`, `docs/`, `set-secret.js`,
   `wait-ci.js`.
-- `G:\Venira\Venira-mcp-skills\` (outside this repo) holds the Claude-skills versions of the
-  workflows in this file (`venira-coding-workflow`, `venira-add-tool`, `venira-debug-ci`,
-  `venira-git-pr`). If you are asked to follow those skills, prefer the exact text there —
-  this file is deliberately a compact index, not a copy.
+- The workflow is also packaged as Claude skills (`venira-coding-workflow`, `venira-add-tool`,
+  `venira-debug-ci`, `venira-git-pr`). This file is deliberately a compact index, not a copy.
 - Commits follow conventional commits (`feat(scope):`, `fix(scope):`, `chore(release):`).
   A release = bump the version in the four places above, then
   `npm run build && npm run check:docs && npm run check:source-shape && npm run verify`,
