@@ -4,6 +4,18 @@ Local release notes for venira-mcp. Not published (not listed in `package.json` 
 
 ## Unreleased
 
+### Changed - search batch validation and partial results
+
+- `search` now rejects mixing `searches[]` with top-level `query`, `queries`, `files_hint`, or `kind`; the query schema explicitly says to use one mode.
+- `core` omits advanced `queries[]` and `files_hint` from the search schema. Search batch steps expose `content`/`glob` (legacy `grep`/`rg` aliases remain accepted), isolate per-step arguments, reject `glob` on path-glob steps, and run at most four searches concurrently.
+- Partial search and `read_file requests[]` results no longer set MCP `isError` unless every item fails, so clients can retain successful item content.
+
+### Search regex and batch operations
+
+- `search` now treats content patterns as regex by default; set `regex=false` for exact text. Engine selection stays automatic.
+- Added optional `searches[]` for up to 8 independent `grep`, `rg`, or path `glob` operations, each with its own pattern and scope. Single-query calls remain available.
+- Fixed directory-name searches and file-scoped file-name searches. The JS fallback now ranks a bounded set before applying `limit`; regex validation covers `files_only` and invalid-pattern hints recommend `regex=false`. GNU grep uses PCRE for common regex escapes and rejects non-clean exits (including code 2) so the JS walker can take over.
+
 ### Breaking - `change_impact` tool removed entirely
 
 - **`change_impact` is gone** — the MCP surface now has `dependency_graph` (structure) and `symbol_references` (usages) only. Removed: tool registration (`tools/project-register-codeintel.ts`), handler (`opChangeImpact` in `lib/corehost.ts`), `buildChangeImpact` in `lib/dependency-graph.ts` (shared `buildDependencyGraph` untouched), `TOOL_DOCS.change_impact`, `corehost-search` comment reference, `project-request.ts` special-case, and all verify-suite checks (`consistency.ts` seed section, `dependency-impact.ts` impact checks; `shell-env-audit.ts` default-mode expectation).

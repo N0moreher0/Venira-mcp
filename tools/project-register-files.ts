@@ -1,6 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { ToolResult } from "../lib/output.js";
+import { batchEnvelope, errorEnvelope, newRequestId, toolResult, VeniraError } from "../lib/output.js";
 import { editFuzzyEnabled } from "../lib/env.js";
 import type { Args } from "./project-cache.js";
 import {
@@ -13,6 +14,7 @@ import {
 } from "./project-batch.js";
 import { runHybridSearch, type HybridDeps } from "./project-hybrid.js";
 import { runRecentFiles, type RecentFilesDeps } from "./project-recent.js";
+import { getToolMode } from "./project-tool-mode.js";
 import {
   config,
   editFuzzyShape,
@@ -39,8 +41,76 @@ export type FileToolsDeps = {
   runSearchSelective: (args: Args) => Promise<ToolResult>;
 };
 
+type SearchStep = { type: "content" | "glob"; pattern: string; relative_path?: string; glob?: string; regex?: boolean | 0 | 1 };
+
+async function runSearchSteps(args: Args, runOne: FileToolsDeps["runOne"]): Promise<ToolResult> {
+  const steps = args.searches as SearchStep[];
+  const started = Date.now();
+  const requestId = newRequestId();
+  const responses: Record<string, unknown>[] = new Array(steps.length);
+  let nextIndex = 0;
+  const runStep = async (index: number): Promise<Record<string, unknown>> => {
+    const step = steps[index];
+    if (step.type === "glob" && step.glob !== undefined) {
+      return {
+        index,
+        type: step.type,
+        ok: false,
+        status: "failed",
+        error: { code: "invalid_request", message: "glob is only valid for content searches.", retryable: false },
+        hint: "Remove `glob` from this searches[] item.",
+      };
+    }
+
+    const inherited: Args = {};
+    for (const key of ["exclude_glob", "case_sensitive", "include_hidden", "limit", "context_lines", "whole_word"]) {
+      if (args[key] !== undefined) inherited[key] = args[key];
+    }
+    const operationArgs: Args = {
+      ...inherited,
+      query: step.pattern,
+      relative_path: step.relative_path ?? args.relative_path,
+      kind: step.type === "glob" ? "path_glob" : "literal_content",
+      ...(step.type === "content" && step.glob !== undefined ? { glob: step.glob } : {}),
+      ...(step.type === "content" ? { regex: step.regex ?? true } : {}),
+    };
+    try {
+      const result = await runOne("search", operationArgs);
+      const text = result.content[0]?.text;
+      if (typeof text !== "string") throw new Error("Search returned no result payload.");
+      const payload: unknown = JSON.parse(text);
+      if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
+        throw new Error("Search returned an invalid result payload.");
+      }
+      const envelope = payload as Record<string, unknown>;
+      if (typeof envelope.ok !== "boolean") throw new Error("Search returned an invalid result payload.");
+      return { index, type: step.type, ...envelope };
+    } catch (error) {
+      return {
+        index,
+        type: step.type,
+        ok: false,
+        status: "failed",
+        error: { code: "internal", message: error instanceof Error ? error.message : String(error), retryable: false },
+      };
+    }
+  };
+  const worker = async (): Promise<void> => {
+    while (true) {
+      const index = nextIndex++;
+      if (index >= steps.length) return;
+      responses[index] = await runStep(index);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(4, steps.length) }, () => worker()));
+  const failedCount = responses.filter((response) => response.ok === false).length;
+  const envelope = batchEnvelope(requestId, responses, Date.now() - started, {}, { kind: "search_batch" });
+  return toolResult(envelope, responses.length > 0 && failedCount === responses.length);
+}
+
 export function registerFileTools(server: McpServer, deps: FileToolsDeps): void {
   const { runOne, hybridDeps, recentFilesDeps, batchDeps, maxBatchItemBytes, runSearchSelective } = deps;
+  const coreMode = getToolMode() === "core";
   // VENIRA_EDIT_FUZZY decides whether the fuzzy options are advertised (ROADMAP_TOOL_SCHEMA.md, phase 3).
   // Read once per registration, like VENIRA_JS_EXEC_MODE for execute_js.
   const fuzzy = editFuzzyEnabled();
@@ -149,47 +219,84 @@ export function registerFileTools(server: McpServer, deps: FileToolsDeps): void 
       ),
       inputSchema: {
         // ~99% of calls need only `query` (+ optionally relative_path). Everything below is fine-tuning.
-        query: z.string().optional().describe("What to find (plain substring; regex=true for regex). The only parameter most calls need."),
-        relative_path: path_.optional().describe("Directory (or one file) to scan. Default: workspace root; narrow it for speed."),
-        kind: z.enum(["file_name", "directory_name", "literal_content", "definition"]).optional().describe("literal_content (default): lines containing the match. definition: symbol declarations only. file_name/directory_name: name substring."),
-        glob: z.string().optional().describe("rg glob filter ('*.ts' = any depth, 'tools/*.ts' = that folder)."),
-        exclude_glob: z.string().optional().describe("rg glob exclusion (same syntax as glob)."),
-        limit: z.number().int().min(1).max(200).optional().describe("Max hits (default/max 200; ignored when count_only=true)."),
-        regex: flag01.optional().describe("true = query is a regex (default false = plain substring)."),
-        case_sensitive: flag01.optional().describe("true (default) = case-sensitive match for literal_content/definition."),
-        whole_word: flag01.optional().describe("true = whole-word match only (rg -w)."),
-        include_hidden: flag01.optional().describe("default true; false = skip dotfiles. Secrets always excluded."),
-        invert: flag01.optional().describe("true = lines WITHOUT a match (grep -v)."),
-        files_only: flag01.optional().describe("true = only files with a match (grep -l), no lines/content."),
-        context_lines: z.number().int().min(0).max(20).optional().describe("Context lines around each hit (default 0)."),
-        count_only: flag01.optional().describe("true = only counts; limit is ignored."),
-        hybrid: flag01.optional().describe("Advanced: tag hits with source/confidence. literal_content only."),
-        queries: z
-          .array(
-            z.object({
-              pattern: z.string().min(1).describe("Substring matched against each line."),
-              must: flag01.optional().describe("true (default false): line must contain this pattern too."),
-              weight: z.number().int().optional().describe("Points per matching line (default 1)."),
-            }),
-          )
-          .min(1)
-          .max(8)
-          .optional()
-          .describe("Advanced (rarely needed): weighted multi-pattern ranking (overrides kind/query). Hits carry score/matched. Pair with files_hint."),
-        files_hint: z
-          .array(z.string().max(300))
-          .max(20)
-          .optional()
-          .describe("Advanced (rarely needed): paths to scan when queries[] is set (first 20 used)."),
+        query: z.string().optional().describe("Use query OR searches[] (not both). Regex by default; set regex=false for exact text."),
+        relative_path: path_.optional().describe("File or folder to scan (default: workspace root)."),
+        kind: z.enum(["file_name", "directory_name", "literal_content", "definition"]).optional().describe("literal_content (default), definition, file_name or directory_name."),
+        glob: z.string().optional().describe("Filter content-search paths; path-only globs use searches[].type=glob."),
+        exclude_glob: z.string().optional().describe("Exclude matching paths."),
+        limit: z.number().int().min(1).max(200).optional().describe("Max hits (default 200)."),
+        regex: flag01.optional().describe("false searches exact text (default: regex)."),
+        case_sensitive: flag01.optional().describe("Case-sensitive (default true)."),
+        whole_word: flag01.optional().describe("Match whole words only."),
+        include_hidden: flag01.optional().describe("Include dotfiles (default true)."),
+        invert: flag01.optional().describe("Return lines without a match."),
+        files_only: flag01.optional().describe("Return matching paths only."),
+        context_lines: z.number().int().min(0).max(20).optional().describe("Context lines per hit (default 0)."),
+        count_only: flag01.optional().describe("Return counts only; ignores limit."),
+        hybrid: flag01.optional().describe("Advanced: add source/confidence tags."),
+        ...(!coreMode
+          ? {
+              queries: z
+                .array(
+                  z.object({
+                    pattern: z.string().min(1).describe("Text to match."),
+                    must: flag01.optional().describe("Require this pattern (default false)."),
+                    weight: z.number().int().optional().describe("Score weight (default 1)."),
+                  }),
+                )
+                .min(1)
+                .max(8)
+                .optional()
+                .describe("Advanced: weighted patterns; overrides query/kind. Hits include score and matched patterns."),
+              files_hint: z
+                .array(z.string().max(300))
+                .max(20)
+                .optional()
+                .describe("Advanced: limit queries[] to these paths (max 20)."),
+            }
+          : {}),
+        searches: z.array(z.object({
+          type: z.preprocess(
+            (value) => value === "grep" || value === "rg" ? "content" : value,
+            z.enum(["content", "glob"]),
+          ).describe("Content search or path glob; engine is automatic."),
+          pattern: z.string().min(1).max(512).describe("Regex by default; glob pattern for type=glob."),
+          relative_path: path_.optional().describe("Item scope; defaults to the top-level path."),
+          glob: z.string().max(256).optional().describe("Content-search file filter."),
+          regex: flag01.optional().describe("false searches exact text."),
+        })).min(1).max(8).optional().describe("Batch up to 8 independent searches; each result includes its index and type."),
       },
     },
     (args) => {
-      if (Array.isArray((args as Args).queries) && ((args as Args).queries as unknown[]).length > 0) {
-        return runSearchSelective(args as Args);
+      const a = args as Args;
+      if (Array.isArray(a.searches) && a.searches.length > 0) {
+        const clash = ["query", "queries", "files_hint", "kind"].filter((key) => a[key] !== undefined);
+        if (clash.length > 0) {
+          const requestId = newRequestId();
+          return toolResult(
+            errorEnvelope(
+              "search",
+              new VeniraError(
+                "invalid_request",
+                `Pass either top-level query OR searches[], not both (got: ${clash.join(", ")}).`,
+              ),
+              {
+                requestId,
+                elapsedMs: 0,
+                hint: "Send one top-level search or searches[] items; queries[] is a separate advanced ranking mode.",
+              },
+            ),
+            true,
+          );
+        }
+        return runSearchSteps(a, runOne);
       }
-      return args.hybrid === true && args.kind === "literal_content"
-        ? runHybridSearch(args as Args, hybridDeps)
-        : runOne("search", args);
+      if (Array.isArray(a.queries) && a.queries.length > 0) {
+        return runSearchSelective(a);
+      }
+      return a.hybrid === true && a.kind === "literal_content"
+        ? runHybridSearch(a, hybridDeps)
+        : runOne("search", a);
     },
   );
 

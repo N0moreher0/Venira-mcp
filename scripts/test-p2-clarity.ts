@@ -79,6 +79,13 @@ await check("search in a missing path is not_found", async () => {
   assert.match(error.message, /list_files/);
 });
 
+await check("grep exit 2 is rejected for JS fallback", () => {
+  assert.equal(search.isCleanGrepResult({ status: 0 }), true);
+  assert.equal(search.isCleanGrepResult({ status: 1 }), true);
+  assert.equal(search.isCleanGrepResult({ status: 2 }), false);
+  assert.equal(search.isCleanGrepResult({ status: null, error: { code: "ENOENT" } }), false);
+});
+
 await check("listing a missing directory is not_found", async () => {
   const error = await rejects(() => fileread.opListFiles({ relative_path: "no-such-dir" }, workspace));
   assert.match(error.message, /^\[not_found\]/);

@@ -27,6 +27,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { z } from "zod";
 
 process.env.VENIRA_JS_EXEC_MODE = "ask"; // so execute_js registers too
+process.env.VENIRA_TOOL_MODE = "default";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const load = (rel: string) => import(pathToFileURL(path.join(repoRoot, rel)).href);
@@ -186,6 +187,11 @@ function walk(node: unknown, where: string, depth: number): void {
 let checks = 0;
 function check(name: string, fn: () => void) {
   fn();
+  checks += 1;
+  console.log(`ok - ${name}`);
+}
+async function checkAsync(name: string, fn: () => Promise<void>) {
+  await fn();
   checks += 1;
   console.log(`ok - ${name}`);
 }
@@ -493,6 +499,156 @@ function jsonOf(input: unknown): string {
   return JSON.stringify(z.toJSONSchema(schema as never, { io: "input", unrepresentable: "any" }));
 }
 
+type SearchToolResult = { content: { type: "text"; text: string }[]; isError?: boolean };
+type SearchToolHandler = (args: Record<string, unknown>) => Promise<SearchToolResult>;
+
+function registerSearchForTest(
+  runOne: (operation: string, args: Record<string, unknown>) => Promise<SearchToolResult>,
+): { schema: Record<string, unknown>; call: (args: Record<string, unknown>) => Promise<SearchToolResult> } {
+  let handler: SearchToolHandler | undefined;
+  let inputSchema: unknown;
+  const server = {
+    registerTool: (name: string, config: Record<string, unknown>, callback: SearchToolHandler) => {
+      if (name === "search") {
+        inputSchema = config.inputSchema;
+        handler = callback;
+      }
+    },
+  } as never;
+  files.registerFileTools(server, { ...fileToolDeps, runOne: runOne as never });
+  if (!inputSchema || !handler) throw new Error("search tool did not register");
+  const schema = shapeOf(inputSchema);
+  const validator = inputSchema instanceof z.ZodType ? inputSchema : z.object(schema as never);
+  return {
+    schema,
+    call: async (args) => handler!(validator.parse(args) as Record<string, unknown>),
+  };
+}
+
+check("search schema: advanced weighted queries are omitted only in core mode", () => {
+  const saved = process.env.VENIRA_TOOL_MODE;
+  try {
+    process.env.VENIRA_TOOL_MODE = "default";
+    const full = registerSearchForTest(async () => ({ content: [{ type: "text", text: "{}" }] }));
+    assert.ok("queries" in full.schema);
+    assert.ok("files_hint" in full.schema);
+    assert.match(effectiveDescription(full.schema.query) ?? "", /query OR searches\[\] \(not both\)/);
+    process.env.VENIRA_TOOL_MODE = "core";
+    const core = registerSearchForTest(async () => ({ content: [{ type: "text", text: "{}" }] }));
+    assert.ok(!("queries" in core.schema));
+    assert.ok(!("files_hint" in core.schema));
+  } finally {
+    if (saved === undefined) delete process.env.VENIRA_TOOL_MODE;
+    else process.env.VENIRA_TOOL_MODE = saved;
+  }
+});
+
+check("search schema: content aliases parse to content while only content/glob are advertised", () => {
+  const search = registered.get("search")!;
+  const shape = shapeOf(search.inputSchema);
+  let searches = defOf(shape.searches);
+  while (searches && searches.type === "optional") searches = defOf(searches.innerType);
+  const item = searches?.element as { _zod?: unknown } | undefined;
+  const typeSchema = shapeOf(item).type as z.ZodType;
+  const typeJson = z.toJSONSchema(typeSchema, { io: "input", unrepresentable: "any" }) as { enum?: unknown[] };
+  assert.deepEqual(typeJson.enum, ["content", "glob"]);
+  for (const alias of ["grep", "rg"]) {
+    assert.equal(typeSchema.parse(alias), "content");
+  }
+});
+
+await checkAsync("search batch: rejects clashes, isolates args and caps concurrency at four", async () => {
+  let dispatched = 0;
+  let active = 0;
+  let maxActive = 0;
+  const operationArgs: Record<string, unknown>[] = [];
+  const search = registerSearchForTest(async (_operation, args) => {
+    dispatched += 1;
+    operationArgs.push(args);
+    active += 1;
+    maxActive = Math.max(maxActive, active);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    active -= 1;
+    return { content: [{ type: "text", text: JSON.stringify({ ok: true, status: "completed", data: {} }) }] };
+  });
+
+  for (const [field, value] of [
+    ["query", "top-level"],
+    ["queries", [{ pattern: "weighted" }]],
+    ["files_hint", ["src/a.ts"]],
+    ["kind", "definition"],
+  ] as const) {
+    const result = await search.call({ searches: [{ type: "content", pattern: "step" }], [field]: value });
+    const envelope = JSON.parse(result.content[0].text) as { error?: { code?: string }; hint?: string };
+    assert.equal(envelope.error?.code, "invalid_request");
+    assert.match(envelope.hint ?? "", /either|one/i);
+  }
+  assert.equal(dispatched, 0, "clashing calls must not dispatch a search");
+
+  const result = await search.call({
+    relative_path: "src",
+    exclude_glob: "*.min.js",
+    case_sensitive: true,
+    include_hidden: false,
+    limit: 12,
+    context_lines: 2,
+    whole_word: true,
+    files_only: true,
+    invert: true,
+    searches: Array.from({ length: 8 }, (_, index) => ({ type: "content", pattern: `p${index}` })),
+  });
+  const envelope = JSON.parse(result.content[0].text) as { status: string };
+  assert.equal(envelope.status, "completed");
+  assert.equal(dispatched, 8);
+  assert.equal(maxActive, 4, "search batch should run at most four requests concurrently");
+  assert.deepEqual(operationArgs[0], {
+    exclude_glob: "*.min.js",
+    case_sensitive: true,
+    include_hidden: false,
+    limit: 12,
+    context_lines: 2,
+    whole_word: true,
+    query: "p0",
+    relative_path: "src",
+    kind: "literal_content",
+    regex: true,
+  });
+});
+
+await checkAsync("search batch: rejects glob filters on path-glob steps", async () => {
+  let dispatched = 0;
+  const search = registerSearchForTest(async () => {
+    dispatched += 1;
+    return { content: [{ type: "text", text: JSON.stringify({ ok: true }) }] };
+  });
+  const result = await search.call({ searches: [{ type: "glob", pattern: "*.ts", glob: "src/**" }] });
+  const envelope = JSON.parse(result.content[0].text) as {
+    data: { responses: { error?: { code?: string } }[] };
+  };
+  assert.equal(dispatched, 0);
+  assert.equal(envelope.data.responses[0].error?.code, "invalid_request");
+  assert.equal(result.isError, true);
+});
+
+await checkAsync("partial batches keep successful item content visible to MCP clients", async () => {
+  const search = registerSearchForTest(async (_operation, args) => ({
+    content: [{
+      type: "text",
+      text: JSON.stringify(args.query === "bad"
+        ? { ok: false, status: "failed", error: { code: "invalid_request", message: "bad pattern" } }
+        : { ok: true, status: "completed", data: { hits: ["good"] } }),
+    }],
+  }));
+  const partial = await search.call({ searches: [{ type: "content", pattern: "bad" }, { type: "content", pattern: "good" }] });
+  const partialEnvelope = JSON.parse(partial.content[0].text) as { status: string; partial?: boolean };
+  assert.equal(partialEnvelope.status, "partial");
+  assert.equal(partialEnvelope.partial, true);
+  assert.equal(partial.isError, undefined);
+
+  const allFailed = await search.call({ searches: [{ type: "content", pattern: "bad" }] });
+  assert.equal(allFailed.isError, true);
+});
+
 check("fuzzy off: edit_file and its edits[] items do not advertise the fuzzy options", () => {
   assert.deepEqual(fuzzyIn(editFileKeys(fuzzyOff)), []);
   assert.deepEqual(fuzzyIn(batchItemKeys(fuzzyOff)), []);
@@ -553,6 +709,31 @@ check("fuzzy on: every edit-tool parameter still has a description", () => {
 // ---- Phase 7: start_line minimum, hidden max_response_bytes_per_item, config() without dead text ----
 const batchModule = (await load("tools/project-batch.ts")) as typeof import("../tools/project-batch.js");
 const propsOf = (input: unknown): Record<string, any> => JSON.parse(jsonOf(input)).properties ?? {};
+
+await checkAsync("read_file partial batches do not set MCP isError unless every item fails", async () => {
+  const deps = {
+    execute: async (_operation: string, args: Record<string, unknown>) => {
+      if (args.relative_path === "bad") throw new Error("[not_found] missing file");
+      return {
+        response: { status: "completed", result: { kind: "read_file", data: { relative_path: "good", text: "ok" } } },
+        cached: false,
+      };
+    },
+    maxBatchResponseBytes: 1_000_000,
+  };
+  const partial = await batchModule.runReadFileBatch(
+    [{ relative_path: "bad" }, { relative_path: "good" }],
+    batchModule.READ_ITEM_BYTES_MAX,
+    deps as never,
+  );
+  assert.equal(partial.isError, undefined);
+  const allFailed = await batchModule.runReadFileBatch(
+    [{ relative_path: "bad" }],
+    batchModule.READ_ITEM_BYTES_MAX,
+    deps as never,
+  );
+  assert.equal(allFailed.isError, true);
+});
 
 check("read_file advertises start_line with minimum 1 (also in ranges[]) but still parses 0", () => {
   const input = registered.get("read_file")!.inputSchema;

@@ -105,7 +105,7 @@ export function modeBlocksTool(mode: ToolMode, name: string, setupTools: boolean
   return TOOL_MODE_EXCLUDES[mode].includes(name);
 }
 
-function resolveToolMode(): ToolMode {
+export function getToolMode(): ToolMode {
   const raw = (process.env.VENIRA_TOOL_MODE ?? "").trim().toLowerCase();
   if (raw === "expert" || raw === "default" || raw === "core") return raw;
   try {
@@ -131,7 +131,7 @@ export function applyDisabledTools(server: McpServer): void {
       .map((name) => name.trim())
       .filter(Boolean),
   );
-  const mode = resolveToolMode();
+  const mode = getToolMode();
   const setupTools = setupToolsEnabled();
   if (mode === "expert" && disabled.size === 0) return;
   const blocked = (name: string): boolean => disabled.has(name) || modeBlocksTool(mode, name, setupTools);

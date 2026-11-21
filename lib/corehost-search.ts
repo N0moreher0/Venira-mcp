@@ -155,6 +155,10 @@ function grepExec(args: string[], timeoutMs: number): Promise<{ status: number |
   });
 }
 
+export function isCleanGrepResult(result: { status: number | null; error?: unknown }): boolean {
+  return result.error === undefined && (result.status === 0 || result.status === 1);
+}
+
 function escapeRegExpLiteral(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -239,6 +243,7 @@ export async function opSearch(
   }
   const query = args.query;
   const kind = (args.kind as string) ?? "literal_content";
+  const useRegex = args.regex !== false && args.regex !== 0;
   const searchRoot = resolveInWorkspace(args.relative_path as string, root);
   // Roadmap item 15 (P2): a search in a path that does not exist is a
   // mistake, not an empty result. `dependency_graph` and `snapshot create`
@@ -428,7 +433,10 @@ export async function opSearch(
       if (!caseSensitive) argList.push("-i");
       if (wholeWord) argList.push("-w");
       if (invert) argList.push("-v");
-      if (args.regex === true) { argList.push("-E", "-e", String(query)); }
+      // GNU grep's ERE dialect treats common JS/Rust escapes such as \d as
+      // literal letters. PCRE is much closer to the regex users expect; grep
+      // builds without PCRE support fail cleanly and fall through to JS.
+      if (useRegex) { argList.push("-P", "-e", String(query)); }
       else { argList.push("-F", "-e", String(query)); }
       // rg anchors a glob containing "/" to its own cwd; grep's --include only
       // understands basename-style globs, so anything with "/" is applied below
@@ -439,7 +447,7 @@ export async function opSearch(
       const resp = await grepExec(argList, 10000);
       // Only clean exits (0 = matches, 1 = no matches) are served here. Any
       // spawn error or exit 2 (bad regex) returns null => JS fallback.
-      if (resp.error || (resp.status !== 0 && resp.status !== 1)) return null;
+      if (!isCleanGrepResult(resp)) return null;
       const raw = String(resp.stdout ?? "");
       if (filesOnlyMode) {
         const seen = new Set<string>();
@@ -560,12 +568,21 @@ export async function opSearch(
     }
   }
 
-  async function collectFiles(dir: string): Promise<{ files: string[]; scanTruncated: boolean }> {
-    const files: string[] = [];
+  type SearchPath = { abs: string; isDirectory: boolean };
+  async function collectPaths(
+    dir: string,
+    includeDirectories = false,
+  ): Promise<{ paths: SearchPath[]; scanTruncated: boolean }> {
+    const paths: SearchPath[] = [];
     let scanTruncated = false;
     const cap = maxScanFiles();
+    const rootStat = await fs.stat(dir);
+    if (rootStat.isFile()) {
+      if (!isProtectedPath(dir)) paths.push({ abs: dir, isDirectory: false });
+      return { paths, scanTruncated };
+    }
     async function walk(d: string): Promise<void> {
-      if (files.length >= cap) { scanTruncated = true; return; }
+      if (paths.length >= cap) { scanTruncated = true; return; }
       let entries;
       try {
         entries = await fs.readdir(d, { withFileTypes: true });
@@ -581,31 +598,38 @@ export async function opSearch(
         const abs = path.join(d, entry.name);
         if (entry.isDirectory()) {
           if (IGNORED.has(entry.name)) continue;
+          if (includeDirectories && !isProtectedPath(abs)) {
+            paths.push({ abs, isDirectory: true });
+            if (paths.length >= cap) { scanTruncated = true; return; }
+          }
           await walk(abs);
         } else if (entry.isFile()) {
           if (isProtectedPath(abs)) continue;
-          files.push(abs);
-          if (files.length >= cap) { scanTruncated = true; return; }
+          paths.push({ abs, isDirectory: false });
+          if (paths.length >= cap) { scanTruncated = true; return; }
         }
       }
     }
     await walk(dir);
-    return { files, scanTruncated };
+    return { paths, scanTruncated };
   }
 
   const needle = caseSensitive ? query : query.toLowerCase();
 
-  if (kind === "file_name" || kind === "directory_name") {
-    const { files, scanTruncated } = await collectFiles(searchRoot);
+  if (kind === "file_name" || kind === "directory_name" || kind === "path_glob") {
+    const pathGlobRe = kind === "path_glob" ? globToRegex(query) : null;
+    const { paths, scanTruncated } = await collectPaths(searchRoot, kind === "directory_name");
     if (scanTruncated) markCut("file_cap");
-    for (const abs of files) {
+    for (const { abs, isDirectory } of paths) {
       if (hits.length >= limit) { markCut("limit"); break; }
       const basename = path.basename(abs);
-      const matchRaw = caseSensitive ? basename.includes(query) : basename.toLowerCase().includes(needle);
-      if (invert ? matchRaw : !matchRaw) continue;
-      if (kind === "file_name" && (await fs.stat(abs)).isDirectory()) continue;
-      if (kind === "directory_name" && !(await fs.stat(abs)).isDirectory()) continue;
       const rel = relToRoot(abs, root);
+      const matchRaw = pathGlobRe
+        ? pathGlobRe.test(rel)
+        : caseSensitive ? basename.includes(query) : basename.toLowerCase().includes(needle);
+      if (invert ? matchRaw : !matchRaw) continue;
+      if (kind === "file_name" && isDirectory) continue;
+      if (kind === "directory_name" && !isDirectory) continue;
       hits.push({ relative_path: rel });
       totalMatchLines += 1;
     }
@@ -614,6 +638,9 @@ export async function opSearch(
     // chunked reads) + Phase 2 (binary-ext + null-byte guards).
     // files_only (grep -l): list files with >=1 matching line — no line content,
     // paths only, alphabetically sorted (both backends agree), no total_match_lines.
+    // Validate before any fast path, including files_only, so malformed or
+    // over-complex regexes cannot bypass the resource guard.
+    const searchRegex = useRegex ? compileSearchRegex(query, caseSensitive) : null;
     if (envFlag("VENIRA_USE_RIPGREP", true) && kind === "literal_content" && !countOnly && filesOnly) {
       if (await ripgrepInstalled()) {
         try {
@@ -625,7 +652,7 @@ export async function opSearch(
           if (wholeWord) argList.push("-w");
           if (invert) argList.push("--invert-match");
           if (includeHidden) argList.push("--hidden");
-          if (args.regex === true) argList.push("-e", String(query));
+          if (useRegex) argList.push("-e", String(query));
           else argList.push("-F", "-e", String(query));
           if (glob && !String(glob).includes("/")) argList.push("--glob", String(glob));
           if (excludeGlob && !String(excludeGlob).includes("/")) argList.push("--glob", `!${excludeGlob}`);
@@ -686,11 +713,6 @@ export async function opSearch(
     // would need per-file cluster correlation, so instead each hit file is
     // re-read once (bounded, chunked) and the surrounding lines are sliced,
     // exactly matching the JS path's `context` shape.
-    // Validate regex complexity/invalid syntax before either backend runs.
-    // Without this, rg (which compiles patterns in Rust) would happily serve a
-    // query such as `(a+)+$` and the resource guard would never fire.
-    if (args.regex === true) compileSearchRegex(query, caseSensitive);
-
     if (envFlag("VENIRA_USE_GREP", true) && kind === "literal_content" && !countOnly && !filesOnly) {
       // 2nd link (backstop): rg absent or failed ⇒ try GNU grep before the JS walker.
       const viaGrep = await grepTry(false);
@@ -712,7 +734,7 @@ export async function opSearch(
           if (wholeWord) argList.push("-w");
           if (invert) argList.push("--invert-match");
           if (includeHidden) argList.push("--hidden");
-          if (args.regex === true) { argList.push("-e", String(query)); }
+          if (useRegex) { argList.push("-e", String(query)); }
           else { argList.push("-F", "-e", String(query)); }
           // rg anchors a glob containing "/" to its own cwd, not the workspace, so those globs are
           // applied to the workspace-relative path below (same includeRe/excludeRe as the JS scanner).
@@ -826,17 +848,13 @@ export async function opSearch(
       }
     }
 
-    const { files, scanTruncated } = await collectFiles(searchRoot);
+    const { paths, scanTruncated } = await collectPaths(searchRoot);
     if (scanTruncated) markCut("file_cap");
-    const useRegex = args.regex === true;
     let wordRe: RegExp | null = null;
     if (wholeWord) {
       wordRe = new RegExp(`(?:^|[^A-Za-z0-9_$])${escapeRegExpLiteral(needle)}(?:[^A-Za-z0-9_$]|$)`, caseSensitive ? "" : "i");
     }
-    let contentRe: RegExp | null = null;
-    if (useRegex) {
-      contentRe = compileSearchRegex(query, caseSensitive);
-    }
+    const contentRe = searchRegex;
 
     const BINARY_EXT = new Set([".png",".jpg",".jpeg",".gif",".webp",".bmp",".ico",".tiff",
       ".woff",".woff2",".ttf",".otf",".eot",".svg",".pdf",".zip",".gz",".tgz",".7z",".rar",".tar",
@@ -846,9 +864,9 @@ export async function opSearch(
     type FileEntry = { abs: string; rel: string; content: string };
     const entries: Array<FileEntry | null> = [];
     const READ_CHUNK = 16;
-    for (let ci = 0; ci < files.length; ci += READ_CHUNK) {
-      const chunk = files.slice(ci, ci + READ_CHUNK);
-      const results = await Promise.all(chunk.map(async (abs): Promise<FileEntry | null> => {
+    for (let ci = 0; ci < paths.length; ci += READ_CHUNK) {
+      const chunk = paths.slice(ci, ci + READ_CHUNK);
+      const results = await Promise.all(chunk.map(async ({ abs }): Promise<FileEntry | null> => {
         const rel = relToRoot(abs, root);
         if (includeRe && !includeRe.test(rel)) return null;
         if (excludeRe && excludeRe.test(rel)) return null;
@@ -898,35 +916,31 @@ export async function opSearch(
         hits.push({ relative_path: rel });
       }
     } else if (!countOnly) {
+      const matchCap = Math.max(limit * 10, 1000);
+      let stopCollecting = false;
       for (const entry of entries) {
         if (!entry) continue;
-        if (hits.length >= limit) { markCut("limit"); break; }
+        if (stopCollecting) break;
         const { rel, content } = entry;
 
         const lines = splitLines(content);
-        const matchIndices: number[] = [];
         for (let i = 0; i < lines.length; i++) {
-          if (lineMatches(lines[i])) matchIndices.push(i);
-        }
-        if (matchIndices.length === 0) continue;
-        totalMatchLines += matchIndices.length;
-
-        for (const idx of matchIndices) {
-          // Same collection cap as the rg path: collect, rank, then trim so the
-          // two backends agree on which hits survive `limit`.
-          if (hits.length >= Math.max(limit * 10, 1000)) {
-            markCut("match_cap", Math.max(limit * 10, 1000));
-            break;
-          }
-          const snippet = lines[idx].trim().slice(0, 200);
-          const hit: Hit = { relative_path: rel, line_number: idx + 1 };
+          if (!lineMatches(lines[i])) continue;
+          const snippet = lines[i].trim().slice(0, 200);
+          const hit: Hit = { relative_path: rel, line_number: i + 1 };
           hit.snippet = snippet;
           if (contextLines > 0) {
-            const start = Math.max(0, idx - contextLines);
-            const end = Math.min(lines.length, idx + contextLines + 1);
+            const start = Math.max(0, i - contextLines);
+            const end = Math.min(lines.length, i + contextLines + 1);
             hit.context = lines.slice(start, end);
           }
           hits.push(hit);
+          totalMatchLines += 1;
+          if (hits.length >= matchCap) {
+            markCut("match_cap", matchCap);
+            stopCollecting = true;
+            break;
+          }
         }
       }
       rankHits(hits, needleConst);

@@ -250,7 +250,7 @@ All tools return the standard envelope (`ok`, `kind`, `data`, `hint`, `elapsed_m
 | `list_files` | List files/dirs, depth 1–3, limit ≤ 200 |
 | `read_file` | Read a file by line range; optional `ranges[]` (up to 16) |
 | `get_file_info` | File/dir metadata (kind, size, mtime); `missing_ok=true` answers ok with `exists:false` for missing paths |
-| `search` | Plain substring, file/dir name, regex or symbol; `invert` (grep -v) and `files_only` (grep -l); `hybrid: true` tags hits with `source`+`confidence`; `queries[]` ranks files by AND/OR/NOT patterns (advanced, rarely needed) |
+| `search` | Regex by default (set regex=false for exact text), file/dir name or symbol; optional searches[] batches independent grep/rg/glob operations; `invert` (grep -v) and `files_only` (grep -l); `hybrid: true` tags hits with `source`+`confidence`; `queries[]` ranks files by AND/OR/NOT patterns (advanced, rarely needed) |
 | `recent_files` | Recently modified files (index-first, scan-fallback) |
 | `read_file` | Single file (line ranges or `ranges[]` up to 16) **or** several files in one call via `requests[]` (max 8 items; same args per item). Also supports multi-file edits through `edits[]` with per-item `relative_path` (atomic) |
 | `health` | Diagnostics: capability, queue, cache hit-rates, p50/p95, security limits notice, and `server.workspace_switching` (`enabled`, `profile`, `allowed_roots`) |

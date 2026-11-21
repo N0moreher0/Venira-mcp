@@ -114,7 +114,30 @@ export async function runSearch(
     flInvFiles(flInvRg) === 2 && flInvFiles(flInvJs) === 2,
     { rg: flInvRg.data?.hits, js: flInvJs.data?.hits },
   );
-  await searchJsClient.close();
+  const searchBatch = asEnvelope(
+    await call("search", {
+      relative_path: gvDir,
+      searches: [
+        { type: "grep", pattern: "GV_TOKEN", regex: 0, glob: "*.ts" },
+        { type: "glob", pattern: "*.ts" },
+      ],
+    }),
+  );
+  const batchResponses = Array.isArray(searchBatch.data?.responses)
+    ? (searchBatch.data.responses as Record<string, unknown>[])
+    : [];
+  check(
+    "search_independent_batch_steps",
+    searchBatch.status === "completed" &&
+      batchResponses.length === 2 &&
+      batchResponses[0].index === 0 &&
+      batchResponses[0].type === "content" &&
+      batchResponses[1].index === 1 &&
+      batchResponses[1].type === "glob" &&
+      Array.isArray((batchResponses[0].data as Record<string, unknown>)?.hits) &&
+      Array.isArray((batchResponses[1].data as Record<string, unknown>)?.hits),
+    batchResponses,
+  );
   const hitKeys = (env: { data?: { hits?: unknown } }) => {
     const hits = Array.isArray(env.data?.hits)
       ? (env.data.hits as Record<string, unknown>[])
@@ -181,6 +204,83 @@ export async function runSearch(
       relRankHits.findIndex((h) => String(h.relative_path ?? "") === "util.ts"),
     relRankHits.map((h) => h.relative_path),
   );
+  const rankLimitDir = `${dir}/rank-limit`;
+  await fs.mkdir(rankLimitDir, { recursive: true });
+  await fs.writeFile(`${rankLimitDir}/a_low_rank.ts`, "const x = rank_token_helper();\n");
+  await fs.writeFile(`${rankLimitDir}/z_rank_token.ts`, "const x = rank_token;\n");
+  const jsRankLimit = asEnvelope(
+    await searchJsClient.callTool({
+      name: "search",
+      arguments: {
+        query: "rank_token",
+        relative_path: rankLimitDir,
+        limit: 1,
+      },
+    }),
+  );
+  check(
+    "search_js_ranks_before_limit",
+    Array.isArray(jsRankLimit.data?.hits) &&
+      jsRankLimit.data.hits.length === 1 &&
+      String(jsRankLimit.data.hits[0].relative_path).endsWith("z_rank_token.ts"),
+    jsRankLimit.data?.hits,
+  );
+  const nameKindsDir = `${dir}/name-kinds`;
+  const matchingDirectory = `${nameKindsDir}/needle-directory`;
+  const matchingFile = `${nameKindsDir}/needle-file.ts`;
+  await fs.mkdir(matchingDirectory, { recursive: true });
+  await fs.writeFile(`${matchingDirectory}/inside.txt`, "content\n");
+  await fs.writeFile(matchingFile, "content\n");
+  const directoryNames = asEnvelope(
+    await searchJsClient.callTool({
+      name: "search",
+      arguments: {
+        query: "needle-directory",
+        kind: "directory_name",
+        relative_path: nameKindsDir,
+      },
+    }),
+  );
+  const fileNames = asEnvelope(
+    await searchJsClient.callTool({
+      name: "search",
+      arguments: {
+        query: "needle-file",
+        kind: "file_name",
+        relative_path: matchingFile,
+      },
+    }),
+  );
+  check(
+    "search_directory_name_finds_directories",
+    Array.isArray(directoryNames.data?.hits) &&
+      directoryNames.data.hits.length === 1 &&
+      String(directoryNames.data.hits[0].relative_path).endsWith("needle-directory"),
+    directoryNames.data?.hits,
+  );
+  check(
+    "search_file_name_accepts_file_scope",
+    Array.isArray(fileNames.data?.hits) &&
+      fileNames.data.hits.length === 1 &&
+      String(fileNames.data.hits[0].relative_path).endsWith("needle-file.ts"),
+    fileNames.data?.hits,
+  );
+  const filesOnlyInvalidRegex = asEnvelope(
+    await searchJsClient.callTool({
+      name: "search",
+      arguments: {
+        query: "[",
+        relative_path: dir,
+        files_only: 1,
+      },
+    }),
+  );
+  check(
+    "search_files_only_validates_regex",
+    filesOnlyInvalidRegex.error?.code === "invalid_request",
+    filesOnlyInvalidRegex.error,
+  );
+  await searchJsClient.close();
 
   // 10a3. `context_lines` on the ripgrep fast path must return the same `context`
   // arrays as the JS scanner (it used to drop the field silently). This check is
@@ -221,6 +321,7 @@ export async function runSearch(
       kind: "literal_content",
       relative_path: relRankDir,
       glob: "*.ts",
+      regex: 0,
     }),
   );
   check(
@@ -242,6 +343,11 @@ export async function runSearch(
     "search_regex_invalid_returns_invalid_request",
     invalidRegex.error?.code === "invalid_request",
     invalidRegex.error,
+  );
+  check(
+    "search_regex_invalid_suggests_literal_mode",
+    typeof invalidRegex.hint === "string" && invalidRegex.hint.includes("regex=false"),
+    invalidRegex.hint,
   );
 
   // 10a5. whole_word and include_hidden flags are honoured by both search backends.

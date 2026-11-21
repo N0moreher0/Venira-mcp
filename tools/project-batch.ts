@@ -204,7 +204,8 @@ export async function runReadFileBatch(
     total_bytes_returned: totalBytes,
     max_response_bytes_per_item: maxItemBytes,
   }, { kind: "read_file" });
-  return toolResult(envelope, envelope.ok === false);
+  const allFailed = responses.length > 0 && responses.every((response) => isRecord(response) && response.ok === false);
+  return toolResult(envelope, allFailed);
 }
 
 /** The multi-file form of edit_file: one call, all-or-nothing, automatic rollback. */

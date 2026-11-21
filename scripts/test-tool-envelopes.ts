@@ -638,7 +638,7 @@ try {
       deps,
     );
     const env = parse(r);
-    assert.equal(r.isError, true);
+    assert.equal(r.isError, undefined, "partial content should remain visible to MCP clients");
     assert.equal(env.ok, false);
     assert.equal(env.status, "partial");
     assert.equal(env.error.code, "batch_partial_failure");
