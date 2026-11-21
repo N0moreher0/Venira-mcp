@@ -2,7 +2,7 @@
 
 Local release notes for venira-mcp. Not published (not listed in `package.json` `files`) and not pushed to git.
 
-## Unreleased
+## 5.0.0 - 2026-11-22
 
 ### Changed - search batch validation and partial results
 
@@ -22,7 +22,6 @@ Local release notes for venira-mcp. Not published (not listed in `package.json` 
 - **Docs corrected against reality**: the README/check-docs/doctor pinned counts of default 39 / expert 52 that no longer matched the registered tools (actual with JS exec on is default **31**, expert **44**, core **17**; with `VENIRA_JS_EXEC_MODE=off`: 30/43/16 — every extra schema byte is on every prompt, so the stale numbers matter). Fixed README (intro + mode table), `scripts/check-docs.ts` (EXPECTED_DEFAULT_TOOLS=31/EXPECTED_EXPERT_TOOLS=44), `scripts/doctor.ts` (JS-off expectedTools=43), `scripts/schema-budget.json` (entry dropped) and the git-merge changelog bullet. Measured via a temporary stdio `listTools` probe per mode (deleted after use).
 - **Verification:** `npm run build` passes; `npm run doctor` now passes `tools_count`; `npm run check:docs` passes.
 
-## Unreleased
 
 ### Breaking - six `git_*` tools merged into one `git` tool
 
@@ -35,7 +34,6 @@ Local release notes for venira-mcp. Not published (not listed in `package.json` 
 - Docs updated: README (tool table core 17 + single `git` row), AGENTS.md, GEMINI.md, TOOL_DOCS (six entries → one), decision tree in `server.ts`, `scripts/test-tool-schema.ts`, `scripts/schema-budget.json` regenerated with `--update` (ratchet down). CHANGELOG/ROADMAP notes deliberately kept as history.
 - Verification: `npm run build`, `test:git-local`, `test:tool-schema`, `test:schema-budget`, `check:docs`.
 
-## Unreleased
 
 ### Changed - `search` engine chain rg → grep → JS walker + slimmer schema
 
@@ -43,7 +41,6 @@ Local release notes for venira-mcp. Not published (not listed in `package.json` 
 - **Search schema descriptions slimmed down** (~550 B less, `scripts/schema-budget.json` search entry now 3611 B, ceiling unchanged at 4162 B). Names, defaults and the `invert`/`files_only`/`queries[]` advanced tier are unchanged; only the wording got tighter, plus the tool config speed_profile now names the chain (`rg → grep → JS walker`).
 - Tests: `test:tool-schema` (29/29), `test:tool-envelopes`, `test:p2-clarity` (30/30), `test:schema-budget`, `test:env-registry` (56 checks incl. the new flag) all pass. `scripts/smoke.ts` reports `escape NOT blocked — bug!` — pre-existing (unmodified file, fails on HEAD too); the `rg → grep → JS` chain could not be exercised on Windows because no `grep` binary exists here — parity for grep is only guaranteed by code review, not run.
 
-## Unreleased
 
 ### Breaking - `read_batch` / `edit_batch` merged into `read_file` / `edit_file`; `write_file` create makes folders
 
