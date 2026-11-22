@@ -13,10 +13,11 @@ import type { Args } from "./project-cache.js";
 // Not audit-logged and not encrypted: never put secrets in it.
 
 /**
- * Hard cap on the note, in bytes. Deliberately small: a handoff is a summary (goal, decisions, files, next
- * steps), and a read must come back whole even in VENIRA_OUTPUT_MODE=compact, which trims payloads over 8 KiB.
+ * Hard cap on the note, in bytes. Still small on purpose: a handoff is a summary (goal, decisions, files, next
+ * steps), but 10 KB leaves room for several agents to share context. A read stays whole even in
+ * VENIRA_OUTPUT_MODE=compact because `buildEnvelope` never previews the `memory` kind (it is bounded by this cap).
  */
-export const MEMORY_MAX_BYTES = 6_000;
+export const MEMORY_MAX_BYTES = 10_000;
 
 /** The note: `<workspace>/.venira/memory.md` (follows `switch_workspace`). */
 export function memoryFilePath(): string {
@@ -39,12 +40,25 @@ function isNotFound(error: unknown): boolean {
   return (error as NodeJS.ErrnoException | undefined)?.code === "ENOENT";
 }
 
-type Note = { content: string; bytes: number; updated_at_ms: number };
+type Note = { content: string; bytes: number; updated_at_ms: number; version: string };
+
+/** Content fingerprint (first 12 hex of sha256). `read` returns it, `write` takes it back as `if_version`. */
+export function versionOf(content: string): string {
+  return createHash("sha256").update(content, "utf8").digest("hex").slice(0, 12);
+}
+
+/** Version reported (and accepted as `if_version`) while no note exists yet. */
+const NEW_NOTE_VERSION = "new";
 
 async function tryRead(file: string): Promise<Note | null> {
   try {
     const [content, stat] = await Promise.all([fs.readFile(file, "utf8"), fs.stat(file)]);
-    return { content, bytes: Buffer.byteLength(content, "utf8"), updated_at_ms: Math.round(stat.mtimeMs) };
+    return {
+      content,
+      bytes: Buffer.byteLength(content, "utf8"),
+      updated_at_ms: Math.round(stat.mtimeMs),
+      version: versionOf(content),
+    };
   } catch (error) {
     if (!isNotFound(error)) throw error;
     return null;
@@ -65,16 +79,24 @@ async function readMemory(): Promise<{ data: Record<string, unknown>; hint?: str
     };
   }
   return {
-    data: { exists: false, content: "", bytes: 0, path: file },
+    data: { exists: false, content: "", bytes: 0, version: NEW_NOTE_VERSION, path: file },
     hint: "No saved context for this workspace yet. Start the task normally and write a note before you finish.",
   };
 }
 
-async function writeMemory(content: unknown): Promise<{ data: Record<string, unknown> }> {
+async function writeMemory(
+  content: unknown,
+  ifVersion: unknown,
+): Promise<{ data: Record<string, unknown>; hint?: string }> {
   if (typeof content !== "string" || content.trim().length === 0) {
     throw new Error(
       "[invalid_request] memory: action=write needs a non-empty `content`. " +
         "Hint: write the full note (goal, decisions, files touched, next steps); it replaces the previous one.",
+    );
+  }
+  if (ifVersion !== undefined && typeof ifVersion !== "string") {
+    throw new Error(
+      "[invalid_request] memory: `if_version` must be a string. Hint: copy `version` from the last read result (use the word new when no note exists).",
     );
   }
   const bytes = Buffer.byteLength(content, "utf8");
@@ -85,6 +107,18 @@ async function writeMemory(content: unknown): Promise<{ data: Record<string, unk
     );
   }
   const file = memoryFilePath();
+  if (ifVersion !== undefined) {
+    // Optimistic lock: refuse to overwrite a note that changed since the caller read it.
+    const current = (await tryRead(file)) ?? (await tryRead(legacyMemoryFilePath()));
+    const currentVersion = current ? current.version : NEW_NOTE_VERSION;
+    const expected = ifVersion.trim() === "" ? NEW_NOTE_VERSION : ifVersion.trim();
+    if (expected !== currentVersion) {
+      throw new Error(
+        `[conflict] memory: the note changed since you read it (if_version=${expected}, current version=${currentVersion}). ` +
+          "Nothing was written. Hint: read the note again, merge your changes into it, then write with the new version.",
+      );
+    }
+  }
   let previousBytes = 0;
   let replaced = false;
   try {
@@ -105,7 +139,20 @@ async function writeMemory(content: unknown): Promise<{ data: Record<string, unk
   }
   const stat = await fs.stat(file);
   return {
-    data: { replaced, previous_bytes: previousBytes, bytes, updated_at_ms: Math.round(stat.mtimeMs), path: file },
+    data: {
+      replaced,
+      previous_bytes: previousBytes,
+      bytes,
+      version: versionOf(content),
+      updated_at_ms: Math.round(stat.mtimeMs),
+      path: file,
+    },
+    ...(replaced && ifVersion === undefined
+      ? {
+          hint:
+            "Overwrote an existing note without `if_version`. Pass the `version` from your last read next time so a concurrent edit is refused instead of lost.",
+        }
+      : {}),
   };
 }
 
@@ -116,7 +163,7 @@ export async function runMemory(args: Args): Promise<ToolResult> {
   try {
     let outcome: { data: Record<string, unknown>; hint?: string };
     if (args.action === "read") outcome = await readMemory();
-    else if (args.action === "write") outcome = await writeMemory(args.content);
+    else if (args.action === "write") outcome = await writeMemory(args.content, args.if_version);
     else {
       throw new Error(
         '[invalid_request] memory: action must be "read" or "write". ' +

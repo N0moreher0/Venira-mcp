@@ -314,10 +314,15 @@ export const ENV_REGISTRY: readonly EnvVarSpec[] = [
   shStr("VENIRA_DEFAULT_SHELL", "Shell used when a call does not name one (powershell, pwsh, cmd or bash).", true, {}),
 
   // --- workspace / data ----------------------------------------------------
-  wsPath("VENIRA_WORKSPACE", "Workspace root; every path resolves against it.", true, { default: "process.cwd()" }),
+  wsList("VENIRA_WORKSPACE", "Workspace root and the roots `switch_workspace` may reach under strict/balanced (absolute paths, both `,` and `;` separators). The FIRST entry is the workspace root; every entry is part of the allowlist. Unset = locked to the spawn workspace. Ignored under trusted/off/`VENIRA_UNRESTRICTED=1` (those switch to any existing directory).", true, { default: "process.cwd()" }),
   wsPath("VENIRA_DATA_DIR", "Directory for the audit DB, approvals and state.", true),
   wsPath("VENIRA_CONFIG_FILE", "Explicit path of the JSON config file (git provider settings).", true, {}),
-  wsList("VENIRA_WORKSPACE_ROOTS", "Allowlist of roots `switch_workspace` may reach under strict/balanced (absolute paths, both `,` and `;` separators). Unset = locked to the spawn workspace. Ignored under trusted/off/`VENIRA_UNRESTRICTED=1` (those switch to any existing directory).", true, {}),
+  removed(
+    "VENIRA_WORKSPACE_ROOTS",
+    "list",
+    "Allowlist of roots `switch_workspace` may reach under strict/balanced (merged into VENIRA_WORKSPACE).",
+    "merge its roots into VENIRA_WORKSPACE (comma/semicolon separated; the first entry is the workspace root).",
+  ),
 
   // --- cache ---------------------------------------------------------------
   cacheEnum("VENIRA_CACHE", "Cache preset: `all` every cache, `list` only directory listings, `search` only searches, `off` always fresh.", true, {

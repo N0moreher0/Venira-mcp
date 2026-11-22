@@ -9,6 +9,8 @@ const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "venira-memory-ws-"))
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "venira-memory-data-"));
 process.env.VENIRA_WORKSPACE = workspaceDir;
 process.env.VENIRA_DATA_DIR = dataDir;
+// Compact mode trims payloads over 8 KiB for most tools; the memory note (cap 10 KB) must still read back whole.
+process.env.VENIRA_OUTPUT_MODE = "compact";
 
 const { MEMORY_MAX_BYTES, memoryFilePath, legacyMemoryFilePath, runMemory } = await import("../tools/project-memory.js");
 
@@ -39,6 +41,7 @@ try {
   const empty = await call({ action: "read" });
   check("read with no note: ok, exists=false, empty content", empty.env.ok === true && empty.env.data?.exists === false && empty.env.data?.content === "", empty.env);
   check("read with no note: hint tells the AI what to do", typeof empty.env.hint === "string" && empty.env.hint.length > 0, empty.env);
+  check("read with no note: version is \"new\"", empty.env.data?.version === "new", empty.env);
 
   // first write
   const first = "## Goal\nMove the memory note into the workspace\n\n## Next\n- run test:memory\n";
@@ -66,6 +69,15 @@ try {
   check("over the cap: error, isError set", tooBig.isError && tooBig.env.ok === false, tooBig.env);
   const atCap = await call({ action: "write", content: "y".repeat(MEMORY_MAX_BYTES) });
   check("exactly at the cap is accepted", atCap.env.ok === true && atCap.env.data?.bytes === MEMORY_MAX_BYTES, atCap.env);
+  check("cap is 10000 bytes", MEMORY_MAX_BYTES === 10_000, MEMORY_MAX_BYTES);
+  const readCap = await call({ action: "read" });
+  check(
+    "compact mode: a note at the cap (above 8 KiB) reads back whole, not trimmed",
+    readCap.env.ok === true &&
+      readCap.env.data?.content === "y".repeat(MEMORY_MAX_BYTES) &&
+      (readCap.env as { trimmed?: boolean }).trimmed !== true,
+    { trimmed: (readCap.env as { trimmed?: boolean }).trimmed, length: String(readCap.env.data?.content ?? "").length },
+  );
   await call({ action: "write", content: second });
 
   const empties = [await call({ action: "write", content: "" }), await call({ action: "write", content: "  \n " }), await call({ action: "write" })];
@@ -76,6 +88,39 @@ try {
 
   const still = await call({ action: "read" });
   check("refused writes left the previous note untouched", still.env.data?.content === second, still.env);
+
+  // optimistic lock: if_version
+  const vRead = await call({ action: "read" });
+  const v0 = String(vRead.env.data?.version ?? "");
+  check("read returns a 12-hex version", /^[0-9a-f]{12}$/.test(v0), vRead.env);
+  check("version is stable for the same content", String((await call({ action: "read" })).env.data?.version) === v0, v0);
+  const third = "## Third\nwritten with the right version\n";
+  const wv = await call({ action: "write", content: third, if_version: v0 });
+  check(
+    "write with the current if_version: ok, returns a new version, no hint",
+    wv.env.ok === true && wv.env.data?.replaced === true && typeof wv.env.data?.version === "string" && wv.env.data.version !== v0 && wv.env.hint === undefined,
+    wv.env,
+  );
+  const vAfter = String((await call({ action: "read" })).env.data?.version);
+  check("the version a write returns equals the next read's version", wv.env.data?.version === vAfter, { returned: wv.env.data?.version, read: vAfter });
+  const stale = await call({ action: "write", content: "stale overwrite\n", if_version: v0 });
+  check(
+    "stale if_version: conflict, isError, current version named",
+    stale.isError && stale.env.ok === false && stale.env.error?.code === "conflict" && String(stale.env.error?.message).includes(vAfter),
+    stale.env,
+  );
+  check("stale if_version: nothing was written", (await call({ action: "read" })).env.data?.content === third);
+  const chained = await call({ action: "write", content: second, if_version: String(wv.env.data?.version) });
+  check("chained write with the version the last write returned: ok", chained.env.ok === true, chained.env);
+  const plain = await call({ action: "write", content: second });
+  check(
+    "no if_version on an existing note: still overwrites, with a hint",
+    plain.env.ok === true && typeof plain.env.hint === "string" && plain.env.hint.includes("if_version"),
+    plain.env,
+  );
+  const badType = await call({ action: "write", content: "x", if_version: 5 });
+  check("if_version of the wrong type: error", badType.isError && badType.env.ok === false, badType.env);
+  check("a refused if_version write left the note untouched", (await call({ action: "read" })).env.data?.content === second);
 
   // legacy note is honoured as a fallback and survives a workspace write
   fs.rmSync(path.join(workspaceDir, ".venira"), { recursive: true, force: true });
@@ -90,6 +135,14 @@ try {
   check("a workspace write never deletes the legacy note", fs.readFileSync(legacyFile, "utf8") === legacyNote, legacyFile);
   const r4 = await call({ action: "read" });
   check("after the move, read serves the workspace note, not the legacy one", r4.env.data?.content === "fresh workspace note\n" && r4.env.data?.legacy === undefined, r4.env);
+
+  // if_version="new" is only valid while no note exists
+  fs.rmSync(path.join(workspaceDir, ".venira"), { recursive: true, force: true });
+  fs.rmSync(legacyFile, { force: true });
+  const wNew = await call({ action: "write", content: "created with new\n", if_version: "new" });
+  check("if_version=new with no note: ok, replaced=false, no hint", wNew.env.ok === true && wNew.env.data?.replaced === false && wNew.env.hint === undefined, wNew.env);
+  const wNew2 = await call({ action: "write", content: "again\n", if_version: "new" });
+  check("if_version=new on an existing note: conflict", wNew2.isError && wNew2.env.error?.code === "conflict", wNew2.env);
 
   // atomic write leaves nothing behind
   const leftovers = fs.readdirSync(path.dirname(file)).filter((name) => name.endsWith(".tmp"));

@@ -5,9 +5,10 @@
  * The gated core op `project_tool.workspace.switch` is not exposed directly; the tool is
  * `switch_workspace`. These checks pin the validation:
  *
- *   - trusted/off switch to ANY existing directory, even with VENIRA_WORKSPACE_ROOTS set;
- *   - strict/balanced switch only inside the VENIRA_WORKSPACE_ROOTS allowlist;
- *     with no roots configured, switching is locked to the spawn workspace;
+ *   - trusted/off switch to ANY existing directory, even with VENIRA_WORKSPACE listing roots;
+ *   - strict/balanced switch only inside the roots listed in VENIRA_WORKSPACE (the first entry
+ *     is the workspace root); with VENIRA_WORKSPACE unset, switching is locked to the spawn
+ *     workspace;
  *   - strict and balanced behave the same; trusted and off behave the same for switching;
  *   - VENIRA_UNRESTRICTED=1 allows any path on top of any profile;
  *   - the target must be an existing directory; `..` traversal, a sibling directory, a file,
@@ -15,7 +16,8 @@
  *     `[workspace_switch_denied]`;
  *   - a refused switch leaves the active workspace unchanged; a successful one moves it,
  *     and the file-tool path guard (`toHostPath`) follows the new root;
- *   - nonexistent root entries are ignored; both `,` and `;` separate roots.
+ *   - nonexistent root entries are ignored; both `,` and `;` separate roots;
+ *   - VENIRA_WORKSPACE_ROOTS is gone: the merged VENIRA_WORKSPACE carries both roles.
  *
  * Run with: npm run test:workspace-switch
  */
@@ -55,10 +57,12 @@ delete process.env.VENIRA_UNRESTRICTED;
 
 const ws = await import(pathToFileURL(path.join(repoRoot, "lib", "workspace.ts")).href);
 
+// The merged variable: the first entry is the workspace root, every entry is a root
+// `switch_workspace` may reach. `roots` holds the extra roots; the spawn root stays first.
 function setProfile(profile: string, roots: string): void {
   process.env.VENIRA_SECURITY_PROFILE = profile;
-  if (roots) process.env.VENIRA_WORKSPACE_ROOTS = roots;
-  else delete process.env.VENIRA_WORKSPACE_ROOTS;
+  if (roots) process.env.VENIRA_WORKSPACE = [startDir, ...roots.split(/[,;]/)].join(";");
+  else delete process.env.VENIRA_WORKSPACE;
 }
 
 function assertDenied(target: string): void {
@@ -85,7 +89,7 @@ try {
 
   check("balanced_is_the_default_and_locks_to_the_spawn_workspace_without_roots", () => {
     delete process.env.VENIRA_SECURITY_PROFILE;
-    delete process.env.VENIRA_WORKSPACE_ROOTS;
+    delete process.env.VENIRA_WORKSPACE;
     assert.equal(ws.switchingEnabled(), false, "balanced without roots -> switching locked to the spawn workspace");
     assert.equal(ws.profileAllowsAnyPath(), false);
     assert.equal(ws.canSwitchWorkspace(otherDir), null);
@@ -216,9 +220,33 @@ try {
     assert.throws(() => ws.switchWorkspaceRoot(path.join(otherDir, "missing")), /\[workspace_switch_denied\]/);
     assert.equal(ws.switchWorkspaceRoot(startDir), startDir);
   });
+
+  // The root is the FIRST entry of VENIRA_WORKSPACE: a fresh module instance (cache-busted
+  // import) starts in it, and the remaining entries become the switch allowlist.
+  process.env.VENIRA_SECURITY_PROFILE = "balanced";
+  process.env.VENIRA_WORKSPACE = `${allowedDir};${secondAllowed}`;
+  const merged = await import(pathToFileURL(path.join(repoRoot, "lib", "workspace.ts")).href + "?merged=1");
+  check("the_first_entry_of_VENIRA_WORKSPACE_is_the_workspace_root", () => {
+    assert.equal(merged.SPAWN_WORKSPACE, allowedDir);
+    assert.equal(merged.WORKSPACE, allowedDir);
+    assert.deepEqual(merged.allowedWorkspaceRoots(), [allowedDir, secondAllowed]);
+    assert.equal(merged.canSwitchWorkspace(secondAllowed), secondAllowed);
+    assert.equal(merged.canSwitchWorkspace(otherDir), null, "a directory outside the list is refused");
+  });
+
+  check("VENIRA_WORKSPACE_ROOTS_is_ignored", () => {
+    process.env.VENIRA_WORKSPACE = startDir;
+    process.env.VENIRA_WORKSPACE_ROOTS = otherDir;
+    try {
+      assert.equal(ws.canSwitchWorkspace(otherDir), null, "the removed variable must not widen the allowlist");
+      assert.deepEqual(ws.allowedWorkspaceRoots(), [startDir]);
+    } finally {
+      delete process.env.VENIRA_WORKSPACE_ROOTS;
+    }
+  });
 } finally {
   delete process.env.VENIRA_SECURITY_PROFILE;
-  delete process.env.VENIRA_WORKSPACE_ROOTS;
+  delete process.env.VENIRA_WORKSPACE;
   delete process.env.VENIRA_UNRESTRICTED;
   if (linkCreated) rmSync(escapeLink, { recursive: true, force: true });
   rmSync(tempRoot, { recursive: true, force: true });

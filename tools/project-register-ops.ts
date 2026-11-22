@@ -189,7 +189,8 @@ export function registerOpsTools(server: McpServer, deps: OpsToolsDeps): void {
       ),
       inputSchema: {
         action: z.enum(["read", "write"]).describe("read: return the saved note (exists=false + hint when none). write: replace it entirely with `content`."),
-        content: z.string().optional().describe("write only: the full new note (markdown, max 6000 bytes). Replaces the previous one; empty/missing content is refused."),
+        content: z.string().optional().describe("write only: the full note (markdown, max 10000 bytes). Replaces the previous one; empty/missing content is refused."),
+        if_version: z.string().optional().describe("write only: `version` from the last read (\"new\" if none); stale = conflict."),
       },
     },
     (args) => runMemory(args as Args),

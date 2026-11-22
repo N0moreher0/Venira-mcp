@@ -2,6 +2,46 @@
 
 Local release notes for venira-mcp. Not published (not listed in `package.json` `files`) and not pushed to git.
 
+## 6.0.0 - 2026-11-23
+
+### Breaking
+
+- `VENIRA_WORKSPACE_ROOTS` is removed (no alias); use `VENIRA_WORKSPACE` (see below). This is why the release is a major bump.
+
+### Fixed - unescaped quotes in the `workspace_switch_denied` message
+
+- The error text in `lib/corehost.ts` and `lib/workspace.ts` contained `VENIRA_WORKSPACE="/path/one;/path/two"` with unescaped double quotes inside a double-quoted string. That ended the string early and Node refused to load `dist/lib/corehost.js` (`SyntaxError: Invalid regular expression flags`). The example now has no quotes.
+
+### Changed - verify budget
+
+- `TOOL_SCHEMA_MAX_BYTES` (`scripts/verify/core.ts`) 6200 -> 7116: the 5.1.0 `git action=push` options grew the `git` schema past the old ceiling; `schema-budget.json` was already re-based, this constant was not.
+
+### Added - `memory` optimistic lock (`if_version`)
+
+- `memory action=read` now returns a `version` (first 12 hex of the note's sha256; `"new"` while no note exists). `action=write` accepts an optional `if_version`: when it does not match the current note, nothing is written and the call fails with `conflict` (message names the current version; re-read, merge, write again). A successful write returns the new `version`, so consecutive writes need no re-read.
+- Without `if_version` the old overwrite behaviour is kept (older clients, the Venira app); the result carries a hint to pass it when an existing note was replaced.
+- Why: `write` replaces the whole note, so a session that wrote after another one silently erased its edits (happened on 2026-11-23). No `append`/`replace` actions on purpose (schema budget).
+- Schema budget: `memory` 1125 -> 1359 B (expert 72188 -> 72422 B, default 52992 -> 53226 B), raised deliberately with `--update --allow-increase`.
+- Docs: `TOOL_DOCS.memory`, README `memory` row, `ROADMAP_TOOLS.md` phase 13. Tests: `test:memory` 24 -> 37 checks.
+
+### Changed - one workspace variable (`VENIRA_WORKSPACE`)
+
+- The workspace axis has a single variable: `VENIRA_WORKSPACE`. It accepts absolute paths separated by `,` or `;`; the **first** entry is the workspace root (where every path resolves) and every entry is a root `switch_workspace` may reach under `strict`/`balanced`.
+- `VENIRA_WORKSPACE_ROOTS` is removed (breaking, no alias): it is ignored and warns at startup with the exact replacement. Migration: `VENIRA_WORKSPACE_ROOTS="C:\\a;D:\\b"` -> `VENIRA_WORKSPACE="C:\\a;D:\\b"`.
+- Behavior change: with `VENIRA_WORKSPACE` set, `switch_workspace` is enabled under `strict`/`balanced` and scoped to the listed roots; before, it was locked to the spawn workspace unless `VENIRA_WORKSPACE_ROOTS` was set. Unset `VENIRA_WORKSPACE` still locks switching to the spawn workspace.
+- `lib/workspace.ts`: `SPAWN_WORKSPACE` = the first entry, `allowedWorkspaceRoots()` = the listed roots, `workspaceRootsConfigured()` = "is `VENIRA_WORKSPACE` set". `lib/snapshots.ts` compares a checkpoint's workspace against the resolved root instead of the raw env string. `bin/venira-mcp.js`: `--workspace`/`-w` replaces the root entry and keeps the other roots.
+- Docs: README (env table + the `switch_workspace` paragraphs), `ROADMAP_ENV_SLIM.md` phase 2g.
+- Tests: `test:workspace-switch` covers the merged list, the root entry, both separators and the removed variable; `test:env-registry` pins the registry kinds and the startup warning.
+
+### Changed - `memory` note cap 6000 -> 10000 bytes
+
+- `MEMORY_MAX_BYTES` (`tools/project-memory.ts`) is now 10 000 bytes, so several agents can share more context in `<workspace>/.venira/memory.md`. Writes over the cap are still refused with the same `invalid_request` and hint.
+- `lib/output.ts`: the `memory` kind is never previewed in `VENIRA_OUTPUT_MODE=compact`. The old 6000-byte cap was chosen to stay under the 8 KiB compact threshold; at 10 KB a note would have been cut on `read`. The kind is bounded by the cap, so it cannot grow unchecked.
+- Docs: the "max 6000 bytes" wording is now 10000 in the tool description (`tools/project-docs.ts`), the `content` parameter (`tools/project-register-ops.ts`, also dropped the word "new" to stay inside the schema budget) and the README `memory` row. The 5.1.0-era entries below keep the historical 6000.
+- Schema budget: `memory` stays under its ceiling; ceilings ratcheted down with `--update`.
+- Tests: `test:memory` now runs with `VENIRA_OUTPUT_MODE=compact` and +2 checks (cap is 10000; a note at the cap reads back whole and not `trimmed`).
+- Note: a running MCP server keeps the old cap until it is rebuilt (`npm run build`) and restarted.
+
 ## 5.1.0 - 2026-11-22
 
 ### Added - `git action=push`

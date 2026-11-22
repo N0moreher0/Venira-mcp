@@ -10,8 +10,20 @@ import { resolveSecurityProfile } from "./security-profile.js";
 import { snapshotProtectedRoots } from "./snapshot-paths.js";
 export const PLATFORM = process.platform;
 
+/**
+ * VENIRA_WORKSPACE entries: absolute paths separated by `,` or `;`.
+ * The FIRST entry is the workspace root; every entry is also a root `switch_workspace`
+ * may reach under strict/balanced. A single path keeps the old meaning (the root).
+ */
+export function workspaceEntries(env: NodeJS.ProcessEnv = process.env): string[] {
+  return (env.VENIRA_WORKSPACE ?? "")
+    .split(/[,;]/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
 /** The workspace the server started in: always allowed as a switch target, even after re-rooting. */
-export const SPAWN_WORKSPACE = path.resolve(process.env.VENIRA_WORKSPACE ?? process.cwd());
+export const SPAWN_WORKSPACE = path.resolve(workspaceEntries()[0] ?? process.cwd());
 export let WORKSPACE = SPAWN_WORKSPACE;
 
 import os from "node:os";
@@ -144,7 +156,7 @@ function normalizedProtectedBase(canonicalPath: string): string {
  * Workspace switching follows VENIRA_SECURITY_PROFILE (the former dynamic-workspace env flag was removed):
  *   trusted / off  -> any existing directory (personal-machine posture, same idea as
  *                     off carrying VENIRA_UNRESTRICTED=1);
- *   strict/balanced-> only the spawn workspace plus the entries of VENIRA_WORKSPACE_ROOTS
+ *   strict/balanced-> only the spawn workspace plus the roots listed in VENIRA_WORKSPACE
  *                     (unset = locked to the spawn workspace).
  * VENIRA_UNRESTRICTED=1 allows any path on top of any profile (it is the
  * "no workspace lock at all" posture, and off implies it via the profile env defaults).
@@ -162,17 +174,23 @@ export function profileAllowsAnyPath(): boolean {
   return envFlag("VENIRA_UNRESTRICTED", false) || profile === "trusted" || profile === "off";
 }
 
+/** Absolute roots from VENIRA_WORKSPACE, in configuration order (the first entry is the workspace root). */
+function configuredRoots(): string[] {
+  const roots: string[] = [];
+  for (const entry of workspaceEntries()) {
+    const abs = path.resolve(entry);
+    if (!roots.includes(abs)) roots.push(abs);
+  }
+  return roots;
+}
+
 export function allowedWorkspaceRoots(): string[] {
   const roots: string[] = [WORKSPACE];
   if (!roots.includes(SPAWN_WORKSPACE)) roots.push(SPAWN_WORKSPACE);
-  const raw = process.env.VENIRA_WORKSPACE_ROOTS ?? "";
   // The allowlist is honored under strict/balanced only; trusted/off (and an explicit
   // VENIRA_UNRESTRICTED=1) may reach any existing directory, so listing roots there adds nothing.
   if (!profileAllowsAnyPath()) {
-    for (const part of raw.split(/[,;]/)) {
-      const value = part.trim();
-      if (!value) continue;
-      const abs = path.resolve(value);
+    for (const abs of configuredRoots()) {
       if (fs.existsSync(abs) && !roots.includes(abs)) {
         roots.push(abs);
       }
@@ -184,13 +202,9 @@ export function allowedWorkspaceRoots(): string[] {
   return roots;
 }
 
-/** True when VENIRA_WORKSPACE_ROOTS lists at least one entry (existence is not required). */
+/** True when VENIRA_WORKSPACE lists at least one entry (existence is not required). */
 export function workspaceRootsConfigured(): boolean {
-  const raw = process.env.VENIRA_WORKSPACE_ROOTS ?? "";
-  return raw
-    .split(/[,;]/)
-    .map((part) => part.trim())
-    .filter(Boolean).length > 0;
+  return workspaceEntries().length > 0;
 }
 
 export function canSwitchWorkspace(target: string): string | null {
@@ -202,7 +216,7 @@ export function canSwitchWorkspace(target: string): string | null {
   // workspace. This is what a stdio MCP client that cannot respawn the server per project
   // (e.g. Claude Desktop) needs when the operator opted into the personal-machine posture.
   if (profileAllowsAnyPath()) return abs;
-  // strict/balanced: the spawn workspace plus the VENIRA_WORKSPACE_ROOTS allowlist;
+  // strict/balanced: the spawn workspace plus the VENIRA_WORKSPACE allowlist;
   // unset roots mean locked to the spawn workspace.
   const roots = allowedWorkspaceRoots();
   return roots.some((root) => {
@@ -220,7 +234,7 @@ export function canSwitchWorkspace(target: string): string | null {
 export function switchWorkspaceRoot(target: string): string {
   const next = canSwitchWorkspace(target);
   if (!next) {
-    throw new Error("[workspace_switch_denied] Workspace switching is limited by VENIRA_SECURITY_PROFILE: strict/balanced switch only inside VENIRA_WORKSPACE_ROOTS (unset = locked to the spawn workspace); trusted/off switch any existing directory. Set VENIRA_WORKSPACE_ROOTS to allow specific directories.");
+    throw new Error("[workspace_switch_denied] Workspace switching is limited by VENIRA_SECURITY_PROFILE: strict/balanced switch only inside the roots listed in VENIRA_WORKSPACE (unset = locked to the spawn workspace); trusted/off switch any existing directory. Set VENIRA_WORKSPACE='root1;root2' (the first entry is the workspace root) to allow specific directories.");
   }
   WORKSPACE = next;
   return WORKSPACE;

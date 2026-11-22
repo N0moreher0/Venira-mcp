@@ -29,12 +29,25 @@ const rawArgs = process.argv.slice(2);
 const env = { ...process.env };
 const restArgs = [];
 
+// --workspace/-w sets the ROOT entry of VENIRA_WORKSPACE (the first entry); any further
+// roots the operator configured are kept, so the switch allowlist survives an override.
+const setWorkspaceRoot = (current, value) => {
+  const root = String(value ?? "").trim();
+  if (!root) return current;
+  const rest = String(current ?? "")
+    .split(/[,;]/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .slice(1);
+  return [root, ...rest].join(";");
+};
+
 for (let i = 0; i < rawArgs.length; i++) {
   const arg = rawArgs[i];
   if (arg === "--workspace" || arg === "-w") {
-    env.VENIRA_WORKSPACE = rawArgs[++i] || env.VENIRA_WORKSPACE;
+    env.VENIRA_WORKSPACE = setWorkspaceRoot(env.VENIRA_WORKSPACE, rawArgs[++i]);
   } else if (arg.startsWith("--workspace=")) {
-    env.VENIRA_WORKSPACE = arg.slice("--workspace=".length);
+    env.VENIRA_WORKSPACE = setWorkspaceRoot(env.VENIRA_WORKSPACE, arg.slice("--workspace=".length));
   } else if (arg === "--data-dir") {
     env.VENIRA_DATA_DIR = rawArgs[++i] || env.VENIRA_DATA_DIR;
   } else if (arg.startsWith("--data-dir=")) {
@@ -77,12 +90,14 @@ Usage:
   npx venira-mcp --help, -h      Show this help
 
 Environment:
-  VENIRA_WORKSPACE    Project root the tools are locked to (default: cwd)
+  VENIRA_WORKSPACE    Project root the tools are locked to (default: cwd). Accepts a
+                      list (";" separated): the first entry is the root, every entry
+                      is a root switch_workspace may reach.
   VENIRA_DATA_DIR     Audit DB, approvals + keys (default: per-user data dir,
                       e.g. ~/.local/share/venira; the server and --approve must agree)
   VENIRA_UNRESTRICTED 1 to allow paths outside the workspace (default: 0)
 
-  --workspace, -w <path>  Project root instead of editing env
+  --workspace, -w <path>  Project root instead of editing env (keeps other roots)
   --data-dir <path>       Audit DB + data dir
 
 Docs: https://github.com/N0moreher0/Venira-mcp`;

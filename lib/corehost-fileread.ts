@@ -374,7 +374,7 @@ export async function opListFiles(
 }
 
 /**
- * Switch the active workspace root at runtime (VENIRA_SECURITY_PROFILE trusted/off, or VENIRA_WORKSPACE_ROOTS under strict/balanced).
+ * Switch the active workspace root at runtime (VENIRA_SECURITY_PROFILE trusted/off, or the roots listed in VENIRA_WORKSPACE under strict/balanced).
  * Returns the new root and the roots a switch may reach. The file-tool path
  * guard (	oHostPath) follows the new root; the read/list/search caches keep
  * their absolute-path keys, and the caller additionally invalidates the

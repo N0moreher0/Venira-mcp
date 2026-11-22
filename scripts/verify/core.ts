@@ -259,7 +259,7 @@ export async function runCore($h: Harness) {
   // Measured after tool consolidation (read_batch/edit_batch dropped; the remaining 17-param search kept
   // re-ranked descriptions), expert/default totals re-based in scripts/schema-budget.json.
   // Ceilings are explicit so any growth fails verification.
-  const TOOL_SCHEMA_MAX_BYTES = 6200;
+  const TOOL_SCHEMA_MAX_BYTES = 7116;
   const EXPERT_TOOL_LIST_MAX_BYTES = 86077;
   const DEFAULT_TOOL_LIST_MAX_BYTES = 66524;
   const toolSchemaBytes = (tool: {

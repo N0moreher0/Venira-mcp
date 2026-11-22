@@ -108,6 +108,18 @@ check("envSpec resolves known names and rejects unknown ones", () => {
   assert.equal(envSpec("VENIRA_DOES_NOT_EXIST"), undefined);
 });
 
+check("the workspace axis is one variable: VENIRA_WORKSPACE is a list, VENIRA_WORKSPACE_ROOTS is removed", () => {
+  const workspace = envSpec("VENIRA_WORKSPACE");
+  assert.equal(workspace?.kind, "list");
+  assert.equal(workspace?.status, "supported");
+  const roots = envSpec("VENIRA_WORKSPACE_ROOTS");
+  assert.equal(roots?.status, "removed");
+  assert.match(roots?.removedNote ?? "", /VENIRA_WORKSPACE/);
+  const [issue] = checkEnvironment({ VENIRA_WORKSPACE_ROOTS: "C:\\one;D:\\two" });
+  assert.equal(issue.code, "removed_var");
+  assert.match(issue.message, /VENIRA_WORKSPACE/);
+});
+
 // ---------------------------------------------------------------------------
 // 2. checkEnvironment table
 // ---------------------------------------------------------------------------

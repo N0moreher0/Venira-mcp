@@ -19,7 +19,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
-import { resolveWithin } from "./workspace.js";
+import { resolveWithin, SPAWN_WORKSPACE } from "./workspace.js";
 import type { RustResponse } from "./output.js";
 import { MANIFEST_VERSION, MAX_TOTAL_BYTES, KEEP_CHECKPOINTS, MAX_DELETE_EXTRA, effectiveMaxFiles, DEFAULT_EXCLUDES, snapshotDataDir, indexPath, blobRoot, blobPath, protectedPrefixes, isProtected, isAuditDbFile, newId, validId, sanitizeReason, type SnapshotManifest, readManifest, readManifestOwner, writeManifest, listManifests, listManifestsDetailed, hashBuffer, fileSignature, normalizeRel, pathHasSymlinkAncestor } from "./snapshot-store.js";
 import { walkForSnapshot, storeBlob } from "./snapshot-walk.js";
@@ -195,7 +195,7 @@ export async function opSnapshotList(args: Record<string, unknown>): Promise<Rus
     total_bytes: m.total_bytes,
     roots: m.roots.map((r) => r.path),
     truncated: m.truncated,
-    workspace_match: m.workspace === path.resolve(process.env.VENIRA_WORKSPACE ?? process.cwd()),
+    workspace_match: m.workspace === SPAWN_WORKSPACE,
   }));
   return {
     status: "completed",

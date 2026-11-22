@@ -592,7 +592,7 @@ export class CoreHost {
 
       case "project_tool.workspace.switch": {
         if (!switchingEnabled()) {
-          throw new Error("[workspace_switch_denied] Workspace switching is limited by VENIRA_SECURITY_PROFILE: strict/balanced switch only inside VENIRA_WORKSPACE_ROOTS (unset = locked to the spawn workspace); trusted/off switch any existing directory. Set VENIRA_WORKSPACE_ROOTS to allow specific directories.");
+          throw new Error("[workspace_switch_denied] Workspace switching is limited by VENIRA_SECURITY_PROFILE: strict/balanced switch only inside the roots listed in VENIRA_WORKSPACE (unset = locked to the spawn workspace); trusted/off switch any existing directory. Set VENIRA_WORKSPACE='root1;root2' (the first entry is the workspace root) to allow specific directories.");
         }
         return (await opWorkspaceSwitch(p)) as T;
       }

@@ -442,7 +442,13 @@ export function buildEnvelope(
 
   const originalBytes = serializedBytes(data ?? null);
   const forcePreviewKinds = new Set(["file_list", "search", "symbol_references", "recent_files", "audit_read"]);
-  const shouldPreview = OUTPUT_MODE === "compact" && (originalBytes > SUMMARY_THRESHOLD_BYTES || forcePreviewKinds.has(kind));
+  // `memory` is bounded by MEMORY_MAX_BYTES (10 KB, above the 8 KiB threshold) and the handoff note must come back
+  // whole, so compact mode never previews it.
+  const neverPreviewKinds = new Set(["memory"]);
+  const shouldPreview =
+    OUTPUT_MODE === "compact" &&
+    !neverPreviewKinds.has(kind) &&
+    (originalBytes > SUMMARY_THRESHOLD_BYTES || forcePreviewKinds.has(kind));
   if (shouldPreview) {
     const candidate = previewData(kind, data);
     // For forcePreviewKinds, always use the structured preview even if not smaller.
