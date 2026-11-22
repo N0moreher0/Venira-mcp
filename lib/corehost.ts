@@ -39,7 +39,7 @@ import { shellRuns, killTree, SHELL_EXIT_EARLY, SHELL_MAX_TIMEOUT_MS } from "./c
 export { SHELL_TAIL_LIMIT, SHELL_EXIT_EARLY, SHELL_MAX_TIMEOUT_MS, shellPolicySnapshot } from "./corehost-shell-state.js";
 import { opWriteFile, opEditFile, opCreateDirectory, opDeletePath, opMovePath, opCopyPath } from "./corehost-filewrite.js";
 import { opApplyPatch } from "./corehost-patch.js";
-import { opGitStatus, opGitDiff, opGitLog, opGitBranch, opGitCommit, opGitStash } from "./corehost-git.js";
+import { opGitStatus, opGitDiff, opGitLog, opGitBranch, opGitCommit, opGitStash, opGitPush } from "./corehost-git.js";
 import { opShellRun, opShellStatus, opShellCancel } from "./corehost-shell.js";
 export { queryRecentFiles } from "./recent-index.js";
 
@@ -366,6 +366,7 @@ const operations: Record<string, OperationHandler> = {
   git_branch: opGitBranch,
   git_commit: opGitCommit,
   git_stash: opGitStash,
+  git_push: opGitPush,
   recent_files: async (args: Record<string, unknown>) => opRecentFiles(args),
   snapshot_create: opSnapshotCreate,
   snapshot_list: (args: Record<string, unknown>) => opSnapshotList(args),

@@ -1,6 +1,6 @@
 /**
  * corehost local git ops: git_status, git_diff, git_log,
- * git_branch, git_commit, git_stash.
+ * git_branch, git_commit, git_stash, git_push.
  * See ROADMAP_TOOLS.md, phase 3. Outputs are parsed and locale-independent.
  */
 import { promises as fs, statSync } from "node:fs";
@@ -8,6 +8,7 @@ import path from "node:path";
 import { sanitizeReason } from "./snapshots.js";
 import type { RustResponse } from "./corehost-common.js";
 import { isProtectedPath } from "./workspace.js";
+import { resolveSecurityProfile } from "./security-profile.js";
 import {
   assertBranchName,
   assertGitRef,
@@ -615,4 +616,140 @@ export async function opGitStash(args: Args, root: string): Promise<RustResponse
     };
   }
   throw new Error("[invalid_request] action must be push|list|apply|pop|drop|show. Hint: use action=list to see stashes.");
+}
+
+// ---------------------------------------------------------------------------
+// git_push
+// ---------------------------------------------------------------------------
+// Pushes ONE local branch to a CONFIGURED remote (by name, never a URL). No force of
+// any kind, no branch deletion, no --all/--mirror: those stay in shell_run, where the
+// shell policy asks for approval. Under VENIRA_SECURITY_PROFILE=strict plain pushes
+// need approval too, so this op refuses there and points to shell_run.
+// Output is `--porcelain` (parsed) and credentials in URLs are redacted.
+
+const PUSH_TIMEOUT_MS = 120_000;
+const REMOTE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
+
+/** Strip credentials from URLs (https://user:token@host) before text reaches the agent. */
+const redactUrls = (text: string): string => text.replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, "$1***@");
+
+type PushStatus = "pushed" | "new" | "forced" | "deleted" | "up_to_date" | "rejected";
+type PushUpdate = { flag: string; ref: string; status: PushStatus; summary: string };
+
+const PUSH_FLAG_STATUS: Record<string, PushStatus> = {
+  " ": "pushed",
+  "+": "forced",
+  "-": "deleted",
+  "*": "new",
+  "=": "up_to_date",
+  "!": "rejected",
+};
+
+export const parsePushPorcelain = (stdout: string): PushUpdate[] => {
+  const updates: PushUpdate[] = [];
+  for (const line of stdout.split(/\r?\n/)) {
+    const m = /^([ +\-*=!])\t([^\t]*)\t(.*)$/.exec(line);
+    if (!m) continue;
+    const flag = m[1] ?? " ";
+    updates.push({ flag, ref: m[2] ?? "", status: PUSH_FLAG_STATUS[flag] ?? "pushed", summary: redactUrls((m[3] ?? "").trim()) });
+  }
+  return updates;
+};
+
+export async function opGitPush(args: Args, root: string): Promise<RustResponse> {
+  await resolveWorkspaceRepo(root);
+  if (resolveSecurityProfile() === "strict") {
+    throw new Error("[invalid_request] git push is not available under VENIRA_SECURITY_PROFILE=strict (pushes need human approval there). Hint: use shell_run with `git push -u origin <branch>` so the user can approve it.");
+  }
+  const dryRun = flagBool(args.dry_run);
+  const setUpstream = flagBool(args.set_upstream);
+  const tags = flagBool(args.tags);
+
+  // Branch: explicit local branch name, else the checked-out branch.
+  let branch: string;
+  if (typeof args.ref === "string" && args.ref.trim()) {
+    branch = assertBranchName(args.ref, "ref").replace(/^refs\/heads\//, "");
+  } else {
+    const head = await runGit(["symbolic-ref", "--quiet", "--short", "HEAD"], root);
+    branch = head.stdout.toString("utf8").trim();
+    if (head.exitCode !== 0 || !branch) {
+      throw new Error("[invalid_request] HEAD is detached, so there is no branch to push. Hint: switch to a branch (git action=branch sub=switch) or pass ref: \"main\".");
+    }
+  }
+  const exists = await runGit(["show-ref", "--verify", "--quiet", `refs/heads/${branch}`], root);
+  if (exists.exitCode !== 0) {
+    throw new Error(`[not_found] Local branch does not exist: ${branch}. Hint: list branches with git action=branch, or commit first.`);
+  }
+
+  // Remote: a configured remote NAME (never a URL): explicit, else the branch's own, else origin / the only one.
+  const remotes = (await runGit(["remote"], root)).stdout.toString("utf8").split(/\r?\n/).map((v) => v.trim()).filter(Boolean);
+  let remote = "";
+  if (typeof args.remote === "string" && args.remote.trim()) {
+    remote = args.remote.trim();
+    if (!REMOTE_NAME.test(remote) || !remotes.includes(remote)) {
+      throw new Error(`[invalid_request] remote must be the name of a configured remote (${remotes.join(", ") || "none configured"}), not a URL. Hint: pass remote: "origin", or add one with git remote add.`);
+    }
+  } else {
+    const configured = (await runGit(["config", "--get", `branch.${branch}.remote`], root)).stdout.toString("utf8").trim();
+    remote = configured && remotes.includes(configured) ? configured : remotes.includes("origin") ? "origin" : remotes.length === 1 ? (remotes[0] ?? "") : "";
+    if (!remote) {
+      throw new Error(`[invalid_request] No remote to push to (configured: ${remotes.join(", ") || "none"}). Hint: pass remote: "origin", or add one with git remote add.`);
+    }
+  }
+
+  const gitArgs = [
+    "push",
+    "--porcelain",
+    ...(dryRun ? ["--dry-run"] : []),
+    ...(setUpstream ? ["--set-upstream"] : []),
+    ...(tags ? ["--tags"] : []),
+    remote,
+    `refs/heads/${branch}:refs/heads/${branch}`,
+  ];
+  const result = await runGit(gitArgs, root, {
+    maxBuffer: 4 * 1024 * 1024,
+    timeoutMs: PUSH_TIMEOUT_MS,
+    // Never hang on an ssh passphrase/host prompt; a user-set GIT_SSH_COMMAND wins.
+    ...(process.env.GIT_SSH_COMMAND ? {} : { env: { GIT_SSH_COMMAND: "ssh -o BatchMode=yes" } }),
+  });
+  const stdout = result.stdout.toString("utf8");
+  const stderr = redactUrls(result.stderr.toString("utf8")).trim();
+  const updates = parsePushPorcelain(stdout);
+  const rejected = updates.filter((u) => u.status === "rejected");
+
+  if (result.exitCode === 124) {
+    throw new Error(`[timeout] git push timed out after ${PUSH_TIMEOUT_MS / 1000}s. Hint: check the network and credentials with the user, then retry once.`);
+  }
+  if (result.exitCode !== 0) {
+    const detail = stderr.split(/\r?\n/).filter((l) => l.trim() && !/^\s*hint:/i.test(l)).slice(-3).join(" | ") || `git exited with ${result.exitCode}`;
+    if (rejected.length > 0 || /non-fast-forward|fetch first|stale info|rejected/i.test(stderr + stdout)) {
+      throw new Error(`[conflict] Push of ${branch} to ${remote} was rejected. ${detail}. Hint: integrate the remote changes first (pull --rebase in shell_run). A force push is not offered here; ask the user, and use shell_run (approval required) only if they confirm.`);
+    }
+    if (/could not read (Username|Password)|Authentication failed|Permission denied|publickey|returned error: 40[13]|HTTP 40[13]/i.test(stderr)) {
+      throw new Error(`[invalid_request] Push to ${remote} needs credentials that are not available non-interactively. ${detail}. Hint: ask the user to configure a credential helper or SSH key for ${remote}; do not put tokens in remote URLs.`);
+    }
+    if (/Could not resolve host|unable to access|Connection (refused|timed out|reset)|Network is unreachable|Failed to connect/i.test(stderr)) {
+      throw new Error(`[network_error] Could not reach ${remote}. ${detail}. Hint: check connectivity and retry once.`);
+    }
+    FAILURE("invalid_request", `git push failed. ${detail}. Hint: run git action=status, and check the remote name and branch.`);
+  }
+
+  const pushedRefs = updates.filter((u) => ["pushed", "new", "forced", "deleted"].includes(u.status));
+  return {
+    status: "completed",
+    result: {
+      kind: "git_push",
+      data: {
+        remote,
+        branch,
+        dry_run: dryRun,
+        set_upstream: setUpstream,
+        tags,
+        pushed: !dryRun && pushedRefs.length > 0,
+        up_to_date: updates.length > 0 && pushedRefs.length === 0,
+        updates,
+        reason: sanitizeReason(args.reason),
+      },
+    },
+  };
 }

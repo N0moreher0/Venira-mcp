@@ -19,6 +19,10 @@ export type GitOptions = {
   maxBuffer?: number;
   /** Extra `-c key=value` pairs, for one-off config such as a test user. */
   config?: Readonly<Record<string, string>>;
+  /** Kill git after this many ms (network ops such as push). A timeout resolves with exitCode 124. */
+  timeoutMs?: number;
+  /** Extra env vars merged over the fixed git env (never over LC_ALL/GIT_TERMINAL_PROMPT). */
+  env?: Readonly<Record<string, string>>;
 };
 
 const gitEnv = (): NodeJS.ProcessEnv => ({
@@ -78,10 +82,11 @@ export async function runGit(args: readonly string[], root: string, options: Git
       argv,
       {
         cwd: root,
-        env: gitEnv(),
+        env: { ...(options.env ?? {}), ...gitEnv() },
         encoding: "buffer",
         maxBuffer: options.maxBuffer ?? DEFAULT_MAX_BYTES,
         windowsHide: true,
+        ...(options.timeoutMs ? { timeout: options.timeoutMs, killSignal: "SIGKILL" as const } : {}),
       },
       (error, stdout, stderr) => {
         const out = Buffer.isBuffer(stdout) ? stdout : Buffer.from(stdout ?? "");
@@ -91,6 +96,10 @@ export async function runGit(args: readonly string[], root: string, options: Git
         }
         if (error && (error as NodeJS.ErrnoException).code === "ENOBUFS") {
           throw new Error("[resource_limit] Git returned more data than the configured limit. Hint: narrow the paths or use a smaller max_bytes.");
+        }
+        if (options.timeoutMs && error && (error as { killed?: boolean }).killed) {
+          resolve({ stdout: out, stderr: Buffer.concat([err, Buffer.from(`\ngit timed out after ${options.timeoutMs} ms`)]), exitCode: 124 });
+          return;
         }
         const rawCode = error && typeof error.code === "number" ? error.code : 0;
         resolve({ stdout: out, stderr: err, exitCode: rawCode });

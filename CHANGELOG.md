@@ -2,6 +2,23 @@
 
 Local release notes for venira-mcp. Not published (not listed in `package.json` `files`) and not pushed to git.
 
+## Unreleased
+
+### Added - `git action=push`
+
+- `git` gains `action=push`: pushes ONE local branch (`ref`, default the checked-out branch) to a configured remote **name** (`remote`, default the branch's own remote, else `origin`, else the only remote). Options: `set_upstream` (`-u`), `tags` (`--tags`), `dry_run`. Corehost op `git_push` (`opGitPush` in `lib/corehost-git.ts`).
+- Safety: remotes are names only (URLs and option-like values are refused); no force of any kind, no branch deletion, no `--all`/`--mirror` (those stay in `shell_run`, where the shell policy asks for approval); refused under `VENIRA_SECURITY_PROFILE=strict` (pushes need approval there); credentials only from the user's git config, never prompted (`GIT_TERMINAL_PROMPT=0`, ssh `BatchMode=yes` unless `GIT_SSH_COMMAND` is set); 120 s timeout; URL credentials are redacted from output. Audited `reason` like other mutations; tool annotation `openWorldHint: true`.
+- Output: `{remote, branch, pushed, up_to_date, dry_run, set_upstream, tags, updates[] {flag, ref, status, summary}}` parsed from `git push --porcelain`. Errors: rejected/non-fast-forward -> `conflict`, missing credentials -> `invalid_request` with a hint, unreachable remote -> `network_error`, hang -> `timeout`.
+- `lib/git-local.ts`: `runGit` gained `timeoutMs` (resolves exitCode 124) and `env`.
+- Schema budget: the `git` schema grew 6154 -> 7189 B for the push options (expert 72190 B, default 52994 B); `scripts/schema-budget.json` raised deliberately (`--update --allow-increase`).
+- Tests: `test:git-local` +10 checks against a local bare remote (dry run, `-u`, up-to-date, URL refusal, non-fast-forward, no force, strict refusal, detached HEAD, porcelain parser/redaction).
+
+### Changed - `switch_workspace` joins the `core` allowlist
+
+- `CORE_TOOLS` (`tools/project-tool-mode.ts`) now includes `switch_workspace`, so small-model / restricted-context clients that spawn the server once (Claude Desktop, Cowork) can follow the user to another project folder without a restart. Core is now **18** tools (17 with `VENIRA_JS_EXEC_MODE=off`); default 31 and expert 44 are unchanged because the tool was already registered there. Behaviour is unchanged and still scoped by `VENIRA_SECURITY_PROFILE` (`trusted`/`off`: any existing directory; `strict`/`balanced`: only `VENIRA_WORKSPACE_ROOTS`).
+- Docs: README (intro, mode table, `VENIRA_TOOL_MODE` row — the stale 23/39/52 counts there are now 18/31/44), `AGENTS.md`, `GEMINI.md`, `ROADMAP_TOOLS.md` (the "no push" wording now points to `git action=push`), and the README `git` row/paragraph now document `action=push`.
+- Tests: `test:tool-schema` pins `switch_workspace` in the core allowlist.
+
 ## 5.0.0 - 2026-11-22
 
 ### Changed - search batch validation and partial results

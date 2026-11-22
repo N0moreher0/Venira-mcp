@@ -413,11 +413,11 @@ check("core mode: every allowlisted tool is a real registered tool (no typo or r
   assert.equal(new Set(toolMode.CORE_TOOLS).size, toolMode.CORE_TOOLS.length, "CORE_TOOLS has a duplicate");
 });
 
-check("core mode: keeps shell, execute_js, read, search, list, edit, snapshot and git", () => {
+check("core mode: keeps shell, execute_js, read, search, list, edit, snapshot, git and switch_workspace", () => {
   for (const name of [
     "shell_run", "shell_status", "execute_js", "read_file", "search", "list_files",
     "edit_file", "write_file", "snapshot", "git",
-    "create", "move_path", "recent_files", "outline_symbol", "memory",
+    "create", "move_path", "recent_files", "outline_symbol", "memory", "switch_workspace",
   ]) {
     assert.ok(toolMode.CORE_TOOLS.includes(name), `core must keep ${name}`);
   }

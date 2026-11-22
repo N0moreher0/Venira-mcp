@@ -1,11 +1,11 @@
 {
   "expert": {
     "tool_count": 44,
-    "total_bytes": 71286
+    "total_bytes": 72190
   },
   "default": {
     "tool_count": 31,
-    "total_bytes": 52090
+    "total_bytes": 52994
   },
   "tools": {
     "apply_patch": 1886,
@@ -24,7 +24,7 @@
     "execute_js": 1589,
     "explain_error": 1125,
     "get_file_info": 937,
-    "git": 6154,
+    "git": 7189,
     "github_connect": 1243,
     "health": 1155,
     "list_files": 915,
@@ -41,7 +41,7 @@
     "read_audit": 1772,
     "read_file": 3710,
     "recent_files": 1056,
-    "search": 3611,
+    "search": 3480,
     "secret": 2103,
     "shell_cancel": 661,
     "shell_cancel_session": 437,

@@ -57,7 +57,7 @@ Clients may prefix tool names (for example `mcp__venira__read_file`). The tool n
 
 ## Ground rules
 
-- Stay inside the workspace. Paths are workspace-relative; forward slashes work on Windows too.
+- Stay inside the workspace. Paths are workspace-relative; forward slashes work on Windows too. If the project lives in another folder, call `switch_workspace` with its absolute path (available in every tool mode, `core` included; scoped by `VENIRA_SECURITY_PROFILE`).
 - Read before you write. Never edit from memory of a file. Re-read when anything else may have touched it.
 - Make the smallest change that solves the task. No drive-by reformatting or unrelated cleanups.
 - Never put secrets in files, commands or chat. Store tokens with `secret` (prefer `value_env`) and inject them with `secret_env` on `shell_run`.
@@ -191,7 +191,7 @@ Call `git action=status` (branch, ahead/behind, changed files) and `git action=d
 
 ## 4. Push and open the PR
 
-`git action=commit` does not push. Push with `shell_run` (`git push -u origin <branch>`). Under the current policy: plain push is allowed without approval everywhere except `strict` (needs approval there); force pushes (`--force`, `+ref`, `--force-with-lease`), delete pushes, `--mirror`, and pushes to URLs need approval in `balanced` and `strict`, and run freely in `permissive` and `off`. If one asks for approval, tell the user instead of trying to dodge it.
+`git action=commit` does not push. Push with `git action=push` (`set_upstream=true` the first time, `dry_run=true` to preview): one local branch to a configured remote name, no force/delete/URL, refused under `strict`. A rejected push (`conflict`) means the remote moved: integrate first, never force. For anything else use `shell_run` (`git push ...`). Under the shell policy: plain push is allowed without approval everywhere except `strict` (needs approval there); force pushes (`--force`, `+ref`, `--force-with-lease`), delete pushes, `--mirror`, and pushes to URLs need approval in `balanced` and `strict`, and run freely in `permissive` and `off`. If one asks for approval, tell the user instead of trying to dodge it.
 
 Then `pr_create` with a one-line imperative title and a body holding a summary and a test plan. Use `draft=true` if the work is unfinished.
 

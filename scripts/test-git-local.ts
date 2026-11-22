@@ -1,6 +1,6 @@
 /**
  * Phase 3 of ROADMAP_TOOLS.md: local git tools (corehost ops git_status /
- * git_diff / git_log / git_branch / git_commit / git_stash).
+ * git_diff / git_log / git_branch / git_commit / git_stash / git_push).
  *
  * Pins:
  *   1. status: clean repo, untracked, staged added, renamed with old_path, paths filter.
@@ -10,6 +10,8 @@
  *   5. commit: staged commit, explicit paths, nothing-to-commit is invalid_request.
  *   6. stash: push/list/show/pop round trip, invalid selector and a no-op push.
  *   7. Non-repo and out-of-workspace paths are refused.
+ *   8. push (local bare remote, no network): dry_run, set_upstream, up-to-date, URL remotes
+ *      refused, non-fast-forward rejection is a conflict, no force, strict profile refusal, detached HEAD.
  *
  * Run with: npm run test:git-local
  */
@@ -34,6 +36,8 @@ const {
   opGitBranch,
   opGitCommit,
   opGitStash,
+  opGitPush,
+  parsePushPorcelain,
 } = (await import(pathToFileURL(path.join(repoRoot, "lib", "corehost-git.ts")).href)) as typeof import("../lib/corehost-git.js");
 
 const root = path.join(tempDir, "repo");
@@ -211,6 +215,100 @@ try {
 
   await check("an invalid stash selector is invalid_request", async () => {
     await assert.rejects(() => opGitStash({ action: "pop", selector: "stash@abc" }, root), /^Error: \[invalid_request\]/);
+  });
+
+  await check("push without any remote is invalid_request", async () => {
+    await assert.rejects(() => opGitPush({}, root), /^Error: \[invalid_request\].*No remote/);
+  });
+
+  const remotePath = path.join(tempDir, "remote.git");
+  execFileSync("git", ["init", "-q", "--bare", "-b", "main", remotePath]);
+  git(["remote", "add", "origin", remotePath]);
+  const remoteSha = (branch: string) => execFileSync("git", ["--git-dir", remotePath, "rev-parse", "--verify", "-q", `refs/heads/${branch}`], { encoding: "utf8" }).trim();
+
+  await check("push dry_run reports a new branch and pushes nothing", async () => {
+    const d = data(await opGitPush({ dry_run: 1 }, root));
+    assert.equal(d.remote, "origin");
+    assert.equal(d.branch, "main");
+    assert.equal(d.dry_run, true);
+    assert.equal(d.pushed, false);
+    assert.equal((d.updates as Array<Record<string, unknown>>)[0].status, "new");
+    assert.throws(() => remoteSha("main"));
+  });
+
+  await check("push with set_upstream publishes the branch", async () => {
+    const d = data(await opGitPush({ set_upstream: 1 }, root));
+    assert.equal(d.pushed, true);
+    assert.equal(d.up_to_date, false);
+    assert.equal(remoteSha("main"), git(["rev-parse", "HEAD"]).trim());
+    assert.equal(git(["config", "--get", "branch.main.remote"]).trim(), "origin");
+  });
+
+  await check("pushing again is up_to_date, not an error", async () => {
+    const d = data(await opGitPush({}, root));
+    assert.equal(d.pushed, false);
+    assert.equal(d.up_to_date, true);
+  });
+
+  await check("remote must be a configured name, never a URL", async () => {
+    await assert.rejects(() => opGitPush({ remote: "https://example.com/x.git" }, root), /^Error: \[invalid_request\].*not a URL/);
+    await assert.rejects(() => opGitPush({ remote: "nope" }, root), /^Error: \[invalid_request\]/);
+    await assert.rejects(() => opGitPush({ remote: "-o" }, root), /^Error: \[invalid_request\]/);
+  });
+
+  await check("ref must be an existing local branch name", async () => {
+    await assert.rejects(() => opGitPush({ ref: "missing-branch" }, root), /^Error: \[not_found\]/);
+    await assert.rejects(() => opGitPush({ ref: "--delete" }, root), /^Error: \[invalid_request\]/);
+    await assert.rejects(() => opGitPush({ ref: "main:other" }, root), /^Error: \[invalid_request\]/);
+  });
+
+  await check("a non-fast-forward push is a conflict and never moves the remote", async () => {
+    const clone = path.join(tempDir, "clone");
+    execFileSync("git", ["clone", "-q", remotePath, clone]);
+    const cg = (args: string[]) => execFileSync("git", ["-C", clone, ...args], { encoding: "utf8" });
+    cg(["config", "user.name", "Other"]);
+    cg(["config", "user.email", "other@example.com"]);
+    fs.writeFileSync(path.join(clone, "other.txt"), "x\n");
+    cg(["add", "other.txt"]);
+    cg(["commit", "-qm", "remote side change"]);
+    cg(["push", "-q", "origin", "main"]);
+    const before = remoteSha("main");
+    git(["commit", "-q", "--allow-empty", "-m", "local divergent"]);
+    await assert.rejects(() => opGitPush({}, root), /^Error: \[conflict\]/);
+    assert.equal(remoteSha("main"), before, "a rejected push must not move the remote");
+  });
+
+  await check("force is not offered: force_with_lease is ignored, the push is still rejected", async () => {
+    await assert.rejects(() => opGitPush({ force_with_lease: 1, force: 1 }, root), /^Error: \[conflict\]/);
+    git(["fetch", "-q", "origin"]);
+    git(["reset", "-q", "--hard", "origin/main"]);
+    git(["commit", "-q", "--allow-empty", "-m", "local after sync"]);
+    const d = data(await opGitPush({}, root));
+    assert.equal(d.pushed, true);
+    assert.equal(remoteSha("main"), git(["rev-parse", "HEAD"]).trim());
+  });
+
+  await check("push is refused under the strict security profile (use shell_run for approval)", async () => {
+    const prev = process.env.VENIRA_SECURITY_PROFILE;
+    process.env.VENIRA_SECURITY_PROFILE = "strict";
+    try {
+      await assert.rejects(() => opGitPush({}, root), /^Error: \[invalid_request\].*strict.*shell_run/);
+    } finally {
+      if (prev === undefined) delete process.env.VENIRA_SECURITY_PROFILE;
+      else process.env.VENIRA_SECURITY_PROFILE = prev;
+    }
+  });
+
+  await check("a detached HEAD has no branch to push", async () => {
+    git(["checkout", "-q", "--detach"]);
+    await assert.rejects(() => opGitPush({}, root), /^Error: \[invalid_request\].*detached/);
+    git(["checkout", "-q", "main"]);
+  });
+
+  await check("parsePushPorcelain maps flags and redacts credentials", async () => {
+    const updates = parsePushPorcelain("To https://user:tok@host/x.git\n*\trefs/heads/a:refs/heads/a\t[new branch]\n \trefs/heads/b:refs/heads/b\t1..2\n!\trefs/heads/c:refs/heads/c\t[rejected] (fetch first)\n=\trefs/heads/d:refs/heads/d\t[up to date]\nDone\n");
+    assert.deepEqual(updates.map((u) => u.status), ["new", "pushed", "rejected", "up_to_date"]);
+    assert.equal(updates[2].summary, "[rejected] (fetch first)");
   });
 
   await check("paths outside the workspace are refused for git_status diff log", async () => {

@@ -21,6 +21,7 @@ const REASON_REQUIRED_OPS = new Set([
   "git_commit",
   "git_branch",
   "git_stash",
+  "git_push",
   "snapshot_create",
   "snapshot_restore",
   "snapshot_delete",

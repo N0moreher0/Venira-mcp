@@ -5,8 +5,8 @@ import type { Args } from "./project-cache.js";
 import { config, flag01, reason_ } from "./project-schema.js";
 
 // Local git: ONE tool `git` (exposed as `venira_git` in client plugins) with
-// `action` = status | diff | log | branch | commit | stash, plus `sub` for the
-// branch/stash sub-actions. The corehost operations stay `git_status`..`git_stash`;
+// `action` = status | diff | log | branch | commit | stash | push, plus `sub` for the
+// branch/stash sub-actions. The corehost operations stay `git_status`..`git_push`;
 // this file only merges the schema surface and maps argv for the runners.
 //
 //   git action=status {paths?}
@@ -15,6 +15,11 @@ import { config, flag01, reason_ } from "./project-schema.js";
 //   git action=branch {sub?, name?, from?, include_remote?, force?}   sub: list|current|create|switch|delete
 //   git action=commit {message, paths?, allow_empty?, amend?}
 //   git action=stash  {sub?, selector?, paths?, message?, include_untracked?}  sub: push|list|apply|pop|drop|show
+//   git action=push   {remote?, ref?, set_upstream?, tags?, dry_run?}
+//
+// push: ONE local branch to a configured remote NAME (never a URL); no force, no
+// branch deletion (use shell_run, which asks approval); credentials come from the
+// user's git config (non-interactive); refused under VENIRA_SECURITY_PROFILE=strict.
 //
 // message (commit body, stash push note) is capped at 1000 chars.
 
@@ -28,7 +33,7 @@ const paths_ = z
   .optional()
   .describe("Optional workspace-relative paths to limit the operation.");
 
-const ref_ = z.string().max(300).optional().describe("Optional ref (branch, tag or commit sha). Default: HEAD.");
+const ref_ = z.string().max(300).optional().describe("Optional ref (branch, tag or commit sha). Default: HEAD. action=push: local branch to push (default: checked-out branch).");
 
 const limit_ = z.number().int().min(1).max(200).optional().describe("Max commits to return (default 20, max 200).");
 
@@ -54,7 +59,7 @@ export function registerGitTools(server: McpServer, deps: GitToolsDeps): void {
   const { runOne } = deps;
   // -------------------------------------------------------------------------
   // Local git: merged into ONE tool (`git`). Read-only sub-actions run free;
-  // mutations need an audited `reason`; this tool never pushes.
+  // mutations need an audited `reason`; push only targets configured remotes.
   // -------------------------------------------------------------------------
 
   server.registerTool(
@@ -63,12 +68,12 @@ export function registerGitTools(server: McpServer, deps: GitToolsDeps): void {
       ...config("Local git", {
         speed_profile: "one git call per action; output is parsed and locale-independent.",
         batch_safe: false,
-      }, { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }),
+      }, { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true }),
       inputSchema: {
         action: z
-          .enum(["status", "diff", "log", "branch", "commit", "stash"])
+          .enum(["status", "diff", "log", "branch", "commit", "stash", "push"])
           .default("status")
-          .describe("Which git operation to run: status | diff | log | branch | commit | stash."),
+          .describe("Which git operation to run: status | diff | log | branch | commit | stash | push."),
         // shared options
         paths: paths_.describe("Optional workspace-relative paths. status/diff/log/stash: limits what the command looks at. commit: paths to stage first (git add); omit to commit the already-staged set. Not used by action=branch."),
         reason: reason_,
@@ -97,6 +102,11 @@ export function registerGitTools(server: McpServer, deps: GitToolsDeps): void {
         allow_empty: flag01.optional().describe("action=commit: true allows an empty commit (git commit --allow-empty)."),
         amend: flag01.optional().describe("action=commit: true amends HEAD instead of creating a new commit."),
         include_untracked: flag01.optional().describe("action=stash sub=push: true includes untracked files when pushing."),
+        // push
+        remote: z.string().max(100).optional().describe("action=push: configured remote NAME (not a URL). Default: the branch's remote, else origin."),
+        set_upstream: flag01.optional().describe("action=push: true sets the upstream (git push -u)."),
+        tags: flag01.optional().describe("action=push: true also pushes tags (--tags)."),
+        dry_run: flag01.optional().describe("action=push: true only reports what would be pushed."),
       },
     },
     (args) => {

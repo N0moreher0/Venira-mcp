@@ -17,7 +17,8 @@ import { WORKSPACE } from "../lib/workspace.js";
  *               two it is an **allowlist** (`CORE_TOOLS`): only the must-have
  *               tools are advertised (shell, execute_js, read, search, list, recent_files,
  *               outline_symbol,
- *               edit/write/create/move/delete, snapshot, git, memory), every other tool stays out
+ *               edit/write/create/move/delete, snapshot, git, memory,
+ *               switch_workspace), every other tool stays out
  *               of `tools/list` — including tools added later — because each
  *               one costs schema tokens on every prompt. `delete_path` stays
  *               available: shell `rm -rf` / `rd /s` / `Remove-Item -Recurse
@@ -88,6 +89,8 @@ export const CORE_TOOLS: readonly string[] = [
   "git",
   // handoff note that outlives the chat
   "memory",
+  // runtime re-root for clients that spawn the server once (still scoped by VENIRA_SECURITY_PROFILE)
+  "switch_workspace",
 ];
 
 /** Exclusion lists for the modes that are defined by what they leave out. `core` is an allowlist (CORE_TOOLS). */
