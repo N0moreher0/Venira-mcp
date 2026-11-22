@@ -2,7 +2,7 @@
 
 Local release notes for venira-mcp. Not published (not listed in `package.json` `files`) and not pushed to git.
 
-## Unreleased
+## 5.1.0 - 2026-11-22
 
 ### Added - `git action=push`
 
