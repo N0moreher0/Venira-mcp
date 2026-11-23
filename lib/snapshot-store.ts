@@ -74,9 +74,21 @@ const envInt = (name: string, fallback: number): number => {
 };
 
 const DEFAULT_MAX_FILES = 4000;
-export const MAX_FILE_BYTES = envInt("VENIRA_SNAPSHOT_MAX_FILE_BYTES", 32 * 1024 * 1024);
-export const MAX_TOTAL_BYTES = envInt("VENIRA_SNAPSHOT_MAX_BYTES", 512 * 1024 * 1024);
-export const KEEP_CHECKPOINTS = Math.max(1, envInt("VENIRA_SNAPSHOT_KEEP", 20));
+const MB = 1024 * 1024;
+/**
+ * `*_MB` snapshot variables are plain megabytes scaled to bytes ("100" -> 100 MB).
+ * The old raw-byte names (`VENIRA_SNAPSHOT_MAX_BYTES`, `VENIRA_SNAPSHOT_MAX_FILE_BYTES`)
+ * are removed: setting one prints a startup warning pointing at the new name
+ * (see the removed entries in env-registry.ts). No alias on purpose: unit confusion
+ * (an old byte value silently read as MB) would scale the caps by 1024^2.
+ */
+const envMb = (name: string, fallbackMb: number): number => {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value >= 0 ? Math.floor(value * MB) : fallbackMb * MB;
+};
+export const MAX_FILE_BYTES = envMb("VENIRA_SNAPSHOT_MAX_FILE_MB", 100);
+export const MAX_TOTAL_BYTES = envMb("VENIRA_SNAPSHOT_MAX_MB", 1024);
+export const KEEP_CHECKPOINTS = Math.max(1, envInt("VENIRA_SNAPSHOT_KEEP", 100));
 export const MAX_DELETE_EXTRA = 500;
 
 /** Hard ceiling for a single checkpoint file cap, whatever the source (env / config / arg). */

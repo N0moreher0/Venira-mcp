@@ -311,7 +311,7 @@ const RULES: Rule[] = [
     cause: "The disk (or the tmp volume) is full.",
     fix: [
       "Free build output (dist/, node_modules/.cache, temp checkpoint stores).",
-      "Keep checkpoints bounded: VENIRA_SNAPSHOT_KEEP (default 20) prunes old ones.",
+      "Keep checkpoints bounded: VENIRA_SNAPSHOT_KEEP (default 100) prunes old ones.",
     ],
   },
   {

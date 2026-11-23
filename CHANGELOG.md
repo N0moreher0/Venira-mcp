@@ -2,6 +2,17 @@
 
 Local release notes for venira-mcp. Not published (not listed in `package.json` `files`) and not pushed to git.
 
+## Unreleased
+
+### Changed - snapshot retention + megabyte-based size variables
+
+- `VENIRA_SNAPSHOT_KEEP` default 20 -> 100 checkpoints kept per project.
+- `VENIRA_SNAPSHOT_MAX_FILE_BYTES` (raw bytes) is renamed to `VENIRA_SNAPSHOT_MAX_FILE_MB` (megabytes). Default 100 MB (was 32 MB = 33554432 bytes).
+- `VENIRA_SNAPSHOT_MAX_BYTES` (raw bytes) is renamed to `VENIRA_SNAPSHOT_MAX_MB` (megabytes). Default 1024 MB = 1 GB (was 512 MB = 536870912 bytes).
+- The old byte-unit names are removed, not aliased: a raw byte value silently read as MB would scale the cap by 1024^2. Setting one prints a startup warning (`removed_var`) with the exact replacement (env-registry.ts `removed()` entries).
+- Parsing lives in `lib/snapshot-store.ts` (`envMb()`); the exported constants `MAX_FILE_BYTES` / `MAX_TOTAL_BYTES` stay byte-valued for the walk/compare code.
+- Docs: README env table rows updated.
+
 ## 6.0.1 - 2026-11-23
 
 ### Fixed - CI on windows/macos runners

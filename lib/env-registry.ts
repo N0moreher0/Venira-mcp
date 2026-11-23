@@ -365,15 +365,27 @@ export const ENV_REGISTRY: readonly EnvVarSpec[] = [
   // --- snapshots -----------------------------------------------------------
   snapPath("VENIRA_SNAPSHOT_ROOT", "Shared root folder for per-project checkpoint stores.", true),
   snapPath("VENIRA_SNAPSHOT_DIR", "Exact checkpoint store folder (single project, no sub-folders).", true),
-  snapInt("VENIRA_SNAPSHOT_KEEP", "Checkpoints kept per project before pruning.", true, { default: "20" }),
+  snapInt("VENIRA_SNAPSHOT_KEEP", "Checkpoints kept per project before pruning.", true, { default: "100" }),
   snapPath("VENIRA_SNAPSHOT_MIRROR_DIR", "Existing folder that receives an append-only copy of the checkpoint store.", true),
   snapInt("VENIRA_SNAPSHOT_MIRROR_TIMEOUT_MS", "Time budget of one snapshot mirror run (milliseconds).", true, { default: "20000" }),
-  snapInt("VENIRA_SNAPSHOT_MAX_BYTES", "Total size cap of a project checkpoint.", true, {
-    default: "536870912",
+  snapInt("VENIRA_SNAPSHOT_MAX_MB", "Total size cap of a project checkpoint, in megabytes.", true, {
+    default: "1024",
   }),
-  snapInt("VENIRA_SNAPSHOT_MAX_FILE_BYTES", "Largest single file a checkpoint captures.", true, {
-    default: "33554432",
+  snapInt("VENIRA_SNAPSHOT_MAX_FILE_MB", "Largest single file a checkpoint captures, in megabytes.", true, {
+    default: "100",
   }),
+  removed(
+    "VENIRA_SNAPSHOT_MAX_BYTES",
+    "int",
+    "Total size cap of a project checkpoint in raw bytes (removed; renamed).",
+    "replaced by VENIRA_SNAPSHOT_MAX_MB (megabytes; default 1024 = 1 GB).",
+  ),
+  removed(
+    "VENIRA_SNAPSHOT_MAX_FILE_BYTES",
+    "int",
+    "Largest single file a checkpoint captures in raw bytes (removed; renamed).",
+    "replaced by VENIRA_SNAPSHOT_MAX_FILE_MB (megabytes; default 100 = 104857600 bytes).",
+  ),
   snapInt("VENIRA_SNAPSHOT_MAX_FILES", "File-count cap of a checkpoint (0 keeps the built-in limit).", true, {
     default: "0",
   }),

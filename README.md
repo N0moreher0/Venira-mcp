@@ -389,7 +389,7 @@ Full reference: the source reads 80+ distinct supported `VENIRA_*` names; this t
 | `VENIRA_DATA_DIR` | per-user OS path | Where audit DB + encrypted secrets live |
 | `VENIRA_SNAPSHOT_ROOT` | `<per-user data dir>/snapshots` | Shared checkpoint root for every project and client; each workspace gets its own sub-folder (absolute path) |
 | `VENIRA_SNAPSHOT_DIR` | unset | Exact checkpoint store for a single project, no sub-folders; wins over `VENIRA_SNAPSHOT_ROOT` (absolute path) |
-| `VENIRA_SNAPSHOT_KEEP` | `20` | Checkpoints kept per project (oldest pruned on create) |
+| `VENIRA_SNAPSHOT_KEEP` | `100` | Checkpoints kept per project (oldest pruned on create) |
 | `VENIRA_SNAPSHOT_MIRROR_DIR` | unset | Optional append-only copy of the checkpoint store in this existing folder (OneDrive/Dropbox, NAS share, USB drive, rclone mount); absolute path, must be outside the store and the workspace |
 | `VENIRA_SNAPSHOT_MIRROR_TIMEOUT_MS` | `20000` after `create`, `100000` for `action=mirror` | Time budget of one mirror run; it stops between files (`partial`) and the next run resumes |
 | `VENIRA_DISABLE_TOOLS` | unset | Comma-separated tool names to hide from `tools/list` |
@@ -434,8 +434,8 @@ Sensible defaults; leave any of these unset unless you know why you set them.
 | `VENIRA_READ_CACHE_BYTES` | `67108864` | Total size cap of the file-read cache |
 | `VENIRA_AUDIT_STRICT` | `"0"` | `"1"` fails a tool call when its audit row cannot be written (default: audit failure is a warning) |
 | `VENIRA_AUDIT_KEEP_DAYS` | `90` | Audit rows older than this many days are pruned |
-| `VENIRA_SNAPSHOT_MAX_BYTES` | `536870912` | Total size cap of a project checkpoint |
-| `VENIRA_SNAPSHOT_MAX_FILE_BYTES` | `33554432` | Largest single file a checkpoint captures |
+| `VENIRA_SNAPSHOT_MAX_MB` | `1024` (MB) | Total size cap of a project checkpoint, in megabytes (replaces `VENIRA_SNAPSHOT_MAX_BYTES`, raw bytes) |
+| `VENIRA_SNAPSHOT_MAX_FILE_MB` | `100` (MB) | Largest single file a checkpoint captures, in megabytes (replaces `VENIRA_SNAPSHOT_MAX_FILE_BYTES`, raw bytes) |
 | `VENIRA_SNAPSHOT_MAX_FILES` | `0` | File-count cap of a checkpoint (`0` keeps the built-in limit) |
 | `VENIRA_GIT_MAX_BYTES` | built-in | Largest provider API response accepted |
 | `VENIRA_GIT_LOG_MAX_BYTES` | built-in | Total CI log bytes returned per call |
