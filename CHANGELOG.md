@@ -2,6 +2,18 @@
 
 Local release notes for venira-mcp. Not published (not listed in `package.json` `files`) and not pushed to git.
 
+## 6.0.1 - 2026-11-23
+
+### Fixed - CI on windows/macos runners
+
+- JS search fallback ignored `whole_word` when `regex` was left at its default (on): `search { query: "parse", whole_word: 1 }` returned `parseThing` lines. The walker now word-bounds every regex match, matching `rg -w` semantics. This was the only failure on the `windows` matrix.
+- The GNU grep backstop returned a silent empty result on macOS runners: BSD grep parsed to zero records while exiting 0 (e.g. literal `compute_stats(` found nothing next to `compute_stats()`). The backstop is now Linux-only; darwin falls through to ripgrep or the JS walker.
+- Repro env for the fallback path: `VENIRA_USE_RIPGREP=0 VENIRA_USE_GREP=0 npm run verify` (554/554 pass).
+
+### Added - README badges
+
+- CI, Pages, npm version and license badges at the top of the README.
+
 ## 6.0.0 - 2026-11-23
 
 ### Breaking

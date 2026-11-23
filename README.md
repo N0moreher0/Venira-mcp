@@ -1,5 +1,10 @@
 # venira-mcp
 
+[![CI](https://github.com/N0moreher0/Venira-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/N0moreher0/Venira-mcp/actions/workflows/ci.yml)
+[![Pages](https://github.com/N0moreher0/Venira-mcp/actions/workflows/pages.yml/badge.svg)](https://github.com/N0moreher0/Venira-mcp/actions/workflows/pages.yml)
+[![npm version](https://img.shields.io/npm/v/venira-mcp)](https://www.npmjs.com/package/venira-mcp)
+[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](./LICENSE)
+
 Fast, workspace-scoped MCP server for coding agents (OpenCode, Claude Desktop, any MCP client).
 Three tool modes — **Core** (18 tools: shell, `execute_js`, read/search/list, edit/create/move, snapshot, git, memory, `switch_workspace` — for small models) · **Default** (31 coding tools, no CI/CD) · **Expert** (44 tools: default + CI/CD). `VENIRA_JS_EXEC_MODE=off` hides `execute_js` in every mode (44 → 43, 31 → 30, 18 → 17); otherwise it is registered and approval-gated. `VENIRA_SETUP_TOOLS=1` adds the two setup tools `detect_harnesses` and `install_self` (+2); `npx venira-mcp --install` and `--print-config` do the same from a terminal.
 Pure Node, 1 native dependency (better-sqlite3), no GUI, no external binary.
