@@ -414,6 +414,11 @@ export async function opSearch(
    */
   async function grepTry(filesOnlyMode: boolean): Promise<RustResponse | null> {
     if (process.platform === "win32") return null; // no grep on stock Windows
+    // macOS ships BSD grep, not GNU grep: its -Z/--include/output dialect differs
+    // enough that a "clean" run can parse to zero records and return a silent
+    // empty result (observed on macos runners). Linux GNU grep keeps the backstop;
+    // darwin falls through to rg / the JS walker, which keep parity.
+    if (process.platform === "darwin") return null;
     if (!envFlag("VENIRA_USE_GREP", true)) return null;
     if (!(await grepInstalled())) return null;
     try {
