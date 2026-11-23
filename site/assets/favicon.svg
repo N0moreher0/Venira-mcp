@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="32" height="32">
+  <style>
+    .ink{stroke:#12222F}.sig{stroke:#1F3FA8}
+    @media (prefers-color-scheme: dark){.ink{stroke:#E4EEE6}.sig{stroke:#8FA8FF}}
+  </style>
+  <rect class="ink" x="2.5" y="3.5" width="19" height="17" rx="2" fill="none" stroke-width="1.8"/>
+  <path class="ink" d="M6.5 9h6M6.5 13h4" fill="none" stroke-width="1.8" stroke-linecap="round"/>
+  <circle class="sig" cx="16.5" cy="14.5" r="3.2" fill="none" stroke-width="1.8"/>
+  <path class="sig" d="m15 14.6 1.1 1.1 1.9-2.1" fill="none" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
