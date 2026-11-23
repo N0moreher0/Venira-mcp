@@ -886,14 +886,33 @@ export async function opSearch(
     // drift between them would break the rg <-> JS parity.
     const lineMatches = (line: string): boolean => {
       const lineLower = caseSensitive ? line : line.toLowerCase();
-      const match = useRegex
-        ? (contentRe as RegExp).test(line)
-        : kind === "definition"
+      let match: boolean;
+      if (useRegex) {
+        match = (contentRe as RegExp).test(line);
+        // rg -w parity for the JS fallback (the backend used when rg and grep
+        // are unavailable, e.g. CI runners on windows/macos): with whole_word,
+        // every regex match must sit on word boundaries — a match glued to
+        // [A-Za-z0-9_$] on either side does not count.
+        if (match && wholeWord) {
+          const re = contentRe as RegExp;
+          const g = new RegExp(re.source, re.flags.replace("g", "") + "g");
+          const wordChar = (ch: string | undefined) => ch !== undefined && /[A-Za-z0-9_$]/.test(ch);
+          match = false;
+          let m: RegExpExecArray | null;
+          while ((m = g.exec(line)) !== null) {
+            if (m[0].length === 0) { g.lastIndex += 1; continue; }
+            if (!wordChar(m.index > 0 ? line[m.index - 1] : undefined) &&
+                !wordChar(line[m.index + m[0].length])) { match = true; break; }
+          }
+        }
+      } else {
+        match = kind === "definition"
           ? /^\s*(?:export\s+)?(?:function|class|const|let|var|type|interface|struct|fn|impl|trait|enum)\s+/.test(line) &&
             (wordRe ? wordRe.test(lineLower) : lineLower.includes(needleConst))
           : wordRe
             ? wordRe.test(lineLower)
             : lineLower.includes(needleConst);
+      }
       return invert ? !match : match;
     };
     // When countOnly is true, we don't collect hits at all - just count matches.
