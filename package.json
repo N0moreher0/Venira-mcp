@@ -66,6 +66,8 @@
     "SECURITY.md",
     "BENCHMARK-2026-11-07.md",
     "BENCHMARK-2026-11-07.json",
+    "BENCHMARK-2026-11-24.md",
+    "BENCHMARK-2026-11-24.json",
     "opencode.example.json",
     "CONTRIBUTING.md"
   ],
@@ -79,6 +81,7 @@
     "smoke": "tsx scripts/smoke.ts",
     "bench": "tsx scripts/bench.ts",
     "bench:mcp": "tsx scripts/bench-mcp.ts",
+    "bench:modes": "tsx scripts/bench-modes.ts",
     "bench:hybrid-symbols": "tsx scripts/bench-hybrid-symbols.ts",
     "bench:tools": "npm run build && tsx scripts/bench-tools.ts",
     "verify": "npm run check:docs && npm run test:shell-unavailable && npm run test:shell-repeat && npm run test:shell-invocation && npm run test:p1-recovery && npm run test:p2-clarity && npm run test:symbol-extract && npm run test:provider-secret-guard && npm run test:github-device-flow && npm run test:approval-lifecycle && npm run test:shell-elicitation && npm run test:protected-snapshot-paths && npm run test:config-posture && npm run test:js-executor && npm run test:cache-layer && npm run test:env-registry && npm run test:coverage-report && npm run coverage:shell && npm run test:git-url-fuzz && npm run test:snapshot-lifecycle && npm run test:snapshot-mirror && npm run test:workspace-switch && npm run test:tool-envelopes && npm run test:tool-schema && npm run test:minimal-mode && npm run test:sdk-bridge && npm run test:sdk-integration && npm run test:edit-verify && npm run test:edit-fuzzy-gate && npm run test:move-copy && npm run test:apply-patch && npm run test:memory && npm run test:git-local && npm run test:file-info-missing-ok && npm run test:schema-budget && npm run test:audit-verify && tsx scripts/verify.ts",

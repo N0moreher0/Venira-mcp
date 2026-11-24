@@ -11,10 +11,16 @@
  * Rows are chained (`prev_hash` points at the previous `row_hash`). New hashes
  * are keyed with `audit.key` in the data dir:
  *
- *   h1:<hmac-sha256(key, prev + "\x1f" + payload)>   ← current format
- *   s1:<sha256(prev + "\x1f" + payload)>             ← key unavailable
+ *   h2:/s2:<digest>  ← current format (v3: includes parent_call_id)
+ *   h1:<hmac-sha256(key, prev + "\x1f" + payload)>   ← v2: same, without parent_call_id
+ *   s1:<sha256(prev + "\x1f" + payload)>             ← v2, key unavailable
  *   <64 hex chars>                                   ← pre-1.8.2 rows (legacy)
  *   <empty>                                          ← rows written before hashing existed (legacy)
+ *
+ * The version in the prefix is what keeps old rows verifiable: a row written
+ * before `parent_call_id` existed is recomputed with the v2 payload (the field
+ * simply is not part of it), a new row with the v3 payload. Without that, every
+ * pre-migration row would suddenly report `hash_mismatch`.
  *
  * A keyed hash means someone who can edit `venira.db` (a backup, a sync tool,
  * a DBA, or the agent through SQL) but cannot read `audit.key` cannot rewrite
@@ -39,19 +45,29 @@ export type AuditHashFields = {
   started_at: number;
   reason?: string | null;
   args_hash?: string | null;
+  /** The `execute_js` call whose snippet ran this operation (Phase 4). */
+  parent_call_id?: string | null;
 };
 
-const KEYED_PREFIX = "h1:";
-const UNKEYED_PREFIX = "s1:";
+/** Payload version: 2 = pre-`parent_call_id`, 3 = includes it. */
+export type AuditHashVersion = 2 | 3;
+
+const KEYED_PREFIX_V2 = "h1:";
+const UNKEYED_PREFIX_V2 = "s1:";
+const KEYED_PREFIX_V3 = "h2:";
+const UNKEYED_PREFIX_V3 = "s2:";
+
+/** New rows are hashed with the v3 payload (parent_call_id included). */
+export const AUDIT_HASH_VERSION: AuditHashVersion = 3;
 
 export function auditKeyPath(dataDir: string): string {
   return path.join(dataDir, "audit.key");
 }
 
 /** Canonical, order-independent-of-call-site payload for one row. */
-export function auditPayload(row: AuditHashFields): string {
-  return JSON.stringify([
-    "venira-audit-v2",
+export function auditPayload(row: AuditHashFields, version: AuditHashVersion = AUDIT_HASH_VERSION): string {
+  const fields: unknown[] = [
+    `venira-audit-v${version}`,
     row.session_id ?? "",
     row.project_id ?? "",
     row.operation ?? "",
@@ -59,7 +75,23 @@ export function auditPayload(row: AuditHashFields): string {
     typeof row.started_at === "number" ? row.started_at : Number(row.started_at) || 0,
     row.reason ?? null,
     row.args_hash ?? null,
-  ]);
+  ];
+  // v3 appends the parent call: the field must not enter older payloads, or
+  // every pre-migration row fails verification after an upgrade.
+  if (version >= 3) fields.push(row.parent_call_id ?? null);
+  return JSON.stringify(fields);
+}
+
+/** Which payload version a stored hash was written with (null = legacy row). */
+export function auditHashVersion(hash: string): AuditHashVersion | null {
+  if (hash.startsWith(KEYED_PREFIX_V3) || hash.startsWith(UNKEYED_PREFIX_V3)) return 3;
+  if (hash.startsWith(KEYED_PREFIX_V2) || hash.startsWith(UNKEYED_PREFIX_V2)) return 2;
+  return null;
+}
+
+/** True when the stored hash is keyed (HMAC), regardless of payload version. */
+export function auditHashIsKeyed(hash: string): boolean {
+  return hash.startsWith(KEYED_PREFIX_V3) || hash.startsWith(KEYED_PREFIX_V2);
 }
 
 /**
@@ -67,10 +99,17 @@ export function auditPayload(row: AuditHashFields): string {
  * unkeyed digest when the key file cannot be used; it is still better than no
  * chain at all and the prefix makes the weaker format visible.
  */
-export function hashAuditRow(prevHash: string, row: AuditHashFields, key: Buffer | null): string {
-  const input = `${prevHash}\u001f${auditPayload(row)}`;
-  if (!key) return UNKEYED_PREFIX + crypto.createHash("sha256").update(input).digest("hex");
-  return KEYED_PREFIX + crypto.createHmac("sha256", key).update(input).digest("hex");
+export function hashAuditRow(
+  prevHash: string,
+  row: AuditHashFields,
+  key: Buffer | null,
+  version: AuditHashVersion = AUDIT_HASH_VERSION,
+): string {
+  const input = `${prevHash}\u001f${auditPayload(row, version)}`;
+  const keyedPrefix = version >= 3 ? KEYED_PREFIX_V3 : KEYED_PREFIX_V2;
+  const unkeyedPrefix = version >= 3 ? UNKEYED_PREFIX_V3 : UNKEYED_PREFIX_V2;
+  if (!key) return unkeyedPrefix + crypto.createHash("sha256").update(input).digest("hex");
+  return keyedPrefix + crypto.createHmac("sha256", key).update(input).digest("hex");
 }
 
 export type AuditVerifyRow = AuditHashFields & {
@@ -125,11 +164,13 @@ export function verifyAuditRows(rows: AuditVerifyRow[], key: Buffer | null): Aud
       }
     }
     started = true;
-    if (hash.startsWith(KEYED_PREFIX) || hash.startsWith(UNKEYED_PREFIX)) {
-      if (hash.startsWith(KEYED_PREFIX) && !key) {
+    const version = auditHashVersion(hash);
+    if (version !== null) {
+      const keyed = auditHashIsKeyed(hash);
+      if (keyed && !key) {
         return { ok: false, rows: rows.length, verified_rows: verifiedRows, legacy_rows: legacyRows, reason: "key_unavailable", failed_row: index };
       }
-      const expected = hashAuditRow(prevHash, row, hash.startsWith(KEYED_PREFIX) ? key : null);
+      const expected = hashAuditRow(prevHash, row, keyed ? key : null, version);
       const a = Buffer.from(expected);
       const b = Buffer.from(hash);
       if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {

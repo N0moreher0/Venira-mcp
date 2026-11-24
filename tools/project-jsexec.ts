@@ -143,7 +143,7 @@ export async function runExecuteJs(args: Args, sdkDispatch?: SdkDispatch): Promi
     }
   }
 
-  const bridge = sdkDispatch ? createSdkBridge(sdkDispatch) : undefined;
+  const bridge = sdkDispatch ? createSdkBridge(sdkDispatch, { parentCallId: requestId }) : undefined;
   try {
     const r = await executeJs(code, { cwd: WORKSPACE, timeout: timeoutMs, args: cliArgs, contained: JS_EXEC_CONTAINED, bridge });
     const response: RustResponse = {

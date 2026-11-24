@@ -169,8 +169,8 @@ export const TOOL_DOCS: Record<string, ToolDoc> = {
     out: "read: exists, content, bytes, version, updated_at_ms. write: replaced, previous_bytes, bytes, version, updated_at_ms (pass if_version from the last read: a changed note gives conflict and nothing is written). Over the cap or empty content: invalid_request, old note kept.",
   },
   read_audit: {
-    about: "Read recent audit-log rows, newest first: what each job was asked and returned. Filter by session_id, operation, outcome, request_id, since_unix (seconds); verify=true checks the hash chain.",
-    use: "you review what ran and how it ended, or look one job up by request_id.",
+    about: "Read recent audit-log rows, newest first: what each job was asked and returned. Filter by session_id, operation, outcome, request_id, parent_call_id, since_unix; verify=true checks the hash chain.",
+    use: "you review what ran and how it ended, look one job up by request_id, or list every op one `execute_js` snippet ran.",
     avoid: "you want live metrics (health).",
     out: "rows[] {session_id, operation, outcome, reason_code, reason, args_hash, command, request_id, started_at_ms, completed_at_ms, elapsed_ms, args_summary, result_summary, result_bytes}, count, truncated, chain_ok (verify=true). Output mode full adds redacted args and result per row; bulk text is kept as its length only. Timestamps are epoch milliseconds (since_unix filters in seconds). args_hash identifies the call, command is the redacted command line.",
   },

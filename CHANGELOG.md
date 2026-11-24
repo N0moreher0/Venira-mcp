@@ -4,6 +4,14 @@ Local release notes for venira-mcp. Not published (not listed in `package.json` 
 
 ## Unreleased
 
+### Added - audit attribution (`parent_call_id`) + tool-mode benchmark (Phase 4/5)
+
+- `project_tool_audit` gained `parent_call_id` (additive migration in `lib/audit-store.ts`): every op an `execute_js` snippet runs records the snippet's envelope `request_id`, so `read_audit { parent_call_id }` returns that script's command tree. The id is propagated with `AsyncLocalStorage` (`lib/audit-context.ts`) around the bridge dispatch and sent in the corehost envelope - never guessed by the corehost.
+- Hash chain versioned in `lib/audit-hash.ts` (v3 payload hashes `parent_call_id`; prefixes `h2:`/`s2:`). Rows written before the migration keep verifying with their own v2 payload (`h1:`/`s1:`), so a mixed DB verifies end to end; tampering with `parent_call_id` breaks the chain.
+- `read_audit` filters by `parent_call_id` and echoes it on each row; the schema descriptions were re-trimmed so the `default`/`expert` budget does not move (`read_audit` 1 767 B, totals 53 221 / 72 417 B under the unchanged ceilings).
+- New `scripts/bench-modes.ts` (`npm run bench:modes`, also embedded in `npm run bench:mcp`): the same five-file read → edit → shell task in `default`, `core` and `minimal`, measured end to end. Result on 2026-11-24: **~22 632 / ~16 500 / ~2 893 estimated context tokens** (bytes / 4). Recorded in `benchmarks.md` section 7, `BENCHMARK-2026-11-24.md`/`.json` and the README mode section.
+- Tests: `test:audit-verify` now pins v2/v3 coexistence and `parent_call_id` authentication; `test:sdk-integration` pins the script→row tree through the real `read_audit`.
+
 ### Added - tool mode `minimal` (one door)
 
 - `VENIRA_TOOL_MODE=minimal` advertises exactly **2** tools: `execute_js` and `shell_status` (~2 737 B of schema, ~685 tokens) against 31 tools / 53 226 B for `default` - about 19x smaller on every prompt. Like `core` it is an allowlist (`MINIMAL_TOOLS` in `tools/project-tool-mode.ts`).

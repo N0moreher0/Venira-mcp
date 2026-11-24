@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "measured_local_date": "2026-11-24 Asia/Bangkok",
+  "environment": {
+    "os": "Windows 11",
+    "node": "v24.20.0",
+    "venira": "6.1.0"
+  },
+  "tool_mode_token_benchmark": {
+    "command": "npm run bench:modes (also embedded in npm run bench:mcp as `modes`)",
+    "script": "scripts/bench-modes.ts",
+    "method": "Three real MCP stdio servers, one per VENIRA_TOOL_MODE, each on its own copy of the same five-file fixture. Same task in every mode: read five files, add a `// touched` line to each, run `echo refactor-ok`. default/core use read_file batch + edit_file batch + shell_run (3 turns); minimal uses one execute_js snippet with venira.read/venira.edit/venira.shell (1 turn).",
+    "accounting": "surface_bytes = instructions + tools/list JSON; call_bytes = serialized arguments of the reference plan; result_bytes = response text returned by those calls; tokens = ceil(bytes / 4). Context-cost estimate, not a tokenizer run; no model is called.",
+    "task": "refactor 5 files: read -> edit -> echo refactor-ok",
+    "modes": {
+      "default": {
+        "tool_count": 31,
+        "instructions_bytes": 12071,
+        "tools_list_bytes": 72713,
+        "surface_bytes": 84784,
+        "surface_tokens": 21196,
+        "turns": 3,
+        "call_bytes": 703,
+        "result_bytes": 5038,
+        "task_tokens": 1436,
+        "total_tokens": 22632,
+        "task_ok": true,
+        "task_ms": 328.4
+      },
+      "core": {
+        "tool_count": 18,
+        "instructions_bytes": 12068,
+        "tools_list_bytes": 48188,
+        "surface_bytes": 60256,
+        "surface_tokens": 15064,
+        "turns": 3,
+        "call_bytes": 703,
+        "result_bytes": 5039,
+        "task_tokens": 1436,
+        "total_tokens": 16500,
+        "task_ok": true,
+        "task_ms": 266
+      },
+      "minimal": {
+        "tool_count": 2,
+        "instructions_bytes": 1988,
+        "tools_list_bytes": 8451,
+        "surface_bytes": 10439,
+        "surface_tokens": 2610,
+        "turns": 1,
+        "call_bytes": 902,
+        "result_bytes": 228,
+        "task_tokens": 283,
+        "total_tokens": 2893,
+        "task_ok": true,
+        "task_ms": 458.5
+      }
+    },
+    "ratios": {
+      "default_over_minimal_total": 7.82,
+      "core_over_minimal_total": 5.7,
+      "note": "Surface dominates: 84,784 B (default) vs 10,439 B (minimal); executed work is identical and all modes report task_ok."
+    }
+  },
+  "audit_attribution": {
+    "note": "Phase 4 of ROADMAP_MINIMAL_MODE.md is covered by tests, not by a benchmark: scripts/test-audit-verify.ts pins that pre-migration (v2) rows still verify next to v3 rows that hash parent_call_id, and scripts/test-sdk-integration.ts pins that every op an execute_js snippet runs carries the execute_js request id and is returned by read_audit { parent_call_id }."
+  }
+}

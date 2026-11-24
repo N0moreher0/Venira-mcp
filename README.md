@@ -245,6 +245,8 @@ Four tool modes set which tools the client sees. Set via `VENIRA_TOOL_MODE` env 
 | `default` | **31** | Read/write/edit/search, code intel, snapshots, shell, `delete_path`, `execute_js` — **no** CI/CD; `explain_error` and `plan_read_batch` are expert-only |
 | `expert` | **44** | Everything in default + `pr_*`, `ci_*`, `explain_error`, `plan_read_batch` |
 
+Measured context cost (`npm run bench:modes`, 2026-11-24, `venira-mcp@6.1.0`): the same five-file read → edit → shell task costs **~22,632 estimated tokens in `default`, ~16,500 in `core`, ~2,893 in `minimal`** (`bytes / 4`; the advertised surface dominates, all modes complete the task). Details in section 7 of [`benchmarks.md`](./benchmarks.md).
+
 `delete_path` is always available. In `balanced` / `strict` mode, shell `rm -rf /` / `~` and Windows drive-wide deletes are hard-denied, and recursive/force deletes (`Remove-Item -Recurse -Force`, `rd /s /q`, `del /f /q`) need approval. `permissive` mode lets ordinary ask-rule and unclassified commands run without a prompt, but hard-denies require approval and uninspectable command substitutions require approval in every policy-enabled mode.
 
 ## 5. Tools quick reference

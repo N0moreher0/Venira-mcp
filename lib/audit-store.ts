@@ -91,6 +91,7 @@ export function ensureAuditDb(): Database.Database | null {
       ["prev_hash", "TEXT"],
       ["row_hash", "TEXT"],
       ["args_hash", "TEXT"],
+      ["parent_call_id", "TEXT"],
     ] as const) {
       if (!columns.has(name)) auditDb.exec(`ALTER TABLE project_tool_audit ADD COLUMN ${name} ${type}`);
     }
@@ -181,6 +182,8 @@ export type AuditRow = {
   /** Free-text "why" supplied by the caller (edit/write/delete/snapshot). */
   reason?: string | null;
   args_hash?: string | null;
+  /** `execute_js` request id when this op ran inside a snippet (Phase 4). */
+  parent_call_id?: string | null;
 };
 
 // Cache the previous row hash to avoid a SELECT-per-write round trip in
@@ -249,6 +252,10 @@ function auditInsert(row: AuditRow): void {
       ["reason", row.reason ?? null],
       ["args_hash", row.args_hash ?? null],
     ];
+    // Phase 4: which `execute_js` call this row belongs to (NULL for a direct
+    // tool call). Hashed with the v3 payload, so forging/blanking it on a
+    // written row breaks verification. Guarded like the other additive columns.
+    if (columns.has("parent_call_id")) entries.push(["parent_call_id", row.parent_call_id ?? null]);
     // Older per-user databases used created_at as the required timestamp
     // instead of started_at. Keep writing it when that legacy column exists;
     // otherwise SQLite rejects the whole insert before the modern columns can
@@ -290,6 +297,7 @@ export function auditStart(
     approver?: string;
     reason?: string;
     args_hash?: string;
+    parent_call_id?: string;
   } = {},
 ): number {
   const startedAt = Date.now();
@@ -306,6 +314,7 @@ export function auditStart(
     approver: extra.approver ?? null,
     reason: extra.reason ?? null,
     args_hash: extra.args_hash ?? null,
+    parent_call_id: extra.parent_call_id ?? null,
   });
   return startedAt;
 }

@@ -1,4 +1,5 @@
 import { newRequestId } from "../lib/output.js";
+import { currentAuditCallId } from "../lib/audit-context.js";
 import type { RustResponse } from "../lib/output.js";
 import type { Args } from "./project-cache.js";
 import type { createProjectSessionRuntime } from "./project-session-runtime.js";
@@ -29,6 +30,10 @@ export function createBackendExecutor({ callHost, runtime, sessionId }: BackendE
     // `reason` is copied into the envelope for the host audit row and stays in
     // operation arguments so the result can echo it as `data.reason`.
     const reason = typeof payload.reason === "string" ? payload.reason : undefined;
+    // Phase 4 (ROADMAP_MINIMAL_MODE.md): when this call runs inside an
+    // `execute_js` snippet, the enclosing call id rides along so the audit row
+    // can name the script that caused it. Null at the top level.
+    const parentCallId = currentAuditCallId();
     const envelope = {
       contract_version: 1,
       request_id: newRequestId(),
@@ -36,6 +41,7 @@ export function createBackendExecutor({ callHost, runtime, sessionId }: BackendE
       project_id: cap.projectId,
       capability_id: cap.id,
       ...(reason !== undefined ? { reason } : {}),
+      ...(parentCallId ? { parent_call_id: parentCallId } : {}),
       operation: { name: operation, arguments: payload },
     };
     const timeout = requestTimeout(operation, args);

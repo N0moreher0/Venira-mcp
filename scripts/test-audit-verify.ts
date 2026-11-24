@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
-import { hashAuditRow, verifyAuditRows, type AuditVerifyRow } from "../lib/audit-hash.js";
+import { hashAuditRow, verifyAuditRows, type AuditHashVersion, type AuditVerifyRow } from "../lib/audit-hash.js";
 
 const key = crypto.randomBytes(32);
 
@@ -13,20 +13,41 @@ function makeRow(i: number): AuditVerifyRow {
     started_at: 1_000 + i,
     reason: null,
     args_hash: null,
+    parent_call_id: null,
     prev_hash: null,
     row_hash: null,
   };
 }
 
 /** Linear keyed chain of `n` rows, optionally preceded by `legacy` rows that never had a hash. */
-function buildChain(n: number, legacy = 0): AuditVerifyRow[] {
+function buildChain(n: number, legacy = 0, version: AuditHashVersion = 3): AuditVerifyRow[] {
   const rows: AuditVerifyRow[] = [];
   for (let i = 0; i < legacy; i++) rows.push(makeRow(i));
   let prev = "";
   for (let i = 0; i < n; i++) {
     const row = makeRow(legacy + i);
     row.prev_hash = prev || null;
-    row.row_hash = hashAuditRow(prev, row, key);
+    row.row_hash = hashAuditRow(prev, row, key, version);
+    prev = row.row_hash;
+    rows.push(row);
+  }
+  return rows;
+}
+
+/** Append rows onto an existing chain (so v2 and v3 rows can be mixed). */
+function extendChain(
+  base: AuditVerifyRow[],
+  count: number,
+  version: AuditHashVersion,
+  parentCallId?: string,
+): AuditVerifyRow[] {
+  const rows = [...base];
+  let prev = (rows[rows.length - 1]?.row_hash as string | null | undefined) ?? "";
+  for (let i = 0; i < count; i++) {
+    const row = makeRow(1000 + rows.length + i);
+    row.prev_hash = prev || null;
+    if (parentCallId) row.parent_call_id = parentCallId;
+    row.row_hash = hashAuditRow(prev, row, key, version);
     prev = row.row_hash;
     rows.push(row);
   }
@@ -116,6 +137,44 @@ const clone = (rows: AuditVerifyRow[]) => rows.map((r) => ({ ...r }));
   const before = JSON.stringify(rows);
   verifyAuditRows(clone(rows), key);
   assert.equal(JSON.stringify(rows), before);
+}
+
+// 9. Phase 4: a v2 chain and a v3 chain can live in one DB. Rows written before
+// `parent_call_id` existed must keep verifying after the upgrade.
+{
+  const v2 = buildChain(5, 0, 2);
+  const mixed = extendChain(v2, 5, 3, "exec-req-1");
+  const result = verifyAuditRows(mixed, key);
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.verified_rows, 10);
+  assert.equal(result.legacy_rows, 0);
+  // The stored prefixes say which payload each row used.
+  assert.ok(String(v2[0].row_hash).startsWith("h1:"), `v2 row prefix: ${v2[0].row_hash}`);
+  assert.ok(String(mixed[7].row_hash).startsWith("h2:"), `v3 row prefix: ${mixed[7].row_hash}`);
+  assert.equal(mixed[7].parent_call_id, "exec-req-1");
+}
+
+// 10. The parent call id is authenticated: blanking it on a v3 row breaks the chain.
+{
+  const rows = extendChain(buildChain(3, 0, 2), 3, 3, "exec-req-2");
+  rows[4].parent_call_id = "some-other-call";
+  const result = verifyAuditRows(rows, key);
+  assert.equal(result.ok, false, JSON.stringify(result));
+  assert.equal(result.reason, "hash_mismatch");
+  assert.equal(result.failed_row, 4);
+}
+
+// 11. Re-hashing a v2 row with the v3 payload (the naive migration) is what would
+// break old rows; the versioned prefix is why that does not happen. The forged
+// row itself still matches its stored hash, so the NEXT row's link is what fails.
+{
+  const v2 = buildChain(4, 0, 2);
+  const naive = clone(v2);
+  naive[1].row_hash = hashAuditRow(naive[0].row_hash as string, naive[1], key, 3);
+  const result = verifyAuditRows(naive, key);
+  assert.equal(result.ok, false, JSON.stringify(result));
+  assert.equal(result.reason, "broken_link");
+  assert.equal(result.failed_row, 2);
 }
 
 console.log("audit-verify regression tests passed");

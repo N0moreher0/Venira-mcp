@@ -20,6 +20,7 @@
  * `workspace_switch` are refused: no recursion, no re-rooting from a snippet.
  */
 import type { ChildProcess } from "node:child_process";
+import { runWithAuditCallId } from "./audit-context.js";
 import type { ToolResult } from "./output.js";
 
 /** The parent-side runner map: op -> ToolResult. Built in tools/project.ts. */
@@ -122,8 +123,15 @@ export type SdkBridge = {
 
 type BridgeRequest = { id: number; op: string; args: Record<string, unknown> };
 
-/** Parent side of the bridge: serve one child over its IPC channel. */
-export function createSdkBridge(dispatch: SdkDispatch): SdkBridge {
+/**
+ * Parent side of the bridge: serve one child over its IPC channel.
+ *
+ * `parentCallId` is the `execute_js` request id (the one its envelope carries).
+ * Every dispatched op runs inside `runWithAuditCallId(parentCallId)` so its
+ * audit row records which snippet asked for it (Phase 4).
+ */
+export function createSdkBridge(dispatch: SdkDispatch, options: { parentCallId?: string } = {}): SdkBridge {
+  const parentCallId = options.parentCallId;
   let attached: ChildProcess | null = null;
   let nextId = 0;
   let servedCount = 0;
@@ -151,7 +159,7 @@ export function createSdkBridge(dispatch: SdkDispatch): SdkBridge {
     }
     let envelope: Record<string, unknown>;
     try {
-      envelope = envelopeOf(await dispatch(op, args ?? {}));
+      envelope = envelopeOf(await runWithAuditCallId(parentCallId, () => dispatch(op, args ?? {})));
     } catch (error) {
       // Policy tiers throw before an envelope exists (tool-policy, dispatcher).
       const message = error instanceof Error ? error.message : String(error);

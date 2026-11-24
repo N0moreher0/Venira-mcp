@@ -191,7 +191,7 @@ export const SDK_HELP_GROUPS: readonly { topic: string; title: string; entries: 
     topic: "audit",
     title: "Audit trail + session shell hygiene",
     entries: [
-      { name: "read_audit", signature: 'raw("read_audit", { session_id?, operation?, outcome?, request_id?, limit?, verify? })', doc: "Read the SQLite audit trail (bounded, newest first)." },
+      { name: "read_audit", signature: 'raw("read_audit", { session_id?, operation?, outcome?, request_id?, parent_call_id?, limit?, verify? })', doc: "Read the SQLite audit trail (bounded, newest first); parent_call_id = the execute_js call whose snippet ran those ops." },
       { name: "shell_cancel_session", signature: 'raw("shell_cancel_session", {})', doc: "Kill every background shell of this session." },
     ],
   },

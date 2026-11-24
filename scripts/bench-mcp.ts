@@ -1,6 +1,7 @@
 /** End-to-end MCP bench over stdio: node dist/server.js. Extended with read_ranges, recent_files, health (easy to measure). */
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { benchModes } from "./bench-modes.js";
 
 const transport = new StdioClientTransport({
   command: "node",
@@ -141,6 +142,10 @@ const recent = await call("recent_files", { relative_path: ".", limit: 20 });
 out.recent_files_ms = recent.ms.toFixed(1);
 out.recent_files_bytes = text(recent.result).length;
 out.recent_files_ok = resultOk(recent.result);
+
+// Phase 5 (ROADMAP_MINIMAL_MODE.md): the same five-file refactor in default,
+// core and minimal mode. Advertised surface + reference plan, both measured.
+out.modes = await benchModes();
 
 await client.close();
 console.log(JSON.stringify(out, null, 2));

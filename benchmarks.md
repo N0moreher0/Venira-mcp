@@ -5,7 +5,8 @@ Repeatable benchmarks. Regenerate with:
 ```bash
 npm run build
 npm run bench        # in-process corehost tier (pure Node, no IPC)
-npm run bench:mcp    # end-to-end over MCP stdio
+npm run bench:mcp    # end-to-end over MCP stdio, plus the tool-mode token benchmark
+npm run bench:modes  # tool-mode token benchmark only (default vs core vs minimal)
 npm run bench:tools  # paired MCP vs PowerShell command proxy
 ```
 
@@ -177,3 +178,21 @@ PowerShell proxy p50 was similar in both runs (e.g. `read_file` 1.56 ms vs 1.23 
 **Fix:** `lib/workspace.ts` now resolves the canonical protected roots (data dir + checkpoint roots) once per input set and caches them for 2 s. The cache key includes the data dir, workspace and both snapshot env vars, so changing any of them takes effect immediately; the TTL only bounds staleness if a symlink is created or swapped under one of those folders. The per-path canonicalisation of the checked path is unchanged. After the fix the micro-benchmark gives **0.10 ms/call**, `npm run verify` passes (507 checks), and the post-fix numbers in sections 1, 2 and 5 are back at or below the v1.16.2 level.
 
 Pre-fix v1.17.0 `bench:tools` (MCP p50, cache miss, for the record): read_file 11.11 ms, read_batch_3_files 28.94 ms, get_file_info 11.38 ms, list_files_lib 152.62 ms, search_literal 42.25 ms.
+
+## 7. Tool modes: context token cost (`npm run bench:modes`, inside `npm run bench:mcp`)
+
+Measured 2026-11-24, `venira-mcp@6.1.0`, one run on the machine described at the top. `scripts/bench-modes.ts` starts three real MCP stdio servers (`VENIRA_TOOL_MODE=default|core|minimal`), each on its own copy of the same five-file fixture, and runs the **same task**: read the five files, add a `// touched` line to each, run `echo refactor-ok`.
+
+- `default` / `core` use the plain tools: one `read_file` batch, one `edit_file` batch, one `shell_run` (3 model turns).
+- `minimal` uses one `execute_js` snippet that calls `venira.read([...])`, `venira.edit([...])`, `venira.shell(...)` (1 model turn).
+
+| Mode | Tools | Surface (instructions + tools/list) | Turns | Task calls + results | Total (est.) | Task |
+|---|---:|---:|---:|---:|---:|---|
+| `default` | 31 | 84,784 B (~21,196 tok) | 3 | 5,741 B (~1,436 tok) | **~22,632 tok** | MATCH |
+| `core` | 18 | 60,256 B (~15,064 tok) | 3 | 5,742 B (~1,436 tok) | **~16,500 tok** | MATCH |
+| `minimal` | 2 | 10,439 B (~2,610 tok) | 1 | 1,130 B (~283 tok) | **~2,893 tok** | MATCH |
+
+**What this measures.** "Surface" is the server `instructions` string plus the complete `tools/list` payload (names, descriptions, JSON schemas) — what the model has to read once per session, and what client UIs re-send when the tool list is part of the prompt. In `minimal` the `execute_js` description also carries the `.d.ts` SDK contract. "Task calls + results" is the serialized arguments the reference plan emits and the response text the server returns; it is measured from the same calls that are executed. Tokens are `bytes / 4`, the ratio `scripts/test-schema-budget.ts` already uses, so these are **context-cost estimates, not tokenizer runs**: no model is called and the numbers are deterministic apart from the response bytes.
+
+**Reading it.** In this task `minimal` is ~7.8× smaller than `default` and ~5.7× smaller than `core`; the gap is almost entirely the advertised surface (84.8 KB vs 10.4 KB), not the work itself. The task result bytes are smaller too because `execute_js` returns one envelope instead of three full tool envelopes. The trade-off is unchanged safety: `venira.*` still goes through workspace scope, security profile, Secretlint and the audit table.
+

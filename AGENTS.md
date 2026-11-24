@@ -382,6 +382,33 @@ Merge with `pr_merge` only when the user asked and `ci_status` is green. Ask or 
   signature; unknown/blocked ops throw `[invalid_request]`. The bridge reads the error
   code from `envelope.error.code` (`errorEnvelope` strips the `[code]` message prefix).
 - The `venira.*` runtime is injected in EVERY mode (when `ALLOW_JS_EXEC`); only the
-  description contract is `minimal`-gated. Open item: the real-`runShell` background
-  roundtrip inside a snippet answers with empty stdout (diagnostic check 4 of
-  `scripts/test-sdk-integration.ts`).
+  description contract is `minimal`-gated.
+- **Open item closed (2026-11-24)**: the real-`runShell` check was failing because the
+  original snippet put a raw `"` inside a template literal (SyntaxError) and `node -e` is an
+  ask-rule; the test now pins approval mid-chain plus the real `shellStatus` cancel/kill_key
+  roundtrip. `npm run test:sdk-integration` is 6/6.
+
+## Audit attribution + tool-mode benchmark (ROADMAP_MINIMAL_MODE.md Phase 4/5, 2026-11-24)
+
+- `parent_call_id` (additive column, `lib/audit-store.ts`) records the `execute_js` envelope
+  `request_id` on every audit row an SDK snippet causes, so `read_audit { parent_call_id }`
+  returns that script's command tree. The id travels explicitly: `tools/project-jsexec.ts`
+  passes it to `createSdkBridge`, the bridge wraps each dispatch in
+  `runWithAuditCallId` (`lib/audit-context.ts`, `AsyncLocalStorage`), `tools/project-backend.ts`
+  reads it with `currentAuditCallId()` and puts it in the corehost envelope, and
+  `lib/corehost.ts` passes it to `auditStart`. Do not read it implicitly in the corehost.
+- Hash chain is **versioned** (`lib/audit-hash.ts`, `AUDIT_HASH_VERSION = 3`): v3 hashes
+  `parent_call_id` with prefixes `h2:`/`s2:`, v2 rows (`h1:`/`s1:`) keep verifying with their
+  own payload. `verifyAuditRows` dispatches on the stored prefix - never re-hash old rows with
+  the new payload (test 11 in `scripts/test-audit-verify.ts` pins that this breaks the next link).
+- `read_audit` filters by and echoes `parent_call_id`; when the column is missing (pre-migration
+  DB) the filter matches nothing instead of erroring. The schema descriptions were trimmed to
+  keep `read_audit` at 1 767 B and the `default`/`expert` totals unchanged (ceilings were not
+  raised).
+- Phase 5 benchmark: `scripts/bench-modes.ts` (`npm run bench:modes`, embedded in
+  `npm run bench:mcp` as `modes`) runs the same five-file read → edit → shell task in
+  `default`/`core`/`minimal` through real stdio servers and reports advertised surface +
+  reference-plan bytes, tokens = bytes / 4. 2026-11-24: ~22 632 / ~16 500 / ~2 893 estimated
+  context tokens. Numbers live in `benchmarks.md` §7 and `BENCHMARK-2026-11-24.*`; do not quote
+  those as tokenizer output.
+

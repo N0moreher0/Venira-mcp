@@ -633,6 +633,9 @@ export class CoreHost {
           reason: reasonText,
           args_hash: argsHash,
           ...(externalSummary ? { command: externalSummary } : {}),
+          // Phase 4: the `execute_js` call that ran this op (absent for a
+          // direct tool call). Hashed into the row (v3 payload).
+          ...(typeof p.parent_call_id === "string" && p.parent_call_id ? { parent_call_id: p.parent_call_id } : {}),
         });
 
         // Every path below returns or throws; the wrapper records what the job was asked and what it

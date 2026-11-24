@@ -23,9 +23,24 @@ export async function runReadAudit(args: Args, dbPath: string): Promise<ToolResu
     const db = new Database(dbPath, { readonly: true, fileMustExist: true });
     const where: string[] = [];
     const values: unknown[] = [];
+    // `reason` is a newer additive column: probe first so an older DB file
+    // (written before the migration) still returns rows instead of erroring.
+    const columns = new Set(
+      (db.prepare("PRAGMA table_info(project_tool_audit)").all() as Array<{ name: string }>).map((c) => c.name),
+    );
     if (typeof args.session_id === "string") { where.push("a.session_id = ?"); values.push(args.session_id); }
     if (typeof args.operation === "string") { where.push("a.operation = ?"); values.push(args.operation); }
     if (typeof args.request_id === "string") { where.push("a.request_id = ?"); values.push(args.request_id); }
+    // Phase 4: every op a snippet ran carries the `execute_js` request id.
+    if (typeof args.parent_call_id === "string") {
+      if (columns.has("parent_call_id")) {
+        where.push("a.parent_call_id = ?");
+        values.push(args.parent_call_id);
+      } else {
+        // Pre-migration DB: the column cannot match anything.
+        where.push("0");
+      }
+    }
     if (typeof args.outcome === "string") {
       // The log stores succeeded/failed; the tool's documented words are success/failure. Accept both.
       const outcomes: Record<string, string> = { success: "succeeded", failure: "failed" };
@@ -33,11 +48,6 @@ export async function runReadAudit(args: Args, dbPath: string): Promise<ToolResu
       values.push(outcomes[args.outcome] ?? args.outcome);
     }
     if (typeof args.since_unix === "number") { where.push("a.started_at >= ?"); values.push(Math.floor(args.since_unix * 1000)); }
-    // `reason` is a newer additive column: probe first so an older DB file
-    // (written before the migration) still returns rows instead of erroring.
-    const columns = new Set(
-      (db.prepare("PRAGMA table_info(project_tool_audit)").all() as Array<{ name: string }>).map((c) => c.name),
-    );
     // The readable args/result of each job live in a separate table (lib/audit-detail.ts); an older DB
     // file may not have it yet.
     const hasDetail =
@@ -51,8 +61,9 @@ export async function runReadAudit(args: Args, dbPath: string): Promise<ToolResu
     // (the reason was logged, the path and the command hash were not).
     const argsHashColumn = columns.has("args_hash") ? ", args_hash" : "";
     const commandColumn = columns.has("command") ? ", command" : "";
+    const parentColumn = columns.has("parent_call_id") ? ", a.parent_call_id" : "";
     const sql =
-      `SELECT a.session_id, a.operation, a.outcome, a.reason_code, a.request_id, a.started_at, a.completed_at, a.elapsed_ms${reasonColumn}${argsHashColumn}${commandColumn}${detailColumns} ` +
+      `SELECT a.session_id, a.operation, a.outcome, a.reason_code, a.request_id, a.started_at, a.completed_at, a.elapsed_ms${reasonColumn}${argsHashColumn}${commandColumn}${parentColumn}${detailColumns} ` +
       `FROM project_tool_audit a ${hasDetail ? "LEFT JOIN project_tool_audit_detail d ON d.request_id = a.request_id " : ""}${where.length ? `WHERE ${where.join(" AND ")}` : ""} ` +
       `ORDER BY a.started_at DESC LIMIT ?`;
     const rows = db.prepare(sql).all(...values, limit + 1) as unknown[];
@@ -66,6 +77,7 @@ export async function runReadAudit(args: Args, dbPath: string): Promise<ToolResu
         const fields = ["session_id", "project_id", "operation", "request_id", "started_at", "prev_hash", "row_hash"];
         if (columns.has("reason")) fields.push("reason");
         if (columns.has("args_hash")) fields.push("args_hash");
+        if (columns.has("parent_call_id")) fields.push("parent_call_id");
         const all = db
           .prepare(`SELECT ${fields.join(", ")} FROM project_tool_audit ORDER BY id ASC`)
           .all() as Array<Record<string, unknown>>;
@@ -85,6 +97,7 @@ export async function runReadAudit(args: Args, dbPath: string): Promise<ToolResu
             started_at: Number(r.started_at ?? 0),
             reason: (r.reason as string | null | undefined) ?? null,
             args_hash: (r.args_hash as string | null | undefined) ?? null,
+            parent_call_id: (r.parent_call_id as string | null | undefined) ?? null,
             prev_hash: (r.prev_hash as string | null | undefined) ?? null,
             row_hash: (r.row_hash as string | null | undefined) ?? null,
           })),
@@ -145,6 +158,7 @@ export async function runReadAudit(args: Args, dbPath: string): Promise<ToolResu
           ...(typeof row.reason === "string" && row.reason ? { reason: row.reason } : {}),
           ...(typeof row.args_hash === "string" && row.args_hash ? { args_hash: row.args_hash } : {}),
           ...(typeof row.command === "string" && row.command ? { command: row.command } : {}),
+          ...(typeof row.parent_call_id === "string" && row.parent_call_id ? { parent_call_id: row.parent_call_id } : {}),
           request_id: row.request_id,
           // Roadmap item 15 (P2): every timestamp the tools report is epoch
           // MILLISECONDS and says so in its name (snapshots and traces already
