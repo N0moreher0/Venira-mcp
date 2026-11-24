@@ -15,6 +15,7 @@
  * error: the caller gets a generic triage checklist instead.
  */
 import type { NextAction } from "./read-plan.js";
+import { ERROR_CODE_GUIDES, ERROR_CODE_NEXT_ACTIONS, ALL_ERROR_CODES } from "./error-codes.js";
 
 export type { NextAction };
 
@@ -68,6 +69,8 @@ type Rule = {
   fix: string[];
   retry?: string;
   actions?: (ctx: RuleContext) => NextAction[];
+  /** The Venira error codes this rule explains (empty for the language/ecosystem rules). */
+  codes?: string[];
 };
 
 /** Read the failing frame (`file:line`) as a ready-to-send read_ranges call. */
@@ -89,9 +92,28 @@ function searchTerm(ctx: RuleContext, term: string, why: string): NextAction[] {
   return [{ tool: "search", arguments: { query: value, kind: "literal_content", limit: 20 }, why }];
 }
 
-const RULES: Rule[] = [
+/**
+ * Rules for Venira's own error codes.
+ *
+ * Two gaps made these necessary.
+ *
+ * 1. A code the envelope can return but no hand-written rule described used to
+ *    answer "No known signature matched" - the agent pasted Venira's own
+ *    failure and got no diagnosis and no next action.
+ * 2. The envelope strips the "[code]" prefix from the message and reports the
+ *    code as its own field, so a pasted envelope reads "code": "not_found",
+ *    never "[not_found]". A rule that only matched the bracketed spelling
+ *    missed the text agents actually paste.
+ *
+ * So every code gets a rule that matches the JSON spelling, and the codes
+ * without a dedicated rule also match the bracketed one. The table in
+ * lib/error-codes.ts is the same one the envelope reads, so a new code is
+ * covered the moment it is added there.
+ */
+const RULES_WITH_CODES: Rule[] = [
   {
     id: "venira.secret_expired",
+    codes: ["secret_expired"],
     title: "Stored secret expired",
     confidence: "high",
     pattern: /\[secret_expired\]/,
@@ -104,6 +126,7 @@ const RULES: Rule[] = [
   },
   {
     id: "venira.secret_missing",
+    codes: ["secret_missing"],
     title: "Secret not found in the store",
     confidence: "high",
     pattern: /\[secret_missing\]|\[rogue_secret\]/,
@@ -115,6 +138,7 @@ const RULES: Rule[] = [
   },
   {
     id: "venira.approval_required",
+    codes: ["approval_required"],
     title: "Shell policy requires approval",
     confidence: "high",
     pattern: /\[approval_required\]|approval_required|requires_approval/,
@@ -127,6 +151,7 @@ const RULES: Rule[] = [
   },
   {
     id: "venira.path_escape",
+    codes: ["path_escape", "scope_denied"],
     title: "Path is outside the workspace",
     confidence: "high",
     pattern: /\[path_escape\]|\[scope_denied\]/i,
@@ -138,6 +163,7 @@ const RULES: Rule[] = [
   },
   {
     id: "venira.sensitive_result",
+    codes: ["sensitive_result"],
     title: "Path or result is protected by policy",
     confidence: "high",
     pattern: /\[sensitive_result\]|\[sensitive_path\]/i,
@@ -149,6 +175,7 @@ const RULES: Rule[] = [
   },
   {
     id: "venira.audit_unavailable",
+    codes: ["audit_unavailable"],
     title: "Audit storage is unavailable",
     confidence: "high",
     pattern: /\[audit_unavailable\]|audit.{0,30}(unavailable|failed)/i,
@@ -160,6 +187,7 @@ const RULES: Rule[] = [
   },
   {
     id: "venira.invalid_request",
+    codes: ["invalid_request"],
     title: "Venira rejected invalid tool arguments",
     confidence: "high",
     pattern: /\[invalid_request\]/i,
@@ -171,6 +199,7 @@ const RULES: Rule[] = [
   },
   {
     id: "venira.repeated_failure",
+    codes: ["repeated_failure"],
     title: "The identical shell invocation already failed",
     confidence: "high",
     pattern: /\[repeated_failure\]/i,
@@ -186,6 +215,7 @@ const RULES: Rule[] = [
   },
   {
     id: "venira.stale_content",
+    codes: ["stale_content"],
     title: "The file changed after you read it",
     confidence: "high",
     pattern: /\[stale_content\]/i,
@@ -200,6 +230,7 @@ const RULES: Rule[] = [
   },
   {
     id: "venira.command_denied",
+    codes: ["command_denied"],
     title: "Shell policy refuses this command",
     confidence: "high",
     pattern: /\[command_denied\]/i,
@@ -211,6 +242,7 @@ const RULES: Rule[] = [
   },
   {
     id: "venira.shell_unavailable",
+    codes: ["shell_unavailable"],
     title: "The shell binary is not installed",
     confidence: "high",
     pattern: /\[shell_unavailable\]/i,
@@ -223,6 +255,7 @@ const RULES: Rule[] = [
   },
   {
     id: "venira.old_text_not_found",
+    codes: ["old_text_not_found"],
     title: "old_text was not found in the file",
     confidence: "high",
     pattern: /\[old_text_not_found\]|old_text not found/i,
@@ -233,6 +266,45 @@ const RULES: Rule[] = [
     ],
     retry: "Re-read the file; do not replay the same old_text.",
   },
+];
+
+type GeneratedRule = {
+  id: string;
+  title: string;
+  confidence: "high";
+  pattern: RegExp;
+  cause: string;
+  fix: string[];
+  codes: string[];
+  nextActions: NextAction[] | null;
+};
+
+const veniraCodeRules: GeneratedRule[] = ALL_ERROR_CODES.map((code) => {
+  const dedicatedRule = RULES_WITH_CODES.find((rule) => rule.codes?.includes(code));
+  const dedicatedGuide = dedicatedRule
+    ? { title: dedicatedRule.title, cause: dedicatedRule.cause, fix: dedicatedRule.fix }
+    : null;
+  const guide = dedicatedGuide ?? { title: ERROR_CODE_GUIDES[code]?.title ?? `Venira ${code}`, cause: ERROR_CODE_GUIDES[code]?.cause ?? `Venira ${code}`, fix: [] };
+  // The JSON spelling the envelope produces, e.g. "code": "not_found".
+  const jsonSpelling = `"code"\\s*:\\s*"${code}"`;
+  // A dedicated rule already matches the bracketed spelling for its codes, so
+  // this rule only adds the JSON spelling there - no duplicate diagnosis.
+  const pattern = dedicatedRule
+    ? new RegExp(jsonSpelling, "i")
+    : new RegExp(`\\[${code}\\]|${jsonSpelling}`, "i");
+  return {
+    id: `venira.code.${code}`,
+    title: guide.title,
+    confidence: "high" as const,
+    pattern,
+    cause: guide.cause,
+    fix: guide.fix,
+    codes: [code],
+    nextActions: (ERROR_CODE_NEXT_ACTIONS[code] as NextAction[] | undefined) ?? null,
+  };
+});
+
+const RULES_GENERIC: Rule[] = [
   {
     id: "fs.enoent",
     title: "File or directory does not exist (ENOENT)",
@@ -465,6 +537,7 @@ const RULES: Rule[] = [
   },
   {
     id: "github.auth",
+    codes: ["auth_missing"],
     title: "GitHub token rejected or missing",
     confidence: "high",
     pattern: /Bad credentials|Requires authentication|\b401\b|\[auth_missing\]/,
@@ -476,6 +549,7 @@ const RULES: Rule[] = [
   },
   {
     id: "github.scope",
+    codes: ["forbidden"],
     title: "GitHub token lacks permission",
     confidence: "high",
     pattern: /Resource not accessible by (integration|personal access token)|\b403\b|\[forbidden\]/,
@@ -487,6 +561,7 @@ const RULES: Rule[] = [
   },
   {
     id: "github.rate_limit",
+    codes: ["rate_limited"],
     title: "GitHub rate limit",
     confidence: "high",
     pattern: /API rate limit|rate_limited|\b429\b|secondary rate limit/i,
@@ -517,8 +592,17 @@ const RULES: Rule[] = [
       "Stop the competing process (shell_cancel_session) or point the tool at a scratch DB.",
       "Write in WAL mode where the project allows it; retry with a short backoff.",
     ],
-  },
-];
+  },];
+
+const veniraCodeRulesAsRules: Rule[] = veniraCodeRules.map((codeRule) => {
+  const actions = codeRule.nextActions ? (): NextAction[] => codeRule.nextActions as NextAction[] : undefined;
+  return {
+    ...codeRule,
+    actions,
+  };
+});
+
+const RULES: Rule[] = [...RULES_WITH_CODES, ...RULES_GENERIC, ...veniraCodeRulesAsRules];
 
 function shortLine(value: string): string {
   return value.replace(/\s+/g, " ").trim().slice(0, MAX_LINE);

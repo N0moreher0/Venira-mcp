@@ -1,0 +1,5 @@
+Venira_snapshot: 5 checkpoint snapshot_corrupt — đây là lỗi. Có 5 file index bị hỏng, blob cleanup bị pause. Cần delete thủ công index file đó hoặc upgrade
+Store nằm ngoài workspace (C:\Users\...\venira\snapshots\Venira) → không theo git, mất là mất, nên cần cẩn thận khi dùng
+Một số checkpoint được tạo tự động bằng edit_batch (label "edit_batch"), không có context rõ
+
+Tất cả tool: đổi sang Boolean là "true"/"false" thay vì "0"/"1"

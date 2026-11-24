@@ -349,6 +349,8 @@ export const ENV_REGISTRY: readonly EnvVarSpec[] = [
   cacheInt("VENIRA_READ_CACHE_BYTES", "Total size cap of the file-read cache.", true, {
     default: "67108864",
   }),
+  internal("int", "cache", "VENIRA_CACHE_MAX_AGE_MS", "Hard ceiling for sliding TTL cache entries. When set, an entry is expired once it is this old even if it was hit recently; 0 disables sliding and keeps the absolute TTL.", "cache internals"),
+  internal("string", "shell", "VENIRA_SHELL_EPOCH", "Controls when finished shell runs bump the workspace cache epoch: always (default), auto (only after non-read-only runs), or off. 0/false maps to off.", "shell epoch internals"),
 
   // --- audit ---------------------------------------------------------------
   auditFlag("VENIRA_AUDIT_STRICT", "Fail a tool call when its audit row cannot be written.", true, {

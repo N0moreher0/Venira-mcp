@@ -427,7 +427,7 @@ Sensible defaults; leave any of these unset unless you know why you set them.
 | `VENIRA_SHELL_CACHE` | `"1"` | Cache read-only shell results |
 | `VENIRA_SHELL_CACHE_READ_ONLY` | `"1"` | Compatibility flag (shell output caching is always read-only — nothing mutating is ever cached) |
 | `VENIRA_CONFIG_FILE` | unset | Explicit path of the JSON config file (git provider settings); never auto-read from a workspace |
-| `VENIRA_WORKSPACE_ROOTS` | unset | Allowlist of roots `switch_workspace` may reach under `strict`/`balanced` (absolute paths, both `,` and `;` separators). Unset = locked to the spawn workspace. Ignored under `trusted`/`off`/`VENIRA_UNRESTRICTED=1` (those switch to any existing directory) |
+| `VENIRA_WORKSPACE` | unset | Workspace root **and** the roots `switch_workspace` may reach under `strict`/`balanced` (absolute paths, both `,` and `;` separators). The first entry is the root all paths resolve against; every entry is part of the allowlist. Unset = switching locked to the spawn workspace. Ignored under `trusted`/`off`/`VENIRA_UNRESTRICTED=1` (those switch to any existing directory) |
 | `VENIRA_CACHE_LIST_ONLY` | unset | Enable only the directory-listing cache |
 | `VENIRA_CACHE_SEARCH_ONLY` | unset | Enable only the search cache |
 | `VENIRA_LIST_CACHE_MS` | `1500` | Directory-listing cache lifetime |

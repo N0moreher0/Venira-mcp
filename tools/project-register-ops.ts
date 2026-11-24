@@ -245,7 +245,7 @@ export function registerOpsTools(server: McpServer, deps: OpsToolsDeps): void {
           .string()
           .min(1)
           .describe(
-            "Absolute path of the directory to make the workspace. Follows VENIRA_SECURITY_PROFILE: trusted/off switch to any existing directory; strict/balanced only inside VENIRA_WORKSPACE_ROOTS (unset = locked to the spawn workspace).",
+            "Absolute path of the directory to make the workspace. Follows VENIRA_SECURITY_PROFILE: trusted/off switch to any existing directory; strict/balanced only inside VENIRA_WORKSPACE (unset = locked to the spawn workspace).",
           ),
         reason: reason_,
       },

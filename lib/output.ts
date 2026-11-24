@@ -7,6 +7,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomBytes } from "node:crypto";
 import { envChoice, envFlag } from "./env.js";
+import { ERROR_CODE_HINTS, ERROR_CODE_NEXT_ACTIONS } from "./error-codes.js";
 
 export type OutputMode = "full" | "compact";
 
@@ -572,74 +573,6 @@ const RETRYABLE = new Set(["io_error", "capability_expired", "host_timeout", "ho
 const GENERIC_HINT =
   "Unknown error code. Read error.message, fix what it names, retry once; else explain_error.";
 
-const DEFAULT_HINTS: Record<string, string> = {
-  invalid_request: "Check argument names, types and values against the tool schema; unknown fields are rejected.",
-  not_found: "Check the path with list_files or search first; do not retry the same path.",
-  conflict: "The file changed or the edit is ambiguous; re-read it and retry.",
-  scope_denied: "Use a path inside the workspace (workspace-relative is safest).",
-  path_escape: "Paths must stay inside the workspace. Use a relative path under it, or enable VENIRA_UNRESTRICTED=1.",
-  resource_limit: "Narrow the request: smaller limit/max_bytes, line ranges, or read_file (multi-file).",
-  audit_unavailable:
-    "The host refused the operation because its audit row could not be written. Tell the user; do not retry in a loop.",
-  capability_expired: "The scope is reopened automatically on the next call; retry once.",
-  sensitive_result: "Content withheld for safety; do not retry or work around it.",
-  unsupported: "The operation is unavailable in the current permission mode or for this file type.",
-  io_error: "The file may be locked or the disk busy; retry once.",
-  host_timeout: "The backend did not answer in time; check health, then retry once.",
-  host_unavailable: "The backend is unavailable; it restarts on the next call. Retry once.",
-  internal: "Unexpected error; check health and the server stderr log.",
-  feature_disabled:
-    "Switched off by the operator; no approval will enable it. Do not retry; tell the user the hint (VENIRA_* flag) or ask them to do it manually.",
-  approval_required:
-    "NOT run: a human must approve. Stop; tell the user the approval_id and data.approval.approve_command. After they confirm, retry the same call once with approval_id. Never invent or reuse an id.",
-  approval_invalid:
-    "approval_id is single-use, bound to the exact command/shell/cwd/secret_env, and expires. Call again without it for a fresh approval_required; a human must grant the new id.",
-  command_denied:
-    "Policy refuses this command in every mode. Do not retry or rephrase; ask the user to run it manually if needed.",
-  old_text_not_found:
-    "The text to replace is not in the file. data.mismatch says the line, the first differing character and how many characters are off; data.context.text is three lines around the wrong spot (no line numbers) - copy it into old_text. The file was not changed.",
-  old_text_ambiguous:
-    "old_text matches more than one place. Extend it with surrounding context, or set replace_all=true. The file was not changed.",
-  stale_content:
-    "The file changed since you read it. Read it again with read_file, rebuild the patch against the current content and send the new sha256 as expected_sha256. Never replay the same edit unchanged.",
-  repeated_failure:
-    "This exact invocation already failed in this session. Read data.previous.stderr_tail, fix the cause, then change the command or its inputs. Pass retry_failed=true only for a deliberate rerun of the identical command.",
-  batch_failed: "Check data.atomic for rollback state, fix the failed item, resubmit the rest.",
-  batch_partial_failure: "Fix or drop the failed items in data.responses, retry only those.",
-  config_invalid: "Fix the named VENIRA_* setting or config value and restart; do not retry unchanged.",
-  workspace_switch_denied: "Workspace switching is disabled; stay in the current workspace.",
-  override_not_enabled: "Override not enabled by the operator; do not retry, ask the user to run it manually.",
-  override_scope_mismatch: "Override does not cover this command; ask the user to run it manually.",
-  checkpoint_failed: "Pre-command snapshot failed, command not run. Create a scoped snapshot, then retry.",
-  shell_unavailable:
-    "The shell binary is not installed or not on PATH; nothing ran. Follow error.message to install it or pick another shell; do not retry unchanged.",
-  snapshot_corrupt: "Snapshot is damaged; pick another id from snapshot action=list.",
-  snapshot_unsafe_path: "Snapshot lists a path outside the workspace and is not restored; pick another id, or snapshot action=delete removes it.",
-  snapshot_version_unsupported: "Snapshot format not supported by this version; use a newer snapshot or upgrade.",
-  mirror_conflict: "Snapshot mirror differs from primary; change nothing and check health.",
-  secret_missing: "No such secret; see secret action=list or create it with action=set.",
-  secret_expired: "Secret expired; ask the user for a new one (secret action=set).",
-  secret_store_locked: "Secret store locked by another process; retry once.",
-  secret_store_corrupt: "Secret store unreadable; do not delete it, tell the user.",
-  lock_timeout: "Lock held by another process; retry once, do not loop.",
-  secret_detected: "Content looks like a credential and was blocked; remove it and retry.",
-  secret_output_blocked: "Output contained a secret and was withheld; tell the user.",
-  secret_scan_failed: "Secret scan failed, nothing sent; retry once with a smaller body.",
-  secret_scan_limit: "Content too large to scan; send a smaller body.",
-  auth_missing: "No credential; run github_connect or store a token with secret.",
-  auth_failed: "Provider rejected the credential; ask the user to reconnect or replace it.",
-  forbidden: "Credential lacks permission for this repo/action; check token scopes with the user.",
-  rate_limited: "Rate limited; wait until the reset time before retrying, do not loop.",
-  network_blocked: "Network access is blocked by policy; tell the user, do not retry.",
-  network_error: "Network failed; check connectivity, retry once.",
-  timeout: "Timed out; retry once with a smaller scope.",
-  provider_error: "Provider error; retry once, then check its status page.",
-  repo_unresolved: 'Pass repo as "owner/name" or set VENIRA_GIT_REPO.',
-  detached_head: "No current branch (detached HEAD); pass an explicit ref/head.",
-  already_exists: "Already exists; update the existing one instead.",
-  already_configured: "Credential already set; use replace_existing=true only if the user wants to replace it.",
-};
-
 function classify(raw: string): string {
   if (/outside (the )?workspace/i.test(raw)) return "path_escape";
   if (/timed out|timeout/i.test(raw)) return "host_timeout";
@@ -648,14 +581,6 @@ function classify(raw: string): string {
   if (/EACCES|EPERM|access is denied|permission denied/i.test(raw)) return "io_error";
   return "internal";
 }
-
-const DEFAULT_NEXT_ACTIONS: Record<string, unknown[]> = {
-  not_found: [{ tool: "list_files", arguments: { relative_path: "." }, why: "locate the correct path" }],
-  path_escape: [{ tool: "list_files", arguments: { relative_path: "." }, why: "stay inside the workspace" }],
-  snapshot_corrupt: [{ tool: "snapshot", arguments: { action: "list" }, why: "pick another checkpoint" }],
-  snapshot_unsafe_path: [{ tool: "snapshot", arguments: { action: "list" }, why: "pick another checkpoint" }],
-  secret_missing: [{ tool: "secret", arguments: { action: "list" }, why: "see stored names" }],
-};
 
 /**
  * Tool-specific recovery (roadmap item 15, P1).
@@ -759,7 +684,7 @@ function defaultNextActions(failure: Failure, operation?: string): unknown[] | u
       ? [{ tool: "read_file", arguments: { relative_path: file }, why: "copy the exact current text, then retry the edit" }]
       : undefined;
   }
-  return DEFAULT_NEXT_ACTIONS[failure.code];
+  return ERROR_CODE_NEXT_ACTIONS[failure.code];
 }
 
 /** The tool-specific hint, when the tool knows a better way out than the generic one. */
@@ -838,7 +763,7 @@ export function parseToolError(error: unknown): Failure & { data?: unknown } {
   if (!hint && code === "not_found" && /^Unknown run_id/i.test(body)) hint = "Run ids only live for this session; start the command again with shell_run.";
   if (!hint && code === "invalid_request" && /^Invalid regex/i.test(body)) hint = "Fix the pattern, or set regex=false to search it as literal text.";
   if (!hint && code === "invalid_request") hint = invalidRequestHint(body);
-  if (!hint) hint = DEFAULT_HINTS[code] ?? GENERIC_HINT;
+  if (!hint) hint = ERROR_CODE_HINTS[code] ?? GENERIC_HINT;
   const message = body || raw;
   const retryable = error instanceof VeniraError ? error.retryable : RETRYABLE.has(code);
   // The recovery may need the error data (e.g. the file of a failed edit),

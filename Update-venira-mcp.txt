@@ -1,0 +1,36 @@
+
+Phase 1: Thêm VENIRA_TOOL_MODE=code (tools/project-tool-mode.ts, server.ts)
+
+• Mở rộng enum mode: Thêm 'code' vào kiểu ToolMode ('core' | 'default' | 'expert' | 'code').
+• Lọc tools/list: Khi VENIRA_TOOL_MODE=code, chỉ quảng bá đúng 2 tools là execute_js và shell_status (cộng thêm 2 setup tools nếu VENIRA_SETUP_TOOLS=1).
+• Auto-gate execute_js: Trong mode code, nếu user không set cứng VENIRA_JS_EXEC_MODE=off, tự động nâng default của VENIRA_JS_EXEC_MODE lên semi-auto (hoặc ask nếu VENIRA_SECURITY_PROFILE=strict) để tránh trường hợp bật mode code mà tool duy nhất lại bị ẩn.
+
+Phase 2: Nén TOOL_DOCS + Zod thành .d.ts (tools/project-docs.ts, scripts/)
+
+• Viết generator sinh chữ ký TypeScript: Tạo một helper (chạy lúc build hoặc cache lúc khởi động) đọc schema của nhóm 18 tool CORE_TOOLS và xuất ra chuỗi declare const venira siêu gọn (~300–400 token), kèm 1 dòng JSDoc ngắn cho các hàm dễ nhầm tham số như edit hay shell.
+• Nhét .d.ts vào description của execute_js: Chỉ bơm block .d.ts này khi VENIRA_TOOL_MODE=code để không làm phình token của các mode khác. Cập nhật thêm rule ngắn trong INSTRUCTIONS (server.ts) hướng dẫn model ưu tiên gọi gộp nhiều bước trong 1 lần execute_js.
+• Làm hàm venira.help(topic?) (Progressive Discovery): Các tool nâng cao còn lại (ci_*, pr_*, dependency_graph, secret, read_audit) không đưa vào .d.ts gốc. Khi model gọi venira.help('ci') hoặc venira.help('graph') trong JS, hàm mới trả về chữ ký .d.ts chi tiết của nhóm đó.
+
+Phase 3: Tách Internal Dispatcher & Xây createVeniraSdk() (lib/js-sdk.ts)
+
+• Gọi nội bộ không qua JSON-RPC: Tách logic thực thi của các tool khỏi lớp MCP transport để execute_js gọi thẳng hàm TypeScript trong cùng process (giữ nguyên tốc độ RAM cache ~8ms).
+• Thiết kế API bọc ngoài (venira.*) thân thiện với LLM:
+	• venira.read(paths, opts) — hỗ trợ truyền cả string lẫn string[] (tự map sang requests[] batch của read_file).
+	• venira.search(query, opts) — hỗ trợ truyền 1 query hoặc mảng queries[].
+	• venira.edit(edits, reason) & venira.write(path, content, reason, expectedSha256?).
+	• venira.shell(cmd, opts) & venira.snapshot(action, id?) & venira.git(action, args?) & venira.memory(action, content?, ifVersion?).
+• Chuẩn hóa lỗi trả về: Khi model truyền sai kiểu trong JS, throw error kèm đúng chữ ký mẫu (ví dụ: Expected venira.edit([{ relative_path, old_text, new_text }], reason)) để model tự sửa ở lượt sau.
+• Inject vào execute_js: Đóng băng object bằng Object.freeze(venira) và truyền vào global context của sandbox execute_js (tận dụng cơ chế top-level await sẵn có).
+
+Phase 4: Giữ nguyên lớp giáp Security, Policy & Audit
+
+• Đi qua cùng 1 pipeline kiểm duyệt: Tuyệt đối không để venira.shell() hay venira.write() bên trong execute_js chạy thẳng xuống OS. Mọi hàm trong venira.* phải đi qua đúng lớp check VENIRA_WORKSPACE, VENIRA_SECURITY_PROFILE, Secretlint DLP và ghi dòng vào SQLite audit table (gắn cùng session_id hoặc parent_call_id để read_audit truy vết được script nào đã gọi sub-tool nào).
+• Xử lý [approval_required] trong chuỗi lệnh JS: Nếu câu lệnh thứ 3 trong script JS chạm rule ask (ví dụ venira.shell('git reset --hard')), throw ngay một ApprovalRequiredError chứa nguyên vẹn object data.approval (approval_id, approve_command) để execute_js dừng lập tức và trả payload xin cấp quyền ra cho user.
+
+Phase 5: Verify & Benchmark (scripts/verify/, benchmarks.md)
+
+• Thêm test case vào npm run verify:
+	• Xác nhận VENIRA_TOOL_MODE=code chỉ trả về đúng 2 tools.
+	• Test chuỗi tác vụ liên hoàn trong 1 lần gọi execute_js: snapshot('create') → search() → read() → edit().
+	• Test bảo mật: gọi venira.read('../outside') hoặc venira.shell('rm -rf /') bên trong execute_js phải bị chặn đúng chuẩn path_escape / command_denied.
+• Chạy lại npm run bench:mcp: Đo chênh lệch tổng token input/output trên cùng 1 task refactor 5 file giữa VENIRA_TOOL_MODE=core và VENIRA_TOOL_MODE=code để lấy số liệu thực tế đưa thẳng lên README.

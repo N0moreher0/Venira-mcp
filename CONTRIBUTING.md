@@ -83,7 +83,7 @@ published artifacts and the public listings honest.
 - [ ] Post-release: `health` and `read_audit verify=true` on a fresh
       install; confirm the shell policy profile and protected paths behave as documented.
 
-Changelog lives in the PR / release notes; there is no separate `CHANGELOG.md` (yet).
+Changelog lives in the PR / release notes. `CHANGELOG.md` is a local, git-ignored release-notes file; it is not published with the package.
 
 ## Security-sensitive changes
 
