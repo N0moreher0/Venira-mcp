@@ -10,7 +10,7 @@ if (readme.includes("44 tools by default")) {
   console.error("README tool count is out of date; expected Default/Expert tool modes.");
   failed = true;
 }
-if (!readme.includes("Three tool modes") || !readme.includes("VENIRA_TOOL_MODE")) {
+if (!readme.includes("Four tool modes") || !readme.includes("VENIRA_TOOL_MODE")) {
   console.error("README tool-mode contract is out of date; expected Core/Default/Expert modes (VENIRA_TOOL_MODE) documented.");
   failed = true;
 }

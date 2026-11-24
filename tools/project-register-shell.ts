@@ -6,12 +6,17 @@ import { WORKSPACE } from "../lib/workspace.js";
 import type { Args } from "./project-cache.js";
 import { runShell, type ShellDeps } from "./project-shell.js";
 import { backgroundFlag, config, flag01 } from "./project-schema.js";
+import { getToolMode } from "./project-tool-mode.js";
 
 // Shell tool registrations: shell_run, shell_status, shell_cancel.
 // Extracted from registerProjectTools in tools/project.ts (roadmap item 6, step 5k). Schemas, descriptions
 // and registration order are unchanged. shell_cancel_session is registered later in the list
 // (after read_audit), so it moves with the ops/diagnostics group to keep the order identical.
 // The shell run registry (shellRuns/trackShell) stays in project.ts and reaches runShell via ShellDeps.
+//
+// Mode `minimal` (ROADMAP_MINIMAL_MODE.md): `shell_cancel` is not advertised (allowlist of 2 tools),
+// so its action is folded into `shell_status` as `action="cancel"` + `kill_key`. The other modes keep
+// the two tools apart, so their schema and budget do not move.
 
 export type ShellToolsDeps = {
   runOne: (operation: string, args: Args) => Promise<ToolResult>;
@@ -20,6 +25,8 @@ export type ShellToolsDeps = {
 
 export function registerShellTools(server: McpServer, deps: ShellToolsDeps): void {
   const { runOne, shellDeps } = deps;
+  // Read once per registration, like the mode checks in project-register-files.ts.
+  const minimal = getToolMode() === "minimal";
   server.registerTool(
     "shell_run",
     {
@@ -86,24 +93,56 @@ export function registerShellTools(server: McpServer, deps: ShellToolsDeps): voi
     (args) => runShell(args, server, shellDeps),
   );
 
-  server.registerTool(
-    "shell_status",
+  const statusConfig = config(
+    "Shell status",
     {
-      ...config(
-        "Shell status",
-        {
-          speed_profile: "fast; not queued so it never blocks other tools.",
-          batch_safe: false,
-        },
-        { readOnlyHint: true, openWorldHint: false },
-      ),
-      inputSchema: {
-        run_id: z.string().describe("Run id from shell_run."),
-        wait_seconds: z.number().int().min(0).max(300).optional().describe("Wait up to this many seconds for the run to finish (default 0, max 300). Observation window only, not a timeout."),
-      },
+      speed_profile: "fast; not queued so it never blocks other tools.",
+      batch_safe: false,
     },
-    (args) => runOne("shell_status", args),
+    { readOnlyHint: true, openWorldHint: false },
   );
+  const statusBase = {
+    run_id: z.string().describe("Run id from shell_run."),
+    wait_seconds: z.number().int().min(0).max(300).optional().describe("Wait up to this many seconds for the run to finish (default 0, max 300). Observation window only, not a timeout."),
+  };
+  if (minimal) {
+    // Mode `minimal`: `shell_cancel` is not advertised, so its action is folded in.
+    // `kill_key` stays mandatory for a cancel -- it proves this caller started the
+    // run (same guarantee as the standalone `shell_cancel`).
+    server.registerTool(
+      "shell_status",
+      {
+        ...statusConfig,
+        inputSchema: {
+          ...statusBase,
+          action: z
+            .enum(["status", "cancel"])
+            .optional()
+            .describe(
+              "status (default) reads the run; cancel kills it and needs kill_key. Only in VENIRA_TOOL_MODE=minimal, where shell_cancel is not advertised.",
+            ),
+          kill_key: z
+            .string()
+            .optional()
+            .describe("Kill key from shell_run; required when action=cancel. Proves this caller started the run."),
+        },
+      },
+      (args) =>
+        args.action === "cancel"
+          ? // The `cancel` op refuses a missing or wrong kill_key (lib/corehost-shell.ts).
+            runOne("cancel", { run_id: args.run_id, kill_key: args.kill_key })
+          : runOne("shell_status", args),
+    );
+  } else {
+    server.registerTool(
+      "shell_status",
+      {
+        ...statusConfig,
+        inputSchema: statusBase,
+      },
+      (args) => runOne("shell_status", args),
+    );
+  }
 
   server.registerTool(
     "shell_cancel",

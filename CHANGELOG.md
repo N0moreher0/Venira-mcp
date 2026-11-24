@@ -2,6 +2,16 @@
 
 Local release notes for venira-mcp. Not published (not listed in `package.json` `files`) and not pushed to git.
 
+## Unreleased
+
+### Added - tool mode `minimal` (one door)
+
+- `VENIRA_TOOL_MODE=minimal` advertises exactly **2** tools: `execute_js` and `shell_status` (~2 737 B of schema, ~685 tokens) against 31 tools / 53 226 B for `default` - about 19x smaller on every prompt. Like `core` it is an allowlist (`MINIMAL_TOOLS` in `tools/project-tool-mode.ts`).
+- The mode is read from the env **and** from `venira.config.json` (`"toolMode"`), env wins; the canonical list lives in `lib/tool-mode-names.ts` (dependency-free, so `lib/workspace.ts` and the tool layer agree without an import cycle).
+- In this mode `shell_cancel` is not advertised: its action is folded into `shell_status` as `action="cancel"` + `kill_key` (the kill key still proves the caller started the run). The other modes keep the two tools apart, so their schema and budget do not move.
+- `execute_js` gate: in `minimal` an operator who set nothing gets `semi-auto` (`ask` under the `strict` profile) instead of the server default `off` - otherwise the only door would be hidden. An explicit `VENIRA_JS_EXEC_MODE=off` is still respected.
+- Budget: `scripts/schema-budget.json` gained a `minimal` row; `npm run test:minimal-mode` (12 checks) is part of `npm run verify`.
+
 ## 6.1.0 - 2026-11-23
 
 ### Changed - snapshot retention + megabyte-based size variables

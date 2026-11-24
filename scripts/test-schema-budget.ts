@@ -111,6 +111,31 @@ workflow.registerWorkflowTools(fakeServer, {
 git.registerGitTools(fakeServer, { runOne: dummy });
 vcs.registerVcsTools(fakeServer, { runOne: dummy, runSecret: dummy });
 
+// ---- mode `minimal`: one door ----
+// `minimal` advertises `execute_js` plus the MERGED `shell_status` (the cancel action
+// folded in). The merged variant only exists when the shell group is registered in
+// minimal mode, so that group is registered a second time with the mode flipped.
+const minimalTools = new Map<string, ToolCfg>();
+const fakeMinimalServer = {
+  registerTool: (name: string, cfg: Record<string, unknown>) => {
+    minimalTools.set(name, cfg as ToolCfg);
+  },
+} as never;
+docs.applyToolDocs(fakeMinimalServer);
+{
+  const prevMode = process.env.VENIRA_TOOL_MODE;
+  process.env.VENIRA_TOOL_MODE = "minimal";
+  try {
+    shell.registerShellTools(fakeMinimalServer, {
+      runOne: dummy,
+      shellDeps: { execute: dummy, callHost: dummy } as never,
+    });
+  } finally {
+    if (prevMode === undefined) delete process.env.VENIRA_TOOL_MODE;
+    else process.env.VENIRA_TOOL_MODE = prevMode;
+  }
+}
+
 /** Bytes one tool contributes to tools/list. */
 function toolBytes(name: string, cfg: ToolCfg): number {
   const shape = cfg.inputSchema ?? {};
@@ -132,6 +157,13 @@ function toolBytes(name: string, cfg: ToolCfg): number {
   );
 }
 
+const minimalNames = [...toolMode.MINIMAL_TOOLS];
+const minimalRows = minimalNames.map((name) => ({
+  name,
+  bytes: toolBytes(name, (name === "shell_status" ? minimalTools : registered).get(name) as ToolCfg),
+}));
+const minimalTotal = minimalRows.reduce((n, r) => n + r.bytes, 0);
+
 const defaultExcluded = new Set(toolMode.TOOL_MODE_EXCLUDES.default);
 const rows = [...registered.entries()]
   .map(([name, cfg]) => ({ name, bytes: toolBytes(name, cfg), inDefault: !defaultExcluded.has(name) }))
@@ -146,11 +178,13 @@ const kb = (bytes: number) => (bytes / 1024).toFixed(1);
 type Budget = {
   expert: { tool_count: number; total_bytes: number };
   default: { tool_count: number; total_bytes: number };
+  minimal: { tool_count: number; total_bytes: number };
   tools: Record<string, number>;
 };
 const current: Budget = {
   expert: { tool_count: rows.length, total_bytes: expertTotal },
   default: { tool_count: defaultRows.length, total_bytes: defaultTotal },
+  minimal: { tool_count: minimalRows.length, total_bytes: minimalTotal },
   tools: Object.fromEntries([...rows].sort((a, b) => a.name.localeCompare(b.name)).map((r) => [r.name, r.bytes])),
 };
 
@@ -177,6 +211,10 @@ console.log(
   `default: ${defaultRows.length} tools, ${defaultTotal} B (${kb(defaultTotal)} KB, ~${tokens(defaultTotal)} tokens)` +
     (saved ? `, ceiling ${saved.default.total_bytes} B` : ""),
 );
+console.log(
+  `minimal: ${minimalRows.length} tools, ${minimalTotal} B (${kb(minimalTotal)} KB, ~${tokens(minimalTotal)} tokens)` +
+    (saved?.minimal ? `, ceiling ${saved.minimal.total_bytes} B` : ""),
+);
 
 if (TABLE_ONLY) process.exit(0);
 
@@ -193,6 +231,10 @@ if (UPDATE) {
       default: {
         tool_count: current.default.tool_count,
         total_bytes: Math.min(current.default.total_bytes, saved.default.total_bytes),
+      },
+      minimal: {
+        tool_count: current.minimal.tool_count,
+        total_bytes: Math.min(current.minimal.total_bytes, saved.minimal?.total_bytes ?? current.minimal.total_bytes),
       },
       tools: Object.fromEntries(
         Object.entries(current.tools).map(([name, bytes]) => [name, Math.min(bytes, saved.tools[name] ?? bytes)]),
@@ -221,6 +263,16 @@ if (current.expert.total_bytes > saved.expert.total_bytes) {
 }
 if (current.default.total_bytes > saved.default.total_bytes) {
   failures.push(`default total ${current.default.total_bytes} B > ceiling ${saved.default.total_bytes} B`);
+}
+if (!saved.minimal) {
+  failures.push("minimal budget is missing; run with --update");
+} else {
+  if (current.minimal.tool_count !== saved.minimal.tool_count) {
+    failures.push(`minimal tool count ${current.minimal.tool_count}, expected ${saved.minimal.tool_count}`);
+  }
+  if (current.minimal.total_bytes > saved.minimal.total_bytes) {
+    failures.push(`minimal total ${current.minimal.total_bytes} B > ceiling ${saved.minimal.total_bytes} B`);
+  }
 }
 for (const [name, bytes] of Object.entries(current.tools)) {
   const ceiling = saved.tools[name];

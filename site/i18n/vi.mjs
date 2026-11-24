@@ -95,11 +95,12 @@ export default {
       "Schema của mỗi tool tốn token ở mọi prompt, nên bộ tool là một thiết lập. Đổi bằng `VENIRA_TOOL_MODE`.",
     modesCols: ["Chế độ", "Số tool", "Phù hợp với", "Gồm"],
     modesRows: [
+      ["`minimal`", "2", "Context hẹp nhất; một cửa ngõ", "`execute_js` cộng `shell_status` (~2 737 B)"],
       ["`core`", "18", "Model nhỏ, context hẹp", "Shell, đọc, tìm kiếm, sửa, snapshot, git, memory"],
       ["`default`", "31", "Lập trình hằng ngày", "Core cộng phân tích code, không có CI/CD"],
       ["`expert`", "44", "Quy trình đầy đủ", "Default cộng pull request và CI"],
     ],
-    modesNote: "Mỗi chế độ bớt một tool khi tắt `execute_js`. Chi tiết ở [chế độ tool](/vi/docs/tool-modes/).",
+    modesNote: "Mỗi chế độ bớt một tool khi tắt `execute_js` (minimal còn 1). Chi tiết ở [chế độ tool](/vi/docs/tool-modes/).",
     speedTitle: "Ít vòng chờ hơn",
     speedLead:
       "Đọc theo batch và kết nối bền vững nhanh hơn việc mở một shell mới cho mỗi lần tra cứu. Thời gian trung vị trên một máy Windows 11, so với `exec_command` của Codex, 20 mẫu ghép cặp cho mỗi giai đoạn.",

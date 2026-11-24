@@ -268,16 +268,16 @@ export const ENV_REGISTRY: readonly EnvVarSpec[] = [
   ),
 
   // --- tools / output ------------------------------------------------------
-  toolEnum("VENIRA_TOOL_MODE", "Tool surface: `core` (small models: an allowlist of 23 must-have tools - shell, execute_js, read/search/list, recent_files, outline_symbol, edit/create/move, snapshot, git, memory), `default` (full coding toolset, no CI/CD) or `expert` (everything).", true, {
+  toolEnum("VENIRA_TOOL_MODE", "Tool surface: `core` (small models: an allowlist of 18 must-have tools - shell, execute_js, read/search/list, recent_files, outline_symbol, edit/create/move, snapshot, git, memory), `minimal` (one door: `execute_js` carries the compact JS SDK, plus `shell_status` for background runs - `shell_cancel` is folded into it), `default` (full coding toolset, no CI/CD) or `expert` (everything).", true, {
     default: "default",
-    choices: ["default", "expert", "core"],
+    choices: ["default", "expert", "core", "minimal"],
     allowEmpty: true,
   }),
   removed(
     "VENIRA_PROFILE",
     "string",
     "Tool-surface split (removed; merged into VENIRA_TOOL_MODE).",
-    "use VENIRA_TOOL_MODE (core | default | expert).",
+    "use VENIRA_TOOL_MODE (core | minimal | default | expert).",
   ),
   toolList("VENIRA_DISABLE_TOOLS", "Comma-separated tool names kept out of tools/list entirely.", true),
   toolStr("VENIRA_TOOL_POLICY_JSON", "Inline JSON tool policy (per-tool allow/deny).", true),

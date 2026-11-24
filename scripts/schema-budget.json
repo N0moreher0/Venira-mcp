@@ -7,6 +7,10 @@
     "tool_count": 31,
     "total_bytes": 53226
   },
+  "minimal": {
+    "tool_count": 2,
+    "total_bytes": 2737
+  },
   "tools": {
     "apply_patch": 1886,
     "cache_clear": 700,

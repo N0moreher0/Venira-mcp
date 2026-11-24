@@ -6,7 +6,7 @@
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](./LICENSE)
 
 Fast, workspace-scoped MCP server for coding agents (OpenCode, Claude Desktop, any MCP client).
-Three tool modes — **Core** (18 tools: shell, `execute_js`, read/search/list, edit/create/move, snapshot, git, memory, `switch_workspace` — for small models) · **Default** (31 coding tools, no CI/CD) · **Expert** (44 tools: default + CI/CD). `VENIRA_JS_EXEC_MODE=off` hides `execute_js` in every mode (44 → 43, 31 → 30, 18 → 17); otherwise it is registered and approval-gated. `VENIRA_SETUP_TOOLS=1` adds the two setup tools `detect_harnesses` and `install_self` (+2); `npx venira-mcp --install` and `--print-config` do the same from a terminal.
+Four tool modes — **Minimal** (2 tools: `execute_js` plus `shell_status`, ~2 737 B of schema — the one-door preset) · **Core** (18 tools: shell, `execute_js`, read/search/list, edit/create/move, snapshot, git, memory, `switch_workspace` — for small models) · **Default** (31 coding tools, no CI/CD) · **Expert** (44 tools: default + CI/CD). `VENIRA_JS_EXEC_MODE=off` hides `execute_js` in every mode (44 → 43, 31 → 30, 18 → 17, 2 → 1); otherwise it is registered and approval-gated. `VENIRA_SETUP_TOOLS=1` adds the two setup tools `detect_harnesses` and `install_self` (+2); `npx venira-mcp --install` and `--print-config` do the same from a terminal.
 Pure Node, 1 native dependency (better-sqlite3), no GUI, no external binary.
 
 > **Security scope.** Venira is a guard rail with an audit trail, not a sandbox. It runs with the privileges of the OS user that started it. The workspace lock limits the paths the file tools can touch (unless `VENIRA_UNRESTRICTED=1`), not what a shell command does: commands are classified by rules (allow / ask / deny) and every call is audited, but a malicious prompt can still steer the agent into running a harmful command that the active profile lets through (with `off`, every command runs). Anything running as the same OS user can read the keys in `VENIRA_DATA_DIR`. For untrusted workspaces, or whenever you need a real isolation boundary, run Venira in a container or VM. Details: [`SECURITY.md`](./SECURITY.md).
@@ -230,14 +230,17 @@ See the [full methodology and results](./BENCHMARK-2026-11-07.md) and
 [raw samples](./BENCHMARK-2026-11-07.json). Reproduce the component benchmark from the
 repository root with `npm run bench:tools -- --runs=100`.
 
-## 4. Three tool modes
+## 4. Four tool modes
 
-Three tool modes set which tools the client sees. Set via `VENIRA_TOOL_MODE` env var or
+Four tool modes set which tools the client sees. Set via `VENIRA_TOOL_MODE` env var or
 `"toolMode"` in `venira.config.json` (env wins). `VENIRA_DISABLE_TOOLS` hides additional tools on top.
-`core` is the small-model / restricted-context preset (the old `VENIRA_PROFILE=core`, now folded into this one variable). Unlike the other two modes it is an **allowlist**: only the must-have tools below are advertised, and any tool added later stays out of `tools/list` until it is added to `CORE_TOOLS` (`tools/project-tool-mode.ts`), because every extra schema costs tokens on every prompt.
+`core` is the small-model / restricted-context preset (the old `VENIRA_PROFILE=core`, now folded into this one variable). Like `minimal`, it is an **allowlist**: only the must-have tools below are advertised, and any tool added later stays out of `tools/list` until it is added to `CORE_TOOLS` (`tools/project-tool-mode.ts`), because every extra schema costs tokens on every prompt.
+
+`minimal` is the one-door preset: `tools/list` carries **one** tool (`execute_js`) plus `shell_status` for background runs, and every read/edit/search/shell/git goes through the compact JS SDK that the `execute_js` description ships — so a model can batch many operations into one call instead of paying for 30+ schemas on every prompt. Like `core`, it is an **allowlist** (`MINIMAL_TOOLS` in `tools/project-tool-mode.ts`). In this mode `shell_cancel` is not advertised; its action is folded into `shell_status` as `action="cancel"` + `kill_key` (the kill key still proves the caller started the run).
 
 | Mode | Tools | Includes |
 |---|---|---|
+| `minimal` | **2** | `execute_js` (the one door; the JS SDK rides in its description) + `shell_status` (poll a background run; in this mode it also cancels with `action="cancel"` + `kill_key`) |
 | `core` | **18** | Allowlist: `shell_run`, `shell_status`, `shell_cancel`, `execute_js`, `read_file`, `search`, `list_files`, `recent_files`, `outline_symbol`, `edit_file` (single **and** multi-file via `edits[]` with per-item `relative_path`, or `requests[]` on `read_file`), `write_file`, `delete_path`, `create`, `move_path`, `snapshot`, `git`, `memory`, `switch_workspace` |
 | `default` | **31** | Read/write/edit/search, code intel, snapshots, shell, `delete_path`, `execute_js` — **no** CI/CD; `explain_error` and `plan_read_batch` are expert-only |
 | `expert` | **44** | Everything in default + `pr_*`, `ci_*`, `explain_error`, `plan_read_batch` |
@@ -370,7 +373,7 @@ Full reference: the source reads 80+ distinct supported `VENIRA_*` names; this t
 | Variable | Default | What it does |
 |---|---|---|
 | `VENIRA_WORKSPACE` | `process.cwd()` | Workspace root **and** the roots `switch_workspace` may reach (absolute paths, `,` or `;` separated). The **first** entry is the root all paths resolve against; every entry is part of the allowlist. Unset = switching locked to the spawn workspace |
-| `VENIRA_TOOL_MODE` | `default` | `core` (18 tools) / `default` (31 tools) / `expert` (44 tools); +2 with `VENIRA_SETUP_TOOLS=1` (in every mode, `core` included) |
+| `VENIRA_TOOL_MODE` | `default` | `minimal` (2 tools) / `core` (18 tools) / `default` (31 tools) / `expert` (44 tools); +2 with `VENIRA_SETUP_TOOLS=1` (in every mode, `core` included) |
 | `VENIRA_OUTPUT_MODE` | `full` | `full` or `compact` (summarize/trim payloads > 8 KiB; generic payloads use `preview_text`) |
 | `VENIRA_AUDIT_DETAIL` | `summary` | What `read_audit` can show per job: `off` stores nothing extra, `summary` keeps one args line and one result line, `full` also keeps redacted JSON args/result (up to 16 KiB per job). Long or sensitive values (file content, `old_text`/`new_text`, secret values) are stored as a length only |
 | `VENIRA_UNRESTRICTED` | `"0"` | `"1"` disables workspace lock (never in production) |

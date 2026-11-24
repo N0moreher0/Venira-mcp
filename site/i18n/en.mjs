@@ -97,11 +97,12 @@ export default {
       "Every tool schema costs tokens on every prompt, so the tool set is a setting. Switch it with `VENIRA_TOOL_MODE`.",
     modesCols: ["Mode", "Tools", "Good for", "Contents"],
     modesRows: [
+      ["`minimal`", "2", "Tightest context; one door", "`execute_js` plus `shell_status` (~2 737 B)"],
       ["`core`", "18", "Small models and tight context", "Shell, read, search, edit, snapshot, git, memory"],
       ["`default`", "31", "Everyday coding", "Core plus code intelligence, no CI/CD"],
       ["`expert`", "44", "Full workflows", "Default plus pull requests and CI"],
     ],
-    modesNote: "Each mode has one tool fewer when `execute_js` is switched off. Details in [tool modes](/docs/tool-modes/).",
+    modesNote: "Each mode has one tool fewer when `execute_js` is switched off (minimal drops to 1). Details in [tool modes](/docs/tool-modes/).",
     speedTitle: "Fewer round trips",
     speedLead:
       "Batch reads and a persistent connection beat starting a fresh shell for every lookup. Median times from one Windows 11 machine, compared with Codex `exec_command`, 20 paired samples per phase.",

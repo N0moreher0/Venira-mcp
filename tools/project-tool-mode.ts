@@ -1,8 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { readFileSync } from "node:fs";
-import path from "node:path";
 import { setupToolsEnabled } from "../lib/env.js";
-import { WORKSPACE } from "../lib/workspace.js";
+import { isToolModeName, type ToolModeName } from "../lib/tool-mode-names.js";
+import { effectiveToolMode } from "../lib/workspace.js";
 
 /**
  * Tool modes choose the tools/list surface; one variable: VENIRA_TOOL_MODE.
@@ -13,8 +12,8 @@ import { WORKSPACE } from "../lib/workspace.js";
  *               **shell execution, JS execution**); only excludes the CI/CD
  *               shipping surface (PR/CI tools) plus the two diagnostics-planning
  *               tools, which are expert-only.
- *   `core`    - the small-model / restricted-context preset. Unlike the other
- *               two it is an **allowlist** (`CORE_TOOLS`): only the must-have
+ *   `core`    - the small-model / restricted-context preset. Like `minimal`
+ *               it is an **allowlist** (`CORE_TOOLS`): only the must-have
  *               tools are advertised (shell, execute_js, read, search, list, recent_files,
  *               outline_symbol,
  *               edit/write/create/move/delete, snapshot, git, memory,
@@ -26,10 +25,17 @@ import { WORKSPACE } from "../lib/workspace.js";
  *               `delete_path` is the controlled, auditable deletion path.
  *               The setup tools (`detect_harnesses`, `install_self`) are the
  *               one exception: they join core only with `VENIRA_SETUP_TOOLS=1`.
+ *   `minimal` - the one-door preset. `tools/list` carries **one** tool
+ *               (`execute_js`); every read/edit/search/shell/git goes through the
+ *               compact JS SDK that the tool description ships, so a model batches
+ *               many operations into one call instead of paying for 30+ schemas.
+ *               `shell_status` stays a real tool because a background command
+ *               outlives the snippet that started it (it also carries the merged
+ *               `shell_cancel`, see MINIMAL_TOOLS).
  * `VENIRA_DISABLE_TOOLS` layers a comma-separated blocklist on top of the
  * chosen mode. `VENIRA_PROFILE` was removed and folded into `core`.
  */
-export type ToolMode = "default" | "expert" | "core";
+export type ToolMode = ToolModeName;
 
 /** Shipping surface (PR/CI) + diagnostics planning kit: default excludes these. */
 const SHIPPING_EXCLUDES = [
@@ -93,8 +99,19 @@ export const CORE_TOOLS: readonly string[] = [
   "switch_workspace",
 ];
 
-/** Exclusion lists for the modes that are defined by what they leave out. `core` is an allowlist (CORE_TOOLS). */
-export const TOOL_MODE_EXCLUDES: Record<Exclude<ToolMode, "core">, string[]> = {
+/**
+ * `minimal` allowlist: the one-door preset.
+ *
+ * `execute_js` is the door; `shell_status` stays because a background command
+ * (shell_run runs in the background by default) outlives the snippet that started
+ * it, so the model needs a real tool to poll it from the NEXT turn. In this mode
+ * `shell_status` also carries the merged `shell_cancel` (action="cancel" +
+ * kill_key), so `shell_cancel` itself is not advertised.
+ */
+export const MINIMAL_TOOLS: readonly string[] = ["execute_js", "shell_status"];
+
+/** Exclusion lists for the modes that are defined by what they leave out. `core` and `minimal` are allowlists. */
+export const TOOL_MODE_EXCLUDES: Record<Exclude<ToolMode, "core" | "minimal">, string[]> = {
   expert: [],
   default: [...SHIPPING_EXCLUDES],
 };
@@ -105,21 +122,15 @@ export function modeBlocksTool(mode: ToolMode, name: string, setupTools: boolean
     if (CORE_TOOLS.includes(name)) return false;
     return !(setupTools && SETUP_TOOLS.includes(name));
   }
+  if (mode === "minimal") {
+    if (MINIMAL_TOOLS.includes(name)) return false;
+    return !(setupTools && SETUP_TOOLS.includes(name));
+  }
   return TOOL_MODE_EXCLUDES[mode].includes(name);
 }
 
 export function getToolMode(): ToolMode {
-  const raw = (process.env.VENIRA_TOOL_MODE ?? "").trim().toLowerCase();
-  if (raw === "expert" || raw === "default" || raw === "core") return raw;
-  try {
-    const file = path.join(WORKSPACE, "venira.config.json");
-    const parsed = JSON.parse(readFileSync(file, "utf8")) as { toolMode?: unknown };
-    const candidate = String(parsed?.toolMode ?? "").trim().toLowerCase();
-    if (candidate === "expert" || candidate === "default" || candidate === "core") return candidate;
-  } catch {
-    /* no config -> default */
-  }
-  return "default";
+  return effectiveToolMode();
 }
 
 /**
@@ -144,6 +155,9 @@ export function applyDisabledTools(server: McpServer): void {
   if (mode === "core") {
     const allowed = [...CORE_TOOLS, ...(setupTools ? SETUP_TOOLS : [])].filter((name) => !disabled.has(name));
     console.error(`[venira-coding] tool mode core: allowlist of ${allowed.length} tools: ${allowed.join(", ")}`);
+  } else if (mode === "minimal") {
+    const allowed = [...MINIMAL_TOOLS, ...(setupTools ? SETUP_TOOLS : [])].filter((name) => !disabled.has(name));
+    console.error(`[venira-coding] tool mode minimal: allowlist of ${allowed.length} tools: ${allowed.join(", ")}`);
   } else {
     const names = [...new Set([...disabled, ...TOOL_MODE_EXCLUDES[mode]])];
     console.error(`[venira-coding] disabled tools (${mode}): ${names.join(", ")}`);

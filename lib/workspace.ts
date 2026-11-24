@@ -8,6 +8,7 @@ import { envFlag } from "./env.js";
 import { cacheEnabled } from "./cache-mode.js";
 import { resolveSecurityProfile } from "./security-profile.js";
 import { snapshotProtectedRoots } from "./snapshot-paths.js";
+import { isToolModeName, type ToolModeName } from "./tool-mode-names.js";
 export const PLATFORM = process.platform;
 
 /**
@@ -76,6 +77,26 @@ export function defaultDataDir(): string {
 export const UNRESTRICTED = envFlag("VENIRA_UNRESTRICTED", false);
 
 /**
+ * The effective tool mode: `VENIRA_TOOL_MODE` first, then `"toolMode"` in
+ * `venira.config.json` (env wins). Shared with `tools/project-tool-mode.ts`,
+ * which owns the allowlists, so both sides always read the same value.
+ */
+export function effectiveToolMode(): ToolModeName {
+  const env = (process.env.VENIRA_TOOL_MODE ?? "").trim().toLowerCase();
+  if (isToolModeName(env)) return env;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(path.join(WORKSPACE, "venira.config.json"), "utf8")) as {
+      toolMode?: unknown;
+    };
+    const candidate = String(parsed?.toolMode ?? "").trim().toLowerCase();
+    if (isToolModeName(candidate)) return candidate;
+  } catch {
+    /* no config -> default */
+  }
+  return "default";
+}
+
+/**
  * `execute_js` mode — the single gate for the tool:
  *   - `off`  (default): the tool is not registered at all.
  *   - `ask`: registered; each call needs a human approval bound to the code — unless
@@ -91,10 +112,20 @@ export type JsExecMode = "off" | "ask" | "semi-auto" | "auto";
 
 function resolveJsExecMode(): JsExecMode {
   const raw = process.env.VENIRA_JS_EXEC_MODE;
-  if (raw === undefined || raw.trim() === "") return "off";
-  const value = raw.trim().toLowerCase();
-  if (value === "off" || value === "ask" || value === "semi-auto" || value === "auto") return value;
-  throw new Error(`[config_invalid] VENIRA_JS_EXEC_MODE must be one of: off, ask, semi-auto, auto.`);
+  if (raw !== undefined && raw.trim() !== "") {
+    const value = raw.trim().toLowerCase();
+    if (value === "off" || value === "ask" || value === "semi-auto" || value === "auto") return value;
+    throw new Error(`[config_invalid] VENIRA_JS_EXEC_MODE must be one of: off, ask, semi-auto, auto.`);
+  }
+  // Mode `minimal` chi con execute_js. Mac dinh cua server cho VENIRA_JS_EXEC_MODE
+  // la "off" (tool bi an) -> mode minimal se khong co tool nao dung duoc. Nen o
+  // mode minimal, neu operator KHONG set VENIRA_JS_EXEC_MODE, nang mac dinh len
+  // "semi-auto" ("ask" khi profile la strict) de cua ngo duy nhat luon mo.
+  // Operator set cung "off" thi ton trong (xem lib/config-posture.ts de canh bao).
+  if (effectiveToolMode() === "minimal") {
+    return resolveSecurityProfile() === "strict" ? "ask" : "semi-auto";
+  }
+  return "off";
 }
 
 export const JS_EXEC_MODE: JsExecMode = resolveJsExecMode();

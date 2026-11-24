@@ -82,8 +82,10 @@ npm run bench:mcp          # end-to-end numbers for PRs
      ceiling fails the check, and ceilings otherwise only ratchet **down**);
   4. tool counts changed → update the README count strings **and**
      `scripts/check-docs.ts` (`EXPECTED_DEFAULT_TOOLS` / `EXPECTED_EXPERT_TOOLS`) together.
-     README says 39 default / 52 expert; `schema-budget.json` records the same
-     counts (52 expert / 39 default) with `execute_js` registered.
+     Current contract: `minimal` 2 / `core` 18 / `default` 31 / `expert` 44
+     (`scripts/schema-budget.json`: minimal 2 737 B, default 53 226 B, expert 72 422 B
+     with `execute_js` registered). `minimal` and `core` are allowlists
+     (`MINIMAL_TOOLS` / `CORE_TOOLS` in `tools/project-tool-mode.ts`).
 - **Version bump** — `package.json`, `package-lock.json` (both `version` and `packages[""].version`),
   `server.json` (both `version` and `packages[]`) and `lib/version.ts` must all agree;
   `check:docs` fails otherwise.
