@@ -83,7 +83,8 @@ npm run bench:mcp          # end-to-end numbers for PRs
   4. tool counts changed → update the README count strings **and**
      `scripts/check-docs.ts` (`EXPECTED_DEFAULT_TOOLS` / `EXPECTED_EXPERT_TOOLS`) together.
      Current contract: `minimal` 2 / `core` 18 / `default` 31 / `expert` 44
-     (`scripts/schema-budget.json`: minimal 2 737 B, default 53 226 B, expert 72 422 B
+     (`scripts/schema-budget.json`: minimal 7 588 B - the `execute_js` description carries
+     the JS SDK contract in that mode -, default 53 226 B, expert 72 422 B
      with `execute_js` registered). `minimal` and `core` are allowlists
      (`MINIMAL_TOOLS` / `CORE_TOOLS` in `tools/project-tool-mode.ts`).
 - **Version bump** — `package.json`, `package-lock.json` (both `version` and `packages[""].version`),
@@ -354,3 +355,33 @@ Merge with `pr_merge` only when the user asked and `ci_status` is green. Ask or 
 <!-- venira-skills:end -->
 
 
+
+## JS SDK + internal dispatcher (ROADMAP_MINIMAL_MODE.md Phase 0/2/3, 2026-11-24)
+
+- Architecture **(A) bridge IPC, channel = Node's stdio "ipc"** (NOT fd 3: a pending
+  overlapped read on a Windows pipe blocks child teardown - even `process.exit(0)`;
+  measured, see the roadmap). Parent: `lib/sdk-bridge.ts` (`createSdkBridge` + `SDK_BRIDGE_OPS`
+  allowlist; `execute_js` and `workspace_switch` are never callable from a snippet).
+  Child: `lib/sdk-child-runtime.ts` (one-line preamble defining the frozen `venira` global;
+  `process.channel.unref()` when idle or the child never exits - the persistent
+  "message" listener keeps the channel referenced).
+- **ONE registry** `lib/sdk-registry.ts` drives the `.d.ts` contract injected into the
+  `execute_js` description (mode `minimal` only, inside `applyToolDocs`), `venira.help()`,
+  and `minimalInstructions()` used by `server.ts` INSTRUCTIONS (R6). Never hand-edit a
+  second copy; edit the table and the pin test (`scripts/test-sdk-bridge.ts`,
+  `SDK_FUNCTIONS` vs `SDK_API_CORE`) follows.
+- **Internal dispatcher** `sdkDispatch` lives in `tools/project.ts` and is passed to
+  `runExecuteJs(args, sdkDispatch)` via `OpsToolsDeps.sdkDispatch`. It routes op-level ops
+  through `runOne` (tool policy + cache + audit identical to the MCP tool path) and keeps
+  the dedicated runners for `shell_run` (approval + elicitation), `memory`, `create`,
+  `outline_symbol`, `diff_files`, `symbol_references`, `snapshot`; `read_file requests[]`
+  and `edit_file edits[]` go through the batch runners in `tools/project-batch.ts`.
+- Error contract (pinned by tests): `ok:false` envelopes are VALUES (batch continues);
+  `approval_required` / `approval_invalid` / `command_denied` THROW `VeniraPolicyError`
+  carrying `e.envelope` (with `data.approval`); wrong argument types throw the expected
+  signature; unknown/blocked ops throw `[invalid_request]`. The bridge reads the error
+  code from `envelope.error.code` (`errorEnvelope` strips the `[code]` message prefix).
+- The `venira.*` runtime is injected in EVERY mode (when `ALLOW_JS_EXEC`); only the
+  description contract is `minimal`-gated. Open item: the real-`runShell` background
+  roundtrip inside a snippet answers with empty stdout (diagnostic check 4 of
+  `scripts/test-sdk-integration.ts`).

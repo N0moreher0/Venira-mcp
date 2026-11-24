@@ -13,12 +13,19 @@ import { VERSION } from "./lib/version.js";
 import { UNRESTRICTED, WORKSPACE, migrateLegacyDataDirIfNeeded } from "./lib/workspace.js";
 import { validateBooleanEnvironment } from "./lib/env.js";
 import { enabledShellOverrides, loadShellPolicy } from "./lib/shell-policy.js";
+import { getToolMode } from "./tools/project-tool-mode.js";
+import { minimalInstructions } from "./lib/sdk-registry.js";
 validateBooleanEnvironment();
 loadShellPolicy();
 enabledShellOverrides();
 migrateLegacyDataDirIfNeeded();
 
-const INSTRUCTIONS = `Venira coding tools operate on the workspace ${WORKSPACE}.
+/**
+ * R6 (ROADMAP_MINIMAL_MODE.md): in mode `minimal` the per-tool decision tree
+ * would describe tools the model never sees, so INSTRUCTIONS swap to the
+ * one-door guidance. The other modes keep the text below byte-for-byte.
+ */
+const DEFAULT_INSTRUCTIONS = `Venira coding tools operate on the workspace ${WORKSPACE}.
 Every call returns a JSON envelope: { ok, status, request_id, kind, data, truncated?, summary?, hint?, next_actions?, cached?, trimmed?, command_status?, elapsed_ms }. On failure: { ok:false, error:{ code, message, retryable }, hint, next_actions? } and the MCP result has isError=true. A multi-file read_file with any failed items returns ok=false/status=partial; inspect each data.responses entry. For shell_run, ok=true means the tool call completed; command_status separately reports running/succeeded/failed/cancelled/unknown. Read "hint" and "next_actions" first; they say how to recover.
 
 Decision tree
@@ -62,6 +69,11 @@ Rules
 - Security profile: VENIRA_SECURITY_PROFILE=strict|balanced|trusted|off (default balanced) sets the shell policy and per-call JS approval together; VENIRA_SHELL_MODE=balanced|strict|permissive|off is an advanced override. Hard-deny rules stay active in strict/balanced; permissive turns hard-deny into an approval request; off disables all shell checks, hard-deny included (operator opt-in, trusted environments only).
 - Approvals: when shell_run or execute_js returns approval_required, STOP. Tell the user the approval_id and data.approval.approve_command (a human grants it via \`data.approval.approve_command\` or client elicitation); do not loop, poll or try to approve it yourself. After the user confirms, retry once with data.approval.retry_with. Use shell_run dry_run=true to learn beforehand whether a command would be allowed, asked or denied (nothing runs). approval_wait_s (<=45) makes the call wait for the human and run in the same call; keep it under the client request timeout. approval_token was removed; use approval_id.
 - Named shell overrides require both an operator allowlist (VENIRA_SHELL_OVERRIDES) and a per-call override name plus non-empty reason; they are narrow and audited.`;
+
+const INSTRUCTIONS =
+  getToolMode() === "minimal"
+    ? minimalInstructions(WORKSPACE)
+    : DEFAULT_INSTRUCTIONS;
 
 const server = new McpServer(
   { name: "venira-coding", version: VERSION },

@@ -7,6 +7,7 @@ import {
   requestApproval,
 } from "../lib/approval-gate.js";
 import { executeJs } from "../lib/js-executor.js";
+import { createSdkBridge, type SdkDispatch } from "../lib/sdk-bridge.js";
 import { recordMetric } from "../lib/metrics.js";
 import { buildEnvelope, errorEnvelope, newRequestId, toolResult } from "../lib/output.js";
 import type { RustResponse, ToolResult } from "../lib/output.js";
@@ -45,7 +46,14 @@ function jsExecBinding(code: string, argv: string[] | undefined): string {
   });
 }
 
-export async function runExecuteJs(args: Args): Promise<ToolResult> {
+/**
+ * `sdkDispatch` (ROADMAP_MINIMAL_MODE.md Phase 3) is the internal dispatcher:
+ * when present the snippet gets the frozen `venira` global and its calls run
+ * through the SAME tool pipeline in this process (policy + cache + audit),
+ * answered over the IPC bridge. Undefined = plain snippet, no injection
+ * (byte-identical behaviour with the pre-Phase-3 server).
+ */
+export async function runExecuteJs(args: Args, sdkDispatch?: SdkDispatch): Promise<ToolResult> {
   const started = performance.now();
   const requestId = newRequestId();
   if (!ALLOW_JS_EXEC) {
@@ -135,8 +143,9 @@ export async function runExecuteJs(args: Args): Promise<ToolResult> {
     }
   }
 
+  const bridge = sdkDispatch ? createSdkBridge(sdkDispatch) : undefined;
   try {
-    const r = executeJs(code, { cwd: WORKSPACE, timeout: timeoutMs, args: cliArgs, contained: JS_EXEC_CONTAINED });
+    const r = await executeJs(code, { cwd: WORKSPACE, timeout: timeoutMs, args: cliArgs, contained: JS_EXEC_CONTAINED, bridge });
     const response: RustResponse = {
       status: "completed",
       result: {
@@ -168,5 +177,9 @@ export async function runExecuteJs(args: Args): Promise<ToolResult> {
     const elapsedMs = performance.now() - started;
     recordMetric("execute_js", elapsedMs, false);
     return toolResult(errorEnvelope("execute_js", error, { requestId, elapsedMs }), true);
+  } finally {
+    // Late child exits cannot reach a detached bridge; safe to call twice
+    // (executeJs already closes it after the child exited).
+    bridge?.close();
   }
 }

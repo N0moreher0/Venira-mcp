@@ -12,6 +12,14 @@ Local release notes for venira-mcp. Not published (not listed in `package.json` 
 - `execute_js` gate: in `minimal` an operator who set nothing gets `semi-auto` (`ask` under the `strict` profile) instead of the server default `off` - otherwise the only door would be hidden. An explicit `VENIRA_JS_EXEC_MODE=off` is still respected.
 - Budget: `scripts/schema-budget.json` gained a `minimal` row; `npm run test:minimal-mode` (12 checks) is part of `npm run verify`.
 
+### Added - JS SDK + internal dispatcher (one-door mode, Phase 0/2/3 of ROADMAP_MINIMAL_MODE.md)
+
+- **Bridge IPC, architecture (A)**: the `execute_js` child process gets a frozen `venira` global; every SDK call runs the REAL tool pipeline in the parent (tool policy, caches, corehost, SQLite audit) and answers with the same JSON envelope. Channel is the Node **stdio "ipc"** entry - an fd-3 pipe was measured to deadlock child exit on Windows (pending overlapped read survives `process.exit(0)`), so it was rejected.
+- **Internal dispatcher** (`sdkDispatch` in `tools/project.ts`): op-level ops go through `runOne` (identical policy/audit), dedicated runners stay for `shell_run` (approval + elicitation), `memory`, `create`, `outline_symbol`, `diff_files`, `symbol_references`, `snapshot`; multi-file `read_file requests[]` / `edit_file edits[]` run the atomic batch runners. `execute_js` and `workspace_switch` are refused (`SDK_BRIDGE_OPS` allowlist).
+- **`.d.ts` contract + example + `venira.help()` + minimal INSTRUCTIONS from ONE registry** (`lib/sdk-registry.ts`, no hand-maintained copy): the contract block is injected into the `execute_js` description ONLY in mode `minimal` (default/expert byte-identical, pinned by tests); `minimalInstructions()` replaces the per-tool decision tree there (R6).
+- **Error contract**: `ok:false` envelopes are values (a failed item does not kill the batch); `approval_required`/`approval_invalid`/`command_denied` throw `VeniraPolicyError` carrying `e.envelope` (with `data.approval`); wrong argument types throw the exact expected signature; unknown/blocked ops throw `[invalid_request]`.
+- Tests: `npm run test:sdk-bridge` (19 checks: registry pin, e2e bridge, normalization, policy stops, description injection) and `npm run test:sdk-integration` (real wiring through `registerProjectTools` + CoreHost + audit: one-turn chain `snapshot -> search -> read -> edit -> re-read`, `path_escape` as value, `command_denied` halt). Both are part of `npm run verify`. Budget: `minimal` 2 737 B -> 7 588 B (contract in description); `default`/`expert` unchanged.
+
 ## 6.1.0 - 2026-11-23
 
 ### Changed - snapshot retention + megabyte-based size variables

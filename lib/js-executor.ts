@@ -1,5 +1,7 @@
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import path from "node:path";
+import type { SdkBridge } from "./sdk-bridge.js";
+import { SDK_CHILD_PREAMBLE } from "./sdk-child-runtime.js";
 
 export type JsResult = {
   ok: boolean;
@@ -12,6 +14,7 @@ export type JsResult = {
 
 const DEFAULT_TIMEOUT = 30_000;
 const MAX_BUFFER = 1_048_576; // 1 MiB
+const KILL_GRACE_MS = 1_000;
 
 /**
  * ESM preamble (roadmap item 15, P2).
@@ -92,94 +95,135 @@ function snippetError(error: string, stderr: string, timedOut: boolean, timeout:
 }
 
 /**
- * Workspace-scoped synchronous JS evaluation. With `contained: false` (mode `auto`) every restriction
- * described below is dropped: no permission model, inherited environment.
- * Runs `node` in the workspace, reading code from stdin, capturing stdout/stderr.
- * Node's permission model limits filesystem access to the workspace and does not
- * grant child-process or worker permissions. Protected files inside the workspace
- * are still readable; network access is always open in every mode (the egress guard was removed).
- * This is containment, not a sandbox.
+ * Workspace-scoped asynchronous JS evaluation (ROADMAP_MINIMAL_MODE.md Phase 0:
+ * the child gets a `venira` proxy over the Node IPC channel when a bridge is
+ * passed, so SDK calls land on the parent's real tool pipeline -- policy,
+ * cache, audit). The IPC channel is the second choice after an fd-3 pipe was
+ * measured to deadlock the child's exit on Windows (pending overlapped reads
+ * on the pipe survive even `process.exit(0)`).
+ *
+ * With `contained: false` (mode `auto`) every restriction described below is
+ * dropped: no permission model, inherited environment. Runs `node` in the
+ * workspace, reading code from stdin, capturing stdout/stderr tails. Node's
+ * permission model limits filesystem access to the workspace and does not
+ * grant child-process or worker permissions. Protected files inside the
+ * workspace are still readable; network access is always open in every mode
+ * (the egress guard was removed). This is containment, not a sandbox.
  */
-export function executeJs(
+export async function executeJs(
   code: string,
-  options: { cwd?: string; timeout?: number; args?: string[]; contained?: boolean } = {},
-): JsResult {
+  options: {
+    cwd?: string;
+    timeout?: number;
+    args?: string[];
+    contained?: boolean;
+    /** Present = the `venira` SDK global is injected and served by the parent. */
+    bridge?: SdkBridge;
+  } = {},
+): Promise<JsResult> {
   const cwd = options.cwd ?? process.cwd();
   const timeout = Math.max(100, Math.min(options.timeout ?? DEFAULT_TIMEOUT, 600_000));
   const nodeMajor = Number.parseInt(process.versions.node.split(".")[0] ?? "0", 10);
   const contained = options.contained !== false;
+  const bridge = options.bridge;
   const permissionArgs: string[] = !contained ? [] : [
     nodeMajor >= 23 ? "--permission" : "--experimental-permission",
     `--allow-fs-read=${cwd}`,
     `--allow-fs-write=${cwd}`,
   ];
-  // Roadmap item 15 (P2): a snippet with a top-level await runs as an ES
-  // module, where `require` does not exist. The preamble gives it the same
-  // `require`; Node reports it as line 1, so the echo is stripped below.
-  const esm = looksLikeEsm(code);
-  const prefix = contained && esm ? ESM_PREAMBLE : "";
-  const input = contained ? `${prefix}${code}` : code;
+  // The SDK preamble defines `venira` from fd 3; it uses the `require` shim the
+  // ESM preamble installs, so a bridged snippet always runs as an ES module.
+  // Roadmap item 15 (P2): without a bridge a top-level await still flips the
+  // snippet to ESM and the preamble restores `require`.
+  const esm = bridge !== undefined ? true : looksLikeEsm(code);
+  const prefix = esm ? ESM_PREAMBLE + (bridge ? SDK_CHILD_PREAMBLE : "") : "";
+  const input = `${prefix}${code}`;
   const inputType = esm ? ["--input-type=module"] : [];
-  try {
-    const r = spawnSync(process.execPath, [...permissionArgs, ...inputType, "-", ...((options.args ?? []) as string[])], {
-      input,
-      encoding: "utf8",
-      cwd,
-      timeout,
-      maxBuffer: MAX_BUFFER,
-      stdio: ["pipe", "pipe", "pipe"],
-      env: !contained ? process.env : {
-        PATH: process.env.PATH,
-        TERM: process.env.TERM ?? "",
-        HOME: "",
-        USERPROFILE: "",
-        NODE_PATH: path.join(cwd, "node_modules"),
+  return await new Promise<JsResult>((resolve) => {
+    let spawnError: Error | null = null;
+    let timedOut = false;
+    let exitCode: number | null = null;
+    let signal: string | null = null;
+    let stdout = "";
+    let stderr = "";
+    const child = spawn(
+      process.execPath,
+      [...permissionArgs, ...inputType, "-", ...((options.args ?? []) as string[])],
+      {
+        cwd,
+        // The last entry is the Node IPC channel the SDK bridge serves; with no
+        // bridge there is nothing to serve (plain pipe trio, unchanged).
+        stdio: bridge ? ["pipe", "pipe", "pipe", "ipc"] : ["pipe", "pipe", "pipe"],
+        env: !contained
+          ? process.env
+          : {
+              PATH: process.env.PATH,
+              TERM: process.env.TERM ?? "",
+              HOME: "",
+              USERPROFILE: "",
+              NODE_PATH: path.join(cwd, "node_modules"),
+            },
       },
+    );
+    const killTimer = setTimeout(() => {
+      timedOut = true;
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        /* already gone */
+      }
+      setTimeout(() => {
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          /* already gone */
+        }
+      }, KILL_GRACE_MS).unref();
+    }, timeout);
+    child.stdout?.setEncoding("utf8");
+    child.stderr?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk: string) => {
+      stdout += chunk;
+      if (stdout.length > MAX_BUFFER) stdout = stdout.slice(-MAX_BUFFER);
     });
-    const timed = Boolean(r.signal === "SIGTERM" || r.signal === "SIGKILL");
-    const stdout = (r.stdout ?? "").slice(-MAX_BUFFER);
-    const stderrRaw = r.stderr ?? "";
-    const stderr = (contained && prefix ? stripGuardEcho(stderrRaw, prefix.length) : stderrRaw).slice(-MAX_BUFFER);
-    if (r.error) {
-      return {
-        ok: false,
-        exit_code: r.status ?? null,
+    child.stderr?.on("data", (chunk: string) => {
+      stderr += chunk;
+      if (stderr.length > MAX_BUFFER) stderr = stderr.slice(-MAX_BUFFER);
+    });
+    child.on("error", (error) => {
+      spawnError = error;
+    });
+    // Serve SDK calls while the snippet runs. The bridge is closed after close
+    // so late messages cannot reach a dead child.
+    if (bridge) bridge.attach(child);
+    child.stdin?.write(input);
+    child.stdin?.end();
+    child.on("close", (exit, sig) => {
+      clearTimeout(killTimer);
+      exitCode = exit;
+      signal = sig ?? null;
+      const stderrClean = contained && prefix ? stripGuardEcho(stderr, prefix.length) : stderr;
+      const timed = timedOut || sig === "SIGTERM" || sig === "SIGKILL";
+      const failed = Boolean(spawnError) || timed || (exitCode ?? 0) !== 0;
+      try {
+        bridge?.close();
+      } catch {
+        /* idempotent */
+      }
+      resolve({
+        ok: !failed,
+        exit_code: exitCode,
         timed_out: timed,
-        stdout_tail: stdout,
-        stderr_tail: stderr,
-        // Roadmap item 15 (P2): the raw "spawnSync ... ETIMEDOUT" leak is
-        // replaced by a reason the agent can act on.
-        error: snippetError(r.error.message, stderr, timed, timeout),
-      };
-    }
-    const failed = (r.status ?? 0) !== 0;
-    return {
-      ok: !failed,
-      exit_code: r.status ?? null,
-      timed_out: timed,
-      stdout_tail: stdout,
-      stderr_tail: stderr,
-      ...(failed
-        ? {
-            error: snippetError(
-              // The reason a snippet failed is in its stderr; keep the raw text
-              // there and put the actionable reason in `error`.
-              stderr,
-              stderr,
-              timed,
-              timeout,
-            ),
-          }
-        : {}),
-    };
-  } catch (error) {
-    return {
-      ok: false,
-      exit_code: null,
-      timed_out: false,
-      stdout_tail: "",
-      stderr_tail: "",
-      error: snippetError(error instanceof Error ? error.message : String(error), "", false, timeout),
-    };
-  }
+        stdout_tail: stdout.slice(-MAX_BUFFER),
+        stderr_tail: stderrClean.slice(-MAX_BUFFER),
+        ...(failed
+          ? {
+              error: spawnError
+                ? snippetError(spawnError.message, stderrClean, timed, timeout)
+                : snippetError(stderrClean, stderrClean, timed, timeout),
+            }
+          : {}),
+      });
+    });
+  });
 }

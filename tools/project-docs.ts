@@ -2,6 +2,8 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { editFuzzyEnabled } from "../lib/env.js";
 import { JS_EXEC_MODE, type JsExecMode } from "../lib/workspace.js";
 import { renderDescription } from "./project-schema.js";
+import { getToolMode } from "./project-tool-mode.js";
+import { sdkContractDts } from "../lib/sdk-registry.js";
 
 /**
  * Single source of truth for the model-facing wording of every tool.
@@ -345,11 +347,33 @@ export function aboutFor(name: string, doc: ToolDoc): string {
 /**
  * Replace each registered tool's description with its TOOL_DOCS entry. Patches `registerTool` in
  * place (same approach as applyDisabledTools), so call it before the register* functions run.
+ *
+ * Mode `minimal` (ROADMAP_MINIMAL_MODE.md Phase 2): `execute_js` is the one door, so its
+ * description also carries the JS SDK contract (a rendered `.d.ts` of `venira.*`, generated
+ * from lib/sdk-registry.ts - the same registry `venira.help()` serves). The other modes keep
+ * the TOOL_DOCS description byte-for-byte, so their schema budget does not move.
  */
 export function applyToolDocs(server: McpServer): void {
   const original = server.registerTool.bind(server) as (name: string, cfg: RegisterConfig, ...rest: unknown[]) => unknown;
   server.registerTool = ((name: string, cfg: RegisterConfig, ...rest: unknown[]) => {
     const doc = TOOL_DOCS[name];
+    if (name === "execute_js" && getToolMode() === "minimal") {
+      const base =
+        doc
+          ? renderDescription(aboutFor(name, doc), { use_when: doc.use, avoid_when: doc.avoid, output_kind: doc.out })
+          : cfg.description;
+      const merged: RegisterConfig = {
+        ...cfg,
+        description: `${base}\n\n${sdkContractDts()}`,
+        _meta: doc
+          ? {
+              ...(cfg._meta ?? {}),
+              venira: { ...(cfg._meta?.venira ?? {}), use_when: doc.use, avoid_when: doc.avoid, output_kind: doc.out },
+            }
+          : cfg._meta,
+      };
+      return original(name, merged, ...rest);
+    }
     if (!doc) return original(name, cfg, ...rest);
     const merged: RegisterConfig = {
       ...cfg,

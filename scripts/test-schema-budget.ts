@@ -130,6 +130,27 @@ docs.applyToolDocs(fakeMinimalServer);
       runOne: dummy,
       shellDeps: { execute: dummy, callHost: dummy } as never,
     });
+    // Phase 2 (ROADMAP_MINIMAL_MODE.md): in minimal the execute_js description
+    // carries the JS SDK contract, so the minimal row must measure the minimal
+    // registration, not the default-mode one.
+    ops.registerOpsTools(fakeMinimalServer, {
+      runOne: dummy,
+      runCreate: dummy,
+      healthDeps: {
+        hostSnapshot: dummy,
+        refreshCapability: dummy,
+        capability: dummy,
+        queue: { depth: 0 },
+        caches: dummy,
+        shells: dummy,
+        startedAt: 0,
+        permissionMode: "x",
+        shellElicit: false,
+      } as never,
+      auditDbPath: () => "",
+      shellDeps: { execute: dummy, callHost: dummy } as never,
+      clearCaches: () => undefined,
+    });
   } finally {
     if (prevMode === undefined) delete process.env.VENIRA_TOOL_MODE;
     else process.env.VENIRA_TOOL_MODE = prevMode;
@@ -160,7 +181,7 @@ function toolBytes(name: string, cfg: ToolCfg): number {
 const minimalNames = [...toolMode.MINIMAL_TOOLS];
 const minimalRows = minimalNames.map((name) => ({
   name,
-  bytes: toolBytes(name, (name === "shell_status" ? minimalTools : registered).get(name) as ToolCfg),
+  bytes: toolBytes(name, (minimalTools.get(name) ?? registered.get(name)) as ToolCfg),
 }));
 const minimalTotal = minimalRows.reduce((n, r) => n + r.bytes, 0);
 

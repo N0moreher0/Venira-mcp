@@ -42,8 +42,8 @@ try { out.outside = require("node:fs").readFileSync(${JSON.stringify(outsideFile
 console.log(JSON.stringify(out));
 `;
 
-function run(options: Parameters<typeof executeJs>[1]): Record<string, string> {
-  const r = executeJs(probe, { cwd, ...options });
+async function run(options: Parameters<typeof executeJs>[1]): Promise<Record<string, string>> {
+  const r = await executeJs(probe, { cwd, ...options });
   if (!r.ok) throw new Error(`probe failed: ${r.error ?? ""} ${r.stderr_tail}`);
   return JSON.parse(r.stdout_tail.trim()) as Record<string, string>;
 }
@@ -54,7 +54,7 @@ try {
     ["default", {}],
     ["contained: true", { contained: true }],
   ] as const) {
-    const r = run(options);
+    const r = await run(options);
     check(`${label}: network modules load`, r.https === "ok" && r.net === "ok", r);
     check(`${label}: fetch is available`, r.fetch === "function", r);
     // Global WebSocket landed in Node 22; on Node 20 it does not exist,
@@ -69,22 +69,22 @@ try {
   }
 
   // --- no containment ---
-  const open = run({ contained: false });
+  const open = await run({ contained: false });
   check("contained: false: network modules load", open.https === "ok" && open.net === "ok", open);
   check("contained: false: fetch is available", open.fetch === "function", open);
   check("contained: false: environment is inherited", open.marker === marker, open);
   check("contained: false: reads outside the workspace work", open.outside === "outside-content", open);
 
   // --- errors keep working in both shapes ---
-  const boomContained = executeJs('throw new Error("boom-contained")', { cwd, contained: true });
+  const boomContained = await executeJs('throw new Error("boom-contained")', { cwd, contained: true });
   check(
     "contained: an uncaught error is reported",
     !boomContained.ok && boomContained.stderr_tail.includes("boom-contained") && !boomContained.stderr_tail.includes("Module._load"),
     boomContained.stderr_tail,
   );
-  const boomOpen = executeJs('throw new Error("boom-open")', { cwd, contained: false });
+  const boomOpen = await executeJs('throw new Error("boom-open")', { cwd, contained: false });
   check("uncontained: an uncaught error is reported", !boomOpen.ok && boomOpen.stderr_tail.includes("boom-open"), boomOpen.stderr_tail);
-  const timeoutOpen = executeJs("while (true) {}", { cwd, contained: false, timeout: 300 });
+  const timeoutOpen = await executeJs("while (true) {}", { cwd, contained: false, timeout: 300 });
   check("uncontained: the timeout still applies", !timeoutOpen.ok && timeoutOpen.timed_out, timeoutOpen);
 
   // --- VENIRA_JS_EXEC_MODE resolution ---
@@ -138,7 +138,7 @@ try {
   );
 
   // --- roadmap item 15 (P2): a snippet the agent can actually use ---
-  const esmRequire = executeJs(
+  const esmRequire = await executeJs(
     'const fs = require("node:fs"); const names = fs.readdirSync(".").length; await Promise.resolve(); console.log(names >= 0);',
     { cwd, contained: true },
   );
@@ -148,7 +148,7 @@ try {
     { error: esmRequire.error, stderr: esmRequire.stderr_tail },
   );
 
-  const topLevelReturn = executeJs("return 42;", { cwd, contained: true });
+  const topLevelReturn = await executeJs("return 42;", { cwd, contained: true });
   check(
     "a top-level return explains how to return a value",
     !topLevelReturn.ok &&
@@ -156,7 +156,7 @@ try {
     { error: topLevelReturn.error, stderr: topLevelReturn.stderr_tail.slice(0, 300) },
   );
 
-  const timedOut = executeJs("while (true) {}", { cwd, contained: true, timeout: 400 });
+  const timedOut = await executeJs("while (true) {}", { cwd, contained: true, timeout: 400 });
   check(
     "a timeout is reported as a timeout, not as a spawn error",
     !timedOut.ok &&
@@ -166,7 +166,7 @@ try {
     { error: timedOut.error, timed_out: timedOut.timed_out },
   );
 
-  const netImport = executeJs('import https from "node:https"; console.log(typeof https);', {
+  const netImport = await executeJs('import https from "node:https"; console.log(typeof https);', {
     cwd,
     contained: true,
   });
@@ -175,7 +175,7 @@ try {
     netImport.ok && netImport.stdout_tail.includes("object"),
     { error: netImport.error, stdout: netImport.stdout_tail },
   );
-  const netImportOpen = executeJs('import https from "node:https"; console.log(typeof https);', {
+  const netImportOpen = await executeJs('import https from "node:https"; console.log(typeof https);', {
     cwd,
     contained: false,
   });

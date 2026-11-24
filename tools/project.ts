@@ -12,19 +12,22 @@ import {
   WORKSPACE,
   isProtectedPath,
 } from "../lib/workspace.js";
-import { readTextFile } from "./project-codeintel.js";
+import { readTextFile, runDiffFiles, runOutlineSymbol } from "./project-codeintel.js";
 import type { RecentFilesDeps } from "./project-recent.js";
 import { dataDirFor, type HealthDeps } from "./project-health.js";
 import type { HybridDeps } from "./project-hybrid.js";
 import type { BatchDeps } from "./project-batch.js";
-import { SHELL_ELICIT, type ShellDeps } from "./project-shell.js";
+import { SHELL_ELICIT, runShell, type ShellDeps } from "./project-shell.js";
+import { runMemory } from "./project-memory.js";
 import { createWorkflowRunners } from "./project-workflow.js";
 import { createOperationRunners } from "./project-operations.js";
 import { createShellRunRegistry } from "./project-shell-registry.js";
 import { createCachedExecutor } from "./project-executor.js";
+import { runEditBatch, runReadFileBatch } from "./project-batch.js";
 import { createCodeIntelRunners } from "./project-codeintel-runners.js";
 import { createReadPlanRunner } from "./project-read-plan.js";
 import { applyDisabledTools } from "./project-tool-mode.js";
+import type { SdkDispatch } from "../lib/sdk-bridge.js";
 import { invalidateDependencyGraphCache } from "../lib/dependency-graph.js";
 import { applyToolDocs } from "./project-docs.js";
 import { createProjectSessionRuntime } from "./project-session-runtime.js";
@@ -241,12 +244,58 @@ export function registerProjectTools(server: McpServer): void {
 
   registerShellTools(server, { runOne, shellDeps });
 
+  // -------------------------------------------------------------------------
+  // JS SDK (ROADMAP_MINIMAL_MODE.md Phase 3): the internal dispatcher the
+  // `venira.*` bridge calls land on. Tool-level runners keep their own flow
+  // (shell_run = approval + elicitation; create/outline/diff/refs/snapshot/
+  // memory = their dedicated runners); every other op goes through runOne so
+  // tool policy, caches and audit stay identical to the MCP tool path.
+  // -------------------------------------------------------------------------
+  const sdkDispatch: SdkDispatch = (operation, args) => {
+    switch (operation) {
+      case "read_file":
+        // Multi-file reads run through the same batch runner the tool uses
+        // (per-item envelopes + response budget); single reads stay cached.
+        if (Array.isArray(args.requests) && args.requests.length > 0) {
+          return runReadFileBatch(
+            args.requests as Args[],
+            (typeof args.max_response_bytes_per_item === "number" ? args.max_response_bytes_per_item : MAX_BATCH_ITEM_BYTES),
+            batchDeps,
+          );
+        }
+        return runOne("read_file", args as Args);
+      case "edit_file":
+        // edits[] = the atomic multi-file runner (all-or-nothing with rollback).
+        if (Array.isArray(args.edits) && args.edits.length > 0) {
+          return runEditBatch(args as Args, batchDeps, "edit_file");
+        }
+        return runOne("edit_file", args as Args);
+      case "shell_run":
+        return runShell(args as Args, server, shellDeps);
+      case "memory":
+        return runMemory(args as Args);
+      case "create":
+        return runCreate(args as Args);
+      case "outline_symbol":
+        return runOutlineSymbol(args as Args);
+      case "diff_files":
+        return runDiffFiles(args as Args);
+      case "symbol_references":
+        return runSymbolReferences(args as Args);
+      case "snapshot":
+        return workflowRunners.runSnapshot(args as Args);
+      default:
+        return runOne(operation, args as Args);
+    }
+  };
+
   registerOpsTools(server, {
     runOne,
     runCreate,
     healthDeps,
     auditDbPath,
     shellDeps,
+    sdkDispatch,
     clearCaches: () => {
       cache.invalidateAllCaches();
       invalidateDependencyGraphCache();

@@ -10,6 +10,7 @@ import { runReadAudit } from "./project-audit.js";
 import type { Args } from "./project-cache.js";
 import { runHealth, type HealthDeps } from "./project-health.js";
 import { runExecuteJs } from "./project-jsexec.js";
+import type { SdkDispatch } from "../lib/sdk-bridge.js";
 import { runMemory } from "./project-memory.js";
 import { config, flag01, path_, reason_ } from "./project-schema.js";
 import { runCancelShellSession, type ShellDeps } from "./project-shell.js";
@@ -26,12 +27,19 @@ export type OpsToolsDeps = {
   healthDeps: HealthDeps;
   auditDbPath: () => string;
   shellDeps: ShellDeps;
+  /**
+   * JS SDK internal dispatcher (ROADMAP_MINIMAL_MODE.md Phase 3): when set,
+   * execute_js injects the frozen `venira` global and serves its calls through
+   * this dispatcher (same policy + audit as the tool path). Undefined keeps
+   * execute_js a plain snippet runner.
+   */
+  sdkDispatch?: SdkDispatch;
   /** Drops the tools-layer read/list/search caches; called after a successful workspace switch. */
   clearCaches: () => void;
 };
 
 export function registerOpsTools(server: McpServer, deps: OpsToolsDeps): void {
-  const { runOne, runCreate, healthDeps, auditDbPath, shellDeps, clearCaches } = deps;
+  const { runOne, runCreate, healthDeps, auditDbPath, shellDeps, sdkDispatch, clearCaches } = deps;
   server.registerTool(
     "create",
     {
@@ -131,7 +139,7 @@ export function registerOpsTools(server: McpServer, deps: OpsToolsDeps): void {
             .describe("Wait up to this many seconds (max 45; fractional ok) for the human to grant the approval and run in the same call."),
         },
       },
-      (args) => runExecuteJs(args as Args),
+      (args) => runExecuteJs(args as Args, sdkDispatch),
     );
   }
 
