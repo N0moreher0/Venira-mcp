@@ -756,7 +756,13 @@ export async function opShellStatus(
         truncated: run.stdout_full.length >= MAX_OUTPUT_BYTES || run.stderr_full.length >= MAX_OUTPUT_BYTES,
         dropped_bytes: run.dropped_bytes,
         timed_out: run.timed_out,
-        // The envelope's elapsed_ms is the call; this one is the run.
+        // The envelope's elapsed_ms is the call; these are the run.
+        // duration_ms is the command's true runtime (start -> finish): it
+        // freezes at completion instead of growing with the record's age in
+        // the run map (minimal-mode roadmap P2: a finished `echo` polled
+        // minutes later used to report ~37 s). run_elapsed_ms stays for
+        // older clients.
+        duration_ms: (run.finished_at ?? Date.now()) - run.started_at,
         run_elapsed_ms: Date.now() - run.started_at,
       },
     },

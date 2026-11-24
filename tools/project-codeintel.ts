@@ -53,8 +53,16 @@ export async function runOutlineSymbol(args: Args): Promise<ToolResult> {
   const includeClasses = args.include_classes !== false;
   const symbols = extractSymbols(text, typeof args.language === "string" ? args.language : undefined, includeFunctions, includeClasses);
   const outline = buildOutline(text);
+  // Minimal-mode roadmap P2: `ok:true` + `status:"completed"` + `symbols:[]`
+  // on a non-source file (markdown, text, config) read as "this file has no
+  // symbols". The extractor only understands C-like source, so an empty
+  // result on a non-source extension is reported as `status:"unsupported"`
+  // instead - still ok:true (the call worked), but the model no longer
+  // mistakes the file for symbol-free source.
+  const SOURCE_FILE_EXT = /\.(?:[cm]?[jt]sx?|py|pyw|rs|go|java|kt|kts|scala|swift|c|h|cpp|hpp|cc|hh|cs|rb|php|pl|pm|lua|dart|m|mm|sql|sh|bash|zsh|ps1|psm1|vue|svelte|astro|r|jl|groovy)$/i;
+  const notSource = symbols.length === 0 && !SOURCE_FILE_EXT.test(rel);
   const response: RustResponse = {
-    status: "completed",
+    status: notSource ? "unsupported" : "completed",
     result: {
       kind: "outline_symbol",
       data: {
@@ -71,9 +79,12 @@ export async function runOutlineSymbol(args: Args): Promise<ToolResult> {
     // none" - it may just not be source code.
     ...(symbols.length === 0
       ? {
-          hint:
-            "No symbols found. The extractor understands C-like source (functions, classes, types, interfaces). " +
-            "If the file is not source code, use search instead.",
+          hint: notSource
+            ? "outline_symbol does not parse this file type (the extractor understands C-like source only), " +
+              "so no symbol outline exists. No symbols found is not a fact about the file's structure; " +
+              "use search to inspect its content instead."
+            : "No symbols found. The extractor understands C-like source (functions, classes, types, interfaces). " +
+              "If the file is not source code, use search instead.",
         }
       : {}),
   };

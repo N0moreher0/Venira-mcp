@@ -168,7 +168,23 @@ await check("outline_symbol on a non-source file explains the empty result", asy
   fs.writeFileSync(path.join(workspace, "notes.txt"), "just some notes\nnothing structured\n");
   const result = await codeintel.runOutlineSymbol({ relative_path: "notes.txt" });
   const text = JSON.stringify(result);
-  assert.match(text, /No symbols found/);
+  // Minimal-mode roadmap P2: a non-source file must not read as "this file
+  // has no symbols" - the status says unsupported, not completed. The
+  // envelope is nested inside the MCP content text, so parse it rather than
+  // matching escaped quotes.
+  const parsedNotes = JSON.parse((result as { content?: { text?: string }[] }).content?.[0]?.text ?? "{}") as { status?: string; hint?: string };
+  assert.equal(parsedNotes.status, "unsupported");
+  assert.match(parsedNotes.hint ?? text, /No symbols found/);
+});
+
+await check("outline_symbol on a source file without symbols stays completed", async () => {
+  const codeintel = (await import("../tools/project-codeintel.js")) as typeof import("../tools/project-codeintel.js");
+  fs.writeFileSync(path.join(workspace, "empty-src.ts"), "// only a comment\n");
+  const result = await codeintel.runOutlineSymbol({ relative_path: "empty-src.ts" });
+  const text = JSON.stringify(result);
+  const parsedSrc = JSON.parse((result as { content?: { text?: string }[] }).content?.[0]?.text ?? "{}") as { status?: string; hint?: string };
+  assert.equal(parsedSrc.status, "completed");
+  assert.match(parsedSrc.hint ?? text, /No symbols found/);
 });
 
 await check("outline_symbol reports a workspace-relative path", async () => {
@@ -291,6 +307,12 @@ await check("shell_status is its own kind and reports the run duration", async (
   const data = status.result?.data as Record<string, unknown>;
   assert.equal(typeof data.run_elapsed_ms, "number");
   assert.equal(data.elapsed_ms, undefined, "the envelope carries the call duration");
+  // Minimal-mode roadmap P2: duration_ms is the command runtime; it must not
+  // grow with the record's age, so a second poll freezes it.
+  assert.equal(typeof data.duration_ms, "number");
+  const status2 = await shellModule.opShellStatus({ run_id: runId });
+  const data2 = status2.result?.data as Record<string, unknown>;
+  assert.equal(data2.duration_ms, data.duration_ms, "duration_ms freezes at completion");
 });
 
 await check("a dry run with the policy off shows what balanced would decide", async () => {
