@@ -358,19 +358,22 @@ export function applyToolDocs(server: McpServer): void {
   server.registerTool = ((name: string, cfg: RegisterConfig, ...rest: unknown[]) => {
     const doc = TOOL_DOCS[name];
     if (name === "execute_js" && getToolMode() === "minimal") {
-      const base =
-        doc
-          ? renderDescription(aboutFor(name, doc), { use_when: doc.use, avoid_when: doc.avoid, output_kind: doc.out })
-          : cfg.description;
+      // The default Use/Avoid text points at shell_run and file tools. This mode does not register them.
+      const about =
+        "Run a Node.js snippet in the workspace. Top-level await works. This mode has no separate file or shell tools: call venira.* (read, search, list, edit, write, git, snapshot, shell) and batch them in this one snippet.";
+      const use =
+        "any file, search, edit, git, snapshot or command. Keep each snippet batched. Print a short summary, not whole files.";
+      const avoid =
+        "one venira.* call per turn, or assuming another tool exists outside this one. Background commands return run_id and kill_key; poll them next turn with the outer shell_status tool.";
+      const out =
+        "stdout_tail, stderr_tail, exit_code, timed_out. ok=true only means the snippet process ran: check exit_code. Inside the snippet, venira.* returns full data (text, hits, entries), not a compact preview.";
       const merged: RegisterConfig = {
         ...cfg,
-        description: `${base}\n\n${sdkContractDts()}`,
-        _meta: doc
-          ? {
-              ...(cfg._meta ?? {}),
-              venira: { ...(cfg._meta?.venira ?? {}), use_when: doc.use, avoid_when: doc.avoid, output_kind: doc.out },
-            }
-          : cfg._meta,
+        description: `${renderDescription(about, { use_when: use, avoid_when: avoid, output_kind: out })}\n\n${sdkContractDts()}`,
+        _meta: {
+          ...(cfg._meta ?? {}),
+          venira: { ...(cfg._meta?.venira ?? {}), use_when: use, avoid_when: avoid, output_kind: out },
+        },
       };
       return original(name, merged, ...rest);
     }

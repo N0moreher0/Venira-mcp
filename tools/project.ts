@@ -5,6 +5,7 @@ import {
   errorEnvelope,
   newRequestId,
   toolResult,
+  withOutputMode,
 } from "../lib/output.js";
 import type { ToolResult } from "../lib/output.js";
 import {
@@ -251,7 +252,9 @@ export function registerProjectTools(server: McpServer): void {
   // memory = their dedicated runners); every other op goes through runOne so
   // tool policy, caches and audit stay identical to the MCP tool path.
   // -------------------------------------------------------------------------
-  const sdkDispatch: SdkDispatch = (operation, args) => {
+  // Full envelopes for the snippet. Compact still applies to the execute_js result the client sees.
+  const sdkDispatch: SdkDispatch = (operation, args) =>
+    withOutputMode("full", () => {
     switch (operation) {
       case "read_file":
         // Multi-file reads run through the same batch runner the tool uses
@@ -287,7 +290,7 @@ export function registerProjectTools(server: McpServer): void {
       default:
         return runOne(operation, args as Args);
     }
-  };
+    });
 
   registerOpsTools(server, {
     runOne,

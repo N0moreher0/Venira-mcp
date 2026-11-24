@@ -4,6 +4,7 @@
  * and on failure:
  *   { ok:false, status:"failed", request_id, kind, error:{code, message, retryable}, hint }
  */
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomBytes } from "node:crypto";
 import { envChoice, envFlag } from "./env.js";
 
@@ -11,6 +12,18 @@ export type OutputMode = "full" | "compact";
 
 export const OUTPUT_MODE: OutputMode = envChoice("VENIRA_OUTPUT_MODE", "full", ["full", "compact"]);
 export const PRETTY = envFlag("VENIRA_PRETTY", false);
+
+// SDK calls opt into "full" so a snippet sees complete tool data. Compact trimming
+// stays on the MCP result the client reads, not on the values the snippet consumes.
+const outputModeOverride = new AsyncLocalStorage<OutputMode>();
+
+export function withOutputMode<T>(mode: OutputMode, fn: () => T): T {
+  return outputModeOverride.run(mode, fn);
+}
+
+function activeOutputMode(): OutputMode {
+  return outputModeOverride.getStore() ?? OUTPUT_MODE;
+}
 
 export const stringify = (value: unknown): string =>
   PRETTY ? JSON.stringify(value, null, 2) : JSON.stringify(value);
@@ -328,6 +341,30 @@ export function previewData(kind: string, data: unknown): unknown {
     if (typeof data.hint === "string") out.hint = data.hint;
     return out;
   }
+  if (kind === "git_status") {
+    // The last kind compacted as sliced JSON text (preview_text): on a busy
+    // workspace the cut string hid branch/counts and could not be parsed. A
+    // short object keeps the summary readable; files keep a bounded preview.
+    const files = Array.isArray(data.files) ? (data.files as Loose[]) : [];
+    const counts = isObject(data.counts) ? data.counts : {};
+    return {
+      branch: data.branch ?? null,
+      detached: data.detached === true,
+      ...(typeof data.upstream === "string"
+        ? { upstream: data.upstream, upstream_gone: data.upstream_gone === true }
+        : {}),
+      ahead: typeof data.ahead === "number" ? data.ahead : 0,
+      behind: typeof data.behind === "number" ? data.behind : 0,
+      clean: data.clean === true,
+      counts,
+      file_count: files.length,
+      files_preview: files
+        .slice(0, 20)
+        .map((f) => ({ path: f.path, kind: f.kind, status: f.status })),
+      files_omitted: Math.max(0, files.length - 20),
+      ...(typeof data.reason === "string" ? { reason: data.reason } : {}),
+    };
+  }
   if (kind === "shell_run") {
     const tail = (value: unknown) =>
       typeof value === "string" ? truncateUtf8(value.slice(-2000), PREVIEW_BYTES).text : value;
@@ -335,6 +372,24 @@ export function previewData(kind: string, data: unknown): unknown {
       ...data,
       ...(data.stdout_tail !== undefined ? { stdout_tail: tail(data.stdout_tail), stderr_tail: tail(data.stderr_tail) } : {}),
       ...(data.stdout !== undefined ? { stdout: tail(data.stdout), stderr: tail(data.stderr) } : {}),
+    };
+  }
+  if (kind === "js_execute") {
+    // Snippets print the conclusion last. Generic preview kept a JSON head and
+    // the field was still called stdout_tail, so the useful lines were the ones cut.
+    const stdoutRaw = typeof data.stdout_tail === "string" ? data.stdout_tail : typeof data.stdout === "string" ? data.stdout : "";
+    const stderrRaw = typeof data.stderr_tail === "string" ? data.stderr_tail : typeof data.stderr === "string" ? data.stderr : "";
+    const stdout = truncateUtf8(stdoutRaw.slice(-6000), PREVIEW_BYTES);
+    const stderr = truncateUtf8(stderrRaw.slice(-2000), PREVIEW_BYTES);
+    return {
+      ok: data.ok === true,
+      exit_code: data.exit_code ?? null,
+      timed_out: data.timed_out === true,
+      stdout_tail: stdout.text,
+      stderr_tail: stderr.text,
+      stdout_bytes: Buffer.byteLength(stdoutRaw, "utf8"),
+      stderr_bytes: Buffer.byteLength(stderrRaw, "utf8"),
+      preview_truncated: stdout.truncated || stderr.truncated || stdout.text.length < stdoutRaw.length || stderr.text.length < stderrRaw.length,
     };
   }
   return data;
@@ -446,7 +501,7 @@ export function buildEnvelope(
   // whole, so compact mode never previews it.
   const neverPreviewKinds = new Set(["memory"]);
   const shouldPreview =
-    OUTPUT_MODE === "compact" &&
+    activeOutputMode() === "compact" &&
     !neverPreviewKinds.has(kind) &&
     (originalBytes > SUMMARY_THRESHOLD_BYTES || forcePreviewKinds.has(kind));
   if (shouldPreview) {
@@ -819,13 +874,13 @@ export function errorEnvelope(
   const hint = options.hint ?? recovery?.hint ?? failure.hint;
   const messageBytes = Buffer.byteLength(failure.message, "utf8");
   const messagePreview =
-    OUTPUT_MODE === "compact" && messageBytes > SUMMARY_THRESHOLD_BYTES
+    activeOutputMode() === "compact" && messageBytes > SUMMARY_THRESHOLD_BYTES
       ? truncateUtf8(failure.message, PREVIEW_BYTES)
       : undefined;
   const failureData = options.data !== undefined ? options.data : failure.data;
   const failureDataBytes = failureData === undefined ? 0 : serializedBytes(failureData);
   const compactFailureData =
-    OUTPUT_MODE === "compact" && failureData !== undefined && failureDataBytes > SUMMARY_THRESHOLD_BYTES
+    activeOutputMode() === "compact" && failureData !== undefined && failureDataBytes > SUMMARY_THRESHOLD_BYTES
       ? genericPreview(failureData, failureDataBytes)
       : undefined;
   const compacted = messagePreview?.truncated === true || compactFailureData !== undefined;

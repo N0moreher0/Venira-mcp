@@ -84,6 +84,9 @@ await check("contract: the .d.ts block renders every core function + the example
   const dts = registry.sdkContractDts();
   assert.ok(dts.includes("declare const venira"), "the contract must declare the global");
   assert.ok(dts.includes("venira.snapshot"), "the example must show batching");
+  assert.ok(dts.includes("hits.data.hits"), "the example must read data.hits");
+  assert.equal(dts.includes("data.matches"), false, "the example must not teach data.matches");
+  assert.ok(dts.includes("data.text") && dts.includes("data.entries"), "the contract must name the fields a snippet reads");
   for (const entry of registry.SDK_API_CORE) {
     assert.ok(dts.includes(` ${entry.name}(`), `contract must list ${entry.name}`);
   }
@@ -353,9 +356,80 @@ await check("contract injection: minimal carries the SDK contract, other modes d
   const deflt = captureExecuteJs("default");
   assert.ok(minimal.includes("declare const venira"), "minimal must ship the contract");
   assert.ok(minimal.includes("## JS SDK contract"), "the contract header must be present");
+  assert.equal(minimal.includes("shell_run"), false, "minimal must not point at a tool it does not register");
+  assert.equal(minimal.includes("file tools"), false, "minimal must not point at file tools");
+  assert.ok(deflt.includes("shell_run") && deflt.includes("file tools"), "other modes keep the plain Avoid text");
   assert.ok(!deflt.includes("declare const venira"), "default must keep the plain description");
   const expert = captureExecuteJs("expert");
   assert.ok(!expert.includes("declare const venira"), "expert must keep the plain description");
+});
+
+await check("output: SDK full override skips compact; js_execute compact keeps the stdout tail", () => {
+  const hits = [{ relative_path: "a.ts", line_number: 1, snippet: "fetchData" }];
+  const response = { status: "completed", result: { kind: "search", data: { hits, complete: true } } };
+  const compact = output.withOutputMode("compact", () => output.buildEnvelope("search", response));
+  assert.equal(compact.trimmed, true);
+  assert.ok(Array.isArray((compact.data as { matches_preview?: unknown }).matches_preview));
+  const full = output.withOutputMode("compact", () =>
+    output.withOutputMode("full", () => output.buildEnvelope("search", response)),
+  );
+  assert.equal(full.trimmed, undefined);
+  assert.deepEqual((full.data as { hits?: unknown }).hits, hits);
+  const stdout = "HEAD_MARKER\n" + "y".repeat(12_000) + "\nTAIL_MARKER";
+  const js = output.withOutputMode("compact", () =>
+    output.buildEnvelope("execute_js", {
+      status: "completed",
+      result: { kind: "js_execute", data: { ok: true, stdout_tail: stdout, stderr_tail: "", exit_code: 0, timed_out: false } },
+    }),
+  );
+  const data = js.data as { stdout_tail?: string; preview_text?: string; preview_truncated?: boolean };
+  assert.equal(data.preview_text, undefined);
+  assert.equal(data.preview_truncated, true);
+  assert.ok(data.stdout_tail?.includes("TAIL_MARKER"), "compact js_execute must keep the tail");
+  assert.equal(data.stdout_tail?.includes("HEAD_MARKER"), false, "the head is what compact may drop");
+});
+
+await check("output: compact git_status is a short object, not sliced JSON", () => {
+  // 100 entries x ~107 B ≈ 10.7 KB > SUMMARY_THRESHOLD_BYTES (8 KiB), so compact
+  // mode actually enters the preview path (a small status stays full, by design).
+  const files = Array.from({ length: 100 }, (_, i) => ({
+    path: `f${i}.ts`,
+    staged: false,
+    unstaged: true,
+    untracked: false,
+    unmerged: false,
+    status: "M",
+    kind: "modified",
+  }));
+  const response = {
+    status: "completed",
+    result: {
+      kind: "git_status",
+      data: {
+        branch: "main",
+        detached: false,
+        upstream: "origin/main",
+        upstream_gone: false,
+        ahead: 1,
+        behind: 2,
+        clean: false,
+        counts: { files: 100, staged: 0, unstaged: 100, untracked: 0, unmerged: 0, added: 0, modified: 100, deleted: 0, renamed: 0, typechange: 0 },
+        files,
+        reason: "check",
+      },
+    },
+  };
+  const env = output.withOutputMode("compact", () => output.buildEnvelope("git_status", response));
+  const data = env.data as Record<string, unknown>;
+  assert.equal(data.preview_text, undefined, "git_status must not fall back to the sliced-JSON preview");
+  assert.equal(data.branch, "main");
+  assert.equal(data.ahead, 1);
+  assert.equal(data.behind, 2);
+  assert.equal(data.file_count, 100);
+  assert.equal((data.files_preview as unknown[]).length, 20, "files_preview is bounded at 20");
+  assert.equal(data.files_omitted, 80);
+  assert.equal((data.counts as { modified?: number }).modified, 100);
+  assert.equal((data.files_preview as Array<{ path?: string }>)[0].path, "f0.ts");
 });
 
 fs.rmSync(tmpWorkspace, { recursive: true, force: true });

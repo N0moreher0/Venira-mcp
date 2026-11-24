@@ -108,7 +108,7 @@ export const SDK_API_CORE: readonly SdkApiEntry[] = [
   {
     name: "shell",
     signature: 'shell(cmd: string | ShellReq | ShellReq[], opts?: ShellOpts): Promise<Env | Env[]>',
-    doc: "Run through the FULL shell_run pipeline (policy, Secretlint, audit). Background by default.",
+    doc: "Run a command through the same policy, Secretlint and audit path as every other call. Background by default; pass { background: 0 } to wait for stdout.",
   },
   {
     name: "shellStatus",
@@ -209,7 +209,7 @@ export const SDK_HELP_GROUPS: readonly { topic: string; title: string; entries: 
 const SDK_EXAMPLE = `Example - five operations in ONE execute_js turn:
   const snap = await venira.snapshot("create", { label: "before refactor" });
   const hits = await venira.search("fetchData", { relative_path: "src" });
-  const paths = (hits.data.matches ?? []).map((m) => m.relative_path);
+  const paths = (hits.data.hits ?? []).map((m) => m.relative_path);
   const files = await venira.read(paths);                       // batch read
   const edit = await venira.edit([{ relative_path: paths[0], old_text: "fetchData()", new_text: "fetchRecords()" }], "rename API");
   console.log(snap.ok, hits.ok, files.ok, edit.ok);`;
@@ -224,6 +224,13 @@ export function sdkContractDts(): string {
   lines.push("`ok:false` is a VALUE (inspect and continue); policy denials throw with the rule id. Wrong argument types throw");
   lines.push("an error that repeats the exact expected signature. Background shells keep `run_id` + `kill_key` alive across");
   lines.push("turns: poll/cancel them from the NEXT turn with the outer `shell_status` tool.");
+  lines.push("");
+  lines.push("Envelope `data` fields inside a snippet (full; compact trimming does not apply to venira.*):");
+  lines.push("- read: `data.text`. Several paths: `data.responses[]`, and each item with ok carries `data.text`.");
+  lines.push("- search: `data.hits[]` with `relative_path`, `line_number`, `snippet`. `data.complete === false` means the limit cut the list.");
+  lines.push("- list: `data.entries[]` with `relative_path` and `kind`. `limit` is honored (max 200).");
+  lines.push("- shell: `data.stdout`, `data.stderr`, `data.run_id`, `data.kill_key`, `data.running`, `data.exit_code`.");
+  lines.push("- git status: `data.branch`, `data.ahead`, `data.behind`, `data.files[]`.");
   lines.push("");
   lines.push("```ts");
   lines.push("declare const venira: {");

@@ -83,8 +83,8 @@ npm run bench:mcp          # end-to-end numbers for PRs
   4. tool counts changed → update the README count strings **and**
      `scripts/check-docs.ts` (`EXPECTED_DEFAULT_TOOLS` / `EXPECTED_EXPERT_TOOLS`) together.
      Current contract: `minimal` 2 / `core` 18 / `default` 31 / `expert` 44
-     (`scripts/schema-budget.json`: minimal 7 588 B - the `execute_js` description carries
-     the JS SDK contract in that mode -, default 53 226 B, expert 72 422 B
+     (`scripts/schema-budget.json`: minimal 8 347 B - the `execute_js` description carries
+     the JS SDK contract in that mode -, default 53 221 B, expert 72 417 B
      with `execute_js` registered). `minimal` and `core` are allowlists
      (`MINIMAL_TOOLS` / `CORE_TOOLS` in `tools/project-tool-mode.ts`).
 - **Version bump** — `package.json`, `package-lock.json` (both `version` and `packages[""].version`),
