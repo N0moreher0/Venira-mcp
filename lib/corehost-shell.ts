@@ -33,6 +33,12 @@ import {
 } from "./shell-invocation.js";
 import { shellRuns, pruneShellRuns, TAIL_LIMIT, MAX_OUTPUT_BYTES, trimTail, appendCapped, buildShellEnv, normalizeSecretEnv, killTree, SHELL_EXIT_EARLY, SHELL_MAX_TIMEOUT_MS, SHELL_TIMEOUT_POLICY, type ShellRun } from "./corehost-shell-state.js";
 
+/** A surviving grandchild can keep the stdio pipes open so close never
+ *  fires: after exit, give the pipes this long to drain, then destroy them
+ *  and release the caller. Also bounds the finished-run wait on the async
+ *  shell path (see opShellRun). */
+const CLOSE_GRACE_MS = 3000;
+
 function defaultShellForPlatform(): string {
   return hostDefaultShell();
 }
@@ -520,7 +526,6 @@ export async function opShellRun(
     // stdio pipes open, so 'close' never fires and a foreground caller would
     // block until the MCP request itself times out. Give the pipes a short
     // grace period to drain, then destroy them and release the caller.
-    const CLOSE_GRACE_MS = 3000;
     const stuckPipeTimer = setTimeout(() => {
       child.stdout?.destroy();
       child.stderr?.destroy();
@@ -618,6 +623,20 @@ export async function opShellRun(
       setTimeout(check, 50);
       setTimeout(resolve, 2000);
     });
+    // A fast background command (echo, git status, git add) can finish between
+    // two poll ticks: exit already set running=false / exit_code, but the
+    // tails are only trimmed by close (stdio flushed). Returning inside that
+    // window reported running:false with empty stdout_tail/stderr_tail forever
+    // (roadmap P1), while the same command with background:0 always carried
+    // full output. Wait for close when the run is already done: the stuck-
+    // pipe grace timer in the exit handler resolves it, so this cannot hang;
+    // the small extra cap is only insurance.
+    if (!run.running && run.exit_code !== null) {
+      await Promise.race([
+        run.closedPromise,
+        new Promise<void>((resolve) => setTimeout(resolve, CLOSE_GRACE_MS + 1_000)),
+      ]);
+    }
   }
 
   // The shell binary is not installed: nothing ran, so say so instead of returning exit_code -1.
