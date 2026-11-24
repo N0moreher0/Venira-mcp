@@ -90,7 +90,7 @@ const executeCached = createCachedExecutor({
   execute,
   rememberEdit: () => {},
   clearRecentEdits: () => {},
-  trackShell: () => {},
+  trackShell: () => ({ finished: false, workspace_effect: "unknown" }),
 });
 
 let checks = 0;

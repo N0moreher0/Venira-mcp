@@ -101,6 +101,7 @@
     "test:config-posture": "tsx scripts/test-config-posture.ts",
     "test:js-executor": "tsx scripts/test-js-executor.ts",
     "test:cache-layer": "tsx scripts/test-cache-layer.ts",
+    "test:cache-epoch": "tsx scripts/test-cache-epoch.ts",
     "test:env-registry": "tsx scripts/test-env-registry.ts",
     "test:shell-policy-adversarial": "tsx scripts/test-shell-policy-adversarial.ts",
     "test:shell-policy-fuzz": "tsx scripts/test-shell-policy-fuzz.ts",

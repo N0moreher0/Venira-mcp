@@ -10,13 +10,15 @@ import {
 } from "../lib/workspace.js";
 import type { RustResponse } from "../lib/output.js";
 import type { Args, Execution, CacheLayer } from "./project-cache.js";
+import { classifyWorkspaceEffect } from "./project-shell-registry.js";
+import type { ShellTrackResult, WorkspaceEffect } from "./project-shell-registry.js";
 
 export type CachedExecutorDeps = {
   cache: CacheLayer;
   execute: (operation: string, args: Args) => Promise<RustResponse>;
   rememberEdit: (absolutePath: string) => void;
   clearRecentEdits: () => void;
-  trackShell: (operation: string, data: unknown) => void;
+  trackShell: (operation: string, data: unknown, workspaceEffect?: WorkspaceEffect) => ShellTrackResult;
 };
 
 const MUTATING = new Set(["write_file", "edit_file", "delete_path", "apply_patch"]);
@@ -30,6 +32,15 @@ const isGitWorktreeMutation = (operation: string, args: Args): boolean => {
   if (operation === "git_stash") return !["list", "show"].includes(rawAction ?? "list");
   return false;
 };
+
+/** C2 shell epoch modes: always is the safe legacy default, auto skips verified read-only runs, off disables shell invalidation. */
+type ShellEpochMode = "always" | "auto" | "off";
+function shellEpochMode(): ShellEpochMode {
+  const raw = process.env.VENIRA_SHELL_EPOCH?.trim().toLowerCase();
+  if (["0", "false", "off"].includes(raw ?? "")) return "off";
+  if (raw === "auto") return "auto";
+  return "always";
+}
 
 /** 0|1 integer or boolean dry_run shapes (apply_patch). */
 function isDryRunFlag(value: unknown): boolean {
@@ -211,7 +222,18 @@ export function createCachedExecutor({
           invalidateDependencyGraphCache();
         }
         if (operation.startsWith("shell_") || operation === "cancel") {
-          trackShell(operation, response.result?.data);
+          const workspaceEffect = operation === "shell_run"
+            ? classifyWorkspaceEffect(args.command, args.shell)
+            : undefined;
+          const tracked = trackShell(operation, response.result?.data, workspaceEffect);
+          const mode = shellEpochMode();
+          const shouldBump = tracked?.finished && (mode === "always" ||
+            (mode === "auto" && tracked.workspace_effect !== "read_only"));
+          if (shouldBump) {
+            cache.bumpEpoch();
+            clearRecentEdits();
+            invalidateDependencyGraphCache();
+          }
         }
         execution = { response, cached: false };
       }

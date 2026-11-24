@@ -54,9 +54,17 @@ type CachedRead = {
   bytes: number;
 };
 
-type CachedTtl = { at: number; response: RustResponse; bytes: number };
+// C1/C2 (ROADMAP_CACHE): `at` slides on hit, `born` is the hard-ceiling clock, `epoch` is the workspace epoch at store time.
+type CachedTtl = { at: number; born: number; epoch: number; response: RustResponse; bytes: number };
 
-type Counter = { hits: number; misses: number };
+type Counter = { hits: number; misses: number; slided_hits?: number; ceiling_expired?: number; epoch_expired?: number };
+
+/** Hard lifetime of a TTL entry. VENIRA_CACHE_MAX_AGE_MS=0 turns sliding off (absolute TTL, the pre-C1 behaviour). */
+function maxAgeFor(ttlMs: number): number {
+  const raw = process.env.VENIRA_CACHE_MAX_AGE_MS;
+  if (raw !== undefined && raw.trim() !== "" && Number.isFinite(Number(raw)) && Number(raw) >= 0) return Number(raw);
+  return ttlMs * 10;
+}
 
 /** Cache types that `cache_clear` can clear in this module. */
 export type ClearableCache = "read" | "info" | "list" | "search" | "recent" | "negative";
@@ -82,17 +90,19 @@ export function createCacheLayer(deps: CacheDeps) {
 
   let readBytes = 0;
   let infoBytes = 0;
+  /** Workspace epoch (C2): bumped by every mutation and by finished shell runs; TTL entries from older epochs are dead. */
+  let epoch = 0;
 
   const cacheStats = {
     read: { hits: 0, misses: 0 },
     info: { hits: 0, misses: 0 },
-    list: { hits: 0, misses: 0 },
-    search: { hits: 0, misses: 0 },
+    list: { hits: 0, misses: 0, slided_hits: 0, ceiling_expired: 0, epoch_expired: 0 } as Counter,
+    search: { hits: 0, misses: 0, slided_hits: 0, ceiling_expired: 0, epoch_expired: 0 } as Counter,
     // symbol_references (workspace) uses a dedicated cache (keyed on the inner
     // search args) because the host reports complete=false when it stops at the
     // hit cap, and searchCache only stores complete results.
-    references: { hits: 0, misses: 0 },
-    recent: { hits: 0, misses: 0 },
+    references: { hits: 0, misses: 0, slided_hits: 0, ceiling_expired: 0, epoch_expired: 0 } as Counter,
+    recent: { hits: 0, misses: 0, slided_hits: 0, ceiling_expired: 0, epoch_expired: 0 } as Counter,
   };
 
   /** Age of the oldest entry in the negative-read cache (ms), 0 when empty. */
@@ -327,10 +337,30 @@ export function createCacheLayer(deps: CacheDeps) {
       counter.misses += 1;
       return null;
     }
-    if (Date.now() - entry.at > ttlMs) {
+    const now = Date.now();
+    if (entry.epoch !== epoch) {
+      map.delete(key);
+      counter.epoch_expired = (counter.epoch_expired ?? 0) + 1;
+      counter.misses += 1;
+      return null;
+    }
+    const maxAge = maxAgeFor(ttlMs);
+    const sliding = maxAge > 0;
+    if (sliding && now - entry.born > maxAge) {
+      map.delete(key);
+      counter.ceiling_expired = (counter.ceiling_expired ?? 0) + 1;
+      counter.misses += 1;
+      return null;
+    }
+    if (now - entry.at > ttlMs) {
       map.delete(key);
       counter.misses += 1;
       return null;
+    }
+    // Hit: counts as "slided" when absolute TTL (pre-C1) would already have expired this entry.
+    if (sliding) {
+      if (now - entry.born > ttlMs) counter.slided_hits = (counter.slided_hits ?? 0) + 1;
+      entry.at = now;
     }
     map.delete(key);
     map.set(key, entry);
@@ -338,10 +368,13 @@ export function createCacheLayer(deps: CacheDeps) {
     return entry.response;
   }
 
-  function ttlStore(map: Map<string, CachedTtl>, key: string, response: RustResponse): void {
+  function ttlStore(map: Map<string, CachedTtl>, key: string, response: RustResponse, storeEpoch: number = epoch): void {
+    // The workspace changed while the backend call was running: the response may predate the change, do not cache it.
+    if (storeEpoch !== epoch) return;
     const bytes = stringify(response).length;
     if (bytes > 1024 * 1024) return;
-    map.set(key, { at: Date.now(), response, bytes });
+    const now = Date.now();
+    map.set(key, { at: now, born: now, epoch: storeEpoch, response, bytes });
     let total = 0;
     for (const e of map.values()) total += e.bytes;
     while (map.size > TTL_CACHE_ENTRIES || total > TTL_CACHE_BYTES) {
@@ -357,8 +390,9 @@ export function createCacheLayer(deps: CacheDeps) {
     const key = `${absolutePath}\u0000${args.depth ?? ""}\u0000${args.limit ?? ""}\u0000${args.include_ignored === true ? 1 : 0}`;
     const cached = ttlLookup(listCache, key, LIST_CACHE_MS, cacheStats.list);
     if (cached) return { response: cached, cached: true };
+    const startEpoch = epoch;
     const response = await execute("list_files", args);
-    ttlStore(listCache, key, response);
+    ttlStore(listCache, key, response, startEpoch);
     return { response, cached: false };
   }
 
@@ -375,11 +409,12 @@ export function createCacheLayer(deps: CacheDeps) {
     if (inFlight) return await inFlight;
 
     const promise = (async () => {
+      const startEpoch = epoch;
       const response = await execute("search", args);
       // Cache any COMPLETE result (including zero-hit).
       const data = response.result?.data as { complete?: boolean; hits?: unknown[] } | undefined;
       if (data?.complete !== false) {
-        ttlStore(searchCache, key, response);
+        ttlStore(searchCache, key, response, startEpoch);
       }
       return { response, cached: false };
     })();
@@ -413,6 +448,7 @@ export function createCacheLayer(deps: CacheDeps) {
   }
 
   function invalidateListCaches(): void {
+    epoch += 1;
     listCache.clear();
     searchCache.clear();
     referencesCache.clear();
@@ -473,6 +509,7 @@ export function createCacheLayer(deps: CacheDeps) {
       return total === 0 ? null : Math.round((counter.hits / total) * 1000) / 1000;
     };
     return {
+      epoch,
       read: {
         entries: readCache.size,
         bytes: readBytes,
@@ -524,6 +561,9 @@ export function createCacheLayer(deps: CacheDeps) {
     searchCached,
     invalidatePath,
     invalidateListCaches,
+    /** C2: a finished shell run (or any out-of-band change) kills every TTL entry; read/info stay stat-validated. */
+    bumpEpoch: invalidateListCaches,
+    getEpoch: (): number => epoch,
     invalidateAllCaches,
     clear,
     report,

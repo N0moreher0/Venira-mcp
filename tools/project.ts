@@ -123,7 +123,7 @@ const executeCached = createCachedExecutor({
   execute: (operation, args) => execute(operation, args),
   rememberEdit,
   clearRecentEdits: () => recentEdits.clear(),
-  trackShell: (operation, data) => shellRegistry.track(operation, data),
+  trackShell: (operation, data, workspaceEffect) => shellRegistry.track(operation, data, workspaceEffect),
 });
 
 // Tool handlers
